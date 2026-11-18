@@ -174,7 +174,6 @@ class TestCognitiveObserver:
         clock = ManualClock(datetime(2024, 1, 1, 12, 0, tzinfo=UTC))
         bio = BiologicalState(
             energy=0.2,
-            sleep_debt_hours=3.0,
             hormones=HormoneState(dopamine=0.5, cortisol=0.85, serotonin=0.2, noradrenaline=0.4),
             allostatic_load=0.75,
             clock=clock,

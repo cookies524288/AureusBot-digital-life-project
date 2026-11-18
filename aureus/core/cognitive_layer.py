@@ -240,9 +240,6 @@ class CognitiveObserver:
         if bio_state.allostatic_load > 0.7:
             obstacles.append("压力积累（需要休息）")
 
-        if bio_state.sleep_debt_hours > 2:
-            obstacles.append(f"睡眠债 {bio_state.sleep_debt_hours:.1f} 小时")
-
         return obstacles
 
     @staticmethod

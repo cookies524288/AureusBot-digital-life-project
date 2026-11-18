@@ -29,7 +29,7 @@ class FakeReplyer:
             organ_id=self.organ_id,
             suggestion=reply,
             confidence=0.7,
-            metadata={"type": "fake", "emotion_used": emotion.mood_text()},
+            metadata={"type": "fake", "emotion_used": emotion.system_prompt_modifier()},
         )
 
 

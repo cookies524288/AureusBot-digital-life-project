@@ -6,7 +6,6 @@ import pytest
 
 from aureus.common.clock import ManualClock
 from aureus.core.biomodel import (
-    AllostasisModel,
     BiologicalState,
     CircadianModel,
     EmotionalState,
@@ -50,20 +49,6 @@ class TestCircadianModel:
 
         # 8 点 > 4 点
         assert factor_8am > factor_4am
-
-    def test_melatonin_factor_peaks_at_night(self):
-        """测试褪黑素在夜间达到高峰"""
-        circadian = CircadianModel()
-
-        # 晚上 10 点应该较高
-        night = datetime(2026, 1, 1, 22, 0, 0, tzinfo=UTC)
-        factor_night = circadian.circadian_factor_for_melatonin(circadian.phase_at_time(night))
-
-        # 中午应该较低
-        noon = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-        factor_noon = circadian.circadian_factor_for_melatonin(circadian.phase_at_time(noon))
-
-        assert factor_night > factor_noon
 
 
 class TestUltradinRhythm:
@@ -160,49 +145,35 @@ class TestBiologicalState:
         # 由于空闲衰减和 Ultradian 衰减，能量应该下降
         assert bio.energy < initial_energy
 
-    def test_dopamine_trigger(self):
-        """测试多巴胺触发器"""
-        clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
-        bio = BiologicalState(clock=clock)
-
-        initial = bio.hormones.dopamine
-        bio.trigger_dopamine_boost(0.2)
-
-        assert bio.hormones.dopamine == min(1.0, initial + 0.2)
-
-    def test_goal_achievement_effects(self):
-        """测试目标达成对激素的影响"""
-        clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
-        bio = BiologicalState(clock=clock)
-
-        initial_dopamine = bio.hormones.dopamine
-        bio.on_goal_achieved()
-
-        assert bio.hormones.dopamine > initial_dopamine
-
-    def test_social_deficit_increases_on_rejection(self):
-        """测试社交拒绝增加社交缺口"""
-        clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
-        bio = BiologicalState(social_deficit=0.3, clock=clock)
-
-        initial = bio.social_deficit
-        bio.on_social_rejection()
-
-        assert bio.social_deficit > initial
-
     def test_allostatic_load_calculation(self):
         """测试稳态超载计算"""
         clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
         bio = BiologicalState(
             energy=0.1,
             hormones=HormoneState(dopamine=0.5, cortisol=0.9, serotonin=0.2, noradrenaline=0.4),
-            sleep_debt_hours=2.0,
             clock=clock,
         )
 
         bio.update(dt=0.1)
-        # 低能量 + 高皮质醇 + 低血清素 + 睡眠债 = 高压力指数
+        # 低能量 + 高皮质醇 + 低血清素 = 高压力指数
         assert bio.allostatic_load > 0.5
+
+    def test_allostatic_load_weights_without_sleep_debt(self):
+        """睡眠债删掉后，三项按 3 : 3 : 2 重新归一（D52 第 4 条）：全满是 1，全空是 0。"""
+        clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
+        bio = BiologicalState(clock=clock)
+        bio.energy = 0.0
+        bio.hormones = HormoneState(cortisol=1.0, serotonin=0.0)
+        bio._compute_allostatic_load()
+        assert bio.allostatic_load == pytest.approx(1.0)
+        bio.energy = 1.0
+        bio.hormones = HormoneState(cortisol=0.0, serotonin=1.0)
+        bio._compute_allostatic_load()
+        assert bio.allostatic_load == pytest.approx(0.0)
+        bio.energy = 0.5
+        bio.hormones = HormoneState(cortisol=0.4, serotonin=0.5)
+        bio._compute_allostatic_load()
+        assert bio.allostatic_load == pytest.approx(0.5 * 0.375 + 0.4 * 0.375 + 0.5 * 0.25)
 
 
 class TestEmotionalState:
@@ -227,59 +198,6 @@ class TestEmotionalState:
 
         # 高多巴胺 + 高去甲肾上腺素 + 高能量 = 高觉醒度
         assert arousal > 0.6
-
-    def test_emotion_label_joy(self):
-        """测试情绪标签：喜悦"""
-        hormones = HormoneState(dopamine=0.9, cortisol=0.2, serotonin=0.9, noradrenaline=0.9)
-        emotion = EmotionalState(hormones=hormones, energy=0.9)
-
-        label = emotion.emotion_label()
-        # 高效价 + 高觉醒 = 喜悦
-        assert label in ("joy", "contentment")
-
-    def test_emotion_label_anxiety(self):
-        """测试情绪标签：焦虑"""
-        # 需要足够的负效价和高觉醒
-        hormones = HormoneState(dopamine=0.0, cortisol=1.0, serotonin=0.0, noradrenaline=0.85)
-        emotion = EmotionalState(hormones=hormones, energy=0.5)
-
-        label = emotion.emotion_label()
-        valence = emotion.compute_valence()
-        arousal = emotion.compute_arousal()
-
-        # 确保低效价 + 高觉醒 = 焦虑/烦躁
-        assert valence < -0.3, f"valence={valence} should be < -0.3"
-        assert arousal > 0.5, f"arousal={arousal} should be > 0.5"
-        assert label in ("anxiety", "irritation"), f"label={label} should be anxiety or irritation"
-
-    def test_mood_text_generation(self):
-        """测试心情描述生成"""
-        hormones = HormoneState(dopamine=0.7, cortisol=0.3, serotonin=0.7, noradrenaline=0.6)
-        emotion = EmotionalState(hormones=hormones, energy=0.7)
-
-        mood = emotion.mood_text()
-
-        # 应该返回中文字符串
-        assert isinstance(mood, str)
-        assert len(mood) > 0
-
-
-class TestAllostasisModel:
-    """稳态超载模型测试"""
-
-    def test_burnout_risk_low(self):
-        """测试低压力风险"""
-        risk = AllostasisModel.burnout_risk(0.2)
-
-        assert risk["risk_level"] == "low"
-        assert "Can handle more tasks" in risk["recommended_action"]
-
-    def test_burnout_risk_critical(self):
-        """测试严重压力风险"""
-        risk = AllostasisModel.burnout_risk(0.85)
-
-        assert risk["risk_level"] == "critical"
-        assert "Force sleep" in risk["recommended_action"]
 
 
 if __name__ == "__main__":

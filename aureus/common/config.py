@@ -89,7 +89,8 @@ class BiomodelConfig(BaseModel):
     # 每回复一次，社交需求降多少。按回复计，一次聊天常有好几条：
     # 0.05 时聊 6 来回约抵消 10 小时的积累，不至于几句话就“宁愿独处”。
     social_relief_per_conversation: float = Field(default=0.05, ge=0, le=1)
-    # 每回复一次，新奇感降多少。日常聊天带来的新鲜感有限，真正的新事件另由 on_novel_event 处理。
+    # 每回复一次，新奇感降多少。日常聊天带来的新鲜感有限；
+    # 真正的新事件要等 Phase 2 接上来源再单独处理（D52）。
     novelty_relief_per_conversation: float = Field(default=0.03, ge=0, le=1)
 
 

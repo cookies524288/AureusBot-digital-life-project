@@ -7,6 +7,8 @@
 > - Allostatic Load（稳态超载理论，chronic stress 的生物学基础）
 > - Ultradian Rhythms（90-120 分钟的基本认知周期）
 > - 人类脑脊液清除的睡眠稳定态恢复机制
+>
+> **2026-11-18 注（D52 第 4 条）**：本文里没接真实来源的接口已从代码中删掉，包括 `trigger_*`、`on_novel_event` 等 `on_*` 事件（`on_conversation` 保留）、`consume_energy_for_*`、`generate_behavioral_constraints`、`planning_depth()`、`working_memory_items`、`priority_modifiers`、`risk_aversion`、`social_motivation`、`emotion_label`、`mood_text`、`AllostasisModel.burnout_risk`、睡眠债和褪黑素/警觉性曲线。下面的内容只当设计思路看；Phase 2 接真实来源时再按需加回。
 
 ---
 

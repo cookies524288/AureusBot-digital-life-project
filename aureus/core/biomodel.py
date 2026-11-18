@@ -82,19 +82,6 @@ class CircadianModel:
         }
         return self._interpolate(cortisol_curve, phase)
 
-    def circadian_factor_for_melatonin(self, phase: float) -> float:
-        """褪黑素的日周期调制倍数，实际取值范围 [-0.6, 1.0]。
-        晚上 9-11 点上升，早晨下降
-        """
-        # 使用正弦波模拟褪黑素的平滑上升与下降
-        return 0.2 + 0.8 * math.sin(2 * math.pi * (phase + 0.3))
-
-    def circadian_factor_for_alertness(self, phase: float) -> float:
-        """警觉性的日周期调制倍数，实际取值范围 [0.3, 0.9]。
-        午夜最高，中午最低（相位 0 取余弦最大值）
-        """
-        return 0.6 + 0.3 * math.cos(2 * math.pi * phase)
-
     @staticmethod
     def _interpolate(curve: dict[float, float], phase: float) -> float:
         """分段线性插值"""
@@ -176,16 +163,9 @@ class BiologicalState:
 
     # 能量状态 [0, 1]
     energy: float = 0.5
-    energy_baseline: float = 0.5  # 基线（休息状态下自动回复到这里）
     # 精力向 1 回升的速率 ρ（每小时）：dE/dt = ρ(1 - E) - 节律消耗（D42 第 4 条）。
     energy_recovery_rate: float = _DEFAULT_RATES.energy_recovery_rate
-    energy_recovery_rate_sleep: float = 0.40  # 每小时恢复率（深度睡眠时），暂时没用到
     # 空闲消耗 energy_decay_idle 已去掉：每秒 0.002 约 4 分钟耗光精力，空闲消耗由节律给出。
-    energy_decay_think: float = 0.01  # 每秒消耗（思考 / 调用 LLM 时）
-    energy_decay_interact: float = 0.005  # 每秒消耗（社交互动时）
-
-    # 睡眠债（小时）
-    sleep_debt_hours: float = 0.0
 
     # 社交需求 [0, 1]：0 = 满足，1 = 极度孤独
     social_deficit: float = 0.3
@@ -198,7 +178,6 @@ class BiologicalState:
     novelty_craving: float = 0.4
     # 新奇感也随时间上涨；原来的“每秒 0.0005”是单位弄混了（D42 第 6 条）
     novelty_growth_per_hour: float = _DEFAULT_RATES.novelty_growth_per_hour  # 每小时增长
-    novelty_decay_on_novel: float = 0.15  # 每次新事件减少
     # 每回复一次减少多少（D42 第 7 条）
     novelty_relief_per_conversation: float = _DEFAULT_RATES.novelty_relief_per_conversation
 
@@ -365,45 +344,17 @@ class BiologicalState:
         self.novelty_craving = min(1.0, self.novelty_craving + growth)
 
     def _compute_allostatic_load(self) -> None:
-        """计算稳态超载指数（多维压力累积）"""
+        """计算稳态超载指数（多维压力累积）。
+
+        原来还有一项睡眠债占 20%，但睡眠债没有任何来源、永远是 0，已删掉（D52 第 4 条）；
+        剩下三项按原来 3 : 3 : 2 的比例重新归一，满载时仍然是 1。
+        """
         components = [
-            (1.0 - self.energy) * 0.3,  # 能量枯竭 30%
-            self.hormones.cortisol * 0.3,  # 皮质醇高 30%
-            (1.0 - self.hormones.serotonin) * 0.2,  # 血清素低 20%
-            self.sleep_debt_hours / 7.0 * 0.2,  # 睡眠债 20%
+            (1.0 - self.energy) * 0.375,  # 能量枯竭
+            self.hormones.cortisol * 0.375,  # 皮质醇高
+            (1.0 - self.hormones.serotonin) * 0.25,  # 血清素低
         ]
         self.allostatic_load = min(1.0, sum(components))
-
-    # ==================== 激素事件触发器 ====================
-
-    def trigger_dopamine_boost(self, amount: float, reason: str = "") -> None:
-        """触发多巴胺上升（积极预测误差、目标达成）"""
-        self.hormones.dopamine = min(1.0, self.hormones.dopamine + amount)
-
-    def trigger_dopamine_drop(self, amount: float, reason: str = "") -> None:
-        """触发多巴胺下降（消极预测误差、期望落空）"""
-        self.hormones.dopamine = max(0.0, self.hormones.dopamine - amount)
-
-    def trigger_cortisol_spike(self, amount: float, reason: str = "") -> None:
-        """触发皮质醇上升（应激事件）"""
-        self.hormones.cortisol = min(1.0, self.hormones.cortisol + amount)
-
-    def trigger_serotonin_boost(self, amount: float, reason: str = "") -> None:
-        """触发血清素上升（积极社交、成就感）"""
-        self.hormones.serotonin = min(1.0, self.hormones.serotonin + amount)
-
-    def trigger_serotonin_drop(self, amount: float, reason: str = "") -> None:
-        """触发血清素下降（拒绝、失败、孤独）"""
-        self.hormones.serotonin = max(0.0, self.hormones.serotonin - amount)
-
-    def trigger_noradrenaline_spike(self, amount: float, reason: str = "") -> None:
-        """触发去甲肾上腺素上升（新奇刺激、紧急消息）"""
-        self.hormones.noradrenaline = min(1.0, self.hormones.noradrenaline + amount)
-
-    def on_novel_event(self) -> None:
-        """处理新事件的影响"""
-        self.novelty_craving = max(0.0, self.novelty_craving - self.novelty_decay_on_novel)
-        self.trigger_noradrenaline_spike(0.3, "novel_event")
 
     def on_conversation(self) -> None:
         """回复了一次之后：社交需求和新奇感回落（04 号文档：一次有效对话后回落，D42 第 7 条）。
@@ -415,131 +366,9 @@ class BiologicalState:
         self.social_deficit = max(0.0, self.social_deficit - self.social_relief_per_conversation)
         self.novelty_craving = max(0.0, self.novelty_craving - self.novelty_relief_per_conversation)
 
-    def on_positive_social_interaction(self) -> None:
-        """处理积极社交互动（0.5 留下的事件，还没有调用方；和每次回复的回落分开，见 D43）"""
-        self.social_deficit = max(0.0, self.social_deficit - 0.1)
-        self.trigger_serotonin_boost(0.05, "positive_social")
-        self.trigger_dopamine_boost(0.2, "positive_social")
-
-    def on_social_rejection(self) -> None:
-        """处理社交拒绝"""
-        self.social_deficit = min(1.0, self.social_deficit + 0.15)
-        self.trigger_serotonin_drop(0.08, "rejection")
-        self.trigger_cortisol_spike(0.2, "rejection")
-
-    def on_error_or_failure(self) -> None:
-        """处理错误或失败事件"""
-        self.trigger_dopamine_drop(0.1, "failure")
-        self.trigger_cortisol_spike(0.2, "error")
-
-    def on_goal_achieved(self) -> None:
-        """处理目标达成"""
-        self.trigger_dopamine_boost(0.4, "goal_achieved")
-        self.trigger_cortisol_spike(-0.1, "success_relief")  # 负值 = 降低
-
-    def consume_energy_for_thinking(self, duration_seconds: float) -> bool:
-        """消耗思考能量（调用 LLM）。
-
-        返回：是否有足够的能量
-        """
-        required = self.energy_decay_think * duration_seconds
-        if self.energy >= required:
-            self.energy = max(0.0, self.energy - required)
-            return True
-        return False
-
-    def consume_energy_for_interaction(self, duration_seconds: float) -> bool:
-        """消耗社交互动能量。
-
-        返回：是否有足够的能量
-        """
-        required = self.energy_decay_interact * duration_seconds
-        if self.energy >= required:
-            self.energy = max(0.0, self.energy - required)
-            return True
-        return False
-
-    # ==================== 行为约束生成 ====================
-
-    def generate_behavioral_constraints(self) -> dict[str, Any]:
-        """生成给规划器的约束条件。
-        基于当前激素、能量、情绪状态。
-        """
-        emotional_state = self.compute_emotion()
-        arousal = emotional_state.compute_arousal()
-
-        return {
-            "max_planning_depth": self.planning_depth(arousal),
-            "working_memory_limit": self.working_memory_items(),
-            "priority_adjustments": self.priority_modifiers(),
-            "risk_aversion_factor": self.risk_aversion(),
-            "social_motivation_boost": self.social_motivation(),
-            "mood_description": emotional_state.mood_text(),
-            "can_think": self.energy > 0.3,
-            "must_rest": self.energy < 0.1,
-            "burnout_risk": AllostasisModel.burnout_risk(self.allostatic_load),
-        }
-
     def compute_emotion(self) -> "EmotionalState":
         """计算当前情绪状态"""
         return EmotionalState(self.hormones, self.energy)
-
-    def planning_depth(self, arousal: float) -> int:
-        """规划器能考虑多少步（3-7 步）"""
-        depth = 3 + int(arousal * 4)
-        if self.energy < 0.3:
-            depth = max(1, int(depth * 0.5))
-        return depth
-
-    def working_memory_items(self) -> int:
-        """工作记忆容量（Miller's 7±2）"""
-        base = 7
-        variance = int(self.hormones.noradrenaline * 4) - 2
-        return max(4, min(9, base + variance))
-
-    def priority_modifiers(self) -> dict[str, float]:
-        """不同目标类型的优先级调整倍数"""
-        modifiers = {}
-
-        # 能量低时，只有高优先级任务能执行
-        if self.energy < 0.3:
-            modifiers["low_priority"] = 0.3
-            modifiers["maintenance"] = 2.0
-            modifiers["rest"] = 3.0
-
-        # 皮质醇高时，倾向于安全的、已知的任务
-        if self.hormones.cortisol > 0.8:
-            modifiers["novel_exploration"] = 0.1
-            modifiers["risk_taking"] = 0.1
-            modifiers["maintenance"] = 2.0
-            modifiers["rest"] = 2.0
-
-        # 血清素低时，消极滤镜
-        if self.hormones.serotonin < 0.3:
-            modifiers["help_others"] = 0.5
-            modifiers["long_term_project"] = 0.5
-            modifiers["self_protection"] = 1.5
-            modifiers["avoid_harm"] = 1.5
-
-        # 社交需求高时，社交任务权重上升
-        if self.social_deficit > 0.6:
-            modifiers["social_interaction"] = 1.8
-
-        # 无聊时，新奇任务权重上升
-        if self.novelty_craving > 0.6:
-            modifiers["novel_exploration"] = 1.5
-
-        return modifiers
-
-    def risk_aversion(self) -> float:
-        """风险规避程度 [0, 1]，越高越保守"""
-        return self.hormones.cortisol * 0.6 + (1.0 - self.hormones.dopamine) * 0.4
-
-    def social_motivation(self) -> float:
-        """社交动机 [0, 1]"""
-        return (
-            self.social_deficit * 0.5 + self.hormones.dopamine * 0.3 + self.hormones.serotonin * 0.2
-        )
 
     def observe_cognitive_state(self, context: dict[str, Any] | None = None) -> "CognitiveState":  # type: ignore
         """生成自己的认知观察（元认知，实现"我思故我在"）
@@ -602,42 +431,6 @@ class EmotionalState:
         ) / 1.3  # 标准化
         return max(0.0, min(1.0, arousal))
 
-    def emotion_label(self) -> str:
-        """从 2D 点映射到情绪标签。
-        基于 Russell 的环状情绪模型。
-        """
-        valence = self.compute_valence()
-        arousal = self.compute_arousal()
-
-        # 象限划分
-        if valence > 0.3 and arousal > 0.5:
-            return "joy" if arousal > 0.7 else "contentment"
-        elif valence < -0.3 and arousal > 0.5:
-            return "anxiety" if arousal > 0.7 else "irritation"
-        elif valence > 0.3 and arousal < 0.5:
-            return "serenity"
-        elif valence < -0.3 and arousal < 0.5:
-            return "sadness" if arousal < 0.3 else "apathy"
-        else:
-            return "neutral"
-
-    def mood_text(self) -> str:
-        """生成人类可读的心情描述"""
-        label = self.emotion_label()
-
-        mood_map = {
-            "joy": "我感到很开心，充满活力！",
-            "contentment": "我感到满足和舒适。",
-            "serenity": "我感到平静和放松。",
-            "anxiety": "我感到焦虑和不安。",
-            "irritation": "我感到有些烦躁。",
-            "sadness": "我感到有些低落。",
-            "apathy": "我感到有点冷漠和疲惫。",
-            "neutral": "我感觉还好。",
-        }
-
-        return mood_map.get(label, "我的心情复杂。")
-
     def system_prompt_modifier(self) -> str:
         """生成给 LLM 的系统提示词修饰语"""
         valence = self.compute_valence()
@@ -666,43 +459,3 @@ class EmotionalState:
             modifiers.append("你缺乏安全感、需要社交支持")
 
         return "；".join(modifiers) + "。" if modifiers else ""
-
-
-class AllostasisModel:
-    """稳态超载（Allostatic Load）模型。
-    长期高皮质醇、低血清素、能量枯竭的组合 → 倦怠、抑郁。
-    """
-
-    @staticmethod
-    def burnout_risk(allostatic_load: float) -> dict[str, Any]:
-        """返回倦怠风险评估。
-
-        allostatic_load: 稳态超载指数 [0, 1]
-        """
-        risk_level = (
-            "critical"
-            if allostatic_load > 0.7
-            else "high"
-            if allostatic_load > 0.5
-            else "moderate"
-            if allostatic_load > 0.3
-            else "low"
-        )
-
-        days_until_collapse = (1.0 - allostatic_load) * 7.0  # 粗略估计
-
-        recommended_action = (
-            "Force sleep immediately"
-            if allostatic_load > 0.8
-            else "Reduce workload"
-            if allostatic_load > 0.6
-            else "Maintain current pace"
-            if allostatic_load > 0.4
-            else "Can handle more tasks"
-        )
-
-        return {
-            "risk_level": risk_level,
-            "days_until_collapse": days_until_collapse,
-            "recommended_action": recommended_action,
-        }
