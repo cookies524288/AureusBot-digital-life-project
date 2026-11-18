@@ -21,6 +21,21 @@ class CallPurpose(StrEnum):
     OPTIONAL = "可选"
 
 
+class ModelPreference(StrEnum):
+    """从器官的模型列表哪里开始用（15 号文档第 5 节，D59）。
+
+    列表按从贵到便宜排；精力越低，越从后面开始。开始的那个不行时，先往后找更便宜的，
+    都不行再往前找更贵的：先省钱，实在不行也要回上话（月度上限仍由安全网关兜底）。
+    """
+
+    # 第一个，正常档用。
+    PREFERRED = "首选"
+    # 第二个（只有一个模型时就是它），节省档用。
+    CHEAPER = "便宜一档"
+    # 最后一个，低电量和透支保护用。
+    CHEAPEST = "最便宜"
+
+
 @dataclass
 class OrganRequest:
     """发送给器官的请求"""
@@ -33,6 +48,8 @@ class OrganRequest:
     system_context: str = ""
     # 为什么调用；调用方知道是回应用户时必须明确写 USER_REPLY。
     purpose: CallPurpose = CallPurpose.OPTIONAL
+    # 从模型列表哪里开始用；调用方按精力档位选（D59）。不调用模型的器官忽略它。
+    model_preference: ModelPreference = ModelPreference.PREFERRED
 
 
 @dataclass(frozen=True)

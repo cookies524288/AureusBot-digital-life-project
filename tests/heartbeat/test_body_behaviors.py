@@ -142,7 +142,7 @@ def make_rig(
             }
         ),
         bio_state=BiologicalState(clock=clock),
-        config=HeartbeatConfig(tick_interval_seconds=TICK),
+        config=HeartbeatConfig(tick_interval_seconds=TICK, planning_enabled=False),
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,
         timezone=UTC,

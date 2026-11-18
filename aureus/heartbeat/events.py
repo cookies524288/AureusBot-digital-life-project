@@ -15,3 +15,5 @@ EVENT_EMERGENCY_STOP = "emergency_stop"
 EVENT_EMERGENCY_RESUME = "emergency_resume"
 # 压力偏高时的自检（D57）：每次进入偏高状态记一条，内容就是发给用户的自检通知。
 EVENT_SELF_CHECK = "self_check"
+# 规划器看了刚收到的消息，决定不回复（D59）：只有自己可见，metadata 里有规划器的原话和这次的做法。
+EVENT_REPLY_DECLINED = "reply_declined"

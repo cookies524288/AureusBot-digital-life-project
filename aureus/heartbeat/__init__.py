@@ -10,6 +10,7 @@ from .events import (
     EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
+    EVENT_REPLY_DECLINED,
     EVENT_SELF_CHECK,
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
@@ -23,6 +24,8 @@ from .perception import (
     TrustLevel,
     VisibilityScope,
 )
+from .planning import Plan, ReplyLength, parse_plan
+from .reply_strategy import ReplyStrategy, choose_strategy
 
 __all__ = [
     "EVENT_COGNITIVE_STATE",
@@ -30,6 +33,7 @@ __all__ = [
     "EVENT_EMERGENCY_STOP",
     "EVENT_MESSAGE",
     "EVENT_ORGAN_CALL_ABANDONED",
+    "EVENT_REPLY_DECLINED",
     "EVENT_SELF_CHECK",
     "EVENT_SHUT_DOWN",
     "EVENT_WOKE_UP",
@@ -40,7 +44,12 @@ __all__ = [
     "OrganCaller",
     "OutgoingMessage",
     "Perception",
+    "Plan",
+    "ReplyLength",
+    "ReplyStrategy",
     "TrustLevel",
     "VisibilityScope",
     "assess_downtime",
+    "choose_strategy",
+    "parse_plan",
 ]

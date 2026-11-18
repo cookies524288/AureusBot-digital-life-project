@@ -17,12 +17,14 @@ _HONESTY_NOTE = (
 )
 
 
-def describe_body_state(reading: BodyReading, config: BodyConfig) -> str:
+def describe_body_state(reading: BodyReading, config: BodyConfig, reply_approach: str = "") -> str:
     """把一份身体读数写成放进系统上下文的一段话，末尾带上如实说的要求。
 
     Args:
         reading: 此刻的身体读数。
         config: 身体配置（说明里要用窗口长度、夜间时段）。
+        reply_approach: 这次回复的做法（ReplyStrategy.describe 的结果）；空字符串表示不写。
+            它是精力档位的直接结果，和身体读数放在一起，被问起时才能说得对得上。
 
     Returns:
         「【身体状态】」开头的几行字；所有信号都关着时仍有一行说明，免得它以为没有这回事。
@@ -49,6 +51,8 @@ def describe_body_state(reading: BodyReading, config: BodyConfig) -> str:
             f"现在{'是' if sleep.night else '不是'}夜间时段"
             f"（当地 {config.night_start_hour} 点到 {config.night_end_hour} 点）"
         )
+    if reply_approach:
+        lines.append(f"这次回复的做法：{reply_approach}")
     lines.append(_HONESTY_NOTE)
     return "\n".join(lines)
 

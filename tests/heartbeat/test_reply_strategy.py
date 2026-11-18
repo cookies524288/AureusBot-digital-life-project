@@ -1,0 +1,90 @@
+"""按精力档位选回复做法的测试（路线图 1.6，D59）：不同档位的调用次数、模型、上下文长度。"""
+
+import json
+
+import pytest
+
+from aureus.body import EnergyTier
+from aureus.common import HeartbeatConfig
+from aureus.heartbeat import ReplyLength, choose_strategy
+from aureus.organs import ModelPreference
+
+
+@pytest.mark.parametrize("tier", [None, EnergyTier.NORMAL, EnergyTier.UNLIMITED])
+def test_normal_tier_plans_first_with_the_preferred_model(tier: EnergyTier | None) -> None:
+    config = HeartbeatConfig()
+    strategy = choose_strategy(tier, config)
+    assert strategy.plan_first
+    assert strategy.model_preference is ModelPreference.PREFERRED
+    assert strategy.message_limit == config.recent_message_limit
+    assert strategy.length_limit is None
+
+
+def test_planning_can_be_switched_off() -> None:
+    strategy = choose_strategy(EnergyTier.NORMAL, HeartbeatConfig(planning_enabled=False))
+    assert not strategy.plan_first
+    # 关掉规划只影响调用次数，模型和上下文长度仍按档位。
+    assert strategy.model_preference is ModelPreference.PREFERRED
+
+
+def test_saving_tier_merges_calls_and_shortens_everything() -> None:
+    config = HeartbeatConfig()
+    strategy = choose_strategy(EnergyTier.SAVING, config)
+    assert not strategy.plan_first
+    assert strategy.model_preference is ModelPreference.CHEAPER
+    assert strategy.message_limit == config.saving_message_limit
+    assert strategy.length_limit is ReplyLength.MEDIUM
+
+
+@pytest.mark.parametrize("tier", [EnergyTier.LOW, EnergyTier.OVERDRAFT])
+def test_low_tiers_use_the_cheapest_model_and_the_shortest_reply(tier: EnergyTier) -> None:
+    config = HeartbeatConfig()
+    strategy = choose_strategy(tier, config)
+    assert not strategy.plan_first
+    assert strategy.model_preference is ModelPreference.CHEAPEST
+    assert strategy.message_limit == config.low_message_limit
+    assert strategy.length_limit is ReplyLength.SHORT
+
+
+def test_lower_tiers_never_cost_more_than_higher_ones() -> None:
+    config = HeartbeatConfig()
+    tiers = [EnergyTier.NORMAL, EnergyTier.SAVING, EnergyTier.LOW]
+    limits = [choose_strategy(tier, config).message_limit for tier in tiers]
+    assert limits == sorted(limits, reverse=True)
+
+
+@pytest.mark.parametrize("tier", [EnergyTier.SAVING, EnergyTier.LOW, EnergyTier.OVERDRAFT])
+def test_tier_limits_never_exceed_the_configured_recent_limit(tier: EnergyTier) -> None:
+    strategy = choose_strategy(tier, HeartbeatConfig(recent_message_limit=3))
+    assert strategy.message_limit == 3
+
+
+def test_description_states_what_is_actually_done() -> None:
+    normal = choose_strategy(EnergyTier.NORMAL, HeartbeatConfig()).describe()
+    assert "先想好要不要回" in normal
+    assert "首选" in normal
+    assert "最近 20 条" in normal
+    assert "回复控制" not in normal
+
+    saving = choose_strategy(EnergyTier.SAVING, HeartbeatConfig()).describe()
+    assert "合并成一次调用" in saving
+    assert "便宜一档" in saving
+    assert "最近 10 条" in saving
+    assert "三五句话" in saving
+
+    low = choose_strategy(EnergyTier.LOW, HeartbeatConfig()).describe()
+    assert "最便宜" in low
+    assert "一两句话" in low
+
+
+def test_metadata_is_plain_json() -> None:
+    metadata = choose_strategy(EnergyTier.SAVING, HeartbeatConfig()).to_metadata()
+    assert metadata == {
+        "energy_tier": "节省",
+        "plan_first": False,
+        "model_preference": "便宜一档",
+        "message_limit": 10,
+        "length_limit": "中",
+    }
+    json.dumps(metadata, ensure_ascii=False)
+    assert choose_strategy(None, HeartbeatConfig()).to_metadata()["energy_tier"] is None

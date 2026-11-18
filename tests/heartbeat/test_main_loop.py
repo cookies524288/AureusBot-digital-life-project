@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -144,6 +144,8 @@ class Factory:
         self, organs: ScriptedOrgans | None = None, clock: Any = None, **config: Any
     ) -> Harness:
         clock = clock or self.clock
+        # 这里的测试都按「一次回复一次调用」数请求；规划的行为在 test_planning_flow.py 里测。
+        config.setdefault("planning_enabled", False)
         timeline = TimelineDatabase(self.database_file, clock=clock)
         timeline.open()
         self.timelines.append(timeline)
@@ -757,10 +759,10 @@ async def test_if_the_request_cannot_be_built_the_messages_stay_queued(
     await harness.heartbeat.wait_for_thought()
     harness.heartbeat.submit(said("还在吗"))
 
-    def broken(_batch: object) -> OrganRequest:
+    def broken(_batch: object) -> NoReturn:
         raise RuntimeError("读不了时间线")
 
-    monkeypatch.setattr(harness.heartbeat, "_reply_request", broken)
+    monkeypatch.setattr(harness.heartbeat, "_reply_job", broken)
     with pytest.raises(RuntimeError):
         harness.heartbeat.beat()
     monkeypatch.undo()

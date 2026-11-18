@@ -22,6 +22,7 @@ from aureus.core.cognitive_layer import CognitiveObserver
 from aureus.organs.api_keys import KeyResolver
 from aureus.organs.interface import (
     CallAttempt,
+    ModelPreference,
     OrganCallError,
     OrganRequest,
     OrganResponse,
@@ -204,6 +205,30 @@ def build_system_prompt(bio_state: BiologicalState) -> str:
     )
 
 
+def order_routes[T](routes: Sequence[T], preference: ModelPreference) -> list[T]:
+    """按偏好排出尝试的顺序（D59）。
+
+    从偏好对应的位置开始往后（更便宜）试，都不行再从那里往前（更贵）试。
+    比如四个模型、从第二个开始：2、3、4、1。只有一个模型时，什么偏好都只用它。
+
+    Args:
+        routes: 配置里的模型，按从贵到便宜排。
+        preference: 从哪里开始。
+
+    Returns:
+        尝试的顺序，每个模型正好出现一次。
+    """
+    if not routes:
+        return []
+    last = len(routes) - 1
+    start = {
+        ModelPreference.PREFERRED: 0,
+        ModelPreference.CHEAPER: min(1, last),
+        ModelPreference.CHEAPEST: last,
+    }[preference]
+    return [*routes[start:], *reversed(routes[:start])]
+
+
 def _system_message(request: OrganRequest) -> str:
     """系统提示词：调用方给的背景在前，身体状态在后（D41 第 8 条）。"""
     body = build_system_prompt(request.bio_state)
@@ -265,7 +290,7 @@ class LLMOrgan:
         )
 
     async def process(self, request: OrganRequest) -> OrganResponse:
-        """按顺序尝试模型，返回第一个成功的回复。
+        """按偏好排好顺序（见 order_routes）尝试模型，返回第一个成功的回复。
 
         Args:
             request: 提示词和生物状态；生物状态只用来生成系统提示词。
@@ -283,7 +308,7 @@ class LLMOrgan:
         ]
         failures: list[str] = []
         attempts: list[CallAttempt] = []
-        for route in self._routes:
+        for route in order_routes(self._routes, request.model_preference):
             try:
                 text, attempt = await self._call(route, messages, attempts)
             except _RouteFailureError as failure:

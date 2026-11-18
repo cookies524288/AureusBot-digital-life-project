@@ -2,6 +2,7 @@
 
 每一拍按顺序做：量身体 → 对结果（想法有结果了就说出来）→ 收感知（写进时间线）→
 定焦点、想一想（有没回复的消息就在后台调用器官）→ 广播认知状态。
+想一想的做法由精力档位定（D59）：正常档先调规划器、再调回复器，低档位合并成一次调用。
 急停中（D54）照常收感知、记时间线，但不调用器官、不回复，只发系统通知。
 
 一拍里只有很短的同步操作。慢的器官调用放进后台任务，心跳照常跳；同一时间只想一件事
@@ -23,7 +24,11 @@ from aureus.body import Body, BodyReading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
 from aureus.heartbeat.body_summary import describe_body_state
-from aureus.heartbeat.context import build_reply_prompt, build_system_context
+from aureus.heartbeat.context import (
+    build_plan_prompt,
+    build_reply_prompt,
+    build_system_context,
+)
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
@@ -31,6 +36,7 @@ from aureus.heartbeat.events import (
     EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
+    EVENT_REPLY_DECLINED,
     EVENT_SELF_CHECK,
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
@@ -42,6 +48,8 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.planning import Plan, parse_plan
+from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.identity import Identity
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
@@ -108,19 +116,40 @@ class _Heard:
 
 
 @dataclass(frozen=True)
+class _ReplyJob:
+    """一次回复要用的全部材料。在拍里组装好，后台任务只管按它调用器官，不读也不写状态。"""
+
+    strategy: ReplyStrategy
+    # 之前的对话和这次要回复的消息，都是已经记进时间线的记录，从早到晚。
+    history: Sequence[TimelineRecord]
+    messages: Sequence[TimelineRecord]
+    # 怎么称呼用户；后台任务不去读身份，免得它在中途变了。
+    user_name: str
+    # 规划器和合并成一次的调用看的背景：四层人设都在，由它们决定怎么回应。
+    full_context: str
+    # 规划之后的回复器看的背景：没有行为风格，什么时候开口、怎么回应已经由规划器定了。
+    replyer_context: str
+
+
+@dataclass(frozen=True)
 class _ThoughtOutcome:
-    """一次想法的结果：要么有器官的建议，要么有一条要告诉用户的系统通知。"""
+    """一次想法的结果：器官的建议、规划器决定不回复、或者一条要告诉用户的系统通知。"""
 
     response: OrganResponse | None = None
     notice: str = ""
+    # 规划器读懂的建议；没规划、或者看不懂时是 None。
+    plan: Plan | None = None
+    # 规划器决定不回复：没有 response，也不是失败，不发失败通知。
+    declined: bool = False
 
 
 @dataclass(frozen=True)
 class _Thought:
-    """进行中的想法：后台任务，和它要回复的消息。"""
+    """进行中的想法：后台任务，和它要回复的消息、这次的做法。"""
 
     task: asyncio.Task[_ThoughtOutcome]
     replying_to: Sequence[_Heard]
+    strategy: ReplyStrategy
 
 
 class Heartbeat:
@@ -255,6 +284,7 @@ class Heartbeat:
                 else f"精力 {state.energy_level:.0%}（{state.energy_state}档）"
             )
             lines.append(f"{energy}，信心 {state.planning_confidence:.2f}")
+            lines.append(f"回复做法：{self._current_strategy().describe()}")
         lines.extend(self._describe_signals())
         hormones = self._bio_state.hormones
         lines.append(
@@ -464,6 +494,9 @@ class Heartbeat:
             return
         outcome = thought.task.result()
         target = thought.replying_to[-1].perception
+        if outcome.declined and outcome.plan is not None:
+            self._record_declined(thought, outcome.plan, target)
+            return
         if outcome.response is None:
             self._deliver(target, outcome.notice, MessageKind.NOTICE)
             return
@@ -478,18 +511,41 @@ class Heartbeat:
             )
             return
         text = outcome.response.suggestion.strip()
+        metadata: dict[str, Any] = {
+            "channel": target.channel,
+            "in_reply_to": [heard.record.id for heard in thought.replying_to],
+            "organ_id": outcome.response.organ_id,
+            "strategy": thought.strategy.to_metadata(),
+        }
+        if outcome.plan is not None:
+            metadata["plan"] = outcome.plan.to_metadata()
         self._timeline.append(
             event_type=EVENT_MESSAGE,
             content=text,
             actor_type=ActorType.ME,
             visibility=target.visibility,
-            metadata={
-                "channel": target.channel,
-                "in_reply_to": [heard.record.id for heard in thought.replying_to],
-                "organ_id": outcome.response.organ_id,
-            },
+            metadata=metadata,
         )
         self._deliver(target, text, MessageKind.REPLY)
+
+    def _record_declined(self, thought: _Thought, plan: Plan, target: Perception) -> None:
+        """规划器决定不回复：记进时间线，并在终端提示一行，让用户知道不是出了故障（D59）。
+
+        为什么要提示：用户看到的是「没有回应」，分不清是没看到、出了错、还是它选择不说话。
+        """
+        reason = plan.reason or "觉得不需要回应"
+        self._timeline.append(
+            event_type=EVENT_REPLY_DECLINED,
+            content=f"看了刚收到的消息，决定不回复：{reason}",
+            actor_type=ActorType.ME,
+            visibility=VisibilityScope.PRIVATE,
+            metadata={
+                "in_reply_to": [heard.record.id for heard in thought.replying_to],
+                "plan": plan.to_metadata(),
+                "strategy": thought.strategy.to_metadata(),
+            },
+        )
+        self._deliver(target, f"（没有回复：{reason}）", MessageKind.NOTICE)
 
     def _take_in_perceptions(self) -> None:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
@@ -532,12 +588,12 @@ class Heartbeat:
             == (first.channel, first.sender_id)
         ]
         taken = {heard.record.id for heard in batch}
-        # 先组装请求再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
-        request = self._reply_request(batch)
+        # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
+        job = self._reply_job(batch)
         self._unanswered = [heard for heard in self._unanswered if heard.record.id not in taken]
-        task = asyncio.create_task(self._think(request), name="aureus-thought")
+        task = asyncio.create_task(self._think(job), name="aureus-thought")
         task.add_done_callback(self._on_thought_done)
-        self._thought = _Thought(task=task, replying_to=batch)
+        self._thought = _Thought(task=task, replying_to=batch, strategy=job.strategy)
 
     def _decline_unanswered(self, reason: str) -> None:
         """不允许调用器官时（急停中）：没回复的消息已经在时间线里，这里只通知，之后也不补回复。
@@ -642,8 +698,14 @@ class Heartbeat:
 
     # ---------- 想法（后台任务） ----------
 
-    def _reply_request(self, batch: Sequence[_Heard]) -> OrganRequest:
-        """组装回复用的器官请求：人设和醒来信息放系统上下文，对话放提示词。"""
+    def _current_strategy(self) -> ReplyStrategy:
+        """按此刻的精力档位选这次回复的做法；没有身体读数时按正常档（D59）。"""
+        tier = self._reading.energy.tier if self._reading is not None else None
+        return choose_strategy(tier, self._config)
+
+    def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
+        """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
+        strategy = self._current_strategy()
         batch_ids = {heard.record.id for heard in batch}
         # 只带同一可见范围的对话：私聊的回复里不能混进群聊的内容，反过来也一样。
         recent = self._timeline.query(
@@ -651,37 +713,42 @@ class Heartbeat:
                 event_type=EVENT_MESSAGE,
                 visibility=batch[0].perception.visibility,
                 latest=True,
-                limit=self._config.recent_message_limit,
+                limit=strategy.message_limit,
             )
         )
         # 按序号排除这次要回复的消息，而不是只取“比它们早的”：想上一件事的时候来的消息，
         # 序号比上一次的回复还小，只取更早的就会漏掉它刚说过的话。
         history = [record for record in recent if record.id not in batch_ids]
-        user_name = self._identity.user.name
-        return OrganRequest(
-            organ_id=self._config.reply_organ,
-            prompt=build_reply_prompt(
-                history, [heard.record for heard in batch], user_name, self._timezone
-            ),
-            bio_state=self._bio_state,
-            context={"task": "reply", "in_reply_to": [heard.record.id for heard in batch]},
-            purpose=CallPurpose.USER_REPLY,
-            system_context=build_system_context(
+        body_state = self._body_state_for_context(strategy)
+        now = self._clock.now()
+        downtime = self._downtime_for_context()
+
+        def context(*, include_behavior_style: bool) -> str:
+            return build_system_context(
                 self._identity,
-                self._clock.now(),
-                self._downtime_for_context(),
+                now,
+                downtime,
                 self._timezone,
-                self._body_state_for_context(),
-            ),
+                body_state,
+                include_behavior_style=include_behavior_style,
+            )
+
+        return _ReplyJob(
+            strategy=strategy,
+            history=history,
+            messages=[heard.record for heard in batch],
+            user_name=self._identity.user.name,
+            full_context=context(include_behavior_style=True),
+            replyer_context=context(include_behavior_style=False),
         )
 
-    def _body_state_for_context(self) -> str:
+    def _body_state_for_context(self, strategy: ReplyStrategy) -> str:
         """放进系统上下文的身体状态摘要；没有读数或开关关着时是空字符串。"""
         if self._body is None or self._reading is None:
             return ""
         if not self._body.config.state_in_prompt_enabled:
             return ""
-        return describe_body_state(self._reading, self._body.config)
+        return describe_body_state(self._reading, self._body.config, strategy.describe())
 
     def _downtime_for_context(self) -> Downtime | None:
         """放进系统上下文的停机情况。睡眠信号关掉后不告诉它睡了多久（04 号文档第 7 节）。"""
@@ -689,8 +756,75 @@ class Heartbeat:
             return None
         return self._downtime
 
-    async def _think(self, request: OrganRequest) -> _ThoughtOutcome:
-        """在后台调用器官。不写任何状态；除了被取消，任何情况都返回结果而不是抛异常。"""
+    async def _think(self, job: _ReplyJob) -> _ThoughtOutcome:
+        """在后台调用器官：档位允许时先规划，再回复。
+
+        不写任何状态；除了被取消，任何情况都返回结果而不是抛异常。
+        规划器出任何问题（调用失败、建议看不懂）都不影响回复：改成合并的一次调用，
+        和没有规划器时一样，由回复器自己决定怎么回应（D59）。
+        """
+        plan: Plan | None = None
+        if job.strategy.plan_first:
+            try:
+                plan = await self._plan(job)
+            except CallRejectedError as rejection:
+                # 网关的拒绝（月度上限、失控拦截）对回复器同样成立，不必再试一次。
+                return _ThoughtOutcome(notice=f"没能调用模型，这次没有回复：{rejection.reason}")
+            if plan is not None and not plan.should_reply:
+                return _ThoughtOutcome(plan=plan, declined=True)
+        return await self._reply(job, plan)
+
+    async def _plan(self, job: _ReplyJob) -> Plan | None:
+        """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""
+        organ_id = self._config.plan_organ
+        request = self._organ_request(
+            job,
+            organ_id=organ_id,
+            task="plan",
+            prompt=build_plan_prompt(job.history, job.messages, job.user_name, self._timezone),
+            system_context=job.full_context,
+        )
+        try:
+            response = await self._organs.call(request)
+        except CallRejectedError:
+            raise
+        except OrganCallError as failure:
+            logger.warning("规划器调用失败，合并成一次调用照常回复：%s", failure)
+            return None
+        except Exception:
+            logger.exception("调用规划器 %s 时出错，合并成一次调用照常回复", organ_id)
+            return None
+        plan = parse_plan(response.suggestion)
+        if plan is None:
+            logger.warning("规划器的建议看不懂，合并成一次调用照常回复")
+        return plan
+
+    async def _reply(self, job: _ReplyJob, plan: Plan | None) -> _ThoughtOutcome:
+        """调回复器。有规划就按规划的意图和长度写；没有就由它自己决定（合并的一次调用）。"""
+        strategy = job.strategy
+        if plan is None:
+            system_context, intent, length = job.full_context, "", strategy.length_limit
+        else:
+            system_context, intent = job.replyer_context, plan.intent
+            length = (
+                plan.length.capped_at(strategy.length_limit)
+                if plan.length is not None
+                else strategy.length_limit
+            )
+        request = self._organ_request(
+            job,
+            organ_id=self._config.reply_organ,
+            task="reply",
+            prompt=build_reply_prompt(
+                job.history,
+                job.messages,
+                job.user_name,
+                self._timezone,
+                intent=intent,
+                length=length,
+            ),
+            system_context=system_context,
+        )
         try:
             response = await self._organs.call(request)
         except CallRejectedError as rejection:
@@ -705,7 +839,21 @@ class Heartbeat:
             )
         if not response.suggestion.strip():
             return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
-        return _ThoughtOutcome(response=response)
+        return _ThoughtOutcome(response=response, plan=plan)
+
+    def _organ_request(
+        self, job: _ReplyJob, *, organ_id: str, task: str, prompt: str, system_context: str
+    ) -> OrganRequest:
+        """规划和回复共用的请求格式：都算回应用户，都按这次做法选从哪个模型开始。"""
+        return OrganRequest(
+            organ_id=organ_id,
+            prompt=prompt,
+            bio_state=self._bio_state,
+            context={"task": task, "in_reply_to": [record.id for record in job.messages]},
+            purpose=CallPurpose.USER_REPLY,
+            system_context=system_context,
+            model_preference=job.strategy.model_preference,
+        )
 
     def _on_thought_done(self, _task: asyncio.Task[_ThoughtOutcome]) -> None:
         # 想法有结果了：立即跳一拍去处理，不等下一个定时拍。

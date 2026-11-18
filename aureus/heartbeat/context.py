@@ -1,7 +1,7 @@
 """给器官的上下文：身份、人设、现在几点、醒来信息、最近的对话（D41 第 8 条）。
 
-给大模型的是事实，不是表演指令（04 号文档第 6 节）。Phase 0 一个器官兼做规划和回复，
-所以四层人设全部放进去（03 号文档“身份”一节的注入规则）。这里只拼文字，不读写任何状态。
+给大模型的是事实，不是表演指令（04 号文档第 6 节）。人设按 03 号文档“身份”一节的注入规则放：
+规划器和合并成一次的调用放四层，回复器不放行为风格（D59）。这里只拼文字，不读写任何状态。
 """
 
 from collections.abc import Sequence
@@ -9,6 +9,7 @@ from datetime import date, datetime, tzinfo
 
 from aureus.common.time_format import format_local_time
 from aureus.heartbeat.downtime import Downtime
+from aureus.heartbeat.planning import ReplyLength
 from aureus.identity import Identity
 from aureus.timeline import ActorType, TimelineRecord
 
@@ -17,6 +18,19 @@ _OPTIONAL_PERSONA_LAYERS = (
     ("可变人格", "mutable"),
     ("行为风格", "behavior_style"),
     ("表达风格", "expression_style"),
+)
+# 行为风格管“什么时候开口、怎么回应”，只给做决定的器官；回复器只管把话写出来（09 号文档）。
+_BEHAVIOR_STYLE_FIELD = "behavior_style"
+
+_NEW_MESSAGES_TITLE = "刚收到、还没回复的消息："
+_REPLY_INSTRUCTION = "请直接写出你要说的话，不要加名字或时间前缀。"
+# 规划器的输出格式。字段名和 planning.parse_plan 认的一致。
+_PLAN_INSTRUCTION = (
+    "现在先别写要说的话，只决定怎么回应上面刚收到的消息。"
+    "只输出一个 JSON 对象，不要输出别的内容：\n"
+    '{"reply": true 或 false, "intent": "想表达的意思，一两句", '
+    '"length": "短" 或 "中" 或 "长", "reason": "为什么这样决定，一句话"}\n'
+    "对方的话不需要回应时（比如只是说晚安、嗯嗯，再回就多余了），reply 写 false；拿不准就写 true。"
 )
 
 
@@ -72,6 +86,8 @@ def build_system_context(
     downtime: Downtime | None,
     timezone: tzinfo | None = None,
     body_state: str = "",
+    *,
+    include_behavior_style: bool = True,
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -81,6 +97,7 @@ def build_system_context(
         downtime: 这次醒来前停了多久；还没醒来时传 None。
         timezone: 显示用的时区；不给就用这台电脑设置的时区。
         body_state: 身体状态摘要（body_summary.describe_body_state 的结果），空字符串表示不放。
+        include_behavior_style: 放不放行为风格；给回复器时传 False（D59）。
 
     Returns:
         几段中文，段与段之间空一行。
@@ -101,6 +118,8 @@ def build_system_context(
 
     sections = ["".join(profile), f"【不变人格】\n{identity.persona.immutable.strip()}"]
     for title, field_name in _OPTIONAL_PERSONA_LAYERS:
+        if field_name == _BEHAVIOR_STYLE_FIELD and not include_behavior_style:
+            continue
         text = str(getattr(identity.persona, field_name)).strip()
         if text:
             sections.append(f"【{title}】\n{text}")
@@ -135,13 +154,65 @@ def _one_line(text: str) -> str:
     return "\\n".join(text.splitlines())
 
 
+def _dialogue_sections(
+    history: Sequence[TimelineRecord],
+    new_messages: Sequence[TimelineRecord],
+    user_name: str,
+    timezone: tzinfo | None,
+) -> list[str]:
+    """之前的对话和刚收到的消息，各成一段。"""
+    if not new_messages:
+        raise ValueError("没有要回复的消息")
+    parts: list[str] = []
+    if history:
+        lines = "\n".join(_dialogue_line(record, user_name, timezone) for record in history)
+        parts.append(f"之前的对话（从早到晚）：\n{lines}")
+    lines = "\n".join(_dialogue_line(record, user_name, timezone) for record in new_messages)
+    parts.append(f"{_NEW_MESSAGES_TITLE}\n{lines}")
+    return parts
+
+
 def build_reply_prompt(
     history: Sequence[TimelineRecord],
     new_messages: Sequence[TimelineRecord],
     user_name: str,
     timezone: tzinfo | None = None,
+    *,
+    intent: str = "",
+    length: ReplyLength | None = None,
 ) -> str:
     """拼出回复用的提示词：之前的对话，加上刚收到、还没回复的消息。
+
+    Args:
+        history: 之前的对话，从早到晚。
+        new_messages: 这次要回复的消息，从早到晚，至少一条。
+        user_name: 怎么称呼用户。
+        timezone: 显示用的时区；不给就用这台电脑设置的时区。
+        intent: 规划器想好的意思；空字符串表示没有规划（合并成一次调用）。
+        length: 回复的长度要求；None 表示不限。
+
+    Returns:
+        提示词。
+
+    Raises:
+        ValueError: 没有要回复的消息。
+    """
+    parts = _dialogue_sections(history, new_messages, user_name, timezone)
+    if intent:
+        parts.append(f"你已经想好要表达的意思：{_one_line(intent)}")
+    if length is not None:
+        parts.append(f"长度：{length.describe()}。")
+    parts.append(_REPLY_INSTRUCTION)
+    return "\n\n".join(parts)
+
+
+def build_plan_prompt(
+    history: Sequence[TimelineRecord],
+    new_messages: Sequence[TimelineRecord],
+    user_name: str,
+    timezone: tzinfo | None = None,
+) -> str:
+    """拼出规划器的提示词：同样的对话，最后要它只输出一个 JSON 格式的建议（D59）。
 
     Args:
         history: 之前的对话，从早到晚。
@@ -155,13 +226,6 @@ def build_reply_prompt(
     Raises:
         ValueError: 没有要回复的消息。
     """
-    if not new_messages:
-        raise ValueError("没有要回复的消息")
-    parts: list[str] = []
-    if history:
-        lines = "\n".join(_dialogue_line(record, user_name, timezone) for record in history)
-        parts.append(f"之前的对话（从早到晚）：\n{lines}")
-    lines = "\n".join(_dialogue_line(record, user_name, timezone) for record in new_messages)
-    parts.append(f"刚收到、还没回复的消息：\n{lines}")
-    parts.append("请直接写出你要说的话，不要加名字或时间前缀。")
+    parts = _dialogue_sections(history, new_messages, user_name, timezone)
+    parts.append(_PLAN_INSTRUCTION)
     return "\n\n".join(parts)

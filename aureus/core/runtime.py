@@ -18,6 +18,7 @@ from aureus.common import (
     AureusPaths,
     Clock,
     ConfigError,
+    HeartbeatConfig,
     Settings,
     SystemClock,
     configure_logging,
@@ -50,21 +51,27 @@ class Core:
 
 
 def _build_organ_bus(
-    paths: AureusPaths, reply_organ: str, resolver: KeyResolver, *, fake_organs: bool
+    paths: AureusPaths, heartbeat: HeartbeatConfig, resolver: KeyResolver, *, fake_organs: bool
 ) -> OrganBus:
     """注册器官。假器官模式不读 models.toml、不调用任何模型，不花钱。"""
     bus = OrganBus()
     if fake_organs:
-        bus.register(FakeReplyer(organ_id=reply_organ))
+        bus.register(FakeReplyer(organ_id=heartbeat.reply_organ))
         return bus
     models_config = load_models_config(paths)
     for organ_id in models_config.organs:
         bus.register(LLMOrgan.from_config(organ_id, models_config, resolver))
-    if not bus.is_registered(reply_organ):
-        # 启动时就报错，而不是等用户说第一句话才发现回复器不存在。
+    # 启动时就报错，而不是等用户说第一句话才发现器官不存在。
+    if not bus.is_registered(heartbeat.reply_organ):
         raise ConfigError(
-            f"心跳要用的回复器官 {reply_organ} 没有在 models.toml 里配置"
-            f"（缺少 [organs.{reply_organ}]）。"
+            f"心跳要用的回复器官 {heartbeat.reply_organ} 没有在 models.toml 里配置"
+            f"（缺少 [organs.{heartbeat.reply_organ}]）。"
+        )
+    if heartbeat.planning_enabled and not bus.is_registered(heartbeat.plan_organ):
+        raise ConfigError(
+            f"心跳要用的规划器官 {heartbeat.plan_organ} 没有在 models.toml 里配置"
+            f"（缺少 [organs.{heartbeat.plan_organ}]）。"
+            "不想用规划器，可以在 aureus.toml 的 [heartbeat] 里写 planning_enabled = false。"
         )
     return bus
 
@@ -123,9 +130,11 @@ def open_core(
         ledger.open()
         stack.callback(ledger.close)
 
-        bus = _build_organ_bus(
-            paths, runtime.heartbeat.reply_organ, resolver, fake_organs=fake_organs
-        )
+        heartbeat_config = runtime.heartbeat
+        if fake_organs and heartbeat_config.planning_enabled:
+            # 假器官只有回复器：试运行和测试时不规划，每次一次调用。
+            heartbeat_config = heartbeat_config.model_copy(update={"planning_enabled": False})
+        bus = _build_organ_bus(paths, heartbeat_config, resolver, fake_organs=fake_organs)
         # 网关和心跳共用同一个权限检查器，两边看到的急停状态一致（D54）。
         emergency_stop = EmergencyStop(paths.halt_file, the_clock)
         permissions = PermissionChecker(emergency_stop)
@@ -142,7 +151,7 @@ def open_core(
             organs=gateway,
             identity=identity,
             bio_state=bio_state,
-            config=runtime.heartbeat,
+            config=heartbeat_config,
             timezone=calendar.timezone,
             permissions=permissions,
             emergency_stop=emergency_stop,
