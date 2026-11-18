@@ -277,6 +277,9 @@ for name in files:
 - M8：`prune_snapshots` 的 `stat()` 包 `try/except OSError`。
 - 第 5 节：按「没有装饰」原则删除或接入未使用的状态；修正注释范围；`burnout_risk` 改成中文或删掉；`llm_api_key` 决定去留；确认 `models.toml` 文件名。
 
+> **完成情况（2026-11-18）**：F1–F8 已完成。F9 里 M1、M4–M8 已完成并有测试；第 5 节第 2 条（注释与实现不符）、第 5 条（`model_config.toml` 是用户本机的旧文件，代码读 `models.toml` 没有问题，不用改）、第 7 条（激素基线集中成常量）已完成。
+> **第 5 节还剩第 1、3、4 条，需要用户拍板**：删不删未接真实来源的生物模型接口（`on_*`、`consume_energy_for_*`、`burnout_risk`、`emotion_label`、`mood_text`、`circadian_factor_for_melatonin/alertness`，目前只有测试在调用），以及 `Secrets.llm_api_key` 去留。另外发现：`circadian_factor_for_alertness` 的实际曲线是午夜最高、中午最低，和它原来的说明「早晨高」相反；因为没有代码用它，没改行为，只改了说明。
+
 ---
 
 ## 8. 需要用户拍板的三件事

@@ -123,7 +123,12 @@ def _speaker(record: TimelineRecord, user_name: str) -> str:
 def _dialogue_line(record: TimelineRecord, user_name: str, timezone: tzinfo | None) -> str:
     # 对话可能跨好几天（中间停过机），所以带上日期。
     moment = record.timestamp.astimezone(timezone)
-    return f"[{moment:%m-%d %H:%M}] {_speaker(record, user_name)}：{record.content}"
+    return f"[{moment:%m-%d %H:%M}] {_speaker(record, user_name)}：{_one_line(record.content)}"
+
+
+def _one_line(text: str) -> str:
+    """把内容压成一行：每个换行换成两个字符 反斜杠加 n，免得有人发多行消息伪造一句我说过的话。"""
+    return "\\n".join(text.splitlines())
 
 
 def build_reply_prompt(

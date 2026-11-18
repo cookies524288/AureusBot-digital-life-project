@@ -85,3 +85,35 @@ def test_config_default_and_validation(tmp_path: Path) -> None:
     paths.runtime_config_file.write_text("[snapshots]\nmax_total_megabytes = 5\n", encoding="utf-8")
     assert load_runtime_config(paths).snapshots.max_total_megabytes == 5
     assert BYTES_PER_MEGABYTE == 1024 * 1024
+
+
+def test_a_file_that_cannot_be_inspected_is_skipped_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 审查 M8：stat() 抛错（文件恰好被删或没权限）不能让启动失败。
+    vanished = make_snapshot(tmp_path, "a.zip", 100, 1)
+    older = make_snapshot(tmp_path, "b.zip", 100, 2)
+    newest = make_snapshot(tmp_path, "c.zip", 100, 3)
+    real_stat = Path.stat
+
+    def fake_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if self == vanished:
+            raise PermissionError("没权限")
+        return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    removed = prune_snapshots(tmp_path, 150)
+    monkeypatch.undo()  # 下面的 exists() 也要 stat，不能再让它抛错
+
+    assert removed == [older]  # 读不到的那个既不算大小也不被删
+    assert newest.exists()
+    assert vanished.exists()
+
+
+def test_the_limit_must_be_a_real_number_not_a_string(tmp_path: Path) -> None:
+    # 审查 M7：安全设置写错类型要报错，不要悄悄转换。
+    paths = AureusPaths(tmp_path)
+    paths.ensure_directories()
+    paths.runtime_config_file.write_text('[snapshots]\nmax_total_megabytes = "1024"\n', "utf-8")
+    with pytest.raises(Exception, match="max_total_megabytes"):
+        load_runtime_config(paths)

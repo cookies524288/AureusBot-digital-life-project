@@ -102,7 +102,8 @@ class BiomodelConfig(BaseModel):
 class SnapshotsConfig(BaseModel):
     """快照的保留规则（D46）。"""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # strict=True：上限写成字符串 "1024" 要报错，不要悄悄转成数字（理由同 SafetyConfig）。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     # 默认值没有实测依据，是按经验估的：一份导出包通常远小于这个数，留出十几份的余地。
     max_total_megabytes: int = Field(default=1024, ge=1)

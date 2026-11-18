@@ -31,14 +31,22 @@ ULTRADIAN_DIP_SCALE = 0.15
 _DEFAULT_RATES = BiomodelConfig()
 
 
+# 各激素的基线浓度：既是初始值，也是衰减要回归的值，认知透明层也用它算「相对基线的偏离」。
+# 只在这里写一次，免得几处各写各的、改一处忘另一处（审查第 5 节第 7 条）。
+DOPAMINE_BASELINE = 0.5
+CORTISOL_BASELINE = 0.4
+SEROTONIN_BASELINE = 0.5
+NORADRENALINE_BASELINE = 0.4
+
+
 @dataclass
 class HormoneState:
     """激素浓度状态 [0, 1]"""
 
-    dopamine: float = 0.5  # 多巴胺：动力、期待、奖励
-    cortisol: float = 0.4  # 皮质醇：压力、警惕（受日周期影响）
-    serotonin: float = 0.5  # 血清素：满足感、稳定性（长期累积）
-    noradrenaline: float = 0.4  # 去甲肾上腺素：注意力、警觉性
+    dopamine: float = DOPAMINE_BASELINE  # 多巴胺：动力、期待、奖励
+    cortisol: float = CORTISOL_BASELINE  # 皮质醇：压力、警惕（受日周期影响）
+    serotonin: float = SEROTONIN_BASELINE  # 血清素：满足感、稳定性（长期累积）
+    noradrenaline: float = NORADRENALINE_BASELINE  # 去甲肾上腺素：注意力、警觉性
 
 
 @dataclass
@@ -75,15 +83,15 @@ class CircadianModel:
         return self._interpolate(cortisol_curve, phase)
 
     def circadian_factor_for_melatonin(self, phase: float) -> float:
-        """褪黑素的日周期调制倍数 (0-2 范围)
+        """褪黑素的日周期调制倍数，实际取值范围 [-0.6, 1.0]。
         晚上 9-11 点上升，早晨下降
         """
         # 使用正弦波模拟褪黑素的平滑上升与下降
         return 0.2 + 0.8 * math.sin(2 * math.pi * (phase + 0.3))
 
     def circadian_factor_for_alertness(self, phase: float) -> float:
-        """警觉性的日周期调制倍数（0-2 范围）
-        早晨高，傍晚低
+        """警觉性的日周期调制倍数，实际取值范围 [0.3, 0.9]。
+        午夜最高，中午最低（相位 0 取余弦最大值）
         """
         return 0.6 + 0.3 * math.cos(2 * math.pi * phase)
 
@@ -92,12 +100,7 @@ class CircadianModel:
         """分段线性插值"""
         sorted_keys = sorted(curve.keys())
 
-        # 超出范围时回绕
-        if phase < sorted_keys[0]:
-            phase = phase + 1.0
-        if phase > sorted_keys[-1]:
-            phase = phase - 1.0
-
+        # 调用方给的相位在 [0, 1)，曲线从 0.0 排到 1.0，覆盖整个范围，不需要回绕。
         # 找到插值区间
         for i, key in enumerate(sorted_keys[:-1]):
             if key <= phase <= sorted_keys[i + 1]:
@@ -127,9 +130,8 @@ class UltradinRhythm:
 
     def fatigue_from_phase(self) -> float:
         """一个周期内的疲劳曲线（0-1）
-        0 = 刚清醒（精力充沛）
-        0.5 = 中点（疲劳最高）
-        1 = 结束（需要休息）
+        相位 0 和 1（周期刚开始、刚结束）都是 0，相位 0.5（周期中点）最高。
+        是正弦曲线的前半个波，周期结束后回到 0，下一个周期重新开始。
         """
         return math.sin(self.phase * math.pi)
 
@@ -281,7 +283,7 @@ class BiologicalState:
         # 多巴胺
         self.hormones.dopamine = self._hormone_decay(
             current=self.hormones.dopamine,
-            baseline=0.5,
+            baseline=DOPAMINE_BASELINE,
             halflife=self._halflife_dopamine,
             dt=dt,
         )
@@ -291,7 +293,7 @@ class BiologicalState:
         cortisol_circadian_factor = CircadianModel().circadian_factor_for_cortisol(circadian_phase)
         self.hormones.cortisol = self._hormone_decay(
             current=self.hormones.cortisol,
-            baseline=0.4 * cortisol_circadian_factor,
+            baseline=CORTISOL_BASELINE * cortisol_circadian_factor,
             halflife=self._halflife_cortisol,
             dt=dt,
         )
@@ -299,7 +301,7 @@ class BiologicalState:
         # 血清素
         self.hormones.serotonin = self._hormone_decay(
             current=self.hormones.serotonin,
-            baseline=0.5,
+            baseline=SEROTONIN_BASELINE,
             halflife=self._halflife_serotonin,
             dt=dt,
         )
@@ -307,7 +309,7 @@ class BiologicalState:
         # 去甲肾上腺素
         self.hormones.noradrenaline = self._hormone_decay(
             current=self.hormones.noradrenaline,
-            baseline=0.4,
+            baseline=NORADRENALINE_BASELINE,
             halflife=self._halflife_noradrenaline,
             dt=dt,
         )

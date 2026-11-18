@@ -12,6 +12,26 @@ BYTES_PER_MEGABYTE = 1024 * 1024
 SNAPSHOT_SUFFIX = ".zip"
 
 
+def _list_snapshots(snapshots_dir: Path) -> list[tuple[Path, float, int]]:
+    """列出快照（路径、修改时间、大小），从旧到新。读不到信息的文件跳过并写警告。
+
+    文件可能恰好被别的程序删掉或没有权限；这种文件不算进总大小，也不会被删，
+    清理不能因为它们让启动失败。
+    """
+    found: list[tuple[Path, float, int]] = []
+    for item in snapshots_dir.iterdir():
+        try:
+            if not item.is_file() or item.suffix != SNAPSHOT_SUFFIX:
+                continue
+            info = item.stat()
+        except OSError as error:
+            logger.warning("快照 {} 读不到信息（{}），跳过", item.name, type(error).__name__)
+            continue
+        found.append((item, info.st_mtime, info.st_size))
+    found.sort(key=lambda entry: (entry[1], entry[0].name))
+    return found
+
+
 def prune_snapshots(snapshots_dir: Path, max_total_bytes: int) -> list[Path]:
     """删掉最旧的快照，直到总大小不超过上限。
 
@@ -27,20 +47,15 @@ def prune_snapshots(snapshots_dir: Path, max_total_bytes: int) -> list[Path]:
     """
     if not snapshots_dir.is_dir():
         return []
-    snapshots = sorted(
-        (
-            item
-            for item in snapshots_dir.iterdir()
-            if item.is_file() and item.suffix == SNAPSHOT_SUFFIX
-        ),
-        key=lambda item: (item.stat().st_mtime, item.name),
-    )
-    total = sum(item.stat().st_size for item in snapshots)
+    found = _list_snapshots(snapshots_dir)
+    sizes = {item: size for item, _modified, size in found}
+    snapshots = [item for item, _modified, _size in found]
+    total = sum(sizes.values())
     removed: list[Path] = []
     for snapshot in snapshots[:-1]:
         if total <= max_total_bytes:
             break
-        size = snapshot.stat().st_size
+        size = sizes[snapshot]
         try:
             snapshot.unlink()
         except OSError as error:

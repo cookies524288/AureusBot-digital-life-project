@@ -127,7 +127,8 @@ class _LockContextManager:
             self._lock.acquire()
         except Timeout as e:
             raise SingleInstanceLockError(
-                "另一个 Aureus 实例正在运行。\n如果确定没有其他实例，可以删除锁文件后重试。"
+                "另一个 Aureus 实例正在运行。\n"
+                "请先确认并关掉那个进程；只删锁文件没有用，锁是由运行中的进程持有的。"
             ) from e
         return self._lock
 

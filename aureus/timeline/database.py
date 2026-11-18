@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from aureus.common import Clock, SystemClock
+from aureus.common.clock import ensure_aware
 from aureus.common.sqlite import open_connection
 from aureus.timeline.models import ActorType, TimelineQuery, TimelineRecord, VisibilityScope
 
@@ -172,7 +173,8 @@ class TimelineDatabase:
         if self._conn is None:
             raise RuntimeError("Database is not open")
 
-        timestamp = self._clock.now()
+        # 统一成 UTC 再存：查询按字符串比较时间，混进别的时区会比错（与账本一致）。
+        timestamp = ensure_aware(self._clock.now())
         metadata_json = _encode_metadata(metadata or {})
 
         cursor = self._conn.execute(

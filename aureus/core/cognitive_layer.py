@@ -12,6 +12,12 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from aureus.common.clock import Clock, SystemClock
+from aureus.core.biomodel import (
+    CORTISOL_BASELINE,
+    DOPAMINE_BASELINE,
+    NORADRENALINE_BASELINE,
+    SEROTONIN_BASELINE,
+)
 
 if TYPE_CHECKING:
     from aureus.core.biomodel import BiologicalState
@@ -122,10 +128,10 @@ class CognitiveObserver:
 
         # 4. 激素效应（相对于基线）
         active_hormones = {
-            "dopamine_effect": bio_state.hormones.dopamine - 0.5,
-            "cortisol_effect": bio_state.hormones.cortisol - 0.4,
-            "serotonin_effect": bio_state.hormones.serotonin - 0.5,
-            "noradrenaline_effect": bio_state.hormones.noradrenaline - 0.4,
+            "dopamine_effect": bio_state.hormones.dopamine - DOPAMINE_BASELINE,
+            "cortisol_effect": bio_state.hormones.cortisol - CORTISOL_BASELINE,
+            "serotonin_effect": bio_state.hormones.serotonin - SEROTONIN_BASELINE,
+            "noradrenaline_effect": bio_state.hormones.noradrenaline - NORADRENALINE_BASELINE,
         }
 
         # 5. 能量分类

@@ -4,7 +4,7 @@ import json
 import tempfile
 import time
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -374,3 +374,30 @@ def test_query_by_exact_visibility(database: TimelineDatabase):
     results = database.query(TimelineQuery(visibility=VisibilityScope.USER_ONLY))
 
     assert [r.content for r in results] == ["private chat"]
+
+
+class LocalTimeClock:
+    """返回非 UTC 时区的时钟：模拟将来有人传进本地时间。"""
+
+    def __init__(self, moment: datetime) -> None:
+        self._moment = moment
+
+    def now(self) -> datetime:
+        return self._moment
+
+
+def test_timestamps_are_stored_in_utc_even_if_the_clock_is_not(temp_db_path: Path):
+    """审查 M4：时间线按字符串比较时间，存进去的必须统一是 UTC。"""
+    china = timezone(timedelta(hours=8))
+    clock = LocalTimeClock(datetime(2026, 11, 18, 8, 0, tzinfo=china))
+    db = TimelineDatabase(temp_db_path, clock=clock)
+    db.open()
+    try:
+        record = db.append(event_type="message", content="早", actor_type=ActorType.ME)
+        [stored] = db.query(TimelineQuery(limit=10))
+    finally:
+        db.close()
+
+    assert record.timestamp == datetime(2026, 11, 18, 0, 0, tzinfo=UTC)
+    assert stored.timestamp.utcoffset() == timedelta(0)
+    assert stored.timestamp == record.timestamp
