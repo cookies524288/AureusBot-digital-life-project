@@ -11,7 +11,13 @@ from typing import Any
 
 import pytest
 
-from aureus.common import AcceleratedClock, HeartbeatConfig, ManualClock, SafetyConfig
+from aureus.common import (
+    AcceleratedClock,
+    BudgetCalendar,
+    HeartbeatConfig,
+    ManualClock,
+    SafetyConfig,
+)
 from aureus.common import sqlite as sqlite_support
 from aureus.core import BiologicalState
 from aureus.heartbeat import (
@@ -383,7 +389,7 @@ async def test_with_the_real_gateway_a_budget_rejection_reaches_the_user(
 ) -> None:
     # 验收 3 的一部分：把预算上限调得很低，超限后拒绝调用，用户看到的是系统通知。
     database = tmp_path / "aureus.db"
-    ledger = Ledger(database, clock=factory.clock)
+    ledger = Ledger(database, clock=factory.clock, calendar=BudgetCalendar(UTC))
     ledger.open()
     try:
         bus = OrganBus()

@@ -116,11 +116,12 @@ def open_core(
         timeline = TimelineDatabase(paths.database_file, the_clock)
         timeline.open()
         stack.callback(timeline.close)
-        ledger = Ledger(paths.database_file, the_clock)
+        runtime = settings.runtime
+        calendar = runtime.time.build_calendar()
+        ledger = Ledger(paths.database_file, the_clock, calendar=calendar)
         ledger.open()
         stack.callback(ledger.close)
 
-        runtime = settings.runtime
         bus = _build_organ_bus(
             paths, runtime.heartbeat.reply_organ, resolver, fake_organs=fake_organs
         )
@@ -128,7 +129,7 @@ def open_core(
         emergency_stop = EmergencyStop(paths.halt_file, the_clock)
         permissions = PermissionChecker(emergency_stop)
         gateway = SafetyGateway(bus, ledger, timeline, the_clock, runtime.safety, permissions)
-        # 时区不用传：心跳会把自己的时区填给生物状态（D42 第 3 条）。
+        # 生物状态的时区不用传：心跳会把自己的时区填给它（D42 第 3 条）。
         bio_state = BiologicalState.from_config(runtime.biomodel, the_clock)
         heartbeat = Heartbeat(
             clock=the_clock,
@@ -137,6 +138,7 @@ def open_core(
             identity=identity,
             bio_state=bio_state,
             config=runtime.heartbeat,
+            timezone=calendar.timezone,
             permissions=permissions,
             emergency_stop=emergency_stop,
         )

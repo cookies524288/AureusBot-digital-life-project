@@ -12,7 +12,7 @@ from .errors import (
     RunawayBlockedError,
 )
 from .gateway import EVENT_CALL_FAILED, EVENT_CALL_REJECTED, SafetyGateway
-from .ledger import Ledger, LedgerEntry, month_bounds
+from .ledger import Ledger, LedgerEntry
 from .permissions import (
     ACTION_CALL_ORGAN,
     ACTION_REPLY_TO_USER,
@@ -44,5 +44,4 @@ __all__ = [
     "RunawayBlockedError",
     "RunawayGuard",
     "SafetyGateway",
-    "month_bounds",
 ]

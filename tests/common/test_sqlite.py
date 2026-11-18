@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from aureus.common import ManualClock
+from aureus.common import BudgetCalendar, ManualClock
 from aureus.common import sqlite as sqlite_support
 from aureus.organs import CallAttempt
 from aureus.safety import Ledger
@@ -68,7 +68,7 @@ def test_timeline_append_gives_up_when_the_write_lock_is_held(tmp_path: Path) ->
 @pytest.mark.usefixtures("short_busy_timeout")
 def test_ledger_record_gives_up_when_the_write_lock_is_held(tmp_path: Path) -> None:
     db_path = tmp_path / "aureus.db"
-    ledger = Ledger(db_path, ManualClock(START))
+    ledger = Ledger(db_path, ManualClock(START), calendar=BudgetCalendar(UTC))
     ledger.open()
     try:
         attempt = CallAttempt(model="m", provider="p", prompt_tokens=1, completion_tokens=1)

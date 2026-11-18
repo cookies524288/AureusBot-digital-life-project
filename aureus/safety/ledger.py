@@ -9,18 +9,16 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
-from aureus.common import Clock, SystemClock
+from aureus.common import BudgetCalendar, Clock, SystemClock
 from aureus.common.clock import ensure_aware
 from aureus.common.sqlite import open_connection
 from aureus.organs import CallAttempt
 
 # 时间固定写成带微秒的 UTC，格式等宽，这样 SQLite 里按字符串比较大小就等于按时间比较。
 _TIMESTAMP_PRECISION = "microseconds"
-
-_DECEMBER = 12
 
 
 @dataclass(frozen=True)
@@ -47,27 +45,6 @@ class LedgerEntry:
         return self.prompt_tokens + self.completion_tokens
 
 
-def month_bounds(moment: datetime) -> tuple[datetime, datetime]:
-    """算出某个时刻所在的 UTC 自然月的起止。
-
-    Args:
-        moment: 带时区的时间。
-
-    Returns:
-        （本月第一刻, 下个月第一刻），前者包含、后者不包含，都是 UTC。
-
-    Raises:
-        ValueError: 时间不带时区。
-    """
-    utc_moment = ensure_aware(moment)
-    start = datetime(utc_moment.year, utc_moment.month, 1, tzinfo=UTC)
-    if utc_moment.month == _DECEMBER:
-        end = datetime(utc_moment.year + 1, 1, 1, tzinfo=UTC)
-    else:
-        end = datetime(utc_moment.year, utc_moment.month + 1, 1, tzinfo=UTC)
-    return start, end
-
-
 def _format_timestamp(moment: datetime) -> str:
     return ensure_aware(moment).isoformat(timespec=_TIMESTAMP_PRECISION)
 
@@ -75,15 +52,20 @@ def _format_timestamp(moment: datetime) -> str:
 class Ledger:
     """账本：只能追加和查询，不能修改、不能删除（触发器强制保证）。"""
 
-    def __init__(self, db_path: Path, clock: Clock | None = None) -> None:
+    def __init__(
+        self, db_path: Path, clock: Clock | None = None, *, calendar: BudgetCalendar
+    ) -> None:
         """创建账本对象（还没有打开数据库）。
 
         Args:
             db_path: 数据库文件路径，通常是数据根目录里的 aureus.db。
             clock: 时钟对象，默认使用真实时钟。记账时间从它取。
+            calendar: 一天和一个月的划分（D53）。必须由调用方给：这里不猜时区，
+                账本和身体用同一份日历，月和日的边界才对得上。
         """
         self._db_path = db_path
         self._clock = clock or SystemClock()
+        self._calendar = calendar
         self._conn: sqlite3.Connection | None = None
 
     def open(self) -> None:
@@ -202,20 +184,34 @@ class Ledger:
             )
 
     def tokens_used_in_month(self, moment: datetime) -> int:
-        """查某个 UTC 自然月已经用了多少预算 token（输入加输出）。
+        """查某个时刻所在的月份已经用了多少预算 token（输入加输出）。
 
         Args:
-            moment: 带时区的时间，用来确定是哪个月。
+            moment: 带时区的时间，用来确定是哪个月（按日历：当地每月 1 日凌晨 4 点换月）。
 
         Returns:
             这个月所有记录的输入 token 加输出 token 之和。
 
         Raises:
             RuntimeError: 账本没有打开。
+            ValueError: 时间不带时区。
             sqlite3.Error: 读取失败。
         """
+        return self._tokens_used_between(*self._calendar.month_bounds(moment))
+
+    def tokens_used_in_day(self, moment: datetime) -> int:
+        """查某个时刻所在的一天（当地凌晨 4 点分界）已经用了多少预算 token。
+
+        Raises:
+            RuntimeError: 账本没有打开。
+            ValueError: 时间不带时区。
+            sqlite3.Error: 读取失败。
+        """
+        return self._tokens_used_between(*self._calendar.day_bounds(moment))
+
+    def _tokens_used_between(self, start: datetime, end: datetime) -> int:
+        """起止之间（含起不含止）的预算 token 之和。"""
         conn = self._require_open()
-        start, end = month_bounds(moment)
         row = conn.execute(
             """
             SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS used

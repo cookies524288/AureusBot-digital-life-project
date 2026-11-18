@@ -20,6 +20,7 @@ dependencies = [
     "loguru>=0.8.0",
     "platformdirs>=4.14.5",
     "python-dotenv>=1.2.4",
+    "tzdata>=2026.6",
 ]
 
 [project.scripts]

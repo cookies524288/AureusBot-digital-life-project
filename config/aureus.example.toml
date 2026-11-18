@@ -14,7 +14,7 @@ log_level = "INFO"
 # 安全网关（设计见 docs/06-safety.md 第 12 节）。下面的值都是默认值，需要改再取消注释。
 # 注意：true / false 不能写成引号或数字，数字不能加引号。
 [safety]
-# 每月最多使用的 token（输入加输出），按 UTC 自然月计算。
+# 每月最多使用的 token（输入加输出），按本地时间每月 1 日凌晨 4 点换月（见下面的 [time]）。
 # 不写就是不限制，每次启动会警告一次。写 0 或负数会报错。
 # monthly_token_limit = 5000000
 
@@ -57,6 +57,16 @@ log_level = "INFO"
 # social_relief_per_conversation = 0.05
 # 它每回复一次，新奇感降多少（0 到 1）。
 # novelty_relief_per_conversation = 0.03
+
+# 「一天」和「一个月」怎么划分（设计见 docs/10-decisions.md 的 D53）。
+# 每月的 token 上限、将来每天的精力额度，都按这里的边界算。
+[time]
+# 时区，写 IANA 名字，比如 "Asia/Shanghai"。不写就用这台电脑设置的时区。
+# 换了时区只改「哪一刻算哪个月」，账本里已经记下的时间不变。
+# timezone = "Asia/Shanghai"
+# 一天从当地几点开始，0 到 23。每月 1 日的这个时刻算新的一个月；
+# 默认 4 点，熬夜到凌晨 3 点聊天，用的还是前一天的额度。
+# day_start_hour = 4
 
 # 快照（导入前的自动备份等，放在 data/snapshots/，设计见 docs/10-decisions.md 的 D46）。
 [snapshots]

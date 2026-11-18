@@ -16,7 +16,7 @@ from aureus.cli.inspect_commands import (
     run_usage_command,
 )
 from aureus.cli.main import main
-from aureus.common import AureusPaths, ManualClock
+from aureus.common import AureusPaths, BudgetCalendar, ManualClock
 from aureus.heartbeat.events import EVENT_ORGAN_CALL_ABANDONED
 from aureus.organs import CallAttempt
 from aureus.safety import Ledger
@@ -64,7 +64,7 @@ def add_attempt(
     succeeded: bool = True,
     clock: ManualClock | None = None,
 ) -> None:
-    ledger = Ledger(paths.database_file, clock)
+    ledger = Ledger(paths.database_file, clock, calendar=BudgetCalendar(UTC))
     ledger.open()
     try:
         attempt = CallAttempt(

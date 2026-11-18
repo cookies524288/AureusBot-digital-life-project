@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from aureus.common import ManualClock, SafetyConfig
+from aureus.common import BudgetCalendar, ManualClock, SafetyConfig
 from aureus.core import BiologicalState
 from aureus.organs import (
     CallAttempt,
@@ -136,7 +136,7 @@ class Harness:
 def harness(tmp_path: Path) -> Iterator[Harness]:
     clock = ManualClock(START)
     db_path = tmp_path / "aureus.db"
-    ledger = Ledger(db_path, clock)
+    ledger = Ledger(db_path, clock, calendar=BudgetCalendar(UTC))
     timeline = TimelineDatabase(db_path, clock)
     ledger.open()
     timeline.open()
@@ -271,14 +271,14 @@ async def test_failed_and_estimated_usage_counts_toward_the_budget(harness: Harn
         await gateway.call(harness.request())
 
 
-async def test_budget_resets_in_a_new_utc_month(harness: Harness) -> None:
+async def test_budget_resets_at_four_in_the_morning_on_the_first(harness: Harness) -> None:
     organ = harness.add_organ([ok(make_attempt(100, 50))])
     gateway = harness.build(SafetyConfig(monthly_token_limit=150))
-    harness.clock.advance(datetime(2026, 11, 30, 23, 59, 59, tzinfo=UTC) - START)
+    harness.clock.advance(datetime(2026, 12, 1, 3, 59, 59, tzinfo=UTC) - START)
     await gateway.call(harness.request())
     with pytest.raises(BudgetExceededError):
         await gateway.call(harness.request())
-    harness.clock.advance(timedelta(seconds=1))  # 12 月 1 日 0 点（UTC）
+    harness.clock.advance(timedelta(seconds=1))  # 12 月 1 日凌晨 4 点（UTC 日历）
     await gateway.call(harness.request())
     assert organ.calls == 2
 

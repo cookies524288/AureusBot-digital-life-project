@@ -8,12 +8,14 @@ from typing import Any, cast
 
 import pytest
 
-from aureus.common import ManualClock
+from aureus.common import BudgetCalendar, ManualClock
 from aureus.organs import CallAttempt
-from aureus.safety import Ledger, month_bounds
+from aureus.safety import Ledger
 from aureus.timeline import ActorType, TimelineDatabase
 
 START = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
+# 测试用 UTC 日历：边界好算；换时区、夏令时的情况在 tests/common/test_budget_calendar.py。
+UTC_CALENDAR = BudgetCalendar(UTC)
 
 
 def make_attempt(prompt: int = 100, completion: int = 50, **overrides: Any) -> CallAttempt:
@@ -39,7 +41,7 @@ def db_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def ledger(db_path: Path, clock: ManualClock) -> Iterator[Ledger]:
-    opened = Ledger(db_path, clock)
+    opened = Ledger(db_path, clock, calendar=UTC_CALENDAR)
     opened.open()
     yield opened
     opened.close()
@@ -109,11 +111,11 @@ def test_entries_support_paging(ledger: Ledger) -> None:
 
 
 def test_records_survive_reopening(db_path: Path, clock: ManualClock) -> None:
-    first = Ledger(db_path, clock)
+    first = Ledger(db_path, clock, calendar=UTC_CALENDAR)
     first.open()
     first.record("replyer", [make_attempt(10, 5)])
     first.close()
-    second = Ledger(db_path, clock)
+    second = Ledger(db_path, clock, calendar=UTC_CALENDAR)
     second.open()
     try:
         assert second.tokens_used_in_month(START) == 15
@@ -122,7 +124,7 @@ def test_records_survive_reopening(db_path: Path, clock: ManualClock) -> None:
 
 
 def test_ledger_and_timeline_can_share_one_database_file(db_path: Path, clock: ManualClock) -> None:
-    ledger = Ledger(db_path, clock)
+    ledger = Ledger(db_path, clock, calendar=UTC_CALENDAR)
     timeline = TimelineDatabase(db_path, clock)
     ledger.open()
     timeline.open()
@@ -222,10 +224,10 @@ def test_empty_ledger_has_used_nothing(ledger: Ledger) -> None:
     assert ledger.tokens_used_in_month(START) == 0
 
 
-def test_months_are_counted_separately_in_utc(ledger: Ledger, clock: ManualClock) -> None:
-    clock.advance(datetime(2026, 11, 30, 23, 59, 59, tzinfo=UTC) - START)
+def test_months_are_counted_separately(ledger: Ledger, clock: ManualClock) -> None:
+    clock.advance(datetime(2026, 12, 1, 3, 59, 59, tzinfo=UTC) - START)
     ledger.record("replyer", [make_attempt(100, 0)])
-    clock.advance(timedelta(seconds=1))  # 进入 12 月
+    clock.advance(timedelta(seconds=1))  # 12 月 1 日凌晨 4 点，进入 12 月
     ledger.record("replyer", [make_attempt(7, 0)])
     assert ledger.tokens_used_in_month(datetime(2026, 11, 15, tzinfo=UTC)) == 100
     assert ledger.tokens_used_in_month(datetime(2026, 12, 15, tzinfo=UTC)) == 7
@@ -234,17 +236,54 @@ def test_months_are_counted_separately_in_utc(ledger: Ledger, clock: ManualClock
 def test_first_instant_of_the_month_belongs_to_the_new_month(
     ledger: Ledger, clock: ManualClock
 ) -> None:
-    clock.advance(datetime(2026, 12, 1, tzinfo=UTC) - START)
+    clock.advance(datetime(2026, 12, 1, 4, tzinfo=UTC) - START)
     ledger.record("replyer", [make_attempt(50, 0)])
-    assert ledger.tokens_used_in_month(datetime(2026, 11, 30, 23, 59, 59, tzinfo=UTC)) == 0
-    assert ledger.tokens_used_in_month(datetime(2026, 12, 1, tzinfo=UTC)) == 50
+    assert ledger.tokens_used_in_month(datetime(2026, 12, 1, 3, 59, 59, tzinfo=UTC)) == 0
+    assert ledger.tokens_used_in_month(datetime(2026, 12, 1, 4, tzinfo=UTC)) == 50
 
 
-def test_month_is_decided_in_utc_not_by_the_given_offset(ledger: Ledger) -> None:
-    ledger.record("replyer", [make_attempt(10, 0)])  # UTC 11 月 16 日
+def test_month_is_decided_in_the_calendar_timezone_not_by_the_given_offset(
+    db_path: Path, clock: ManualClock
+) -> None:
     beijing = timezone(timedelta(hours=8))
-    # 北京时间 12 月 1 日 7 点 = UTC 11 月 30 日 23 点，还是 11 月。
-    assert ledger.tokens_used_in_month(datetime(2026, 12, 1, 7, tzinfo=beijing)) == 10
+    ledger = Ledger(db_path, clock, calendar=BudgetCalendar(beijing))
+    ledger.open()
+    try:
+        clock.advance(datetime(2026, 11, 30, 19, tzinfo=UTC) - START)  # 北京时间 12 月 1 日 3 点
+        ledger.record("replyer", [make_attempt(10, 0)])
+        # 不到 12 月 1 日凌晨 4 点，还算 11 月；换成别的时区的写法问同一个时刻，答案不变。
+        assert ledger.tokens_used_in_month(datetime(2026, 11, 20, tzinfo=UTC)) == 10
+        assert ledger.tokens_used_in_month(datetime(2026, 12, 1, 3, tzinfo=beijing)) == 10
+        assert ledger.tokens_used_in_month(datetime(2026, 12, 1, 4, tzinfo=beijing)) == 0
+    finally:
+        ledger.close()
+
+
+def test_day_total_resets_at_four_in_the_morning(ledger: Ledger, clock: ManualClock) -> None:
+    clock.advance(datetime(2026, 11, 17, 3, 59, tzinfo=UTC) - START)
+    ledger.record("replyer", [make_attempt(30, 0)])
+    clock.advance(timedelta(minutes=1))
+    ledger.record("replyer", [make_attempt(5, 0)])
+    assert ledger.tokens_used_in_day(datetime(2026, 11, 16, 12, tzinfo=UTC)) == 30
+    assert ledger.tokens_used_in_day(datetime(2026, 11, 17, 12, tzinfo=UTC)) == 5
+    # 同一天内，月累计包含全部。
+    assert ledger.tokens_used_in_month(START) == 35
+
+
+def test_old_ledger_rows_keep_their_utc_timestamps(db_path: Path, clock: ManualClock) -> None:
+    """换时区只改归哪个月，不改账本里存的时刻，所以老账本照常能读。"""
+    first = Ledger(db_path, clock, calendar=UTC_CALENDAR)
+    first.open()
+    first.record("replyer", [make_attempt(10, 0)])
+    stored = first.entries()[0].timestamp
+    first.close()
+    second = Ledger(db_path, clock, calendar=BudgetCalendar(timezone(timedelta(hours=-10))))
+    second.open()
+    try:
+        assert second.entries()[0].timestamp == stored
+        assert second.tokens_used_in_month(START) == 10
+    finally:
+        second.close()
 
 
 def test_naive_time_is_rejected(ledger: Ledger) -> None:
@@ -252,35 +291,11 @@ def test_naive_time_is_rejected(ledger: Ledger) -> None:
         ledger.tokens_used_in_month(datetime(2026, 11, 16, 12, 0))
 
 
-@pytest.mark.parametrize(
-    ("moment", "start", "end"),
-    [
-        (
-            datetime(2026, 11, 16, tzinfo=UTC),
-            datetime(2026, 11, 1, tzinfo=UTC),
-            datetime(2026, 12, 1, tzinfo=UTC),
-        ),
-        (
-            datetime(2026, 12, 31, 23, 59, tzinfo=UTC),
-            datetime(2026, 12, 1, tzinfo=UTC),
-            datetime(2027, 1, 1, tzinfo=UTC),
-        ),
-        (
-            datetime(2028, 2, 29, tzinfo=UTC),
-            datetime(2028, 2, 1, tzinfo=UTC),
-            datetime(2028, 3, 1, tzinfo=UTC),
-        ),
-    ],
-)
-def test_month_bounds(moment: datetime, start: datetime, end: datetime) -> None:
-    assert month_bounds(moment) == (start, end)
-
-
 # ---------- 没打开、被破坏 ----------
 
 
 def test_using_a_closed_ledger_raises(db_path: Path, clock: ManualClock) -> None:
-    closed = Ledger(db_path, clock)
+    closed = Ledger(db_path, clock, calendar=UTC_CALENDAR)
     with pytest.raises(RuntimeError, match="没有打开"):
         closed.tokens_used_in_month(START)
     with pytest.raises(RuntimeError, match="没有打开"):
@@ -294,7 +309,7 @@ def test_open_twice_is_harmless(ledger: Ledger) -> None:
 
 
 def test_open_creates_missing_parent_directories(tmp_path: Path, clock: ManualClock) -> None:
-    nested = Ledger(tmp_path / "a" / "b" / "aureus.db", clock)
+    nested = Ledger(tmp_path / "a" / "b" / "aureus.db", clock, calendar=UTC_CALENDAR)
     nested.open()
     nested.close()
     assert (tmp_path / "a" / "b" / "aureus.db").exists()

@@ -1,5 +1,6 @@
 """配置读取的测试：运行配置和报错信息。"""
 
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from aureus.common import (
     ConfigError,
     HeartbeatConfig,
     SafetyConfig,
+    TimeConfig,
     load_runtime_config,
     load_settings,
 )
@@ -283,6 +285,45 @@ def test_biomodel_rejects_bad_values(tmp_path: Path, field: str, text: str) -> N
 
 
 # ---------- 合在一起 ----------
+
+
+# ---------- [time]：一天和一个月 ----------
+
+
+def test_time_defaults_use_this_computers_timezone_and_four_oclock(tmp_path: Path) -> None:
+    time = load_runtime_config(AureusPaths(tmp_path)).time
+    assert time == TimeConfig()
+    assert time.timezone is None
+    assert time.day_start_hour == 4
+    assert time.build_calendar().timezone is None
+
+
+def test_time_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, '[time]\ntimezone = "Asia/Tokyo"\nday_start_hour = 5\n')
+    calendar = load_runtime_config(paths).time.build_calendar()
+    assert str(calendar.timezone) == "Asia/Tokyo"
+    assert calendar.day_of(datetime(2026, 11, 18, 19, 30, tzinfo=UTC)) == date(2026, 11, 18)
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("timezone", '"Mars/Base"'),
+        ("timezone", '""'),
+        ("timezone", "8"),
+        ("day_start_hour", "24"),
+        ("day_start_hour", "-1"),
+        ("day_start_hour", '"4"'),
+        ("day_start_hour", "4.5"),
+    ],
+)
+def test_time_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[time]\n{field} = {text}\n")
+    message = error_message_of(paths)
+    assert f"time.{field}" in message
+    assert "Mars" not in message
 
 
 def test_load_settings_combines_paths_and_runtime(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ from aureus.common import AureusPaths, ConfigError, SystemClock, load_runtime_co
 from aureus.common.time_format import format_local_time
 from aureus.heartbeat.events import EVENT_ORGAN_CALL_ABANDONED
 from aureus.organs.interface import sum_costs
-from aureus.safety import Ledger, LedgerEntry, month_bounds
+from aureus.safety import Ledger, LedgerEntry
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
 
 EXIT_OK = 0
@@ -137,7 +137,7 @@ def _format_cost(costs: list[float | None]) -> str:
 
 
 def run_usage_command(paths: AureusPaths, write_line: WriteLine = print) -> int:
-    """执行 usage 命令：本月（UTC 自然月）的模型用量，总数和按器官分开的数。
+    """执行 usage 命令：本月（当地每月 1 日凌晨 4 点换月，D53）的模型用量，总数和按器官分开的数。
 
     Args:
         paths: 数据根目录的路径集合。
@@ -147,15 +147,17 @@ def run_usage_command(paths: AureusPaths, write_line: WriteLine = print) -> int:
         退出码：0 成功，1 配置或账本读不了。
     """
     try:
-        limit = load_runtime_config(paths).safety.monthly_token_limit
+        runtime = load_runtime_config(paths)
     except ConfigError as error:
         print(f"错误：{error}", file=sys.stderr)
         return EXIT_FAILURE
+    limit = runtime.safety.monthly_token_limit
     if not paths.database_file.exists():
         write_line(NO_DATABASE_MESSAGE)
         return EXIT_OK
-    start, end = month_bounds(SystemClock().now())
-    ledger = Ledger(paths.database_file)
+    calendar = runtime.time.build_calendar()
+    start, end = calendar.month_bounds(SystemClock().now())
+    ledger = Ledger(paths.database_file, calendar=calendar)
     timeline = TimelineDatabase(paths.database_file)
     try:
         ledger.open()
@@ -183,7 +185,8 @@ def run_usage_command(paths: AureusPaths, write_line: WriteLine = print) -> int:
     failed = sum(usage.failed for usage in by_organ.values())
     estimated = sum(1 for entry in entries if entry.estimated)
 
-    write_line(f"本月（UTC {start:%Y-%m}）模型用量：{len(entries)} 次请求，失败 {failed} 次，")
+    month = f"{calendar.month_start_day(start):%Y-%m}"
+    write_line(f"本月（{month}）模型用量：{len(entries)} 次请求，失败 {failed} 次，")
     write_line(f"其中 {estimated} 次的用量是估算的。")
     if abandoned:
         # 关闭时取消的调用来不及记账（0.8 已知缺口，审查 H3），要让用户看得见。

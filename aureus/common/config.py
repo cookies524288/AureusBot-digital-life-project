@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from aureus.common.budget_calendar import DEFAULT_DAY_START_HOUR, BudgetCalendar, load_timezone
 from aureus.common.paths import AureusPaths
 
 # 当前软件认识的配置格式版本。以后改了配置格式就加一，并写迁移说明。
@@ -94,6 +95,31 @@ class BiomodelConfig(BaseModel):
     novelty_relief_per_conversation: float = Field(default=0.03, ge=0, le=1)
 
 
+class TimeConfig(BaseModel):
+    """「一天」和「一个月」怎么划分（aureus.toml 的 [time]，D53 第 4 条）。"""
+
+    # 严格类型，理由同 SafetyConfig。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # IANA 时区名，比如 "Asia/Shanghai"。不写就用这台电脑设置的时区。
+    timezone: str | None = Field(default=None, min_length=1)
+    # 一天从当地几点开始；每月 1 日的这个时刻算新的一个月。
+    day_start_hour: int = Field(default=DEFAULT_DAY_START_HOUR, ge=0, le=23)
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_timezone_name(cls, value: str | None) -> str | None:
+        # 启动时就查：时区名写错了，要在读配置时报错，不要等到算预算时才发现。
+        if value is not None:
+            load_timezone(value)
+        return value
+
+    def build_calendar(self) -> BudgetCalendar:
+        """按这份配置建日历。"""
+        zone = None if self.timezone is None else load_timezone(self.timezone)
+        return BudgetCalendar(zone, self.day_start_hour)
+
+
 class SnapshotsConfig(BaseModel):
     """快照的保留规则（D46）。"""
 
@@ -120,6 +146,7 @@ class RuntimeConfig(BaseModel):
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     biomodel: BiomodelConfig = Field(default_factory=BiomodelConfig)
+    time: TimeConfig = Field(default_factory=TimeConfig)
     snapshots: SnapshotsConfig = Field(default_factory=SnapshotsConfig)
 
     @field_validator("log_level", mode="before")

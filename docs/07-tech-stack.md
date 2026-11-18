@@ -22,6 +22,7 @@
 | 网页通道 | FastAPI + WebSocket | 聊天需要服务器主动推送消息（它主动找你） |
 | 观察台 | Streamlit | 纯 Python 写网页仪表盘，不用学前端；只读数据库 |
 | 单实例锁 | filelock | 成熟的跨平台文件锁，支持 Windows |
+| 时区 | zoneinfo（标准库）+ tzdata | 按 IANA 时区名处理夏令时；Windows 没有系统时区库，靠 tzdata 补上 |
 | 日志 | loguru | 比标准库的 logging 简单 |
 
 ### 1.2 开发工具
