@@ -43,12 +43,19 @@ class ReplyStrategy:
             steps = "先想好要不要回、说什么，再写成话"
         parts = [
             steps,
-            f"优先用{_PREFERENCE_DESCRIPTIONS[self.model_preference]}的模型",
+            self._model_choice(),
             f"只看最近 {self.message_limit} 条对话",
         ]
         if self.length_limit is not None:
             parts.append(f"回复控制在{self.length_limit.describe()}")
         return "，".join(parts)
+
+    def _model_choice(self) -> str:
+        """用哪个模型；不是首选时说明：模型列表里有更便宜的才会换。"""
+        text = f"优先用{_PREFERENCE_DESCRIPTIONS[self.model_preference]}的模型"
+        if self.model_preference is ModelPreference.PREFERRED:
+            return text
+        return text + "（模型列表里有更便宜的才会换，只配了一个就还是它）"
 
     def to_metadata(self) -> dict[str, object]:
         """写进时间线 metadata 的样子。"""

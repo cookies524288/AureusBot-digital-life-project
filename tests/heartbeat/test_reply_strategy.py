@@ -65,12 +65,14 @@ def test_description_states_what_is_actually_done() -> None:
     assert "首选" in normal
     assert "最近 20 条" in normal
     assert "回复控制" not in normal
+    assert "更便宜的才会换" not in normal
 
     saving = choose_strategy(EnergyTier.SAVING, HeartbeatConfig()).describe()
     assert "合并成一次调用" in saving
     assert "便宜一档" in saving
     assert "最近 10 条" in saving
     assert "三五句话" in saving
+    assert "更便宜的才会换" in saving
 
     low = choose_strategy(EnergyTier.LOW, HeartbeatConfig()).describe()
     assert "最便宜" in low
