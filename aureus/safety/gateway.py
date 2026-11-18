@@ -1,0 +1,174 @@
+"""安全网关 SafetyGateway：所有器官调用的唯一入口（D39、D40，06 号文档第 12 节）。
+
+流程：失控拦截 → 月度 token 预算 → 放行并调用器官 → 把每次模型请求记进账本 →
+告诉失控拦截成败；拒绝和失败都记进时间线（只有自己可见）。
+安全检查本身出错（读不了账本）时当作「不允许」（06 号文档第 11 节）。
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Sequence
+
+from aureus.common import Clock, SafetyConfig
+from aureus.organs import CallAttempt, OrganBus, OrganCallError, OrganRequest, OrganResponse
+from aureus.safety.errors import (
+    BudgetExceededError,
+    CallRejectedError,
+    LedgerUnavailableError,
+    RunawayBlockedError,
+)
+from aureus.safety.ledger import Ledger
+from aureus.safety.runaway_guard import RunawayGuard
+from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
+
+logger = logging.getLogger(__name__)
+
+EVENT_CALL_REJECTED = "organ_call_rejected"
+EVENT_CALL_FAILED = "organ_call_failed"
+
+
+class SafetyGateway:
+    """包着器官总线的安全网关。核心组装时只把网关交给心跳，别处拿不到总线。"""
+
+    def __init__(
+        self,
+        bus: OrganBus,
+        ledger: Ledger,
+        timeline: TimelineDatabase,
+        clock: Clock,
+        config: SafetyConfig,
+    ) -> None:
+        """创建网关。账本和时间线要由调用方先打开。
+
+        没设月度上限、或关掉了失控拦截时，在这里各警告一次：
+        这两个安全机制被放开是用户的选择，但不能悄悄放开，免得以后忘了（D39）。
+        """
+        self._bus = bus
+        self._ledger = ledger
+        self._timeline = timeline
+        self._clock = clock
+        self._config = config
+        self._guard = RunawayGuard(config, clock)
+        # 账本写入失败后置位，重启之前拒绝所有调用（D40）。
+        self._ledger_write_failed = False
+        if config.monthly_token_limit is None:
+            logger.warning(
+                "月度 token 上限没有设置，用量不受限制。在 [safety] 里写 monthly_token_limit。"
+            )
+        if not config.runaway_guard_enabled:
+            logger.warning("失控拦截已关闭：调用频率和连续失败都不再受限制。")
+
+    async def call(self, request: OrganRequest) -> OrganResponse:
+        """经过安全检查后调用器官。
+
+        Args:
+            request: 器官请求。
+
+        Returns:
+            器官的响应。
+
+        Raises:
+            ValueError: 器官没有注册（不算调用，不进失控拦截的统计）。
+            CallRejectedError: 被网关拒绝（它的三个子类：预算、失控拦截、账本不可用），
+                器官没有被调用。账本在调用之后写不进去时，这次的结果也作废，抛
+                LedgerUnavailableError。
+            OrganCallError: 器官的所有模型都失败。
+        """
+        organ_id = request.organ_id
+        if not self._bus.is_registered(organ_id):
+            raise ValueError(f"器官 {organ_id} 未注册")
+
+        try:
+            self._admit(organ_id)
+        except CallRejectedError as rejection:
+            logger.warning("%s", rejection)
+            self._note_to_timeline(
+                EVENT_CALL_REJECTED,
+                str(rejection),
+                {"organ_id": organ_id, "kind": type(rejection).__name__},
+            )
+            raise
+
+        # 从这里到调用器官之间没有 await，所以并发的调用不会同时通过上面的检查而漏记。
+        try:
+            response = await self._bus.send(request)
+        except OrganCallError as failure:
+            self._finish(organ_id, failure.attempts, succeeded=False, detail=str(failure))
+            raise
+        except Exception as error:
+            # 器官自己出了错（代码问题）：不知道有没有花 token，账本里没有这次的记录。
+            self._finish(
+                organ_id,
+                [],
+                succeeded=False,
+                detail=f"器官内部出错：{type(error).__name__}",
+            )
+            raise
+        self._finish(organ_id, response.attempts, succeeded=True, detail="")
+        return response
+
+    def _admit(self, organ_id: str) -> None:
+        """放行前的全部检查。任何一项不通过就抛 CallRejectedError。"""
+        if self._ledger_write_failed:
+            raise LedgerUnavailableError(
+                organ_id, "账本之前写入失败，用量可能没有记全，重启之前不再放行"
+            )
+
+        blocked_reason = self._guard.blocked_reason(organ_id)
+        if blocked_reason is not None:
+            raise RunawayBlockedError(organ_id, blocked_reason)
+
+        # 不限额时也读账本：读不了就拒绝，不先花了再说。
+        try:
+            used = self._ledger.tokens_used_in_month(self._clock.now())
+        except Exception as error:
+            # 为什么捕获所有异常：安全检查出错一律当作「不允许」，不能因为没想到的错误放行。
+            logger.exception("读不了账本，拒绝调用器官 %s", organ_id)
+            raise LedgerUnavailableError(
+                organ_id, f"读不了账本，不知道本月用了多少 token（{type(error).__name__}）"
+            ) from error
+
+        limit = self._config.monthly_token_limit
+        if limit is not None and used >= limit:
+            raise BudgetExceededError(organ_id, f"本月已用 {used} token，达到上限 {limit}")
+
+        self._guard.admit(organ_id)
+
+    def _finish(
+        self, organ_id: str, attempts: Sequence[CallAttempt], *, succeeded: bool, detail: str
+    ) -> None:
+        """调用结束后的收尾：告诉失控拦截成败，失败记时间线，用量记账本。
+
+        Raises:
+            LedgerUnavailableError: 账本写不进去。
+        """
+        self._guard.report(organ_id, succeeded=succeeded)
+        if not succeeded:
+            self._note_to_timeline(EVENT_CALL_FAILED, detail, {"organ_id": organ_id})
+        try:
+            self._ledger.record(organ_id, attempts)
+        except Exception as error:
+            self._ledger_write_failed = True
+            logger.exception("账本写入失败，器官 %s 这次的用量没有记上，网关已锁定", organ_id)
+            reason = f"账本写入失败，这次的结果作废，重启之前不再放行（{type(error).__name__}）"
+            self._note_to_timeline(
+                EVENT_CALL_REJECTED,
+                reason,
+                {"organ_id": organ_id, "kind": "LedgerUnavailableError"},
+            )
+            raise LedgerUnavailableError(organ_id, reason) from error
+
+    def _note_to_timeline(self, event_type: str, content: str, metadata: dict[str, str]) -> None:
+        """把拒绝和失败记进时间线，只有自己可见。尽力而为：写不进去只记日志。"""
+        try:
+            self._timeline.append(
+                event_type=event_type,
+                content=content,
+                actor_type=ActorType.ME,
+                visibility=VisibilityScope.PRIVATE,
+                metadata=metadata,
+            )
+        except Exception:
+            # 时间线出错不能掩盖真正的结果：调用方要拿到的是拒绝或失败本身。
+            logger.exception("拒绝或失败没能记进时间线：%s", content)

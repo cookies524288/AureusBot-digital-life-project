@@ -1,0 +1,154 @@
+from datetime import UTC, date, datetime, timedelta, timezone
+
+import pytest
+
+from aureus.heartbeat import EVENT_SHUT_DOWN, assess_downtime
+from aureus.heartbeat.context import (
+    age_on,
+    build_reply_prompt,
+    build_system_context,
+    describe_aliases,
+)
+from aureus.identity import Identity
+from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
+
+NOW = datetime(2026, 11, 17, 2, 30, tzinfo=UTC)
+CHINA = timezone(timedelta(hours=8))
+
+
+def make_identity(alias_names: list[str] | None = None, **persona: str) -> Identity:
+    layers = {"immutable": "  温和，好奇。\n", **persona}
+    return Identity.model_validate(
+        {
+            "facts": {
+                "name": "小绿",
+                "alias_names": alias_names or [],
+                "gender": "",
+                "birthday": "2008-11-17",
+            },
+            "user": {"name": "阿明"},
+            "persona": layers,
+        }
+    )
+
+
+def message(record_id: int, actor: ActorType, content: str, minutes_ago: int) -> TimelineRecord:
+    return TimelineRecord(
+        id=record_id,
+        timestamp=NOW - timedelta(minutes=minutes_ago),
+        actor_type=actor,
+        actor_id="local" if actor is ActorType.USER else "",
+        event_type="message",
+        content=content,
+        visibility=VisibilityScope.USER_ONLY,
+    )
+
+
+@pytest.mark.parametrize(
+    ("birthday", "today", "expected"),
+    [
+        ("2008-11-17", date(2026, 11, 17), 18),  # 生日当天满岁
+        ("2008-11-18", date(2026, 11, 17), 17),  # 生日还没到
+        ("2008-02-29", date(2026, 2, 28), 17),  # 闰日生日，平年 2 月 28 日还没到
+        ("2008-02-29", date(2026, 3, 1), 18),
+        (" 2008-01-01 ", date(2026, 1, 1), 18),
+        ("2008/01/01", date(2026, 1, 1), None),  # 格式不对：不猜
+        ("2030-01-01", date(2026, 1, 1), None),  # 还没出生：不算成负数
+    ],
+)
+def test_age_on(birthday: str, today: date, expected: int | None) -> None:
+    assert age_on(birthday, today) == expected
+
+
+def test_system_context_contains_facts_persona_time_and_downtime() -> None:
+    downtime = assess_downtime(
+        TimelineRecord(
+            id=1,
+            timestamp=NOW - timedelta(hours=3),
+            actor_type=ActorType.ME,
+            event_type=EVENT_SHUT_DOWN,
+            visibility=VisibilityScope.PRIVATE,
+        ),
+        NOW,
+    )
+    context = build_system_context(make_identity(expression_style="句子短。"), NOW, downtime, CHINA)
+
+    assert context.startswith("你是小绿。")
+    assert "今年 18 岁" in context  # 按本地日期算：UTC 02:30 在 UTC+8 已经是 11 月 17 日
+    assert "“阿明”" in context
+    assert "【不变人格】\n温和，好奇。" in context
+    assert "【表达风格】\n句子短。" in context
+    assert "【可变人格】" not in context  # 空的层不写
+    assert "现在是 2026-11-17 10:30（UTC+08:00）。" in context
+    assert "停了 3 小时" in context
+
+
+def test_system_context_names_the_aliases() -> None:
+    context = build_system_context(make_identity(["阿绿", "绿宝"]), NOW, None, CHINA)
+
+    assert context.startswith("你是小绿。大家也叫你“阿绿”、“绿宝”，这些都是在叫你。")
+
+
+def test_system_context_without_aliases_says_nothing_about_them() -> None:
+    context = build_system_context(make_identity(), NOW, None, CHINA)
+
+    assert "也叫你" not in context
+
+
+@pytest.mark.parametrize(
+    ("aliases", "expected"),
+    [
+        ([], ""),
+        (["  ", ""], ""),  # 只有空白：当作没填
+        (["小绿"], ""),  # 和名字一样：不算昵称
+        (["绿宝"], "大家也叫你“绿宝”，这些都是在叫你。"),
+        ([" 阿绿 ", "绿宝", "阿绿", "小绿 "], "大家也叫你“阿绿”、“绿宝”，这些都是在叫你。"),
+    ],
+)
+def test_describe_aliases_cleans_up_the_list(aliases: list[str], expected: str) -> None:
+    assert describe_aliases("小绿", aliases) == expected
+
+
+def test_system_context_before_waking_has_no_downtime() -> None:
+    context = build_system_context(make_identity(), NOW, None, CHINA)
+
+    assert "醒来" not in context
+
+
+def test_system_context_keeps_an_unparsable_birthday_verbatim() -> None:
+    identity = make_identity()
+    identity = identity.model_copy(
+        update={"facts": identity.facts.model_copy(update={"birthday": "秋天"})}
+    )
+
+    context = build_system_context(identity, NOW, None, CHINA)
+
+    assert "生日：秋天。" in context
+    assert "岁" not in context
+
+
+def test_reply_prompt_lists_history_then_new_messages() -> None:
+    history = [
+        message(1, ActorType.USER, "早", 10),
+        message(2, ActorType.ME, "早呀", 9),
+    ]
+    new = [message(3, ActorType.USER, "今天面试被拒了", 1)]
+
+    prompt = build_reply_prompt(history, new, "阿明", CHINA)
+
+    before, after = prompt.split("刚收到、还没回复的消息：")
+    assert "[11-17 10:20] 阿明：早" in before
+    assert "[11-17 10:21] 你：早呀" in before
+    assert "[11-17 10:29] 阿明：今天面试被拒了" in after
+
+
+def test_reply_prompt_without_history() -> None:
+    prompt = build_reply_prompt([], [message(1, ActorType.USER, "你好", 0)], "阿明", CHINA)
+
+    assert "之前的对话" not in prompt
+    assert "阿明：你好" in prompt
+
+
+def test_reply_prompt_needs_something_to_reply_to() -> None:
+    with pytest.raises(ValueError, match="没有要回复的消息"):
+        build_reply_prompt([], [], "阿明", UTC)

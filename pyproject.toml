@@ -1,0 +1,150 @@
+# =====================================================================
+# AureusBot 的项目配置文件。
+#
+# 依赖用 uv 管理，不要手动改依赖列表：
+#   加运行时依赖：uv add 包名
+#   加开发工具：  uv add --dev 包名
+# 各个工具为什么这样选，见 docs/07-tech-stack.md。
+# =====================================================================
+
+[project]
+name = "aureus"
+version = "0.0.1"
+description = "一个独立存在的数字生命：自我监控、反馈驱动的拟人化认知内核"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=50.0.2",
+    "filelock>=4.2.10",
+    "litellm>=1.109.1",
+    "loguru>=0.8.0",
+    "platformdirs>=4.14.5",
+    "pydantic-settings>=2.16.3",
+    "python-dotenv>=1.2.4",
+]
+
+[project.scripts]
+# 注册命令行入口：装好后可以直接敲 aureus chat（等价于 python -m aureus chat）。
+aureus = "aureus.cli.main:main"
+
+# ---------------------------------------------------------------------
+# 打包方式：用 hatchling 把 aureus/ 目录当作一个 Python 包。
+# uv 会以"可编辑"方式安装它：改了代码立刻生效，测试里也能直接 import aureus。
+# ---------------------------------------------------------------------
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aureus"]
+
+# ---------------------------------------------------------------------
+# ruff：统一代码格式，查出常见错误。见 docs/11-dev-guide.md 第 3.8 节。
+# ---------------------------------------------------------------------
+[tool.ruff]
+line-length = 100           # 一行最宽 100（一个汉字算 2 个宽度）
+target-version = "py312"    # 按 Python 3.12 的语法检查，保证 3.12 也能运行
+# 只处理 Python 文件。新版 ruff 默认还会格式化 Markdown 里的代码块，
+# 这里关掉，避免它改动文档（尤其是 docs/archive 里的旧草稿）。
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # 基本代码风格（PEP 8）
+    "F",        # 明显的错误：没用到的变量、没定义的名字
+    "I",        # import 的排列顺序
+    "B",        # 容易出 bug 的写法
+    "UP",       # 用新版 Python 更简洁的写法
+    "SIM",      # 可以写得更简单的地方
+    "N",        # 命名规范
+    "D",        # docstring 规范
+    "RUF",      # ruff 自己的规则
+    "TID251",   # 禁用清单：禁止直接读系统时间（见下面的 banned-api，D26）
+]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # 会把中文全角标点误报为"容易混淆的字符"
+    "D400", "D415",                # 要求英文句号结尾，不适合中文 docstring
+    "D105", "D107",                # 魔术方法和 __init__ 不强制写 docstring
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"       # docstring 用 Google 风格：Args / Returns / Raises
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]          # 测试函数的名字本身就是说明，不强制写 docstring
+# 时钟模块是整个项目里唯一允许读系统时间的地方（D26）。
+"aureus/common/clock.py" = ["TID251"]
+# 生物模型包含大量多行 docstring（技术性和科学性强），放宽格式要求
+"aureus/core/biomodel.py" = ["D205", "D212"]
+
+# 禁用清单：除时钟以外的代码不得直接读系统时间，一律用 Clock.now()（D15、D26）。
+# time.monotonic() 只量时长、不是 "几点"，所以不在清单里。
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"time.time".msg = "禁止直接读系统时间，请用 Clock.now()（见 D26）"
+"time.time_ns".msg = "禁止直接读系统时间，请用 Clock.now()（见 D26）"
+"datetime.datetime.now".msg = "禁止直接读系统时间，请用 Clock.now()（见 D26）"
+"datetime.datetime.utcnow".msg = "禁止直接读系统时间，请用 Clock.now()（见 D26）"
+"datetime.datetime.today".msg = "禁止直接读系统时间，请用 Clock.now()（见 D26）"
+"datetime.date.today".msg = "禁止直接读系统时间，请用 Clock.now()（见 D26）"
+
+# ---------------------------------------------------------------------
+# pyright：根据类型注解，在运行前查出类型错误。
+# ---------------------------------------------------------------------
+[tool.pyright]
+include = ["aureus", "tests", "scripts"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+
+# ---------------------------------------------------------------------
+# pytest：测试。
+# ---------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# ---------------------------------------------------------------------
+# import-linter：架构规则（谁不能 import 谁），见 docs/11-dev-guide.md 第 2.2 节。
+# 规则随子系统逐个加入；还没有规则时，scripts/check.py 会跳过这一项。
+# ---------------------------------------------------------------------
+[tool.importlinter]
+root_package = "aureus"
+
+[[tool.importlinter.contracts]]
+name = "common 是地基：不依赖任何子系统"
+type = "layers"
+# 上层是各个子系统，下层是 common：下层不能 import 上层，直接 import 或绕几步都不行。
+# 上层每个名字都带括号，表示“可选”：目录还没建时不报错，建好之后自动开始检查。
+# 上层之间用冒号隔开：这条规则不管它们彼此的依赖，那些规则等子系统建好后再逐条加。
+layers = [
+    """\
+    (aureus.cli) : (aureus.core) : (aureus.identity) : (aureus.body) : (aureus.hormones) : \
+    (aureus.mood) : (aureus.timeline) : (aureus.memory) : (aureus.people) : \
+    (aureus.heartbeat) : (aureus.attention) : (aureus.agenda) : (aureus.organs) : \
+    (aureus.actions) : (aureus.feedback) : (aureus.channels) : (aureus.safety)\
+    """,
+    "aureus.common",
+]
+
+[[tool.importlinter.contracts]]
+name = "器官只给建议：不依赖安全网关和时间线"
+type = "forbidden"
+# 网关包着器官，所以是 safety 依赖 organs，反过来不行（D40）。器官也不直接碰时间线（D6）。
+source_modules = ["aureus.organs"]
+forbidden_modules = ["aureus.safety", "aureus.timeline"]
+
+[[tool.importlinter.contracts]]
+name = "心跳不依赖通道"
+type = "forbidden"
+# 通道依赖心跳（感知和消息的格式由心跳定义），反过来不行：任何通道断开都不影响核心（D41 第 7 条）。
+source_modules = ["aureus.heartbeat"]
+forbidden_modules = ["aureus.channels"]
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.16",
+    "pyright[nodejs]>=1.1.414",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.17.5",
+]
