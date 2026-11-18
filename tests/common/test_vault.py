@@ -1,9 +1,12 @@
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
+from filelock import FileLock
 
 from aureus.common import vault as vault_module
 from aureus.common.vault import (
@@ -252,3 +255,41 @@ def test_master_key_file_is_only_readable_by_its_owner(
 ) -> None:
     secret_vault.set(FAKE_NAME, FAKE_SECRET)
     assert key_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_concurrent_writes_do_not_lose_an_entry(
+    secret_vault: SecretVault, vault_file: Path, key_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 审查 H5：两个 keys set 同时「读—改—写」，没有锁时后写的会覆盖先写的。
+    # 把读放慢，让两个线程一定会交错；有锁时两条都在。
+    real_load = SecretVault.load
+
+    def slow_load(self: SecretVault) -> dict[str, str]:
+        loaded = real_load(self)
+        time.sleep(0.2)
+        return loaded
+
+    monkeypatch.setattr(SecretVault, "load", slow_load)
+    other = SecretVault(vault_file, key_file)  # 另一个进程里的 keys 命令会是另一个对象
+    threads = [
+        threading.Thread(target=secret_vault.set, args=(FAKE_NAME, FAKE_SECRET)),
+        threading.Thread(target=other.set, args=(OTHER_NAME, "sk-fake-secret-0002")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    monkeypatch.undo()
+
+    assert secret_vault.names() == sorted([FAKE_NAME, OTHER_NAME])
+
+
+def test_waiting_too_long_for_the_lock_fails_instead_of_writing(
+    secret_vault: SecretVault, vault_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    secret_vault.set(FAKE_NAME, FAKE_SECRET)
+    monkeypatch.setattr(vault_module, "VAULT_LOCK_TIMEOUT_SECONDS", 0.1)
+    held_elsewhere = FileLock(vault_file.with_name(vault_file.name + ".lock"))
+    with held_elsewhere, pytest.raises(VaultError, match="另一个程序还在改密钥库"):
+        SecretVault(vault_file, vault_file.with_name("secrets.key")).set(OTHER_NAME, "x")
+    assert secret_vault.names() == [FAKE_NAME]

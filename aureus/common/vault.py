@@ -12,11 +12,13 @@
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+from filelock import FileLock, Timeout
 
 # 当前软件认识的文件格式版本。文件比软件新（降级）时拒绝读取，不硬读，
 # 做法同 docs/14-user-data.md 第 3 节。
@@ -26,6 +28,9 @@ VAULT_FORMAT_VERSION = 1
 # 主密钥的保护方式。现在只有 none（不加口令）；字段先留着，以后给主密钥
 # 加口令保护时，密钥库不用重新加密（15 号文档 7.9）。
 PROTECTION_NONE = "none"
+
+# 改密钥库时最多等别的进程多久。改一次只要几毫秒，等这么久还拿不到，多半是有进程卡住了。
+VAULT_LOCK_TIMEOUT_SECONDS = 10.0
 
 
 class VaultError(Exception):
@@ -126,6 +131,10 @@ class SecretVault:
     def __init__(self, vault_file: Path, key_file: Path) -> None:
         self._vault_file = vault_file
         self._key_file = key_file
+        # 改密钥库是「读—改—写」：两个 keys set 同时运行，后写的会覆盖掉先写的那条。
+        # 用单独的锁文件让改动一个一个来（审查 H5，D52）。只读不加锁：写入是原子替换，
+        # 读到的总是一份完整的旧版或新版。
+        self._write_lock = FileLock(vault_file.with_name(vault_file.name + ".lock"))
 
     def _missing_key_error(self) -> VaultError:
         return VaultError(
@@ -212,9 +221,10 @@ class SecretVault:
         cleaned = secret.strip()
         if not name.strip() or not cleaned:
             raise ValueError("密钥名和密钥都不能为空。")
-        secrets = self.load()
-        secrets[name] = cleaned
-        self._save(secrets)
+        with self._locked_for_writing():
+            secrets = self.load()
+            secrets[name] = cleaned
+            self._save(secrets)
 
     def remove(self, name: str) -> bool:
         """删掉一条密钥。
@@ -228,9 +238,26 @@ class SecretVault:
         Raises:
             VaultError: 密钥库打不开。
         """
-        secrets = self.load()
-        if name not in secrets:
-            return False
-        del secrets[name]
-        self._save(secrets)
+        with self._locked_for_writing():
+            secrets = self.load()
+            if name not in secrets:
+                return False
+            del secrets[name]
+            self._save(secrets)
         return True
+
+    @contextmanager
+    def _locked_for_writing(self) -> Iterator[None]:
+        """拿到写锁再改密钥库；等太久就报错，不跳过锁硬写。"""
+        self._vault_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self._write_lock.acquire(timeout=VAULT_LOCK_TIMEOUT_SECONDS)
+        except Timeout:
+            raise VaultError(
+                f"等了 {VAULT_LOCK_TIMEOUT_SECONDS:g} 秒，另一个程序还在改密钥库 "
+                f"{self._vault_file}。请等它结束后再试。"
+            ) from None
+        try:
+            yield
+        finally:
+            self._write_lock.release()
