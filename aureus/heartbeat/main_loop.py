@@ -22,6 +22,7 @@ from typing import Any, Protocol
 from aureus.body import Body, BodyReading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
+from aureus.heartbeat.body_summary import describe_body_state
 from aureus.heartbeat.context import build_reply_prompt, build_system_context
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
@@ -666,9 +667,21 @@ class Heartbeat:
             context={"task": "reply", "in_reply_to": [heard.record.id for heard in batch]},
             purpose=CallPurpose.USER_REPLY,
             system_context=build_system_context(
-                self._identity, self._clock.now(), self._downtime_for_context(), self._timezone
+                self._identity,
+                self._clock.now(),
+                self._downtime_for_context(),
+                self._timezone,
+                self._body_state_for_context(),
             ),
         )
+
+    def _body_state_for_context(self) -> str:
+        """放进系统上下文的身体状态摘要；没有读数或开关关着时是空字符串。"""
+        if self._body is None or self._reading is None:
+            return ""
+        if not self._body.config.state_in_prompt_enabled:
+            return ""
+        return describe_body_state(self._reading, self._body.config)
 
     def _downtime_for_context(self) -> Downtime | None:
         """放进系统上下文的停机情况。睡眠信号关掉后不告诉它睡了多久（04 号文档第 7 节）。"""

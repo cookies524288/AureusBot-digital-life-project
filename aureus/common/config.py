@@ -83,6 +83,9 @@ class BodyConfig(BaseModel):
     # 每日额度里只留给回应用户的比例（04 号文档第 4 节）：可选的调用用到
     # 额度的 (1 - 这个比例) 就停，剩下的只给用户。
     user_reserve_fraction: float = Field(default=0.15, ge=0, lt=1)
+    # 是否把身体状态摘要放进给大模型的系统上下文（04 号文档第 6 节，D58）。
+    # 关掉后它不知道自己的身体状态，被问起时没有事实可说；行为影响不受这个开关管。
+    state_in_prompt_enabled: bool = True
     # 档位分界，按「精力 = 今日剩余额度 ÷ 今日额度」算；低于第一个数进节省档，
     # 低于第二个进低电量，低于第三个进透支保护（04 号文档第 4 节）。
     saving_below: float = Field(default=0.5, gt=0, le=1)

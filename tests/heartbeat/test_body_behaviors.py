@@ -111,7 +111,14 @@ def made() -> Iterator[list[Rig]]:
         rig.timeline.close()
 
 
-def make_rig(made: list[Rig], tmp_path: Path, *, start: datetime = DAYTIME, **body: Any) -> Rig:
+def make_rig(
+    made: list[Rig],
+    tmp_path: Path,
+    *,
+    start: datetime = DAYTIME,
+    monthly_token_limit: int | None = None,
+    **body: Any,
+) -> Rig:
     tmp_path.mkdir(parents=True, exist_ok=True)
     clock = ManualClock(start)
     db_path = tmp_path / "aureus.db"
@@ -139,7 +146,7 @@ def make_rig(made: list[Rig], tmp_path: Path, *, start: datetime = DAYTIME, **bo
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,
         timezone=UTC,
-        body=Body(config, None, ledger, clock, CALENDAR),
+        body=Body(config, monthly_token_limit, ledger, clock, CALENDAR),
     )
     rig = Rig(clock, ledger, timeline, organs, heartbeat)
     heartbeat.attach_channel(CHANNEL, rig.sent.append)
@@ -319,3 +326,47 @@ async def test_downtime_reaches_the_reply_context_only_while_sleep_is_enabled(
     ignoring.say("在吗")
     await ignoring.beat()
     assert "停机期间" not in ignoring.organs.requests[0].system_context
+
+
+# ---------- 状态呈现：身体摘要进系统上下文（1.5） ----------
+
+
+async def test_reply_context_carries_the_body_state_matching_the_ledger(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    rig = make_rig(made, tmp_path, monthly_token_limit=3_000_000)
+    rig.record_calls(60)  # 疲劳满额；每次 15 个 token，共 900
+    rig.record_calls(3, succeeded=False)
+    rig.say("你现在怎么样？")
+    await rig.beat()
+    rig.clock.advance(timedelta(seconds=BATCH_SECONDS))  # 疲劳偏高，先攒了一会儿
+    await rig.beat()
+
+    context = rig.organs.requests[0].system_context
+    assert "【身体状态】" in context
+    assert "最近 30 分钟调用了 63 次" in context
+    assert "疲劳 100%（偏高）" in context
+    assert "失败了 3 次" in context
+    assert "模型服务 503" in context
+    assert "已用 945" in context  # 63 次 × 15 个 token，和账本一致
+    assert "不要夸大" in context
+
+
+async def test_reply_context_has_no_body_state_when_the_switch_is_off(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    rig = make_rig(made, tmp_path, state_in_prompt_enabled=False)
+    rig.say("你现在怎么样？")
+    await rig.beat()
+    assert "【身体状态】" not in rig.organs.requests[0].system_context
+
+
+async def test_reply_context_omits_a_signal_that_is_switched_off(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    rig = make_rig(made, tmp_path, fatigue_enabled=False)
+    rig.say("你现在怎么样？")
+    await rig.beat()
+    context = rig.organs.requests[0].system_context
+    assert "疲劳" not in context
+    assert "压力" in context

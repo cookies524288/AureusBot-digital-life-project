@@ -51,6 +51,9 @@ log_level = "INFO"
 # energy_enabled = true
 # 每日额度里只留给回应用户的比例（0 到 1）。可选的调用用到 85% 就停。
 # user_reserve_fraction = 0.15
+# 是否把身体状态（精力、疲劳、压力、夜间）的真实数字告诉模型，让它被问起时能如实说。
+# 关掉后它不知道这些，被问起时没有事实可说；上面各信号对行为的影响不变。
+# state_in_prompt_enabled = true
 # 档位分界，精力 = 今日剩余额度 ÷ 今日额度。要满足 overdraft_below < low_below < saving_below。
 # 低于 saving_below 进节省档，低于 low_below 进低电量，低于 overdraft_below 进透支保护。
 # saving_below = 0.5

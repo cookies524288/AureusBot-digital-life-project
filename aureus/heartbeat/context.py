@@ -71,6 +71,7 @@ def build_system_context(
     now: datetime,
     downtime: Downtime | None,
     timezone: tzinfo | None = None,
+    body_state: str = "",
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -79,6 +80,7 @@ def build_system_context(
         now: 现在（从时钟取）。
         downtime: 这次醒来前停了多久；还没醒来时传 None。
         timezone: 显示用的时区；不给就用这台电脑设置的时区。
+        body_state: 身体状态摘要（body_summary.describe_body_state 的结果），空字符串表示不放。
 
     Returns:
         几段中文，段与段之间空一行。
@@ -109,6 +111,8 @@ def build_system_context(
         sections.append(
             f"你这次在 {woke} 醒来。{downtime.describe(timezone)}停机期间你确实没有在运行。"
         )
+    if body_state:
+        sections.append(body_state)
     return "\n\n".join(sections)
 
 
