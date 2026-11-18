@@ -153,6 +153,27 @@ def test_delete_is_forbidden_by_the_database(ledger: Ledger, db_path: Path) -> N
     assert len(ledger.entries()) == 1
 
 
+def test_insert_or_replace_cannot_overwrite_a_record(ledger: Ledger, db_path: Path) -> None:
+    # 审查 S3：REPLACE 先删后插，不触发 DELETE 触发器，要靠 BEFORE INSERT 触发器拦住。
+    ledger.record("replyer", [make_attempt()])
+    with pytest.raises(sqlite3.DatabaseError, match="immutable"):
+        raw_execute(
+            db_path,
+            "INSERT OR REPLACE INTO ledger "
+            "(id, timestamp, organ_id, model, provider, prompt_tokens, completion_tokens,"
+            " cached_tokens, estimated, succeeded) "
+            "VALUES (1, '2026-11-16T12:00:00+00:00', 'x', 'x', 'x', 0, 0, 0, 0, 1)",
+        )
+    [entry] = ledger.entries()
+    assert entry.prompt_tokens == 100
+
+
+def test_appending_after_the_trigger_still_works(ledger: Ledger) -> None:
+    ledger.record("replyer", [make_attempt()])
+    ledger.record("replyer", [make_attempt()])
+    assert len(ledger.entries()) == 2
+
+
 @pytest.mark.parametrize("column", ["prompt_tokens", "completion_tokens", "cached_tokens"])
 def test_database_rejects_negative_token_counts(ledger: Ledger, db_path: Path, column: str) -> None:
     values = {"prompt_tokens": 1, "completion_tokens": 1, "cached_tokens": 1, column: -1}

@@ -209,6 +209,24 @@ def test_immutability_update_blocked(database: TimelineDatabase):
     assert "immutable" in str(exc_info.value).lower()
 
 
+def test_immutability_insert_or_replace_blocked(database: TimelineDatabase):
+    """测试 INSERT OR REPLACE 不能覆盖已有的行（审查 S3：REPLACE 不触发 DELETE 触发器）。"""
+    database.append("message", "Original", ActorType.ME)
+
+    assert database._conn is not None
+    with pytest.raises(Exception) as exc_info:
+        database._conn.execute(
+            "INSERT OR REPLACE INTO timeline "
+            "(id, timestamp, actor_type, event_type, visibility) "
+            "VALUES (1, '2026-11-16T12:00:00+00:00', 'me', 'message', 'private')"
+        )
+        database._conn.commit()
+
+    assert "immutable" in str(exc_info.value).lower()
+    assert database.count_records() == 1
+    assert database.query(TimelineQuery())[0].content == "Original"
+
+
 def test_immutability_delete_blocked(database: TimelineDatabase):
     """测试 DELETE 被数据库层面禁止。"""
     database.append("message", "Original", ActorType.ME)

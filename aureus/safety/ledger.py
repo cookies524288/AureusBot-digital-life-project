@@ -139,6 +139,16 @@ class Ledger:
                 SELECT RAISE(ABORT, 'Ledger records are immutable: DELETE is not allowed');
             END
         """)
+        # INSERT OR REPLACE 会先删掉冲突的行，而默认情况下这个删除不触发 DELETE 触发器，
+        # 所以要在插入前拦住「主键已存在」（审查 S3）。新行不带主键时 NEW.id 是 NULL，不会误拦。
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS no_replace_ledger
+            BEFORE INSERT ON ledger
+            WHEN EXISTS (SELECT 1 FROM ledger WHERE id = NEW.id)
+            BEGIN
+                SELECT RAISE(ABORT, 'Ledger records are immutable: REPLACE is not allowed');
+            END
+        """)
         conn.commit()
 
     def _require_open(self) -> sqlite3.Connection:
