@@ -10,6 +10,7 @@ import pytest
 
 from aureus.common import AureusPaths, ManualClock
 from aureus.common.vault import SecretVault
+from aureus.core import portability
 from aureus.core.portability import (
     EXPORT_FORMAT_VERSION,
     MANIFEST_NAME,
@@ -255,3 +256,127 @@ def test_skipping_the_backup_does_not_bypass_the_overwrite_check(
     with pytest.raises(PortabilityError, match="--force"):
         import_data(target, archive, CLOCK, backup_first=False)
     assert records(target) == ["目标原有的记录"]
+
+
+# ---------- 导入加固（审查 H1、H2，F4） ----------
+
+
+def craft_declaring(archive: Path, name: str, data: bytes, declared_size: int) -> None:
+    """做一个 manifest 里声明的大小和真实内容不一样的包。"""
+    manifest = {
+        "export_format_version": EXPORT_FORMAT_VERSION,
+        "files": [
+            {"path": name, "size": declared_size, "sha256": hashlib.sha256(data).hexdigest()}
+        ],
+    }
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr(MANIFEST_NAME, json.dumps(manifest))
+        bundle.writestr(name, data)
+
+
+def test_package_declaring_a_huge_file_is_refused_before_reading(
+    target: AureusPaths, tmp_path: Path
+) -> None:
+    archive = tmp_path / "huge.zip"
+    craft_declaring(archive, "data/aureus.db", b"x", declared_size=5 * 1024**3)
+    with pytest.raises(PortabilityError, match="单个文件上限"):
+        import_data(target, archive, CLOCK)
+    assert not target.home.exists()
+
+
+def test_package_over_the_total_size_limit_is_refused(
+    target: AureusPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(portability, "MAX_TOTAL_BYTES", 5)
+    archive = tmp_path / "big.zip"
+    craft(archive, {"config/identity.toml": b"abc", "config/aureus.toml": b"def"})
+    with pytest.raises(PortabilityError, match="总大小"):
+        import_data(target, archive, CLOCK)
+    assert not target.home.exists()
+
+
+def test_package_with_too_many_entries_is_refused(
+    target: AureusPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(portability, "MAX_ENTRY_COUNT", 2)
+    archive = tmp_path / "many.zip"
+    craft(archive, {f"data/diary/{index}.md": b"x" for index in range(3)})
+    with pytest.raises(PortabilityError, match="超过上限"):
+        import_data(target, archive, CLOCK)
+    assert not target.home.exists()
+
+
+def test_file_whose_real_size_differs_from_the_declared_size_is_refused(
+    target: AureusPaths, tmp_path: Path
+) -> None:
+    archive = tmp_path / "lying.zip"
+    craft_declaring(archive, "config/identity.toml", b"0123456789", declared_size=3)
+    with pytest.raises(PortabilityError, match="大小"):
+        import_data(target, archive, CLOCK)
+    assert not target.home.exists()
+
+
+def test_checksum_error_does_not_claim_the_package_proves_its_origin(
+    target: AureusPaths, tmp_path: Path
+) -> None:
+    archive = tmp_path / "bad.zip"
+    craft(archive, {"config/identity.toml": b"x"}, bad_digest=True)
+    with pytest.raises(PortabilityError, match="只导入自己导出的包"):
+        import_data(target, archive, CLOCK)
+
+
+def fail_replacing_into_place(monkeypatch: pytest.MonkeyPatch, *, also_restoring: bool) -> None:
+    """让「把暂存的 aureus.db 放到位」失败；also_restoring 为真时，放回旧文件也失败。"""
+    real_replace = Path.replace
+
+    def flaky_replace(self: Path, target: Path) -> Path:
+        stage = self.parent.parent.name
+        if self.name == "aureus.db" and (stage == "new" or (also_restoring and stage == "old")):
+            raise PermissionError("模拟：文件被占用")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+
+
+def test_failure_halfway_leaves_the_target_exactly_as_it_was(
+    source: AureusPaths, target: AureusPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    populate(target, "目标原有的记录")
+    archive = tmp_path / "out.zip"
+    export_data(source, archive, CLOCK)
+    target.identity_file.write_text("[facts]\nname = '目标自己的'\n", encoding="utf-8")
+    original_identity = target.identity_file.read_text(encoding="utf-8")
+    fail_replacing_into_place(monkeypatch, also_restoring=False)
+    with pytest.raises(PortabilityError, match="放置文件时出错"):
+        import_data(target, archive, CLOCK, force=True)
+    monkeypatch.undo()
+    assert records(target) == ["目标原有的记录"]
+    assert target.identity_file.read_text(encoding="utf-8") == original_identity
+    assert not list(target.data_dir.glob(".import-*"))
+
+
+def test_failed_rollback_keeps_the_old_files_and_says_where(
+    source: AureusPaths, target: AureusPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    populate(target, "目标原有的记录")
+    archive = tmp_path / "out.zip"
+    export_data(source, archive, CLOCK)
+    fail_replacing_into_place(monkeypatch, also_restoring=True)
+    with pytest.raises(PortabilityError, match="回滚也没做完"):
+        import_data(target, archive, CLOCK, force=True)
+    monkeypatch.undo()
+    kept = list(target.data_dir.glob(".import-*/old/data/aureus.db"))
+    assert len(kept) == 1  # 旧数据库没有丢，还在暂存目录里
+
+
+def test_two_forced_imports_in_the_same_instant_keep_both_backups(
+    source: AureusPaths, target: AureusPaths, tmp_path: Path
+) -> None:
+    populate(target, "目标原有的记录")
+    archive = tmp_path / "out.zip"
+    export_data(source, archive, CLOCK)
+    first = import_data(target, archive, CLOCK, force=True)
+    second = import_data(target, archive, CLOCK, force=True)
+    assert first.backup is not None and second.backup is not None
+    assert first.backup != second.backup
+    assert first.backup.exists() and second.backup.exists()
