@@ -50,6 +50,12 @@ log_level = "INFO"
 # 节省档时带上最近多少条对话；低电量和透支保护时带多少条。都不会超过 recent_message_limit。
 # saving_message_limit = 10
 # low_message_limit = 5
+# 把一段回复拆成几条短消息发出（口语、短句、分条）；关掉后整段一条发出。
+# split_reply_enabled = true
+# 一段回复最多拆成几条。
+# max_reply_messages = 4
+# 一条至少多少个字，更短的句子并进相邻的一句。
+# min_message_chars = 4
 
 # 身体信号（设计见 docs/04-body-signals.md、docs/10-decisions.md 的 D56、D57）。
 # 精力来自每月 token 上限：每日额度 = 本月剩余额度 ÷ 本月剩余天数，

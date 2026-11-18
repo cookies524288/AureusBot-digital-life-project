@@ -146,6 +146,7 @@ class Factory:
         clock = clock or self.clock
         # 这里的测试都按「一次回复一次调用」数请求；规划的行为在 test_planning_flow.py 里测。
         config.setdefault("planning_enabled", False)
+        config.setdefault("split_reply_enabled", False)
         timeline = TimelineDatabase(self.database_file, clock=clock)
         timeline.open()
         self.timelines.append(timeline)

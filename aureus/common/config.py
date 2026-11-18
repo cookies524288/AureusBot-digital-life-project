@@ -74,6 +74,12 @@ class HeartbeatConfig(BaseModel):
     # 节省档、低电量（含透支保护）时带上最近多少条对话；都不会超过 recent_message_limit。
     saving_message_limit: int = Field(default=10, ge=1)
     low_message_limit: int = Field(default=5, ge=1)
+    # 说话方式（路线图 1.7，D60）：把一段回复拆成几条短消息发出。关掉后整段一条发出。
+    split_reply_enabled: bool = True
+    # 一段回复最多拆成几条。
+    max_reply_messages: int = Field(default=4, ge=1)
+    # 一条至少多少个字；更短的句子并进相邻的一句。
+    min_message_chars: int = Field(default=4, ge=1)
 
 
 class BodyConfig(BaseModel):

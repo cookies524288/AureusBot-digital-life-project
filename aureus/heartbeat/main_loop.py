@@ -51,6 +51,7 @@ from aureus.heartbeat.perception import (
 from aureus.heartbeat.planning import Plan, parse_plan
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
+from aureus.heartbeat.speech import split_reply
 from aureus.identity import Identity
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import (
@@ -526,7 +527,23 @@ class Heartbeat:
             visibility=target.visibility,
             metadata=metadata,
         )
-        self._deliver(target, text, MessageKind.REPLY)
+        self._deliver_reply(target, text)
+
+    def _deliver_reply(self, target: Perception, text: str) -> None:
+        """把回复拆成几条短消息发出（D60）。
+
+        时间线里仍然是完整的一条：它说的是一段话，拆开只是发出去的样子。
+        关掉拆分、或者拆不出东西时，整段一条发出。
+        """
+        parts: list[str] = []
+        if self._config.split_reply_enabled:
+            parts = split_reply(
+                text,
+                max_messages=self._config.max_reply_messages,
+                min_chars=self._config.min_message_chars,
+            )
+        for part in parts or [text]:
+            self._deliver(target, part, MessageKind.REPLY)
 
     def _record_declined(self, thought: _Thought, plan: Plan, target: Perception) -> None:
         """规划器决定不回复：记进时间线，并在终端提示一行，让用户知道不是出了故障（D59）。
