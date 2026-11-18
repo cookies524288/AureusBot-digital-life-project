@@ -475,9 +475,7 @@ async def test_retry_after_a_failure_records_both_requests(
 
 
 @pytest.mark.asyncio
-async def test_retry_waits_longer_each_time(
-    bio_state: BiologicalState, keys: KeyResolver
-) -> None:
+async def test_retry_waits_longer_each_time(bio_state: BiologicalState, keys: KeyResolver) -> None:
     sleep = SleepRecorder()
     completion = FakeCompletion(*[Timeout("x")] * 3)
     with pytest.raises(OrganCallError):
