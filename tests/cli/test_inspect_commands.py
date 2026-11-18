@@ -17,6 +17,7 @@ from aureus.cli.inspect_commands import (
 )
 from aureus.cli.main import main
 from aureus.common import AureusPaths, ManualClock
+from aureus.heartbeat.events import EVENT_ORGAN_CALL_ABANDONED
 from aureus.organs import CallAttempt
 from aureus.safety import Ledger
 from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
@@ -35,9 +36,11 @@ def timeline_args(limit: int = 20, event_type: str | None = None) -> argparse.Na
     return argparse.Namespace(limit=limit, event_type=event_type)
 
 
-def add_records(paths: AureusPaths, *records: tuple[str, str]) -> None:
+def add_records(
+    paths: AureusPaths, *records: tuple[str, str], clock: ManualClock | None = None
+) -> None:
     """往时间线追加 (事件类型, 内容) 记录。"""
-    timeline = TimelineDatabase(paths.database_file)
+    timeline = TimelineDatabase(paths.database_file, clock)
     timeline.open()
     try:
         for event_type, content in records:
@@ -192,6 +195,34 @@ def test_usage_ignores_other_months(paths: AureusPaths) -> None:
     _, output = collect(run_usage_command, paths)
     assert "1 次请求" in output
     assert "输入 100 + 输出 20 = 120" in output
+
+
+def test_usage_shows_calls_abandoned_this_month(paths: AureusPaths) -> None:
+    add_attempt(paths)
+    add_records(
+        paths,
+        (EVENT_ORGAN_CALL_ABANDONED, "关闭时取消"),
+        (EVENT_ORGAN_CALL_ABANDONED, "又一次"),
+        ("note", "别的事件不算"),
+    )
+    code, output = collect(run_usage_command, paths)
+    assert code == EXIT_OK
+    assert "另有 2 次调用在关闭时被取消" in output
+    assert "没有计入" in output
+
+
+def test_usage_says_nothing_about_abandoned_calls_when_there_are_none(paths: AureusPaths) -> None:
+    add_attempt(paths)
+    add_records(paths, ("note", "只是一条普通记录"))
+    _, output = collect(run_usage_command, paths)
+    assert "被取消" not in output
+
+
+def test_usage_ignores_abandoned_calls_of_other_months(paths: AureusPaths) -> None:
+    add_attempt(paths)
+    add_records(paths, (EVENT_ORGAN_CALL_ABANDONED, "去年的"), clock=ManualClock(LAST_YEAR))
+    _, output = collect(run_usage_command, paths)
+    assert "被取消" not in output
 
 
 def test_usage_with_only_old_records_shows_zero(paths: AureusPaths) -> None:

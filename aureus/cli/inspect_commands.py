@@ -13,6 +13,7 @@ from datetime import datetime
 
 from aureus.common import AureusPaths, ConfigError, SystemClock, load_runtime_config
 from aureus.common.time_format import format_local_time
+from aureus.heartbeat.events import EVENT_ORGAN_CALL_ABANDONED
 from aureus.organs.interface import sum_costs
 from aureus.safety import Ledger, LedgerEntry, month_bounds
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
@@ -113,6 +114,22 @@ def _entries_between(ledger: Ledger, start: datetime, end: datetime) -> list[Led
         since_id = page[-1].id
 
 
+def _count_abandoned_calls(timeline: TimelineDatabase, start: datetime, end: datetime) -> int:
+    """数时间线里 [start, end) 之间被放弃的器官调用：这些调用用掉的 token 不在账本里。"""
+    count = 0
+    since_id = 0
+    while True:
+        page = timeline.query(
+            TimelineQuery(
+                since_id=since_id, limit=LEDGER_PAGE_SIZE, event_type=EVENT_ORGAN_CALL_ABANDONED
+            )
+        )
+        if not page:
+            return count
+        count += sum(1 for record in page if start <= record.timestamp < end)
+        since_id = page[-1].id
+
+
 def _format_cost(costs: list[float | None]) -> str:
     total = sum_costs(costs)
     # None 是“算不出来”，不是 0：没写价格时不能显示成免费（D37）。
@@ -139,14 +156,18 @@ def run_usage_command(paths: AureusPaths, write_line: WriteLine = print) -> int:
         return EXIT_OK
     start, end = month_bounds(SystemClock().now())
     ledger = Ledger(paths.database_file)
+    timeline = TimelineDatabase(paths.database_file)
     try:
         ledger.open()
         entries = _entries_between(ledger, start, end)
+        timeline.open()
+        abandoned = _count_abandoned_calls(timeline, start, end)
     except sqlite3.Error as error:
         print(f"错误：读不了账本（{type(error).__name__}）：{error}", file=sys.stderr)
         return EXIT_FAILURE
     finally:
         ledger.close()
+        timeline.close()
 
     by_organ: dict[str, _OrganUsage] = {}
     for entry in entries:
@@ -164,6 +185,12 @@ def run_usage_command(paths: AureusPaths, write_line: WriteLine = print) -> int:
 
     write_line(f"本月（UTC {start:%Y-%m}）模型用量：{len(entries)} 次请求，失败 {failed} 次，")
     write_line(f"其中 {estimated} 次的用量是估算的。")
+    if abandoned:
+        # 关闭时取消的调用来不及记账（0.8 已知缺口，审查 H3），要让用户看得见。
+        write_line(
+            f"另有 {abandoned} 次调用在关闭时被取消，它们的用量和费用未知、没有计入下面的数字，"
+            "实际用量可能比显示的多。"
+        )
     write_line(f"token：输入 {prompt} + 输出 {completion} = {total}")
     if limit is None:
         write_line("月度上限：没有设置（在 aureus.toml 的 [safety] 里写 monthly_token_limit）")
