@@ -7,11 +7,12 @@ from .emergency_stop import DEFAULT_HALT_REASON, EmergencyStop, HaltStatus
 from .errors import (
     BudgetExceededError,
     CallRejectedError,
+    EnergyDepletedError,
     LedgerUnavailableError,
     PermissionDeniedError,
     RunawayBlockedError,
 )
-from .gateway import EVENT_CALL_FAILED, EVENT_CALL_REJECTED, SafetyGateway
+from .gateway import EVENT_CALL_FAILED, EVENT_CALL_REJECTED, EnergyGate, SafetyGateway
 from .ledger import Ledger, LedgerEntry
 from .permissions import (
     ACTION_CALL_ORGAN,
@@ -33,6 +34,8 @@ __all__ = [
     "BudgetExceededError",
     "CallRejectedError",
     "EmergencyStop",
+    "EnergyDepletedError",
+    "EnergyGate",
     "HaltStatus",
     "Ledger",
     "LedgerEntry",

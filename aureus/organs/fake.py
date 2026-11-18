@@ -44,10 +44,10 @@ class FakePlanner:
         bio_state = request.bio_state
         cognitive = bio_state.observe_cognitive_state({"task": "规划任务"})
 
-        # 根据能量状态生成不同的规划
-        if cognitive.energy_state == "精力充沛":
+        # 根据规划信心（激素算出来的）生成不同的规划
+        if cognitive.planning_confidence > 0.7:
             plan = "建议：开始一项长期任务，深入分析问题。"
-        elif cognitive.energy_state == "轻度疲劳":
+        elif cognitive.planning_confidence > 0.4:
             plan = "建议：处理中等难度任务，保持专注。"
         else:
             plan = "建议：处理简单任务或休息。"
@@ -58,7 +58,7 @@ class FakePlanner:
             confidence=0.8,
             metadata={
                 "type": "fake",
-                "energy_used": cognitive.energy_state,
+                "confidence_used": cognitive.planning_confidence,
                 "planning_depth": cognitive.planning_depth,
             },
         )

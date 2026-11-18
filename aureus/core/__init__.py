@@ -5,7 +5,6 @@ from .biomodel import (
     CircadianModel,
     EmotionalState,
     HormoneState,
-    UltradinRhythm,
 )
 from .cognitive_layer import CognitiveObserver, CognitiveState
 
@@ -16,5 +15,4 @@ __all__ = [
     "CognitiveState",
     "EmotionalState",
     "HormoneState",
-    "UltradinRhythm",
 ]

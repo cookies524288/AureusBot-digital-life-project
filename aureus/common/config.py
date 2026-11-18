@@ -10,9 +10,9 @@
 
 import tomllib
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from aureus.common.budget_calendar import DEFAULT_DAY_START_HOUR, BudgetCalendar, load_timezone
 from aureus.common.paths import AureusPaths
@@ -55,7 +55,7 @@ class HeartbeatConfig(BaseModel):
     # 没有新消息时，隔多少真实秒跳一拍（02 号文档第 3 节“例如每分钟一次”）。
     # 不许小于 1 秒：写成 0.001 之类的数字，心跳就会空转、占满一个 CPU 核。
     tick_interval_seconds: float = Field(default=60.0, ge=1)
-    # 每拍是否让时间推进生物模型，谈话后是否让社交需求回落。0.9a 修好模型后默认开
+    # 每拍是否让时间推进生物模型（激素随时间衰减）。0.9a 修好模型后默认开
     # （D41 第 2 条、D42 第 8 条）；关掉后整个模型冻结，可以用来对照（D5）。
     advance_biomodel: bool = True
     # 每拍算出的认知状态是否在自述变化时写进时间线（D34、D41 第 4 条；D5 每个机制都能单独关）。
@@ -68,31 +68,32 @@ class HeartbeatConfig(BaseModel):
     reply_organ: str = Field(default="replyer", min_length=1)
 
 
-class BiomodelConfig(BaseModel):
-    """生物模型的可调参数（aureus.toml 的 [biomodel]，设计见 D42、D43）。
+class BodyConfig(BaseModel):
+    """身体信号的可调参数（aureus.toml 的 [body]，设计见 04 号文档、D53）。
 
-    字段名和 BiologicalState 的同名字段一一对应，默认值在这里集中定义。
-    这些数字没有实测依据，是按“多久该觉得累、觉得闷”估的，项目完成后按实际表现再调。
+    首批只有精力；疲劳、压力、睡眠的参数在 1.4 加进来。
     """
 
-    # 严格类型，理由同 SafetyConfig。allow_inf_nan=False：TOML 能写 nan 和 inf，
-    # 算进模型会把状态弄乱。
+    # 严格类型，理由同 SafetyConfig。allow_inf_nan=False：TOML 能写 nan 和 inf。
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
 
-    # 精力每小时把离满精力的差距补回多少（17 号文档“休息时每小时恢复 15%”）。
-    # 0.15 时，从 0.05 回到“正常”（0.5 以上）约 13 小时；空闲时精力停在 0.55–0.6。
-    energy_recovery_rate: float = Field(default=0.15, ge=0)
-    # 社交需求每小时涨多少（17 号文档）。0.03 时从默认的 0.3 涨到“想找人聊”（0.6）约 10 小时，
-    # 也就是大半天没人说话会想聊天。
-    social_timeout_per_hour: float = Field(default=0.03, ge=0)
-    # 新奇感每小时涨多少。0.05 时从 0.4 涨到“想尝试新东西”（0.6）约 4 小时。
-    novelty_growth_per_hour: float = Field(default=0.05, ge=0)
-    # 每回复一次，社交需求降多少。按回复计，一次聊天常有好几条：
-    # 0.05 时聊 6 来回约抵消 10 小时的积累，不至于几句话就“宁愿独处”。
-    social_relief_per_conversation: float = Field(default=0.05, ge=0, le=1)
-    # 每回复一次，新奇感降多少。日常聊天带来的新鲜感有限；
-    # 真正的新事件要等 Phase 2 接上来源再单独处理（D52）。
-    novelty_relief_per_conversation: float = Field(default=0.03, ge=0, le=1)
+    # 精力信号的总开关（D5：每个信号都能单独关）。关掉后不再按每日额度限制调用，
+    # 精力记为「不限」；月度 token 上限仍然生效，那是安全检查，不归身体管。
+    energy_enabled: bool = True
+    # 每日额度里只留给回应用户的比例（04 号文档第 4 节）：可选的调用用到
+    # 额度的 (1 - 这个比例) 就停，剩下的只给用户。
+    user_reserve_fraction: float = Field(default=0.15, ge=0, lt=1)
+    # 档位分界，按「精力 = 今日剩余额度 ÷ 今日额度」算；低于第一个数进节省档，
+    # 低于第二个进低电量，低于第三个进透支保护（04 号文档第 4 节）。
+    saving_below: float = Field(default=0.5, gt=0, le=1)
+    low_below: float = Field(default=0.2, gt=0, le=1)
+    overdraft_below: float = Field(default=0.05, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _check_tier_order(self) -> Self:
+        if not self.overdraft_below < self.low_below < self.saving_below:
+            raise ValueError("档位分界要满足 overdraft_below < low_below < saving_below")
+        return self
 
 
 class TimeConfig(BaseModel):
@@ -145,7 +146,7 @@ class RuntimeConfig(BaseModel):
     log_level: LogLevel = "INFO"
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
-    biomodel: BiomodelConfig = Field(default_factory=BiomodelConfig)
+    body: BodyConfig = Field(default_factory=BodyConfig)
     time: TimeConfig = Field(default_factory=TimeConfig)
     snapshots: SnapshotsConfig = Field(default_factory=SnapshotsConfig)
 

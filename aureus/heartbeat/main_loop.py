@@ -19,6 +19,7 @@ from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, Protocol
 
+from aureus.body import Body, EnergyReading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
 from aureus.heartbeat.context import build_reply_prompt, build_system_context
@@ -40,7 +41,7 @@ from aureus.heartbeat.perception import (
     TrustLevel,
 )
 from aureus.identity import Identity
-from aureus.organs import OrganCallError, OrganRequest, OrganResponse
+from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import (
     ACTION_CALL_ORGAN,
     ACTION_REPLY_TO_USER,
@@ -133,6 +134,7 @@ class Heartbeat:
         permissions: PermissionChecker,
         emergency_stop: EmergencyStop,
         timezone: tzinfo | None = None,
+        body: Body | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -147,6 +149,7 @@ class Heartbeat:
             emergency_stop: 急停开关，每拍读一次状态；要和权限检查器里的是同一个。
             timezone: 给人看的时间用哪个时区；不给就用这台电脑设置的时区。
                 生物状态没有自己设时区时，日周期也按这个时区算（D42 第 3 条）。
+            body: 身体，提供精力读数；不给时精力记为「不限」。
         """
         self._clock = clock
         self._timeline = timeline
@@ -161,6 +164,8 @@ class Heartbeat:
         if bio_state.timezone is None:
             # 给人看的时间和日周期用同一个时区，免得“早上 8 点”皮质醇却在深夜达到高峰。
             bio_state.timezone = timezone
+        self._body = body
+        self._energy: EnergyReading | None = None  # 最近一次读到的精力
         self._observer = CognitiveObserver(clock)
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
@@ -235,17 +240,19 @@ class Heartbeat:
         state = self._cognitive_state
         lines = [state.self_awareness_statement() if state else "还没有跳过第一拍。"]
         if state is not None:
-            lines.append(
-                f"精力 {state.energy_level:.2f}（{state.energy_state}），"
-                f"信心 {state.planning_confidence:.2f}"
+            energy = (
+                "精力 不限（没设月度上限）"
+                if state.energy_level is None
+                else f"精力 {state.energy_level:.0%}（{state.energy_state}档）"
             )
+            lines.append(f"{energy}，信心 {state.planning_confidence:.2f}")
         hormones = self._bio_state.hormones
         lines.append(
             f"多巴胺 {hormones.dopamine:.2f}，皮质醇 {hormones.cortisol:.2f}，"
             f"血清素 {hormones.serotonin:.2f}，去甲肾上腺素 {hormones.noradrenaline:.2f}"
         )
         if not self._config.advance_biomodel:
-            lines.append("生物模型暂停中（advance_biomodel = false）：激素和精力不随时间变化。")
+            lines.append("生物模型暂停中（advance_biomodel = false）：激素不随时间变化。")
         if self._thought is not None:
             lines.append(f"正在想怎么回复 {len(self._thought.replying_to)} 条消息。")
         if self._halt_status.halted:
@@ -456,9 +463,6 @@ class Heartbeat:
             },
         )
         self._deliver(target, text, MessageKind.REPLY)
-        if self._config.advance_biomodel:
-            # 谈过一次话，社交需求和新奇感回落（D42 第 7 条）；开关关着时整个模型冻结。
-            self._bio_state.on_conversation()
 
     def _take_in_perceptions(self) -> None:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
@@ -517,12 +521,23 @@ class Heartbeat:
         for target in latest.values():
             self._deliver(target, f"{reason}。这条消息已经记下，不会回复。", MessageKind.NOTICE)
 
+    def _read_energy(self) -> EnergyReading | None:
+        """读身体的精力。账本读不了时沿用上一次的读数，不编一个新的。"""
+        if self._body is None:
+            return None
+        try:
+            self._energy = self._body.read_energy()
+        except Exception:
+            # 为什么不抛：这里只是观察自己，读不到不该让心跳停下；真正的安全检查在网关里。
+            logger.exception("读不了精力，沿用上一次的读数")
+        return self._energy
+
     def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""
         context: dict[str, Any] = {"task_name": TASK_IDLE}
         if self._thought is not None:
             context = {"task_name": TASK_REPLYING, "focus_target": self._identity.user.name}
-        state = self._observer.observe(self._bio_state, context)
+        state = self._observer.observe(self._bio_state, context, self._read_energy())
         self._cognitive_state = state
         if not self._config.broadcast_cognitive_state:
             return
@@ -563,6 +578,7 @@ class Heartbeat:
             ),
             bio_state=self._bio_state,
             context={"task": "reply", "in_reply_to": [heard.record.id for heard in batch]},
+            purpose=CallPurpose.USER_REPLY,
             system_context=build_system_context(
                 self._identity, self._clock.now(), self._downtime, self._timezone
             ),

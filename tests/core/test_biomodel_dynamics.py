@@ -1,9 +1,11 @@
 """生物模型随时间变化的测试：0.9a 的验收标准（docs/08-roadmap.md，D42）。
 
 - 同一段时间用不同的心跳间隔推进，结果一致；
-- 连续运行几天不会卡在极端值，精力会恢复；
+- 连续运行几天不会卡在极端值，激素会回到基线；
 - 极端的时间间隔和不合法的输入不会弄坏状态；
-- 社交需求和新奇感随时间上涨，谈话后回落；日周期按本地时间算。
+- 日周期按本地时间算。
+
+精力、社交需求、新奇感已经不在这里（D53、D56）：精力见 tests/body/。
 """
 
 import math
@@ -14,9 +16,12 @@ from typing import Any
 
 import pytest
 
-from aureus.common import BiomodelConfig
 from aureus.common.clock import ManualClock
-from aureus.core.biomodel import BiologicalState, HormoneState
+from aureus.core.biomodel import (
+    SEROTONIN_BASELINE,
+    BiologicalState,
+    HormoneState,
+)
 
 HOUR = 3600.0
 CHINA = timezone(timedelta(hours=8))
@@ -49,13 +54,10 @@ def run(
 
 def snapshot(bio: BiologicalState) -> dict[str, float]:
     return {
-        "energy": bio.energy,
         "dopamine": bio.hormones.dopamine,
         "cortisol": bio.hormones.cortisol,
         "serotonin": bio.hormones.serotonin,
         "noradrenaline": bio.hormones.noradrenaline,
-        "social": bio.social_deficit,
-        "novelty": bio.novelty_craving,
     }
 
 
@@ -64,45 +66,13 @@ def assert_in_range(bio: BiologicalState) -> None:
         assert math.isfinite(value) and 0.0 <= value <= 1.0, f"{name}={value}"
 
 
-def test_documented_default_parameters() -> None:
-    # D43 定下的默认值；改了要同步改 D43 和 config/aureus.example.toml。
-    _, bio = make()
-    assert bio.energy_recovery_rate == 0.15  # 每小时
-    assert bio.social_timeout_per_hour == 0.03
-    assert bio.novelty_growth_per_hour == 0.05
-    assert bio.social_relief_per_conversation == 0.05  # 每次回复
-    assert bio.novelty_relief_per_conversation == 0.03
-
-
-def test_defaults_come_from_the_config_section() -> None:
-    _, bio = make()
-    for name, value in BiomodelConfig().model_dump().items():
-        assert getattr(bio, name) == value, name
-
-
-def test_from_config_uses_every_tunable_parameter() -> None:
-    clock = ManualClock(datetime(2026, 11, 17, tzinfo=UTC))
-    config = BiomodelConfig(
-        energy_recovery_rate=0.3,
-        social_timeout_per_hour=0.1,
-        novelty_growth_per_hour=0.2,
-        social_relief_per_conversation=0.4,
-        novelty_relief_per_conversation=0.5,
-    )
-    bio = BiologicalState.from_config(config, clock, CHINA)
-    assert bio.clock is clock
-    assert bio.timezone is CHINA
-    for name, value in config.model_dump().items():
-        assert getattr(bio, name) == value, name
-
-
 # ---------- 结果不随心跳快慢变化（D42 第 1、2 条） ----------
 
 
 def perturbed_run(hour: int, step_seconds: float) -> dict[str, float]:
     # 起点故意偏离基线，这样每个量都在变化，差异才测得出来。
     hormones = HormoneState(dopamine=0.9, cortisol=0.8, serotonin=0.2, noradrenaline=0.7)
-    clock, bio = make(hour, hormones=hormones, energy=0.3, social_deficit=0.2)
+    clock, bio = make(hour, hormones=hormones)
     run(clock, bio, 6 * HOUR, step_seconds)
     return snapshot(bio)
 
@@ -120,34 +90,38 @@ def test_result_does_not_depend_on_tick_length(hour: int, step_seconds: float) -
         assert actual[name] == pytest.approx(expected, abs=TOLERANCE), name
 
 
-# ---------- 精力会恢复，不会卡在极端值（D42 第 4 条） ----------
+# ---------- 激素会回到基线，不会卡在极端值（D42 第 4 条） ----------
 
 
-def test_energy_recovers_from_exhaustion() -> None:
-    clock, bio = make(energy=0.05)
+def test_hormones_return_to_baseline_after_a_spike() -> None:
+    hormones = HormoneState(cortisol=1.0, serotonin=0.0)
+    clock, bio = make(hour=8, hormones=hormones)
+    run(clock, bio, 7 * 24 * HOUR, 60)
+    # 皮质醇半衰期 1 小时：一周后只剩日周期的起伏，不会停在 1；
+    # 血清素半衰期 24 小时：一周后回到基线附近。
+    assert 0.2 < bio.hormones.cortisol < 0.8
+    assert bio.hormones.serotonin == pytest.approx(SEROTONIN_BASELINE, abs=0.02)
+
+
+def test_idle_cortisol_repeats_the_same_daily_cycle() -> None:
+    # 没有任何事件时，皮质醇只跟着日周期走：第二天和第三天的最高、最低值一样，没有漂向极端。
+    clock, bio = make(hour=8)
     run(clock, bio, 24 * HOUR, 60)
-    assert 0.5 < bio.energy < 0.65
+    peaks_and_troughs = []
+    for _ in range(2):
+        seen: list[float] = []
 
+        def watch(seen: list[float] = seen) -> None:
+            seen.append(bio.hormones.cortisol)
 
-def test_energy_relaxes_down_from_full() -> None:
-    clock, bio = make(energy=1.0)
-    run(clock, bio, 24 * HOUR, 60)
-    assert 0.5 < bio.energy < 0.65
-
-
-def test_idle_energy_settles_instead_of_draining() -> None:
-    # 原来空闲时每秒耗 0.002，约 4 分钟耗光，之后一直“濒死”（D41 第 2 条）。
-    clock, bio = make()
-    seen: list[float] = []
-    run(clock, bio, 72 * HOUR, 60, on_step=lambda: seen.append(bio.energy))
-    assert min(seen) > 0.4
-    assert max(seen) < 0.7
+        run(clock, bio, 24 * HOUR, 60, on_step=watch)
+        peaks_and_troughs.append((max(seen), min(seen)))
+    assert peaks_and_troughs[0] == pytest.approx(peaks_and_troughs[1], abs=0.01)
 
 
 def test_a_month_of_hourly_ticks_stays_in_range() -> None:
     clock, bio = make()
     run(clock, bio, 30 * 24 * HOUR, HOUR, on_step=lambda: assert_in_range(bio))
-    assert 0.5 < bio.energy < 0.65
 
 
 # ---------- 很长的间隔、不合法的输入 ----------
@@ -159,7 +133,6 @@ def test_long_gap_in_one_update_stays_finite_and_in_range(days: int) -> None:
     clock, bio = make()
     advance(clock, bio, days * 24 * HOUR)
     assert_in_range(bio)
-    assert 0.5 < bio.energy < 0.65
 
 
 @pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
@@ -176,49 +149,6 @@ def test_zero_dt_changes_nothing() -> None:
     before = snapshot(bio)
     bio.update(0.0)
     assert snapshot(bio) == before
-
-
-# ---------- 社交需求、新奇感随时间上涨，谈话后回落（D42 第 5–7 条） ----------
-
-
-def test_social_need_rises_by_the_hour() -> None:
-    clock, bio = make(social_deficit=0.3)
-    advance(clock, bio, 10 * HOUR)
-    assert bio.social_deficit == pytest.approx(0.3 + 10 * 0.03)
-
-
-def test_social_need_stops_at_one() -> None:
-    clock, bio = make(social_deficit=0.95)
-    advance(clock, bio, 10 * HOUR)
-    assert bio.social_deficit == 1.0
-
-
-def test_novelty_craving_rises_by_the_hour() -> None:
-    # 原来每秒涨 0.0005，约 20 分钟涨满（D42 第 6 条）。
-    clock, bio = make(novelty_craving=0.4)
-    advance(clock, bio, 20 * 60)
-    assert bio.novelty_craving < 0.42
-    advance(clock, bio, 12 * HOUR)  # 0.4 + 12 × 0.05 = 1.0，再多也停在 1
-    assert bio.novelty_craving == 1.0
-
-
-def test_conversation_relieves_social_need_and_novelty_craving() -> None:
-    _, bio = make(social_deficit=0.5, novelty_craving=0.5)
-    hormones_before = snapshot(bio)
-    bio.on_conversation()
-    assert bio.social_deficit == pytest.approx(0.45)
-    assert bio.novelty_craving == pytest.approx(0.47)
-    # 激素和精力不动：由真实事件触发激素是 Phase 2 的事（D20）。
-    after = snapshot(bio)
-    for name in ("energy", "dopamine", "cortisol", "serotonin", "noradrenaline"):
-        assert after[name] == hormones_before[name], name
-
-
-def test_conversation_relief_stops_at_zero() -> None:
-    _, bio = make(social_deficit=0.02, novelty_craving=0.01)
-    bio.on_conversation()
-    assert bio.social_deficit == 0.0
-    assert bio.novelty_craving == 0.0
 
 
 # ---------- 日周期按本地时间算（D42 第 3 条） ----------

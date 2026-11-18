@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from aureus.body import Body
 from aureus.common import (
     AureusPaths,
     Clock,
@@ -128,9 +129,13 @@ def open_core(
         # 网关和心跳共用同一个权限检查器，两边看到的急停状态一致（D54）。
         emergency_stop = EmergencyStop(paths.halt_file, the_clock)
         permissions = PermissionChecker(emergency_stop)
-        gateway = SafetyGateway(bus, ledger, timeline, the_clock, runtime.safety, permissions)
+        # 身体和账本用同一个日历，每日额度和每月上限的边界一致（D55、D56）。
+        body = Body(runtime.body, runtime.safety.monthly_token_limit, ledger, the_clock, calendar)
+        gateway = SafetyGateway(
+            bus, ledger, timeline, the_clock, runtime.safety, permissions, energy_gate=body
+        )
         # 生物状态的时区不用传：心跳会把自己的时区填给它（D42 第 3 条）。
-        bio_state = BiologicalState.from_config(runtime.biomodel, the_clock)
+        bio_state = BiologicalState(clock=the_clock)
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -141,6 +146,7 @@ def open_core(
             timezone=calendar.timezone,
             permissions=permissions,
             emergency_stop=emergency_stop,
+            body=body,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

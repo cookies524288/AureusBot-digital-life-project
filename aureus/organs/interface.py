@@ -4,10 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from aureus.core.biomodel import BiologicalState
+
+
+class CallPurpose(StrEnum):
+    """这次调用是为了什么。安全网关按它决定精力不够时放不放行（04 号文档第 4 节，D56）。"""
+
+    # 回应用户：用户开口了，精力再低也要回应（只受月度上限约束）。
+    USER_REPLY = "回应用户"
+    # 可选的事：探索、闲聊、整理等没人在等的调用。默认值，忘了标时按这个处理，
+    # 不确定就朝省的方向倒。
+    OPTIONAL = "可选"
 
 
 @dataclass
@@ -20,6 +31,8 @@ class OrganRequest:
     context: dict[str, Any] = field(default_factory=dict)  # 额外上下文
     # 调用方给的背景（身份、人设、现在几点、醒来信息），器官放在系统提示词最前面（D41 第 8 条）。
     system_context: str = ""
+    # 为什么调用；调用方知道是回应用户时必须明确写 USER_REPLY。
+    purpose: CallPurpose = CallPurpose.OPTIONAL
 
 
 @dataclass(frozen=True)

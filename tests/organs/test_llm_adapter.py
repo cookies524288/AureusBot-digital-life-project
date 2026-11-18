@@ -310,17 +310,17 @@ async def test_missing_usage_is_flagged_not_treated_as_free(
 async def test_organ_only_reads_the_body_state(
     bio_state: BiologicalState, keys: KeyResolver
 ) -> None:
-    before = (bio_state.energy, bio_state.hormones.dopamine, bio_state.hormones.cortisol)
+    before = tuple(vars(bio_state.hormones).values())
     await make_organ(FakeCompletion(make_response("嗨")), keys).process(ask(bio_state))
-    after = (bio_state.energy, bio_state.hormones.dopamine, bio_state.hormones.cortisol)
+    after = tuple(vars(bio_state.hormones).values())
     assert before == after
 
 
 def test_system_prompt_reflects_the_real_body_state(bio_state: BiologicalState) -> None:
-    bio_state.energy = 0.9
-    assert "精力充沛" in build_system_prompt(bio_state)
-    bio_state.energy = 0.1
-    assert "疲惫" in build_system_prompt(bio_state)
+    bio_state.hormones.dopamine = 0.9
+    assert "充满动力" in build_system_prompt(bio_state)
+    bio_state.hormones.dopamine = 0.1
+    assert "充满动力" not in build_system_prompt(bio_state)
 
 
 @pytest.mark.asyncio

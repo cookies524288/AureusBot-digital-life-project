@@ -10,7 +10,6 @@ from aureus.core.biomodel import (
     CircadianModel,
     EmotionalState,
     HormoneState,
-    UltradinRhythm,
 )
 
 
@@ -51,47 +50,6 @@ class TestCircadianModel:
         assert factor_8am > factor_4am
 
 
-class TestUltradinRhythm:
-    """90 分钟 Ultradian 周期测试"""
-
-    def test_initialization(self):
-        """测试初始化"""
-        ultradian = UltradinRhythm(period_minutes=90)
-        assert ultradian.phase == 0.0
-        assert ultradian.period_minutes == 90
-
-    def test_phase_update(self):
-        """测试相位更新"""
-        ultradian = UltradinRhythm(period_minutes=90)
-        period_seconds = 90 * 60
-
-        # 更新 1/4 周期
-        ultradian.update(period_seconds / 4)
-        assert abs(ultradian.phase - 0.25) < 0.01
-
-        # 更新 1/4 周期，到达 1/2 周期
-        ultradian.update(period_seconds / 4)
-        assert abs(ultradian.phase - 0.5) < 0.01
-
-    def test_fatigue_curve(self):
-        """测试疲劳曲线"""
-        ultradian = UltradinRhythm(period_minutes=90)
-
-        # 开始（phase = 0）：疲劳 = 0
-        fatigue = ultradian.fatigue_from_phase()
-        assert abs(fatigue) < 0.01
-
-        # 中点（phase = 0.5）：疲劳 = 1（最大）
-        ultradian.phase = 0.5
-        fatigue = ultradian.fatigue_from_phase()
-        assert abs(fatigue - 1.0) < 0.01
-
-        # 结束（phase ≈ 1）：疲劳 ≈ 0
-        ultradian.phase = 0.99
-        fatigue = ultradian.fatigue_from_phase()
-        assert abs(fatigue) < 0.05
-
-
 class TestHormoneDecay:
     """激素衰减模型测试"""
 
@@ -128,52 +86,37 @@ class TestBiologicalState:
         clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
         bio = BiologicalState(clock=clock)
 
-        assert bio.energy == 0.5
-        assert bio.social_deficit == 0.3
-        assert bio.novelty_craving == 0.4
+        assert not hasattr(bio, "energy")  # 精力在身体里，不在生物模型里（D56）
+        assert not hasattr(bio, "social_deficit")
+        assert not hasattr(bio, "novelty_craving")
         assert bio.hormones.dopamine == 0.5
         assert bio.hormones.cortisol == 0.4
-
-    def test_update_energy_decay(self):
-        """测试能量自然衰减"""
-        clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
-        bio = BiologicalState(energy=1.0, clock=clock)
-
-        initial_energy = bio.energy
-        bio.update(dt=1.0)  # 更新 1 秒
-
-        # 由于空闲衰减和 Ultradian 衰减，能量应该下降
-        assert bio.energy < initial_energy
 
     def test_allostatic_load_calculation(self):
         """测试稳态超载计算"""
         clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
         bio = BiologicalState(
-            energy=0.1,
             hormones=HormoneState(dopamine=0.5, cortisol=0.9, serotonin=0.2, noradrenaline=0.4),
             clock=clock,
         )
 
         bio.update(dt=0.1)
-        # 低能量 + 高皮质醇 + 低血清素 = 高压力指数
+        # 高皮质醇 + 低血清素 = 高压力指数
         assert bio.allostatic_load > 0.5
 
-    def test_allostatic_load_weights_without_sleep_debt(self):
-        """睡眠债删掉后，三项按 3 : 3 : 2 重新归一（D52 第 4 条）：全满是 1，全空是 0。"""
+    def test_allostatic_load_weights(self):
+        """睡眠债和精力两项删掉后，只剩皮质醇和血清素，按 3 : 2 归一（D52 第 4 条、D56）。"""
         clock = ManualClock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
         bio = BiologicalState(clock=clock)
-        bio.energy = 0.0
         bio.hormones = HormoneState(cortisol=1.0, serotonin=0.0)
         bio._compute_allostatic_load()
         assert bio.allostatic_load == pytest.approx(1.0)
-        bio.energy = 1.0
         bio.hormones = HormoneState(cortisol=0.0, serotonin=1.0)
         bio._compute_allostatic_load()
         assert bio.allostatic_load == pytest.approx(0.0)
-        bio.energy = 0.5
         bio.hormones = HormoneState(cortisol=0.4, serotonin=0.5)
         bio._compute_allostatic_load()
-        assert bio.allostatic_load == pytest.approx(0.5 * 0.375 + 0.4 * 0.375 + 0.5 * 0.25)
+        assert bio.allostatic_load == pytest.approx(0.4 * 0.6 + 0.5 * 0.4)
 
 
 class TestEmotionalState:
@@ -182,7 +125,7 @@ class TestEmotionalState:
     def test_valence_computation(self):
         """测试效价计算"""
         hormones = HormoneState(dopamine=0.8, cortisol=0.2, serotonin=0.8, noradrenaline=0.7)
-        emotion = EmotionalState(hormones=hormones, energy=0.8)
+        emotion = EmotionalState(hormones=hormones)
 
         valence = emotion.compute_valence()
 
@@ -192,11 +135,11 @@ class TestEmotionalState:
     def test_arousal_computation(self):
         """测试觉醒度计算"""
         hormones = HormoneState(dopamine=0.8, cortisol=0.2, serotonin=0.8, noradrenaline=0.8)
-        emotion = EmotionalState(hormones=hormones, energy=0.9)
+        emotion = EmotionalState(hormones=hormones)
 
         arousal = emotion.compute_arousal()
 
-        # 高多巴胺 + 高去甲肾上腺素 + 高能量 = 高觉醒度
+        # 高多巴胺 + 高去甲肾上腺素 = 高觉醒度
         assert arousal > 0.6
 
 

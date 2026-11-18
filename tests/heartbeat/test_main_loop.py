@@ -484,7 +484,7 @@ async def test_broadcast_switch_turns_off_timeline_records(factory: Factory) -> 
 
 def body(state: BiologicalState) -> tuple[float, ...]:
     hormones = state.hormones
-    return (state.energy, hormones.dopamine, hormones.cortisol, state.social_deficit)
+    return (hormones.dopamine, hormones.cortisol, hormones.serotonin, hormones.noradrenaline)
 
 
 class UpdateRecorder:
@@ -506,42 +506,30 @@ async def test_biomodel_is_frozen_when_switched_off(factory: Factory) -> None:
 
     harness.clock.advance(timedelta(hours=2))
     harness.heartbeat.beat()
-    await harness.exchange("在吗")  # 关着时谈话也不让社交需求回落（D42 第 8 条）
+    await harness.exchange("在吗")  # 关着时谈话也不改任何激素（D42 第 8 条）
 
     assert body(harness.bio_state) == before
     assert "生物模型暂停中" in harness.heartbeat.describe_state()
 
 
 async def test_biomodel_advances_by_default(harness: Harness) -> None:
-    before = harness.bio_state.social_deficit
+    before = body(harness.bio_state)
 
     harness.clock.advance(timedelta(hours=2))
     harness.heartbeat.beat()
 
-    assert harness.bio_state.social_deficit > before  # 社交需求随时间上涨（D42 第 5 条）
+    assert body(harness.bio_state) != before  # 激素随时间回到日周期的位置（D42）
     assert "生物模型暂停中" not in harness.heartbeat.describe_state()
 
 
-async def test_a_delivered_reply_relieves_social_need(harness: Harness) -> None:
-    harness.bio_state.social_deficit = 0.5
+async def test_a_conversation_does_not_touch_the_biomodel(harness: Harness) -> None:
+    # 社交需求和新奇感已经不在模型里（D53、D56）；谈话不改任何激素，时钟没走时一个数都不变。
+    before = body(harness.bio_state)
 
     await harness.exchange("在吗")
 
     assert len(harness.sent) == 1
-    # 时钟没走，所以只有谈话带来的回落（D42 第 7 条）。
-    expected = 0.5 - harness.bio_state.social_relief_per_conversation
-    assert harness.bio_state.social_deficit == pytest.approx(expected)
-
-
-async def test_a_failed_reply_does_not_count_as_a_conversation(factory: Factory) -> None:
-    harness = factory.make(ScriptedOrgans(OrganCallError("replyer", ["big：超时"])))
-    harness.heartbeat.wake_up()
-    harness.bio_state.social_deficit = 0.5
-
-    await harness.exchange("在吗")
-
-    assert harness.sent[0].kind is MessageKind.NOTICE
-    assert harness.bio_state.social_deficit == 0.5
+    assert body(harness.bio_state) == before
 
 
 async def test_heartbeat_timezone_drives_the_circadian_phase(factory: Factory) -> None:

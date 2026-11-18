@@ -7,7 +7,7 @@ import pytest
 
 from aureus.common import (
     AureusPaths,
-    BiomodelConfig,
+    BodyConfig,
     ConfigError,
     HeartbeatConfig,
     SafetyConfig,
@@ -235,53 +235,81 @@ def test_heartbeat_rejects_bad_values(tmp_path: Path, field: str, text: str) -> 
     assert field in error_message_of(paths)
 
 
-# ---------- [biomodel] 生物模型的可调参数（D43） ----------
+# ---------- [body] 身体信号的可调参数（D56） ----------
 
-BIOMODEL_FIELDS = tuple(BiomodelConfig.model_fields)
-
-
-def test_biomodel_defaults_when_section_is_missing(tmp_path: Path) -> None:
-    assert load_runtime_config(AureusPaths(tmp_path)).biomodel == BiomodelConfig()
+BODY_FIELDS = tuple(BodyConfig.model_fields)
 
 
-def test_biomodel_example_values_equal_the_defaults(tmp_path: Path) -> None:
+def test_body_defaults_when_section_is_missing(tmp_path: Path) -> None:
+    body = load_runtime_config(AureusPaths(tmp_path)).body
+    assert body == BodyConfig()
+    assert body.energy_enabled is True
+    assert (body.user_reserve_fraction, body.saving_below, body.low_below) == (0.15, 0.5, 0.2)
+    assert body.overdraft_below == 0.05
+
+
+def test_body_example_values_equal_the_defaults(tmp_path: Path) -> None:
     example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
-    prefixes = tuple(f"# {name} =" for name in BIOMODEL_FIELDS)
+    prefixes = tuple(f"# {name} =" for name in BODY_FIELDS)
     lines = example.read_text(encoding="utf-8").splitlines()
     uncommented = [line.removeprefix("# ") if line.startswith(prefixes) else line for line in lines]
-    assert sum(line.startswith(prefixes) for line in lines) == len(BIOMODEL_FIELDS)
+    assert sum(line.startswith(prefixes) for line in lines) == len(BODY_FIELDS)
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, "\n".join(uncommented))
-    assert load_runtime_config(paths).biomodel == BiomodelConfig()
+    assert load_runtime_config(paths).body == BodyConfig()
 
 
-def test_biomodel_values_from_file_are_used(tmp_path: Path) -> None:
+def test_body_values_from_file_are_used(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(
-        paths, "[biomodel]\nsocial_timeout_per_hour = 0.1\nenergy_recovery_rate = 0\n"
+        paths,
+        "[body]\nenergy_enabled = false\nsaving_below = 0.6\nlow_below = 0.3\n"
+        "overdraft_below = 0\nuser_reserve_fraction = 0.1\n",
     )
-    biomodel = load_runtime_config(paths).biomodel
-    assert biomodel.social_timeout_per_hour == 0.1
-    assert biomodel.energy_recovery_rate == 0.0  # 写成整数也行；0 表示不恢复，合法
+    body = load_runtime_config(paths).body
+    assert body.energy_enabled is False
+    assert (body.saving_below, body.low_below, body.overdraft_below) == (0.6, 0.3, 0.0)
+    assert body.user_reserve_fraction == 0.1
 
 
 @pytest.mark.parametrize(
     ("field", "text"),
     [
-        ("energy_recovery_rate", "-0.1"),  # 负数会让精力越来越低
-        ("social_timeout_per_hour", "-1"),
-        ("novelty_growth_per_hour", "nan"),  # 算进模型会让状态变成 nan
-        ("novelty_growth_per_hour", "inf"),
-        ("social_relief_per_conversation", "1.5"),  # 一次回落超过整个范围没有意义
-        ("novelty_relief_per_conversation", "-0.01"),
-        ("social_timeout_per_hour", '"0.03"'),
-        ("energy_recovery_rate", "true"),
+        ("user_reserve_fraction", "-0.1"),
+        ("user_reserve_fraction", "1"),  # 全部留给用户，可选的调用永远不放行，不如关掉精力信号
+        ("saving_below", "0"),
+        ("saving_below", "1.5"),
+        ("low_below", "nan"),
+        ("overdraft_below", "-0.01"),
+        ("energy_enabled", "1"),  # 数字 1 不是 true
+        ("low_below", '"0.2"'),
     ],
 )
-def test_biomodel_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+def test_body_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
     paths = AureusPaths(tmp_path)
-    write_runtime_config(paths, f"[biomodel]\n{field} = {text}\n")
+    write_runtime_config(paths, f"[body]\n{field} = {text}\n")
     assert field in error_message_of(paths)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "saving_below = 0.2\nlow_below = 0.2\n",  # 相等：中间那一档没有宽度
+        "low_below = 0.6\n",  # 比默认的 saving_below 还大
+        "overdraft_below = 0.3\n",  # 比默认的 low_below 还大
+    ],
+)
+def test_body_tiers_must_be_in_order(tmp_path: Path, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[body]\n{text}")
+    assert "档位分界" in error_message_of(paths)
+
+
+def test_old_biomodel_section_is_reported_as_unknown(tmp_path: Path) -> None:
+    # 精力、社交需求、新奇感已经不在生物模型里（D53、D56），旧配置要明确报错而不是悄悄忽略。
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[biomodel]\nenergy_recovery_rate = 0.1\n")
+    assert "biomodel" in error_message_of(paths)
 
 
 # ---------- 合在一起 ----------

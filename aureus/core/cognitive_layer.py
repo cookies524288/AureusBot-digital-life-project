@@ -20,7 +20,14 @@ from aureus.core.biomodel import (
 )
 
 if TYPE_CHECKING:
+    from aureus.body.energy import EnergyReading
     from aureus.core.biomodel import BiologicalState
+
+# 精力档位的显示名；这里只认值，不 import body（core 在 body 之上，运行时不绕回去）。
+_TIER_UNLIMITED = "不限"
+_TIER_SAVING = "节省"
+_TIER_LOW = "低电量"
+_TIER_OVERDRAFT = "透支保护"
 
 
 @dataclass
@@ -42,8 +49,10 @@ class CognitiveState:
         }
     )  # 相对于基线的激素影响
 
-    energy_state: str = "normal"  # "充足" / "正常" / "疲倦" / "濒死"
-    energy_level: float = 0.5  # [0, 1] 绝对能量值
+    # 精力来自身体信号（预算），不是模拟的量（D53、D56）：档位名，和精力比例 [0, 1]；
+    # 没设月度上限（不限）时比例是 None。
+    energy_state: str = _TIER_UNLIMITED
+    energy_level: float | None = None
 
     attention_focus: str = ""  # 注意力聚焦在哪：用户名、任务、想法等
 
@@ -96,7 +105,7 @@ class CognitiveState:
 
 
 class CognitiveObserver:
-    """观察器：让 BiologicalState 能观察自己的思考过程"""
+    """观察器：让它能观察自己的思考过程；精力读身体信号，激素读生物状态。"""
 
     def __init__(self, clock: Clock | None = None):
         self.clock = clock or SystemClock()
@@ -105,12 +114,14 @@ class CognitiveObserver:
         self,
         bio_state: BiologicalState,  # type: ignore # 避免循环导入
         context: dict[str, Any] | None = None,
+        energy: EnergyReading | None = None,
     ) -> CognitiveState:
-        """根据生物状态和当前上下文，生成它对自己的观察
+        """根据生物状态、身体信号和当前上下文，生成它对自己的观察
 
         Args:
             bio_state: 生物学状态对象
             context: 当前执行上下文（任务名、规划深度等）
+            energy: 身体的精力读数；不给时当作「不限」。
 
         Returns:
             CognitiveState：对当前认知状态的描述
@@ -134,21 +145,21 @@ class CognitiveObserver:
             "noradrenaline_effect": bio_state.hormones.noradrenaline - NORADRENALINE_BASELINE,
         }
 
-        # 5. 能量分类
-        energy_state = self._classify_energy(bio_state.energy)
-        energy_level = bio_state.energy
+        # 5. 精力：直接用身体给的档位，不在这里另算
+        energy_state = energy.tier.value if energy is not None else _TIER_UNLIMITED
+        energy_level = energy.fraction if energy is not None else None
 
         # 6. 注意力焦点
         attention_focus = context.get("focus_target", "")
 
         # 7. 决策理由
-        why_this_decision = self._explain_current_state(bio_state)
+        why_this_decision = self._explain_current_state(bio_state, energy_state)
 
         # 8. 障碍识别
-        obstacles = self._identify_obstacles(bio_state)
+        obstacles = self._identify_obstacles(bio_state, energy_state)
 
         # 9. 下一步预测
-        next_likely_action = self._predict_next_action(bio_state, current_task)
+        next_likely_action = self._predict_next_action(bio_state, current_task, energy_state)
 
         return CognitiveState(
             current_task=current_task,
@@ -166,32 +177,14 @@ class CognitiveObserver:
 
     @staticmethod
     def _compute_confidence(bio_state: BiologicalState) -> float:  # type: ignore
-        """基于多巴胺、能量、皮质醇计算规划信心"""
+        """基于多巴胺、皮质醇计算规划信心"""
         # 高多巴胺 = 信心足
         # 高皮质醇 = 谨慎（信心下降）
-        # 低能量 = 不确定（信心下降）
-        confidence = (
-            0.5
-            + bio_state.hormones.dopamine * 0.3
-            - bio_state.hormones.cortisol * 0.2
-            - (1.0 - bio_state.energy) * 0.1
-        )
+        confidence = 0.5 + bio_state.hormones.dopamine * 0.3 - bio_state.hormones.cortisol * 0.2
         return max(0.0, min(1.0, confidence))
 
     @staticmethod
-    def _classify_energy(energy: float) -> str:
-        """将能量值分类为人类可理解的状态"""
-        if energy > 0.7:
-            return "充足"
-        elif energy > 0.5:
-            return "正常"
-        elif energy > 0.3:
-            return "疲倦"
-        else:
-            return "濒死"
-
-    @staticmethod
-    def _explain_current_state(bio_state: BiologicalState) -> str:  # type: ignore
+    def _explain_current_state(bio_state: BiologicalState, energy_state: str) -> str:  # type: ignore
         """根据激素和能量，解释为什么做当前这件事"""
         reasons = []
 
@@ -201,19 +194,9 @@ class CognitiveObserver:
         elif bio_state.hormones.dopamine < 0.3:
             reasons.append("多巴胺低落，比较被动")
 
-        # 能量
-        if bio_state.energy > 0.7:
-            reasons.append("精力充沛")
-        elif bio_state.energy < 0.3:
-            reasons.append("能量紧张")
-
-        # 社交
-        if bio_state.social_deficit > 0.6:
-            reasons.append("有社交需求")
-
-        # 无聊感
-        if bio_state.novelty_craving > 0.6:
-            reasons.append("想尝试新东西")
+        # 精力：今天的额度不多了
+        if energy_state in (_TIER_SAVING, _TIER_LOW, _TIER_OVERDRAFT):
+            reasons.append(f"今天的精力额度紧张（{energy_state}档）")
 
         # 皮质醇
         if bio_state.hormones.cortisol > 0.8:
@@ -222,14 +205,16 @@ class CognitiveObserver:
         return "；".join(reasons) if reasons else "保持常态"
 
     @staticmethod
-    def _identify_obstacles(bio_state: BiologicalState) -> list[str]:  # type: ignore
+    def _identify_obstacles(bio_state: BiologicalState, energy_state: str) -> list[str]:  # type: ignore
         """识别当前行动的障碍"""
         obstacles = []
 
-        if bio_state.energy < 0.3:
-            obstacles.append("能量濒死")
-        elif bio_state.energy < 0.5:
-            obstacles.append("能量不足")
+        if energy_state == _TIER_OVERDRAFT:
+            obstacles.append("今天的额度几乎用完（透支保护）")
+        elif energy_state == _TIER_LOW:
+            obstacles.append("精力低电量")
+        elif energy_state == _TIER_SAVING:
+            obstacles.append("精力进入节省档")
 
         if bio_state.hormones.cortisol > 0.8:
             obstacles.append("皮质醇高（谨慎模式）")
@@ -246,30 +231,22 @@ class CognitiveObserver:
     def _predict_next_action(
         bio_state: BiologicalState,  # type: ignore
         current_task: str,
+        energy_state: str,
     ) -> str | None:
         """基于当前状态预测下一步可能的行动"""
-        # 如果能量马上要用尽
-        if bio_state.energy < 0.15:
-            return "立即休息或进入梦境"
+        # 今天的额度快用完：只回应用户，其余留到明天
+        if energy_state in (_TIER_LOW, _TIER_OVERDRAFT):
+            return "只回应用户，其余的事留到明天"
 
         # 如果压力积累很高
         if bio_state.allostatic_load > 0.7:
             return "寻求恢复（休息、社交）"
 
-        # 如果社交需求很高
-        if bio_state.social_deficit > 0.7:
-            return "尝试社交互动"
-
-        # 如果无聊感很高且能量充足
-        if bio_state.novelty_craving > 0.6 and bio_state.energy > 0.6:
-            return "主动发起新话题或探索"
-
-        # 正常情况
+        # 待机时：额度紧张就继续待着，否则找事做
         if current_task == "待机":
-            if bio_state.energy > 0.7:
-                return "寻找新任务"
-            else:
-                return "继续待机或进入浅度梦境"
+            if energy_state in (_TIER_SAVING, _TIER_LOW, _TIER_OVERDRAFT):
+                return "继续待机"
+            return "寻找新任务"
 
         return None
 
@@ -277,12 +254,6 @@ class CognitiveObserver:
     def system_prompt_modifier(bio_state: BiologicalState) -> str:  # type: ignore
         """生成给 LLM 的系统提示词修饰语（基于当前认知状态）"""
         modifiers = []
-
-        # 基于能量
-        if bio_state.energy > 0.7:
-            modifiers.append("你精力充沛、反应迅速")
-        elif bio_state.energy < 0.3:
-            modifiers.append("你感到疲惫、反应缓慢")
 
         # 基于多巴胺
         if bio_state.hormones.dopamine > 0.7:
@@ -301,14 +272,6 @@ class CognitiveObserver:
             modifiers.append("你心情稳定、倾向乐观")
         elif bio_state.hormones.serotonin < 0.3:
             modifiers.append("你感到不稳定、倾向消极")
-
-        # 基于社交需求
-        if bio_state.social_deficit > 0.6:
-            modifiers.append("你渴望交流、更显亲近")
-
-        # 基于无聊感
-        if bio_state.novelty_craving > 0.6:
-            modifiers.append("你对新鲜事物有兴趣")
 
         if not modifiers:
             modifiers.append("你感到平静、状态正常")

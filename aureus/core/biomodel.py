@@ -1,6 +1,7 @@
 """生物学状态模型 - Aureus Phase 0.5 核心
 
-实现激素系统、能量模型、日周期、情绪派生、稳态超载等。
+实现激素系统、日周期、情绪派生、稳态超载。精力、社交需求、新奇感和 90 分钟节律
+已经删掉（D53、D56）：精力现在来自真实的预算（见 aureus/body/）。
 所有参数基于真实的神经生理学文献。
 
 参考：docs/17-neuroscience-optimization.md
@@ -12,12 +13,11 @@ from datetime import datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any
 
 from aureus.common.clock import Clock, SystemClock, ensure_aware
-from aureus.common.config import BiomodelConfig
 
 if TYPE_CHECKING:
+    from aureus.body.energy import EnergyReading
     from aureus.core.cognitive_layer import CognitiveState
 
-SECONDS_PER_HOUR = 3600.0
 SECONDS_PER_DAY = 86400.0
 
 # update() 把一段时间切成不超过这么多秒的小段，每小段用精确解推进，
@@ -25,11 +25,6 @@ SECONDS_PER_DAY = 86400.0
 MAX_SEGMENT_SECONDS = 60.0
 # 小段数的上限：停机几天后醒来，一次 update 不会算几千几万段；超过时每段相应变长。
 MAX_SEGMENTS = 2000
-# 90 分钟节律最疲劳时的消耗：每个周期最多消耗 15% 的能量范围。
-ULTRADIAN_DIP_SCALE = 0.15
-# 可调参数的默认值只在 BiomodelConfig 里写一次（D43），这里照抄，不另写数字。
-_DEFAULT_RATES = BiomodelConfig()
-
 
 # 各激素的基线浓度：既是初始值，也是衰减要回归的值，认知透明层也用它算「相对基线的偏离」。
 # 只在这里写一次，免得几处各写各的、改一处忘另一处（审查第 5 节第 7 条）。
@@ -102,84 +97,13 @@ class CircadianModel:
 
 
 @dataclass
-class UltradinRhythm:
-    """90-120 分钟的基础认知周期（Ultradian Rhythm）。
-    对应脑脊液清除和葡萄糖消耗的周期。
-    """
-
-    period_minutes: int = 90  # 周期长度（分钟）
-    phase: float = 0.0  # 当前相位 [0, 1)
-
-    def update(self, dt: float) -> None:
-        """更新相位（dt 以秒为单位）"""
-        period_seconds = self.period_minutes * 60
-        self.phase = (self.phase + dt / period_seconds) % 1.0
-
-    def fatigue_from_phase(self) -> float:
-        """一个周期内的疲劳曲线（0-1）
-        相位 0 和 1（周期刚开始、刚结束）都是 0，相位 0.5（周期中点）最高。
-        是正弦曲线的前半个波，周期结束后回到 0，下一个周期重新开始。
-        """
-        return math.sin(self.phase * math.pi)
-
-    def energy_dip_amount(self) -> float:
-        """即使什么都不做，能量也会自然消耗的量。
-        基于 Ultradian 周期的自然疲劳。
-        """
-        return self.fatigue_from_phase() * ULTRADIAN_DIP_SCALE
-
-    def mean_energy_dip_over(self, dt: float) -> float:
-        """从现在起往后 dt 秒里，energy_dip_amount() 的平均值（不改变相位）。
-
-        为什么取平均而不是取某一刻的值：停机很久后一次 update，每小段可能长达几小时，
-        跨过好几个 90 分钟周期，只取一刻会随取样点忽高忽低（D42 第 1 条）。
-        """
-        if dt <= 0:
-            return self.energy_dip_amount()
-        cycles = dt / (self.period_minutes * 60)
-        start = self.phase
-        mean_fatigue = (_integral_of_fatigue(start + cycles) - _integral_of_fatigue(start)) / cycles
-        return mean_fatigue * ULTRADIAN_DIP_SCALE
-
-
-def _integral_of_fatigue(phase: float) -> float:
-    """疲劳曲线 sin(π·相位) 从 0 积分到 phase（phase 可以超过 1，按周期接着算）。
-
-    每个整周期的积分是 2/π；不满一周期的部分是 (1 - cos(π·余数)) / π。
-    """
-    whole_cycles = math.floor(phase)
-    remainder = phase - whole_cycles
-    return whole_cycles * 2.0 / math.pi + (1.0 - math.cos(math.pi * remainder)) / math.pi
-
-
-@dataclass
 class BiologicalState:
-    """完整的生物学状态：激素、能量、社交需求、无聊感、压力指数。
+    """完整的生物学状态：激素、日周期、压力指数。
     这是 Aureus 核心内部状态的数学表达。
     """
 
     # 激素状态
     hormones: HormoneState = field(default_factory=HormoneState)
-
-    # 能量状态 [0, 1]
-    energy: float = 0.5
-    # 精力向 1 回升的速率 ρ（每小时）：dE/dt = ρ(1 - E) - 节律消耗（D42 第 4 条）。
-    energy_recovery_rate: float = _DEFAULT_RATES.energy_recovery_rate
-    # 空闲消耗 energy_decay_idle 已去掉：每秒 0.002 约 4 分钟耗光精力，空闲消耗由节律给出。
-
-    # 社交需求 [0, 1]：0 = 满足，1 = 极度孤独
-    social_deficit: float = 0.3
-    # 社交需求随时间上涨（04 号文档），不再自然衰减（D42 第 5、7 条）
-    social_timeout_per_hour: float = _DEFAULT_RATES.social_timeout_per_hour  # 每小时增长
-    # 每回复一次让它下降多少
-    social_relief_per_conversation: float = _DEFAULT_RATES.social_relief_per_conversation
-
-    # 无聊感 / 刺激饥渴 [0, 1]
-    novelty_craving: float = 0.4
-    # 新奇感也随时间上涨；原来的“每秒 0.0005”是单位弄混了（D42 第 6 条）
-    novelty_growth_per_hour: float = _DEFAULT_RATES.novelty_growth_per_hour  # 每小时增长
-    # 每回复一次减少多少（D42 第 7 条）
-    novelty_relief_per_conversation: float = _DEFAULT_RATES.novelty_relief_per_conversation
 
     # 稳态超载（压力指数）[0, 1]
     allostatic_load: float = 0.0
@@ -190,9 +114,6 @@ class BiologicalState:
     timezone: tzinfo | None = None
     circadian_phase: float = 0.0  # 日周期相位 [0, 1]
 
-    # Ultradian 周期
-    ultradian: UltradinRhythm = field(default_factory=UltradinRhythm)
-
     # 上次更新时间（用于计算时间差）
     _last_update: datetime = field(init=False, default=None)  # type: ignore
 
@@ -201,19 +122,6 @@ class BiologicalState:
     _halflife_cortisol: float = 3600  # 1 小时
     _halflife_serotonin: float = 86400  # 24 小时
     _halflife_noradrenaline: float = 300  # 5 分钟
-
-    @classmethod
-    def from_config(
-        cls, config: BiomodelConfig, clock: Clock, timezone: tzinfo | None = None
-    ) -> "BiologicalState":
-        """按 aureus.toml 的 [biomodel] 建一个生物状态，其余字段用默认值（D43）。
-
-        Args:
-            config: 可调参数。
-            clock: 时钟。
-            timezone: 日周期按哪个时区算；不给时由心跳填成它的时区。
-        """
-        return cls(clock=clock, timezone=timezone, **config.model_dump())
 
     def __post_init__(self) -> None:
         """初始化时间戳"""
@@ -252,10 +160,6 @@ class BiologicalState:
     def _advance_segment(self, dt: float, circadian_phase: float) -> None:
         """推进一小段。日周期相位由调用方按这一小段中点的时间算好传进来。"""
         self._update_hormones(dt, circadian_phase)
-        self._update_energy(dt)
-        self.ultradian.update(dt)
-        self._update_social_deficit(dt)
-        self._update_novelty_craving(dt)
 
     def _update_hormones(self, dt: float, circadian_phase: float) -> None:
         """更新激素浓度（指数衰减 + 基线恢复）。皮质醇的基线随日周期变化。"""
@@ -314,68 +218,33 @@ class BiologicalState:
         result = decayed + recovered_baseline
         return max(0.0, min(1.0, result))  # 钳制在 [0, 1]
 
-    def _update_energy(self, dt: float) -> None:
-        """更新精力：dE/dt = ρ(1 - E) - 节律消耗，在这 dt 秒里取精确解（D42 第 4 条）。
-
-        节律消耗取这 dt 秒里的平均值，所以要在 90 分钟节律往前走之前调用。
-        """
-        recovery_per_second = self.energy_recovery_rate / SECONDS_PER_HOUR
-        period_seconds = self.ultradian.period_minutes * 60
-        drain_per_second = self.ultradian.mean_energy_dip_over(dt) / period_seconds
-        # 令 x = 1 - E（离满精力还差多少），则 dx/dt = -ρx + m，
-        # 解是 x(dt) = x·e^(-ρ·dt) + (m/ρ)·(1 - e^(-ρ·dt))。
-        if recovery_per_second > 0:
-            shrink = math.exp(-recovery_per_second * dt)
-            carried = (1.0 - self.energy) * shrink
-            produced = drain_per_second / recovery_per_second * (1.0 - shrink)
-            shortfall = carried + produced
-        else:
-            shortfall = (1.0 - self.energy) + drain_per_second * dt
-        self.energy = max(0.0, min(1.0, 1.0 - shortfall))
-
-    def _update_social_deficit(self, dt: float) -> None:
-        """更新社交需求：随时间上涨，涨到 1 为止（04 号文档，D42 第 5 条）。"""
-        growth = self.social_timeout_per_hour * dt / SECONDS_PER_HOUR
-        self.social_deficit = min(1.0, self.social_deficit + growth)
-
-    def _update_novelty_craving(self, dt: float) -> None:
-        """更新无聊感：随时间上涨，涨到 1 为止（D42 第 6 条）。"""
-        growth = self.novelty_growth_per_hour * dt / SECONDS_PER_HOUR
-        self.novelty_craving = min(1.0, self.novelty_craving + growth)
-
     def _compute_allostatic_load(self) -> None:
         """计算稳态超载指数（多维压力累积）。
 
-        原来还有一项睡眠债占 20%，但睡眠债没有任何来源、永远是 0，已删掉（D52 第 4 条）；
-        剩下三项按原来 3 : 3 : 2 的比例重新归一，满载时仍然是 1。
+        原来还有精力枯竭和睡眠债两项：睡眠债没有来源已删（D52 第 4 条），精力现在是预算而不是
+        模拟的量（D56），也不再混进激素的压力指数。剩下两项按 3 : 2 归一，满载时仍然是 1。
         """
         components = [
-            (1.0 - self.energy) * 0.375,  # 能量枯竭
-            self.hormones.cortisol * 0.375,  # 皮质醇高
-            (1.0 - self.hormones.serotonin) * 0.25,  # 血清素低
+            self.hormones.cortisol * 0.6,  # 皮质醇高
+            (1.0 - self.hormones.serotonin) * 0.4,  # 血清素低
         ]
         self.allostatic_load = min(1.0, sum(components))
 
-    def on_conversation(self) -> None:
-        """回复了一次之后：社交需求和新奇感回落（04 号文档：一次有效对话后回落，D42 第 7 条）。
-
-        心跳每把一条回复交给用户就调用一次，所以回落量按“每次回复”定（D43）。
-
-        只动这两个量，不动激素：激素由真实事件触发是 Phase 2 反馈的事（D20）。
-        """
-        self.social_deficit = max(0.0, self.social_deficit - self.social_relief_per_conversation)
-        self.novelty_craving = max(0.0, self.novelty_craving - self.novelty_relief_per_conversation)
-
     def compute_emotion(self) -> "EmotionalState":
         """计算当前情绪状态"""
-        return EmotionalState(self.hormones, self.energy)
+        return EmotionalState(self.hormones)
 
-    def observe_cognitive_state(self, context: dict[str, Any] | None = None) -> "CognitiveState":  # type: ignore
+    def observe_cognitive_state(
+        self,
+        context: dict[str, Any] | None = None,
+        energy: "EnergyReading | None" = None,
+    ) -> "CognitiveState":  # type: ignore
         """生成自己的认知观察（元认知，实现"我思故我在"）
 
         这是 D34 的实现：它能观察自己的思考过程。
 
         Args:
+            energy: 身体的精力读数；不给时当作「不限」。
             context: 当前执行上下文，包含：
                 - task_name: 当前任务名
                 - planning_depth: 规划深度
@@ -396,7 +265,7 @@ class BiologicalState:
         from aureus.core.cognitive_layer import CognitiveObserver
 
         observer = CognitiveObserver(self.clock)
-        return observer.observe(self, context or {})
+        return observer.observe(self, context or {}, energy)
 
 
 @dataclass
@@ -406,7 +275,6 @@ class EmotionalState:
     """
 
     hormones: HormoneState
-    energy: float
 
     def compute_valence(self) -> float:
         """情绪效价轴 [-1, 1]
@@ -426,9 +294,7 @@ class EmotionalState:
         高：激活、警觉、兴奋
         低：放松、困倦、无聊
         """
-        arousal = (
-            self.hormones.dopamine * 0.4 + self.hormones.noradrenaline * 0.6 + self.energy * 0.3
-        ) / 1.3  # 标准化
+        arousal = self.hormones.dopamine * 0.4 + self.hormones.noradrenaline * 0.6
         return max(0.0, min(1.0, arousal))
 
     def system_prompt_modifier(self) -> str:
@@ -440,9 +306,9 @@ class EmotionalState:
 
         # 基于觉醒度
         if arousal > 0.7:
-            modifiers.append("你精力充沛、充满热情")
+            modifiers.append("你情绪高涨、反应敏捷")
         elif arousal < 0.3:
-            modifiers.append("你感到困倦、反应变慢")
+            modifiers.append("你有些懒散、反应放松")
 
         # 基于效价
         if valence > 0.5:

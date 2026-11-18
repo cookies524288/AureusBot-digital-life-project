@@ -197,5 +197,5 @@ class TestFakePlanner:
         )
         response = await planner.process(request)
 
-        assert "energy_used" in response.metadata
+        assert "confidence_used" in response.metadata
         assert "planning_depth" in response.metadata

@@ -20,6 +20,10 @@ class BudgetExceededError(CallRejectedError):
     """本月 token 已经用到上限。"""
 
 
+class EnergyDepletedError(CallRejectedError):
+    """今天的精力用完了：可选的调用被推到明天，回应用户的不受影响（D56）。"""
+
+
 class RunawayBlockedError(CallRejectedError):
     """失控拦截：这个器官调用太频繁，或者连续失败后正在暂停。"""
 

@@ -31,8 +31,8 @@ log_level = "INFO"
 [heartbeat]
 # 没有新消息时，隔多少秒跳一拍。不能小于 1。
 # tick_interval_seconds = 60
-# 是否让时间推进生物模型（激素、精力、社交需求、新奇感）。
-# 关掉后它们都停在原来的值，谈话也不会让社交需求回落。
+# 是否让时间推进生物模型（四种激素随时间衰减、皮质醇跟着昼夜变）。
+# 关掉后它们都停在原来的值。
 # advance_biomodel = true
 # 它对自己状态的描述变了时，是否记进时间线（只有它自己可见）。
 # broadcast_cognitive_state = true
@@ -43,20 +43,19 @@ log_level = "INFO"
 # 回复用哪个器官，名字要和 models.toml 里的 [organs.名字] 一致。
 # reply_organ = "replyer"
 
-# 生物模型的快慢（设计见 docs/10-decisions.md 的 D42、D43）。下面的值都是默认值，
-# 还没有实测过，觉得它累得太快、太黏人或太容易闷，就改这里。数值都不能是负数。
-# 心跳的 advance_biomodel = false 时这些都不起作用。
-[biomodel]
-# 精力每小时把离满精力的差距补回多少。越大恢复越快；0.15 时从耗尽到正常约 13 小时。
-# energy_recovery_rate = 0.15
-# 没人说话时，社交需求每小时涨多少（0 到 1）。0.03 时大半天没人说话会想聊天。
-# social_timeout_per_hour = 0.03
-# 新奇感每小时涨多少（0 到 1）。0.05 时约 4 小时会想找点新东西。
-# novelty_growth_per_hour = 0.05
-# 它每回复一次，社交需求降多少（0 到 1）。
-# social_relief_per_conversation = 0.05
-# 它每回复一次，新奇感降多少（0 到 1）。
-# novelty_relief_per_conversation = 0.03
+# 身体信号（设计见 docs/04-body-signals.md、docs/10-decisions.md 的 D56）。
+# 精力来自每月 token 上限：每日额度 = 本月剩余额度 ÷ 本月剩余天数，
+# 所以要在 [safety] 里写了 monthly_token_limit 才有意义；没写时精力记为「不限」。
+[body]
+# 精力信号的总开关。关掉后不再按每日额度限制调用，月度上限仍然生效。
+# energy_enabled = true
+# 每日额度里只留给回应用户的比例（0 到 1）。可选的调用用到 85% 就停。
+# user_reserve_fraction = 0.15
+# 档位分界，精力 = 今日剩余额度 ÷ 今日额度。要满足 overdraft_below < low_below < saving_below。
+# 低于 saving_below 进节省档，低于 low_below 进低电量，低于 overdraft_below 进透支保护。
+# saving_below = 0.5
+# low_below = 0.2
+# overdraft_below = 0.05
 
 # 「一天」和「一个月」怎么划分（设计见 docs/10-decisions.md 的 D53）。
 # 每月的 token 上限、将来每天的精力额度，都按这里的边界算。

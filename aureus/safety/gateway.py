@@ -1,7 +1,7 @@
 """安全网关 SafetyGateway：所有器官调用的唯一入口（D39、D40，06 号文档第 12 节）。
 
-流程：失控拦截 → 月度 token 预算 → 放行并调用器官 → 把每次模型请求记进账本 →
-告诉失控拦截成败；拒绝和失败都记进时间线（只有自己可见）。
+流程：权限 → 失控拦截 → 月度 token 预算 → 精力（可选的调用）→
+放行并调用器官 → 把每次模型请求记进账本 → 告诉失控拦截成败；拒绝和失败都记进时间线（只有自己可见）。
 安全检查本身出错（读不了账本）时当作「不允许」（06 号文档第 11 节）。
 """
 
@@ -10,12 +10,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from typing import Protocol
 
 from aureus.common import Clock, SafetyConfig
-from aureus.organs import CallAttempt, OrganBus, OrganCallError, OrganRequest, OrganResponse
+from aureus.organs import (
+    CallAttempt,
+    CallPurpose,
+    OrganBus,
+    OrganCallError,
+    OrganRequest,
+    OrganResponse,
+)
 from aureus.safety.errors import (
     BudgetExceededError,
     CallRejectedError,
+    EnergyDepletedError,
     LedgerUnavailableError,
     PermissionDeniedError,
     RunawayBlockedError,
@@ -31,6 +40,14 @@ EVENT_CALL_REJECTED = "organ_call_rejected"
 EVENT_CALL_FAILED = "organ_call_failed"
 
 
+class EnergyGate(Protocol):
+    """精力闸门：身体（body）实现它，网关只认这个接口，不依赖身体（D56）。"""
+
+    def refusal_reason(self, purpose: CallPurpose) -> str | None:
+        """这次调用按精力该拒绝时返回原因，放行返回 None。读不了数据时可以抛异常。"""
+        ...
+
+
 class SafetyGateway:
     """包着器官总线的安全网关。核心组装时只把网关交给心跳，别处拿不到总线。"""
 
@@ -42,6 +59,7 @@ class SafetyGateway:
         clock: Clock,
         config: SafetyConfig,
         permissions: PermissionChecker,
+        energy_gate: EnergyGate | None = None,
     ) -> None:
         """创建网关。账本和时间线要由调用方先打开。
 
@@ -54,6 +72,7 @@ class SafetyGateway:
         self._clock = clock
         self._config = config
         self._permissions = permissions
+        self._energy_gate = energy_gate
         self._guard = RunawayGuard(config, clock)
         # 账本写入失败后置位，重启之前拒绝所有调用（D40）。
         self._ledger_write_failed = False
@@ -98,7 +117,7 @@ class SafetyGateway:
         """持有调用锁时的完整流程：检查 → 调用器官 → 收尾。"""
         organ_id = request.organ_id
         try:
-            self._admit(organ_id)
+            self._admit(request)
         except CallRejectedError as rejection:
             logger.warning("%s", rejection)
             self._note_to_timeline(
@@ -125,8 +144,9 @@ class SafetyGateway:
         self._finish(organ_id, response.attempts, succeeded=True, detail="")
         return response
 
-    def _admit(self, organ_id: str) -> None:
+    def _admit(self, request: OrganRequest) -> None:
         """放行前的全部检查。任何一项不通过就抛 CallRejectedError。"""
+        organ_id = request.organ_id
         # 权限放在最前面：急停中连账本都不读，更不会发起调用（D54）。
         decision = self._permissions.check(ACTION_CALL_ORGAN)
         if not decision.allowed:
@@ -155,7 +175,25 @@ class SafetyGateway:
         if limit is not None and used >= limit:
             raise BudgetExceededError(organ_id, f"本月已用 {used} token，达到上限 {limit}")
 
+        self._check_energy(request)
         self._guard.admit(organ_id)
+
+    def _check_energy(self, request: OrganRequest) -> None:
+        """精力闸门：今天的可选额度用完了就拒绝。
+
+        闸门自己出错时当作不允许（06 号文档第 11 节）；回应用户的调用不会被问到。
+        """
+        if self._energy_gate is None or request.purpose is CallPurpose.USER_REPLY:
+            return
+        try:
+            reason = self._energy_gate.refusal_reason(request.purpose)
+        except Exception as error:
+            logger.exception("读不了精力，拒绝可选的调用 %s", request.organ_id)
+            raise EnergyDepletedError(
+                request.organ_id, f"读不了精力，可选的调用先不放行（{type(error).__name__}）"
+            ) from error
+        if reason is not None:
+            raise EnergyDepletedError(request.organ_id, reason)
 
     def _finish(
         self, organ_id: str, attempts: Sequence[CallAttempt], *, succeeded: bool, detail: str

@@ -2,13 +2,14 @@
 
 from .api_keys import KeyResolver
 from .fake import FakePlanner, FakeReplyer
-from .interface import CallAttempt, Organ, OrganCallError, OrganRequest, OrganResponse
+from .interface import CallAttempt, CallPurpose, Organ, OrganCallError, OrganRequest, OrganResponse
 from .llm_adapter import LLMOrgan, count_prompt_tokens
 from .model_config import ModelRoute, ModelsConfig, load_models_config
 from .organ_bus import OrganBus
 
 __all__ = [
     "CallAttempt",
+    "CallPurpose",
     "FakePlanner",
     "FakeReplyer",
     "KeyResolver",
