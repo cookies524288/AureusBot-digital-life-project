@@ -22,32 +22,44 @@ class TokenUsage:
     completion_tokens: int = 0
     # 输入里命中缓存的部分，已经包含在 prompt_tokens 里。
     cached_tokens: int = 0
-    # 服务商没返回用量时为 False：extract_usage 这时给出的三个数都是 0，但不代表真的
+    # 服务商没返回可信的用量时为 False：extract_usage 这时给出的三个数都是 0，但不代表真的
     # 没花钱。适配器会换成按 06 号文档 12.3 节往多里估的数，known 仍为 False，费用算不出来。
     known: bool = True
 
 
-def _as_count(value: object) -> int:
-    # 服务商返回的字段可能缺失、是 None 或负数：一律当 0，不让坏数据污染账本。
-    return value if isinstance(value, int) and value > 0 else 0
+def _as_count(value: object) -> int | None:
+    """把服务商给的字段读成非负整数；读不出可信的整数时返回 None。
+
+    为什么浮点（12.0）也算读不出：宁可当成「未知」走保守估算，也不静默改写服务商的数；
+    bool 是 int 的子类，True 不能当成 1 个 token（审查 S2、M3）。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def extract_usage(response: Any) -> TokenUsage:
     """从 litellm 的返回对象里取出 token 用量。
 
+    任何拿不到可信用量的情况都算「未知」，交给适配器按保守估算记账，绝不记成 0：
+    整个 usage 缺失、输入或输出的字段缺失或不是非负整数、两个数都是 0
+    （真实请求至少有输入）。命中缓存的字段只影响费用，读不出时当 0（多算费用，不少算）。
+
     Args:
         response: litellm 的返回对象（ModelResponse）。
 
     Returns:
-        用量；返回对象里没有 usage 时，known 为 False。
+        用量；拿不到可信数字时，known 为 False。
     """
     usage = getattr(response, "usage", None)
     if usage is None:
         return TokenUsage(known=False)
-    prompt = _as_count(getattr(usage, "prompt_tokens", 0))
-    completion = _as_count(getattr(usage, "completion_tokens", 0))
+    prompt = _as_count(getattr(usage, "prompt_tokens", None))
+    completion = _as_count(getattr(usage, "completion_tokens", None))
+    if prompt is None or completion is None or prompt + completion == 0:
+        return TokenUsage(known=False)
     details = getattr(usage, "prompt_tokens_details", None)
-    cached = _as_count(getattr(details, "cached_tokens", 0))
+    cached = _as_count(getattr(details, "cached_tokens", None)) or 0
     # 命中缓存的部分不可能比整个输入还多，多了就是数据有问题，按输入的总数封顶。
     return TokenUsage(prompt, completion, min(cached, prompt))
 

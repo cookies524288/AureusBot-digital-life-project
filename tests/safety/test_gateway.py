@@ -214,6 +214,44 @@ async def test_call_below_the_limit_is_allowed_and_may_overshoot_it(harness: Har
     assert harness.ledger.tokens_used_in_month(START) == 300
 
 
+async def test_concurrent_calls_cannot_slip_past_the_monthly_limit(harness: Harness) -> None:
+    """审查 S1：上限 100、已用 90，并发两个各花 100 的调用，最多一个成功。"""
+
+    async def yield_to_other_tasks() -> None:
+        await asyncio.sleep(0)
+
+    organ = harness.add_organ([ok(make_attempt(50, 50))], during_call=yield_to_other_tasks)
+    harness.ledger.record(ORGAN, [make_attempt(45, 45)])
+    gateway = harness.build(SafetyConfig(monthly_token_limit=100))
+    results = await asyncio.gather(
+        gateway.call(harness.request()), gateway.call(harness.request()), return_exceptions=True
+    )
+    assert sum(isinstance(result, OrganResponse) for result in results) == 1
+    assert sum(isinstance(result, BudgetExceededError) for result in results) == 1
+    assert organ.calls == 1
+    # 允许的超出只有放行那一次：90 + 100，而不是 90 + 200。
+    assert harness.ledger.tokens_used_in_month(START) == 190
+
+
+async def test_cancelled_call_releases_the_lock_for_the_next_one(harness: Harness) -> None:
+    started = asyncio.Event()
+
+    async def hang() -> None:
+        started.set()
+        await asyncio.sleep(3600)
+
+    harness.add_organ([ok()], organ_id="slow", during_call=hang)
+    harness.add_organ([ok()])
+    gateway = harness.build()
+    slow_call = asyncio.create_task(gateway.call(harness.request("slow")))
+    await started.wait()
+    slow_call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await slow_call
+    response = await asyncio.wait_for(gateway.call(harness.request()), timeout=5)
+    assert response.organ_id == ORGAN
+
+
 async def test_failed_and_estimated_usage_counts_toward_the_budget(harness: Harness) -> None:
     harness.add_organ([all_models_failed(make_attempt(50, 8192, estimated=True, succeeded=False))])
     gateway = harness.build(SafetyConfig(monthly_token_limit=8000))

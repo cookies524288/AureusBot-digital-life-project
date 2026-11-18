@@ -259,6 +259,25 @@ async def test_wasted_cost_is_carried_by_the_final_error(
     assert info.value.wasted_cost == pytest.approx(0.008)
 
 
+@pytest.mark.parametrize("bad", [None, 12.0, True, -3])
+@pytest.mark.asyncio
+async def test_untrustworthy_usage_fields_are_estimated_not_recorded_as_zero(
+    bio_state: BiologicalState, keys: KeyResolver, bad: Any
+) -> None:
+    # 审查 S2：usage 对象在、字段却不可信时，不能记成「已知的 0」。
+    reply = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="嗨"))],
+        usage=SimpleNamespace(prompt_tokens=bad, completion_tokens=bad),
+    )
+    response = await make_organ(FakeCompletion(reply), keys).process(ask(bio_state))
+    assert response.metadata["usage_known"] is False
+    assert response.metadata["cost"] is None
+    [attempt] = response.attempts
+    assert attempt.estimated is True
+    assert attempt.prompt_tokens > 0
+    assert attempt.completion_tokens > 0
+
+
 @pytest.mark.asyncio
 async def test_missing_usage_is_flagged_not_treated_as_free(
     bio_state: BiologicalState, keys: KeyResolver

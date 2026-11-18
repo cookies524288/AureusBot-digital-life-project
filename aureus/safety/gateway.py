@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 
@@ -52,6 +53,8 @@ class SafetyGateway:
         self._guard = RunawayGuard(config, clock)
         # 账本写入失败后置位，重启之前拒绝所有调用（D40）。
         self._ledger_write_failed = False
+        # 让「检查预算 → 调用器官 → 记账」不被别的调用插进来，见 call()。
+        self._call_lock = asyncio.Lock()
         if config.monthly_token_limit is None:
             logger.warning(
                 "月度 token 上限没有设置，用量不受限制。在 [safety] 里写 monthly_token_limit。"
@@ -79,6 +82,17 @@ class SafetyGateway:
         if not self._bus.is_registered(organ_id):
             raise ValueError(f"器官 {organ_id} 未注册")
 
+        # 为什么整段调用都在锁里：预算检查读的是账本，而账本要等调用结束才记账。
+        # 中间隔着 await，不加锁的话，两个并发调用会读到同一个「已用」数字、一起通过
+        # 检查、一起花钱（审查 S1，实测上限 100 用掉 290）。串行之后，上限的语义是
+        # 「到点后不再发起新调用」：最多只有检查通过时正在进行的那一次会超出（D48）。
+        # 代价是同一时刻只有一个器官调用；Phase 0 的心跳本来就是串行的。
+        async with self._call_lock:
+            return await self._call_serialized(request)
+
+    async def _call_serialized(self, request: OrganRequest) -> OrganResponse:
+        """持有调用锁时的完整流程：检查 → 调用器官 → 收尾。"""
+        organ_id = request.organ_id
         try:
             self._admit(organ_id)
         except CallRejectedError as rejection:
@@ -90,7 +104,6 @@ class SafetyGateway:
             )
             raise
 
-        # 从这里到调用器官之间没有 await，所以并发的调用不会同时通过上面的检查而漏记。
         try:
             response = await self._bus.send(request)
         except OrganCallError as failure:

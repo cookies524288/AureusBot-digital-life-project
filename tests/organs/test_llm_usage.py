@@ -80,10 +80,40 @@ def test_missing_usage_is_marked_unknown() -> None:
     assert usage.prompt_tokens == 0
 
 
-@pytest.mark.parametrize("bad", [None, -5, "12", 3.5])
-def test_bad_counts_become_zero(bad: object) -> None:
+@pytest.mark.parametrize("bad", [None, -5, "12", 3.5, 12.0, True])
+def test_untrustworthy_counts_make_the_usage_unknown_not_free(bad: object) -> None:
+    # 审查 S2/M3：字段是 None、负数、浮点、bool 时不能记成「已知的 0」。
     usage = extract_usage(make_response(bad, bad, SimpleNamespace(cached_tokens=bad)))
+    assert not usage.known
     assert (usage.prompt_tokens, usage.completion_tokens, usage.cached_tokens) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("field", ["prompt_tokens", "completion_tokens"])
+def test_one_bad_field_makes_the_whole_usage_unknown(field: str) -> None:
+    good = {"prompt_tokens": 100, "completion_tokens": 10}
+    good[field] = None  # type: ignore[assignment]
+    assert not extract_usage(SimpleNamespace(usage=SimpleNamespace(**good))).known
+
+
+def test_usage_object_without_the_count_fields_is_unknown() -> None:
+    assert not extract_usage(SimpleNamespace(usage=SimpleNamespace())).known
+
+
+def test_all_zero_usage_is_unknown() -> None:
+    # 真实请求至少有输入 token，两个数都是 0 说明服务商没填。
+    assert not extract_usage(make_response(0, 0)).known
+
+
+def test_zero_completion_with_real_prompt_is_still_known() -> None:
+    usage = extract_usage(make_response(100, 0))
+    assert usage.known
+    assert usage.prompt_tokens == 100
+
+
+def test_unreadable_cached_tokens_count_as_zero_but_keep_the_usage_known() -> None:
+    usage = extract_usage(make_response(100, 10, SimpleNamespace(cached_tokens=None)))
+    assert usage.known
+    assert usage.cached_tokens == 0
 
 
 def test_cached_tokens_never_exceed_prompt_tokens() -> None:
