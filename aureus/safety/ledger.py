@@ -14,6 +14,7 @@ from pathlib import Path
 
 from aureus.common import Clock, SystemClock
 from aureus.common.clock import ensure_aware
+from aureus.common.sqlite import open_connection
 from aureus.organs import CallAttempt
 
 # 时间固定写成带微秒的 UTC，格式等宽，这样 SQLite 里按字符串比较大小就等于按时间比较。
@@ -90,8 +91,7 @@ class Ledger:
         if self._conn is not None:
             return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
+        conn = open_connection(self._db_path)
         try:
             self._init_schema(conn)
         except BaseException:

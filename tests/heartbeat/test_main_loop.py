@@ -1,6 +1,8 @@
 """心跳主循环的测试：一拍一拍地驱动，用手动时钟、真的时间线数据库和假器官，不联网、不花钱。"""
 
 import asyncio
+import sqlite3
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
@@ -10,6 +12,7 @@ from typing import Any
 import pytest
 
 from aureus.common import AcceleratedClock, HeartbeatConfig, ManualClock, SafetyConfig
+from aureus.common import sqlite as sqlite_support
 from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_COGNITIVE_STATE,
@@ -761,3 +764,26 @@ async def test_calling_shut_down_wakes_a_waiting_run_loop(factory: Factory) -> N
     await asyncio.wait_for(running, timeout=5)  # 不用等一小时的定时拍
 
     assert len(harness.records(EVENT_SHUT_DOWN)) == 1
+
+
+# ---------- 写库被锁住（审查 M2） ----------
+
+
+async def test_a_locked_database_stops_the_beat_instead_of_losing_the_message(
+    factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 别的进程占着写锁时，这一拍的写入在有限时间内失败并抛出，由 run() 停下来收尾；
+    # 不会悄悄跳过写入、带着没记全的经历继续跑。
+    monkeypatch.setattr(sqlite_support, "SQLITE_BUSY_TIMEOUT_SECONDS", 0.1)
+    harness = factory.make()
+    harness.heartbeat.wake_up()
+    holder = sqlite3.connect(str(factory.database_file), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        assert harness.heartbeat.submit(said("你好"))
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            harness.heartbeat.beat()
+        assert time.monotonic() - started < 1.0
+    finally:
+        holder.close()

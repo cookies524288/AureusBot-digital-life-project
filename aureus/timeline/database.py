@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from aureus.common import Clock, SystemClock
+from aureus.common.sqlite import open_connection
 from aureus.timeline.models import ActorType, TimelineQuery, TimelineRecord, VisibilityScope
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,7 @@ class TimelineDatabase:
             return
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+        self._conn = open_connection(self._db_path)
         self._init_schema()
 
     def close(self) -> None:
