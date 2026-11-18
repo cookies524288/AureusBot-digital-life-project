@@ -9,6 +9,7 @@
 的几句话；每一次真正发出去的请求（含失败的）都放进 attempts，交给安全网关记账（D39）。
 """
 
+import asyncio
 import os
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, Self
@@ -31,6 +32,8 @@ from aureus.organs.model_config import ModelRoute, ModelsConfig, ProviderProtoco
 
 # 调用大模型的函数。默认是 litellm.acompletion；测试时换成假的，不联网。
 CompletionFunction = Callable[..., Awaitable[Any]]
+# 重试之间的等待函数。默认是 asyncio.sleep；测试时换成不等待的。
+SleepFunction = Callable[[float], Awaitable[None]]
 # 估算输入 token 数的函数。默认是 count_prompt_tokens；测试时换成假的，结果固定。
 TokenCounter = Callable[[list[dict[str, str]]], int]
 
@@ -74,18 +77,35 @@ REJECTED_BEFORE_PROCESSING_ERROR_NAMES = frozenset(
     }
 )
 
+# 值得重试的错误：临时性的（超时、断线、限流、服务商那边出问题），过一会可能就好了。
+# 其余错误（认证失败、请求被拒、不认识的错误）重试也不会成功，只会多花钱，直接换下一个模型。
+# 按类名匹配，沿继承链找，理由同上。
+RETRYABLE_ERROR_NAMES = frozenset(
+    {
+        "Timeout",
+        "TimeoutError",
+        "RateLimitError",
+        "APIConnectionError",
+        "ServiceUnavailableError",
+        "InternalServerError",
+    }
+)
+# 重试前等待：第 n 次重试等 RETRY_BACKOFF_SECONDS * 2^(n-1) 秒，最多 MAX_BACKOFF_SECONDS 秒。
+RETRY_BACKOFF_SECONDS = 1.0
+MAX_BACKOFF_SECONDS = 30.0
+
 # 没配置 max_tokens、又没返回用量时，输出按这么多 token 记。
 # 宁可多记（D37）：常见对话模型默认的最大输出长度，大多不超过它。
 ASSUMED_COMPLETION_TOKENS = 8192
 
 
 class _RouteFailureError(Exception):
-    """某一条路线没能用。attempt 是这次真正发出去的请求；密钥缺失、根本没发出去时是 None。"""
+    """某一条路线没能用。retryable 表示值得对同一个模型再试一次。"""
 
-    def __init__(self, reason: str, attempt: CallAttempt | None = None) -> None:
+    def __init__(self, reason: str, *, retryable: bool = False) -> None:
         super().__init__(reason)
         self.reason = reason
-        self.attempt = attempt
+        self.retryable = retryable
 
 
 def _failure_reason(error: Exception) -> str:
@@ -103,6 +123,10 @@ def _rejected_before_processing(error: Exception) -> bool:
         error_class.__name__ in REJECTED_BEFORE_PROCESSING_ERROR_NAMES
         for error_class in type(error).__mro__
     )
+
+
+def _retryable(error: Exception) -> bool:
+    return any(error_class.__name__ in RETRYABLE_ERROR_NAMES for error_class in type(error).__mro__)
 
 
 def _byte_length(messages: list[dict[str, str]]) -> int:
@@ -197,6 +221,7 @@ class LLMOrgan:
         key_resolver: KeyResolver,
         completion: CompletionFunction | None = None,
         token_counter: TokenCounter | None = None,
+        sleep: SleepFunction | None = None,
     ) -> None:
         llm_routes = tuple(route for route in routes if route.model.kind == "llm")
         if not llm_routes:
@@ -207,6 +232,7 @@ class LLMOrgan:
         self._key_resolver = key_resolver
         self._completion = completion or _load_litellm_completion()
         self._token_counter = token_counter or count_prompt_tokens
+        self._sleep = sleep or asyncio.sleep
 
     @classmethod
     def from_config(
@@ -216,6 +242,7 @@ class LLMOrgan:
         key_resolver: KeyResolver,
         completion: CompletionFunction | None = None,
         token_counter: TokenCounter | None = None,
+        sleep: SleepFunction | None = None,
     ) -> Self:
         """按 models.toml 的配置创建某个器官。
 
@@ -225,6 +252,7 @@ class LLMOrgan:
             key_resolver: 把环境变量名换成密钥的解析器。
             completion: 调用大模型的函数；不传就用 litellm。
             token_counter: 估算输入 token 数的函数；不传就用 litellm 的计数工具。
+            sleep: 重试之间的等待函数；不传就用 asyncio.sleep。
 
         Returns:
             这个器官的 LLMOrgan。
@@ -232,7 +260,9 @@ class LLMOrgan:
         Raises:
             ConfigError: 配置里没有这个器官，或者它没有对话模型。
         """
-        return cls(organ_id, config.routes_for(organ_id), key_resolver, completion, token_counter)
+        return cls(
+            organ_id, config.routes_for(organ_id), key_resolver, completion, token_counter, sleep
+        )
 
     async def process(self, request: OrganRequest) -> OrganResponse:
         """按顺序尝试模型，返回第一个成功的回复。
@@ -255,11 +285,9 @@ class LLMOrgan:
         attempts: list[CallAttempt] = []
         for route in self._routes:
             try:
-                text, attempt = await self._call(route, messages)
+                text, attempt = await self._call(route, messages, attempts)
             except _RouteFailureError as failure:
                 failures.append(f"{route.model.name}：{failure.reason}")
-                if failure.attempt is not None:
-                    attempts.append(failure.attempt)
                 logger.warning(
                     "器官 {} 的模型 {} 没能用：{}", self.organ_id, route.model.name, failure.reason
                 )
@@ -275,7 +303,7 @@ class LLMOrgan:
         Args:
             route: 这次走的模型路线，取 max_tokens 用。
             messages: 发出去的消息。
-            requests: 估计实际发了几次请求（litellm 内部重试的次数看不到，按最多算）。
+            requests: 估计实际发了几次请求。
 
         Returns:
             估算的用量，known 为 False。
@@ -318,15 +346,31 @@ class LLMOrgan:
         )
 
     async def _call(
-        self, route: ModelRoute, messages: list[dict[str, str]]
+        self, route: ModelRoute, messages: list[dict[str, str]], attempts: list[CallAttempt]
     ) -> tuple[str, CallAttempt]:
+        """对一条路线发请求，临时性的失败按 max_retry 重试。
+
+        重试由这里自己做，不交给 litellm（num_retries 固定为 0）：litellm 内部重试了
+        几次看不到，账本只能按最多次估算；自己重试，每一次真正发出去的请求都有一条
+        独立的记录（审查 H4）。
+
+        Args:
+            route: 这次走的模型路线。
+            messages: 发出去的消息。
+            attempts: 失败的请求记在这里；成功的那次由返回值带出。
+
+        Returns:
+            回复文字和成功的那次请求。
+
+        Raises:
+            _RouteFailureError: 这条路线没能用（重试用完、不值得重试，或密钥缺失）。
+        """
         provider = route.provider
         kwargs: dict[str, Any] = {
             "model": LITELLM_PREFIX_BY_PROTOCOL[provider.protocol] + route.model.identifier,
             "messages": messages,
             "timeout": provider.timeout_seconds,
-            # 重试交给 litellm，次数来自 models.toml 的 max_retry。
-            "num_retries": provider.max_retry,
+            "num_retries": 0,
         }
         if provider.base_url is not None:
             kwargs["api_base"] = provider.base_url
@@ -340,6 +384,32 @@ class LLMOrgan:
             kwargs["temperature"] = route.temperature
         if route.max_tokens is not None:
             kwargs["max_tokens"] = route.max_tokens
+        requests = 1 + provider.max_retry
+        for number in range(1, requests + 1):
+            try:
+                return await self._request(route, kwargs, messages, attempts)
+            except _RouteFailureError as failure:
+                if not failure.retryable or number == requests:
+                    raise
+                logger.warning(
+                    "器官 {} 的模型 {} 第 {} 次请求失败（{}），准备重试",
+                    self.organ_id,
+                    route.model.name,
+                    number,
+                    failure.reason,
+                )
+                delay = min(RETRY_BACKOFF_SECONDS * 2 ** (number - 1), MAX_BACKOFF_SECONDS)
+                await self._sleep(delay)
+        raise AssertionError("max_retry 不会是负数，循环至少执行一次")  # pragma: no cover
+
+    async def _request(
+        self,
+        route: ModelRoute,
+        kwargs: dict[str, Any],
+        messages: list[dict[str, str]],
+        attempts: list[CallAttempt],
+    ) -> tuple[str, CallAttempt]:
+        """真正发出一次请求。失败的这一次先记进 attempts，再抛出。"""
         try:
             response = await self._completion(**kwargs)
         except Exception as error:
@@ -348,22 +418,22 @@ class LLMOrgan:
                 # 服务商明确拒绝，没有处理这个请求：不产生用量（06 号文档 12.3 节）。
                 attempt = self._attempt(route, TokenUsage(), reason)
             else:
-                # 超时、断线这类失败，对方可能已经算完了，litellm 也可能重试过，
-                # 次数看不到，按最多 1 + max_retry 次请求估算。
-                estimate = self._estimate_usage(route, messages, 1 + provider.max_retry)
-                attempt = self._attempt(route, estimate, reason)
+                # 超时、断线这类失败，对方可能已经算完了：按一次请求估算。
+                attempt = self._attempt(
+                    route, self._estimate_usage(route, messages, requests=1), reason
+                )
+            attempts.append(attempt)
             # from None：不带上原始异常，免得追踪信息里带出请求头里的密钥。
-            raise _RouteFailureError(reason, attempt) from None
+            raise _RouteFailureError(reason, retryable=_retryable(error)) from None
         usage = extract_usage(response)
         if not usage.known:
             usage = self._estimate_usage(route, messages, requests=1)
         text = _read_text(response)
         if text is None:
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
-            # 思考上），这次请求照样要记账，所以带在失败里交给上一层。
-            raise _RouteFailureError(
-                EMPTY_REPLY_REASON, self._attempt(route, usage, EMPTY_REPLY_REASON)
-            )
+            # 思考上），这次请求照样要记账。重试只会再花一次钱，所以不重试。
+            attempts.append(self._attempt(route, usage, EMPTY_REPLY_REASON))
+            raise _RouteFailureError(EMPTY_REPLY_REASON)
         return text, self._attempt(route, usage)
 
     def _build_response(

@@ -16,6 +16,7 @@ from aureus.organs.llm_adapter import (
     ASSUMED_COMPLETION_TOKENS,
     EMPTY_REPLY_REASON,
     LITELLM_PREFIX_BY_PROTOCOL,
+    RETRY_BACKOFF_SECONDS,
     LLMOrgan,
     build_system_prompt,
     count_prompt_tokens,
@@ -47,6 +48,16 @@ class FakeCompletion:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+class SleepRecorder:
+    """假的等待函数：不真的等，只记下每次想等多久。"""
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.delays.append(seconds)
 
 
 def make_response(
@@ -122,7 +133,7 @@ def fixed_counter(messages: list[dict[str, str]]) -> int:
 
 def make_organ(completion: FakeCompletion, keys: KeyResolver, **config_kwargs: Any) -> LLMOrgan:
     return LLMOrgan.from_config(
-        "replyer", make_config(**config_kwargs), keys, completion, fixed_counter
+        "replyer", make_config(**config_kwargs), keys, completion, fixed_counter, SleepRecorder()
     )
 
 
@@ -144,7 +155,7 @@ async def test_first_model_success_passes_the_configured_call_arguments(
     assert call["api_base"] == "https://api.example.com/v1"
     assert call["api_key"] == CLOUD_SECRET
     assert call["timeout"] == 60.0
-    assert call["num_retries"] == 2
+    assert call["num_retries"] == 0  # 重试由适配器自己做，每次请求都记账（审查 H4）
     assert call["temperature"] == 0.9  # 模型自己的
     assert call["max_tokens"] == 300  # 器官上的，优先于模型的 2000
     assert [m["role"] for m in call["messages"]] == ["system", "user"]
@@ -168,22 +179,24 @@ async def test_protocol_selects_the_litellm_model_prefix(
 async def test_failed_model_falls_through_to_the_next(
     bio_state: BiologicalState, keys: KeyResolver
 ) -> None:
-    completion = FakeCompletion(RateLimitError(f"限流 {CLOUD_SECRET}"), make_response("备用"))
+    # 大模型重试用完（1 次加 2 次重试）仍被限流，才顺延到小模型。
+    limited = [RateLimitError(f"限流 {CLOUD_SECRET}")] * 3
+    completion = FakeCompletion(*limited, make_response("备用"))
     response = await make_organ(completion, keys).process(ask(bio_state))
 
     assert response.suggestion == "备用"
     assert response.metadata["model"] == "small"
     assert response.metadata["failures_before_success"] == ["big：被限流"]
     # 本地服务商不需要密钥：不带 api_key，也不带云端的地址。
-    assert "api_key" not in completion.calls[1]
-    assert "api_base" not in completion.calls[1]
+    assert "api_key" not in completion.calls[3]
+    assert "api_base" not in completion.calls[3]
 
 
 @pytest.mark.asyncio
 async def test_all_models_failing_raises_without_leaking_the_secret(
     bio_state: BiologicalState, keys: KeyResolver
 ) -> None:
-    completion = FakeCompletion(RateLimitError(CLOUD_SECRET), Timeout("x"))
+    completion = FakeCompletion(*[RateLimitError(CLOUD_SECRET)] * 3, *[Timeout("x")] * 3)
     with pytest.raises(OrganCallError) as info:
         await make_organ(completion, keys).process(ask(bio_state))
 
@@ -349,7 +362,10 @@ def test_unknown_organ_fails_at_startup(keys: KeyResolver) -> None:
 
 
 def make_unpriced_organ(
-    completion: FakeCompletion, keys: KeyResolver, **organ_settings: Any
+    completion: FakeCompletion,
+    keys: KeyResolver,
+    sleep: SleepRecorder | None = None,
+    **organ_settings: Any,
 ) -> LLMOrgan:
     # 没写任何价格的模型（D37：价格可选）。默认重试 2 次，不写 max_tokens。
     config = ModelsConfig.model_validate(
@@ -361,7 +377,9 @@ def make_unpriced_organ(
             "organs": {"replyer": {"models": ["big"], **organ_settings}},
         }
     )
-    return LLMOrgan.from_config("replyer", config, keys, completion, fixed_counter)
+    return LLMOrgan.from_config(
+        "replyer", config, keys, completion, fixed_counter, sleep or SleepRecorder()
+    )
 
 
 @pytest.mark.asyncio
@@ -394,13 +412,15 @@ async def test_rejected_request_records_zero_tokens_and_zero_cost_even_when_unpr
     bio_state: BiologicalState, keys: KeyResolver
 ) -> None:
     # 服务商明确拒绝，没有处理请求：用量确实是 0，费用也确实是 0，不是“未知”（12.3 节）。
+    completion = FakeCompletion(*[RateLimitError("x")] * 3)
     with pytest.raises(OrganCallError) as info:
-        await make_unpriced_organ(FakeCompletion(RateLimitError("x")), keys).process(ask(bio_state))
-    [attempt] = info.value.attempts
-    assert (attempt.prompt_tokens, attempt.completion_tokens) == (0, 0)
-    assert attempt.estimated is False
-    assert attempt.succeeded is False
-    assert attempt.failure_reason == "被限流"
+        await make_unpriced_organ(completion, keys).process(ask(bio_state))
+    assert len(info.value.attempts) == 3  # 限流值得重试：1 次加 2 次重试，每次都是一条记录
+    for attempt in info.value.attempts:
+        assert (attempt.prompt_tokens, attempt.completion_tokens) == (0, 0)
+        assert attempt.estimated is False
+        assert attempt.succeeded is False
+        assert attempt.failure_reason == "被限流"
     assert info.value.wasted_cost == 0.0
 
 
@@ -418,29 +438,111 @@ async def test_rejection_is_recognised_through_the_class_hierarchy(
 
 
 @pytest.mark.asyncio
-async def test_timeout_is_estimated_as_used_for_every_possible_retry(
+async def test_every_timed_out_request_is_estimated_as_used_and_recorded_separately(
     bio_state: BiologicalState, keys: KeyResolver
 ) -> None:
-    # 超时不能当成免费：对方可能已经算完了，litellm 也可能重试过（12.3 节）。
+    # 超时不能当成免费：对方可能已经算完了（12.3 节）。重试的每一次都是一条独立的记录。
+    completion = FakeCompletion(*[Timeout("x")] * 3)
     with pytest.raises(OrganCallError) as info:
-        await make_unpriced_organ(FakeCompletion(Timeout("x")), keys).process(ask(bio_state))
-    [attempt] = info.value.attempts
-    requests = 1 + 2  # 1 次加上默认的 2 次重试
-    assert attempt.prompt_tokens == COUNTED_PROMPT_TOKENS * requests
-    assert attempt.completion_tokens == ASSUMED_COMPLETION_TOKENS * requests
-    assert attempt.estimated is True
-    assert attempt.cost is None  # 用量是估算的，费用算不出来
+        await make_unpriced_organ(completion, keys).process(ask(bio_state))
+    assert len(completion.calls) == 3  # 1 次加上默认的 2 次重试
+    assert len(info.value.attempts) == 3
+    for attempt in info.value.attempts:
+        assert attempt.prompt_tokens == COUNTED_PROMPT_TOKENS
+        assert attempt.completion_tokens == ASSUMED_COMPLETION_TOKENS
+        assert attempt.estimated is True
+        assert attempt.cost is None  # 用量是估算的，费用算不出来
     assert info.value.wasted_cost is None
 
 
 @pytest.mark.asyncio
-async def test_unknown_error_is_also_estimated_and_uses_the_configured_max_tokens(
+async def test_retry_after_a_failure_records_both_requests(
     bio_state: BiologicalState, keys: KeyResolver
 ) -> None:
-    organ = make_unpriced_organ(FakeCompletion(ValueError("x")), keys, max_tokens=100)
+    # 审查 H4：第一次超时、第二次成功，账本里要有两条，不能只剩成功的那条。
+    sleep = SleepRecorder()
+    completion = FakeCompletion(Timeout("x"), make_response("嗨", prompt=10, completion=5))
+    response = await make_unpriced_organ(completion, keys, sleep).process(ask(bio_state))
+
+    assert response.suggestion == "嗨"
+    assert [attempt.succeeded for attempt in response.attempts] == [False, True]
+    assert response.attempts[0].estimated is True
+    assert response.attempts[0].failure_reason == "超时"
+    assert response.attempts[1].estimated is False
+    assert response.attempts[1].budget_tokens == 15
+    assert len(completion.calls) == 2
+    assert sleep.delays == [RETRY_BACKOFF_SECONDS]
+
+
+@pytest.mark.asyncio
+async def test_retry_waits_longer_each_time(
+    bio_state: BiologicalState, keys: KeyResolver
+) -> None:
+    sleep = SleepRecorder()
+    completion = FakeCompletion(*[Timeout("x")] * 3)
+    with pytest.raises(OrganCallError):
+        await make_unpriced_organ(completion, keys, sleep).process(ask(bio_state))
+    assert sleep.delays == [
+        RETRY_BACKOFF_SECONDS,
+        RETRY_BACKOFF_SECONDS * 2,
+    ]  # 最后一次失败后不再等
+
+
+@pytest.mark.parametrize("error_name", ["AuthenticationError", "BadRequestError"])
+@pytest.mark.asyncio
+async def test_errors_that_cannot_succeed_are_not_retried(
+    bio_state: BiologicalState, keys: KeyResolver, error_name: str
+) -> None:
+    sleep = SleepRecorder()
+    completion = FakeCompletion(type(error_name, (Exception,), {})("x"))
+    with pytest.raises(OrganCallError) as info:
+        await make_unpriced_organ(completion, keys, sleep).process(ask(bio_state))
+    assert len(completion.calls) == 1
+    assert len(info.value.attempts) == 1
+    assert sleep.delays == []
+
+
+@pytest.mark.asyncio
+async def test_empty_reply_is_not_retried(bio_state: BiologicalState, keys: KeyResolver) -> None:
+    # 空回复已经花了 token，再试一次只会再花一次。
+    completion = FakeCompletion(make_response(None, prompt=10, completion=5))
+    with pytest.raises(OrganCallError) as info:
+        await make_unpriced_organ(completion, keys).process(ask(bio_state))
+    assert len(completion.calls) == 1
+    assert len(info.value.attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_max_retry_zero_sends_exactly_one_request(
+    bio_state: BiologicalState, tmp_path: Path
+) -> None:
+    config = ModelsConfig.model_validate(
+        {
+            "providers": [{"name": "local", "protocol": "openai", "max_retry": 0}],
+            "models": [{"name": "small", "identifier": "small-model", "provider": "local"}],
+            "organs": {"replyer": {"models": ["small"]}},
+        }
+    )
+    completion = FakeCompletion(Timeout("x"))
+    organ = LLMOrgan.from_config(
+        "replyer", config, KeyResolver(tmp_path / ".env", {}), completion, fixed_counter
+    )
     with pytest.raises(OrganCallError) as info:
         await organ.process(ask(bio_state))
-    assert info.value.attempts[0].completion_tokens == 100 * 3
+    assert len(completion.calls) == 1
+    assert len(info.value.attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_error_is_estimated_once_without_retrying(
+    bio_state: BiologicalState, keys: KeyResolver
+) -> None:
+    completion = FakeCompletion(ValueError("x"))
+    organ = make_unpriced_organ(completion, keys, max_tokens=100)
+    with pytest.raises(OrganCallError) as info:
+        await organ.process(ask(bio_state))
+    assert len(completion.calls) == 1  # 不认识的错误不重试，免得白花钱
+    assert info.value.attempts[0].completion_tokens == 100
 
 
 @pytest.mark.asyncio
@@ -480,15 +582,20 @@ async def test_broken_token_counter_falls_back_to_the_byte_length(
             raise bad_count
         return bad_count  # type: ignore[return-value]
 
-    completion = FakeCompletion(Timeout("x"))
+    completion = FakeCompletion(*[Timeout("x")] * 3)
     organ = LLMOrgan.from_config(
-        "replyer", make_config(organ_models=("small",)), keys, completion, broken_counter
+        "replyer",
+        make_config(organ_models=("small",)),
+        keys,
+        completion,
+        broken_counter,
+        SleepRecorder(),
     )
     with pytest.raises(OrganCallError) as info:
         await organ.process(ask(bio_state))
     sent = completion.calls[0]["messages"]
     byte_length = sum(len(t.encode("utf-8")) for m in sent for t in m.values())
-    assert info.value.attempts[0].prompt_tokens == byte_length * 3
+    assert info.value.attempts[0].prompt_tokens == byte_length
 
 
 def test_real_token_counter_works_offline() -> None:
