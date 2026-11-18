@@ -19,7 +19,7 @@ from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, Protocol
 
-from aureus.body import Body, EnergyReading
+from aureus.body import Body, BodyReading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
 from aureus.heartbeat.context import build_reply_prompt, build_system_context
@@ -30,6 +30,7 @@ from aureus.heartbeat.events import (
     EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
+    EVENT_SELF_CHECK,
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
@@ -40,6 +41,7 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.self_check import describe_self_check
 from aureus.identity import Identity
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import (
@@ -71,6 +73,10 @@ NOTICE_SENDER = "系统"
 SHUTDOWN_REQUESTED = "按要求关闭"
 SHUTDOWN_INTERRUPTED = "被中断（比如按了 Ctrl+C）"
 SHUTDOWN_AFTER_ERROR = "心跳出错后关闭"
+
+# 压力回落到偏高线的这个比例以下，才算「缓过来了」，下次偏高时再发自检通知。
+# 不在刚低于偏高线时就重置，免得压力在线上下抖动时反复发通知。
+_STRESS_REARM_FRACTION = 0.5
 
 # 取消进行中的器官调用后，最多再等它这么多秒。正常情况下取消会立刻生效；
 # 万一器官代码吞掉了取消，也不能让关闭流程永远卡住。
@@ -165,7 +171,9 @@ class Heartbeat:
             # 给人看的时间和日周期用同一个时区，免得“早上 8 点”皮质醇却在深夜达到高峰。
             bio_state.timezone = timezone
         self._body = body
-        self._energy: EnergyReading | None = None  # 最近一次读到的精力
+        self._reading: BodyReading | None = None  # 最近一次读到的身体信号
+        self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
+        self._last_user_contact: Perception | None = None  # 自检通知发往的地方
         self._observer = CognitiveObserver(clock)
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
@@ -246,6 +254,7 @@ class Heartbeat:
                 else f"精力 {state.energy_level:.0%}（{state.energy_state}档）"
             )
             lines.append(f"{energy}，信心 {state.planning_confidence:.2f}")
+        lines.extend(self._describe_signals())
         hormones = self._bio_state.hormones
         lines.append(
             f"多巴胺 {hormones.dopamine:.2f}，皮质醇 {hormones.cortisol:.2f}，"
@@ -263,6 +272,21 @@ class Heartbeat:
         if self._downtime is not None:
             lines.append(f"这次醒来：{self._downtime.describe(self._timezone)}")
         return "\n".join(lines)
+
+    def _describe_signals(self) -> list[str]:
+        """疲劳、压力、夜间的一行读数；关掉的信号注明已关闭。"""
+        reading = self._reading
+        if reading is None:
+            return []
+        parts: list[str] = []
+        fatigue, stress = reading.fatigue, reading.stress
+        if fatigue.enabled:
+            parts.append(f"疲劳 {fatigue.level:.0%}" + ("（偏高）" if fatigue.high else ""))
+        if stress.enabled:
+            parts.append(f"压力 {stress.level:.0%}" + ("（偏高）" if stress.high else ""))
+        if reading.sleep.enabled and reading.sleep.night:
+            parts.append("夜间时段")
+        return ["，".join(parts)] if parts else []
 
     @property
     def downtime(self) -> Downtime | None:
@@ -344,6 +368,8 @@ class Heartbeat:
         self._watch_emergency_stop()
         self._collect_finished_thought()
         self._take_in_perceptions()
+        self._read_body()
+        self._check_stress()
         self._maybe_start_thought()
         self._broadcast_cognitive_state()
 
@@ -479,6 +505,7 @@ class Heartbeat:
             self._pending.popleft()
             if perception.trust is TrustLevel.VERIFIED_USER:
                 self._unanswered.append(_Heard(perception, record))
+                self._last_user_contact = perception
             else:
                 # 回复时会带上用户的私聊记录和人设，确认不了身份就不回（朝安全方向倒）。
                 logger.info(
@@ -493,6 +520,8 @@ class Heartbeat:
         if not permission.allowed:
             self._decline_unanswered(permission.reason)
             return
+        if self._batch_wait_remaining() > 0:
+            return  # 疲劳偏高：再等等，攒几条一起回（到点后下一拍会开始）
         first = self._unanswered[0].perception
         # 一次只回复同一个通道里同一个人的消息，回复才知道发给谁。
         batch = [
@@ -521,23 +550,80 @@ class Heartbeat:
         for target in latest.values():
             self._deliver(target, f"{reason}。这条消息已经记下，不会回复。", MessageKind.NOTICE)
 
-    def _read_energy(self) -> EnergyReading | None:
-        """读身体的精力。账本读不了时沿用上一次的读数，不编一个新的。"""
+    def _read_body(self) -> None:
+        """读身体信号。账本读不了时沿用上一次的读数，不编一个新的。"""
         if self._body is None:
-            return None
+            return
+        backlog = len(self._unanswered) + len(self._pending)
         try:
-            self._energy = self._body.read_energy()
+            self._reading = self._body.read(backlog)
         except Exception:
             # 为什么不抛：这里只是观察自己，读不到不该让心跳停下；真正的安全检查在网关里。
-            logger.exception("读不了精力，沿用上一次的读数")
-        return self._energy
+            logger.exception("读不了身体信号，沿用上一次的读数")
+
+    def _check_stress(self) -> None:
+        """压力刚变成偏高时做一次自检：记进时间线，并告诉用户（04 号文档第 5 节，D57）。"""
+        reading = self._reading
+        if reading is None or self._body is None:
+            return
+        stress = reading.stress
+        rearm_below = self._body.config.stress_high_at * _STRESS_REARM_FRACTION
+        if not stress.enabled or stress.level < rearm_below:
+            self._stress_alarmed = False
+        if not stress.high or self._stress_alarmed:
+            return
+        self._stress_alarmed = True
+        text = describe_self_check(reading)
+        self._timeline.append(
+            event_type=EVENT_SELF_CHECK,
+            content=text,
+            actor_type=ActorType.ME,
+            visibility=VisibilityScope.PRIVATE,
+            metadata={
+                "stress": stress.level,
+                "failed_calls": stress.failed_calls,
+                "sampled_calls": stress.sampled_calls,
+                "backlog": stress.backlog,
+            },
+        )
+        logger.warning("压力偏高（%.0f%%），已自检", stress.level * 100)
+        if self._last_user_contact is not None:
+            self._deliver(self._last_user_contact, text, MessageKind.NOTICE)
+
+    def _batch_wait_remaining(self) -> float:
+        """疲劳偏高时，最早没回复的那条消息还要再等多少秒才开始回；0 表示现在就回。
+
+        只拖延开始，不丢消息：到点后同一个人的几条消息一起回，少调用几次，让负荷降下来。
+        """
+        reading = self._reading
+        if reading is None or self._body is None or not reading.fatigue.high:
+            return 0.0
+        if not self._unanswered:
+            return 0.0
+        batch_seconds = self._body.config.fatigue_batch_seconds
+        waited = (self._clock.now() - self._unanswered[0].record.timestamp).total_seconds()
+        # 时钟往回调过时 waited 是负数：最多等 batch_seconds，不会无限等下去。
+        return max(min(batch_seconds - waited, batch_seconds), 0.0)
+
+    def seconds_until_next_beat(self) -> float:
+        """到下一个定时拍还有多少秒：夜里放慢；攒消息等到点的话，提前到点那一刻。"""
+        interval = self._config.tick_interval_seconds
+        reading = self._reading
+        if reading is not None and reading.sleep.night and self._body is not None:
+            interval = max(interval, self._body.config.night_tick_interval_seconds)
+        if self._thought is None:
+            remaining = self._batch_wait_remaining()
+            if remaining > 0:
+                interval = min(interval, remaining)
+        return interval
 
     def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""
         context: dict[str, Any] = {"task_name": TASK_IDLE}
         if self._thought is not None:
             context = {"task_name": TASK_REPLYING, "focus_target": self._identity.user.name}
-        state = self._observer.observe(self._bio_state, context, self._read_energy())
+        energy = self._reading.energy if self._reading is not None else None
+        state = self._observer.observe(self._bio_state, context, energy)
         self._cognitive_state = state
         if not self._config.broadcast_cognitive_state:
             return
@@ -580,9 +666,15 @@ class Heartbeat:
             context={"task": "reply", "in_reply_to": [heard.record.id for heard in batch]},
             purpose=CallPurpose.USER_REPLY,
             system_context=build_system_context(
-                self._identity, self._clock.now(), self._downtime, self._timezone
+                self._identity, self._clock.now(), self._downtime_for_context(), self._timezone
             ),
         )
+
+    def _downtime_for_context(self) -> Downtime | None:
+        """放进系统上下文的停机情况。睡眠信号关掉后不告诉它睡了多久（04 号文档第 7 节）。"""
+        if self._body is not None and not self._body.config.sleep_enabled:
+            return None
+        return self._downtime
 
     async def _think(self, request: OrganRequest) -> _ThoughtOutcome:
         """在后台调用器官。不写任何状态；除了被取消，任何情况都返回结果而不是抛异常。"""
@@ -611,7 +703,7 @@ class Heartbeat:
     async def _wait_for_next_beat(self) -> None:
         """等到有事（新感知、想法有结果、要求停下）或者到了定时拍。"""
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self._wake.wait(), timeout=self._config.tick_interval_seconds)
+            await asyncio.wait_for(self._wake.wait(), timeout=self.seconds_until_next_beat())
         # 先清掉再跳：清掉之后才来的事会重新叫醒；之前来的事，接下来这一拍都会处理。
         self._wake.clear()
 

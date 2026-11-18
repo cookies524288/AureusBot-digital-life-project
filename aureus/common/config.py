@@ -71,7 +71,7 @@ class HeartbeatConfig(BaseModel):
 class BodyConfig(BaseModel):
     """身体信号的可调参数（aureus.toml 的 [body]，设计见 04 号文档、D53）。
 
-    首批只有精力；疲劳、压力、睡眠的参数在 1.4 加进来。
+    每个信号都有自己的开关（D5）；社交需求在 Phase 2 和主动社交一起做（D53）。
     """
 
     # 严格类型，理由同 SafetyConfig。allow_inf_nan=False：TOML 能写 nan 和 inf。
@@ -89,10 +89,41 @@ class BodyConfig(BaseModel):
     low_below: float = Field(default=0.2, gt=0, le=1)
     overdraft_below: float = Field(default=0.05, ge=0, le=1)
 
+    # 疲劳（04 号文档第 5 节，D57）：来自最近一段时间的器官调用次数。
+    fatigue_enabled: bool = True
+    # 看最近多少分钟的调用。
+    fatigue_window_minutes: int = Field(default=30, ge=1)
+    # 窗口里调用满这么多次，疲劳就是 100%。
+    fatigue_full_calls: int = Field(default=60, ge=1)
+    # 疲劳达到这个比例算「偏高」。
+    fatigue_high_at: float = Field(default=0.7, gt=0, le=1)
+    # 偏高时，收到消息后先等这么多秒再开始回，攒几条一起回。
+    fatigue_batch_seconds: float = Field(default=20.0, ge=0)
+
+    # 压力（D57）：来自最近的调用失败率和排队的消息数。
+    stress_enabled: bool = True
+    # 看最近多少次调用；失败次数不足这么多次时按这个数当分母，免得第一次失败就是 100%。
+    stress_window_calls: int = Field(default=20, ge=1)
+    # 排队的消息数达到这么多，积压带来的压力就是 100%。
+    stress_backlog_full: int = Field(default=5, ge=1)
+    # 压力达到这个比例算「偏高」，会发一次自检通知。
+    stress_high_at: float = Field(default=0.6, gt=0, le=1)
+
+    # 睡眠（D57）：夜间时段，当地时间；开始大于结束表示跨过午夜（比如 23 到 7）。
+    sleep_enabled: bool = True
+    night_start_hour: int = Field(default=1, ge=0, le=23)
+    night_end_hour: int = Field(default=7, ge=0, le=23)
+    # 夜里定时拍的间隔；只会比白天慢，不会更快。有新消息时照样马上醒来。
+    night_tick_interval_seconds: float = Field(default=300.0, ge=1)
+
     @model_validator(mode="after")
-    def _check_tier_order(self) -> Self:
+    def _check_consistency(self) -> Self:
         if not self.overdraft_below < self.low_below < self.saving_below:
             raise ValueError("档位分界要满足 overdraft_below < low_below < saving_below")
+        if self.night_start_hour == self.night_end_hour:
+            raise ValueError(
+                "夜间时段的开始和结束不能是同一个钟点；不想要夜间时段就关掉 sleep_enabled"
+            )
         return self
 
 

@@ -13,3 +13,5 @@ EVENT_ORGAN_CALL_ABANDONED = "organ_call_abandoned"
 # 急停生效和解除（D54）：心跳发现标记文件出现或消失时各记一条，metadata 里有原因。
 EVENT_EMERGENCY_STOP = "emergency_stop"
 EVENT_EMERGENCY_RESUME = "emergency_resume"
+# 压力偏高时的自检（D57）：每次进入偏高状态记一条，内容就是发给用户的自检通知。
+EVENT_SELF_CHECK = "self_check"

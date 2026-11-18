@@ -221,6 +221,32 @@ class Ledger:
         ).fetchone()
         return int(row["used"])
 
+    def calls_since(self, moment: datetime) -> int:
+        """从某个时刻起（含）发出过多少次模型请求，成功失败都算（身体的疲劳用）。
+
+        Raises:
+            RuntimeError: 账本没有打开。
+            ValueError: 时间不带时区。
+            sqlite3.Error: 读取失败。
+        """
+        conn = self._require_open()
+        row = conn.execute(
+            "SELECT COUNT(*) AS calls FROM ledger WHERE timestamp >= ?",
+            (_format_timestamp(moment),),
+        ).fetchone()
+        return int(row["calls"])
+
+    def latest_entries(self, limit: int) -> list[LedgerEntry]:
+        """最近的 limit 条记录，从新到旧（身体的压力用）。
+
+        Raises:
+            RuntimeError: 账本没有打开。
+            sqlite3.Error: 读取失败。
+        """
+        conn = self._require_open()
+        rows = conn.execute("SELECT * FROM ledger ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [_entry_from_row(row) for row in rows]
+
     def entries(self, since_id: int = 0, limit: int = 100) -> list[LedgerEntry]:
         """按 ID 升序读取记录。
 
@@ -235,20 +261,21 @@ class Ledger:
         rows = conn.execute(
             "SELECT * FROM ledger WHERE id > ? ORDER BY id ASC LIMIT ?", (since_id, limit)
         ).fetchall()
-        return [
-            LedgerEntry(
-                id=row["id"],
-                timestamp=datetime.fromisoformat(row["timestamp"]),
-                organ_id=row["organ_id"],
-                model=row["model"],
-                provider=row["provider"],
-                prompt_tokens=row["prompt_tokens"],
-                completion_tokens=row["completion_tokens"],
-                cached_tokens=row["cached_tokens"],
-                estimated=bool(row["estimated"]),
-                succeeded=bool(row["succeeded"]),
-                failure_reason=row["failure_reason"],
-                cost=row["cost"],
-            )
-            for row in rows
-        ]
+        return [_entry_from_row(row) for row in rows]
+
+
+def _entry_from_row(row: sqlite3.Row) -> LedgerEntry:
+    return LedgerEntry(
+        id=row["id"],
+        timestamp=datetime.fromisoformat(row["timestamp"]),
+        organ_id=row["organ_id"],
+        model=row["model"],
+        provider=row["provider"],
+        prompt_tokens=row["prompt_tokens"],
+        completion_tokens=row["completion_tokens"],
+        cached_tokens=row["cached_tokens"],
+        estimated=bool(row["estimated"]),
+        succeeded=bool(row["succeeded"]),
+        failure_reason=row["failure_reason"],
+        cost=row["cost"],
+    )

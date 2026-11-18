@@ -43,7 +43,7 @@ log_level = "INFO"
 # 回复用哪个器官，名字要和 models.toml 里的 [organs.名字] 一致。
 # reply_organ = "replyer"
 
-# 身体信号（设计见 docs/04-body-signals.md、docs/10-decisions.md 的 D56）。
+# 身体信号（设计见 docs/04-body-signals.md、docs/10-decisions.md 的 D56、D57）。
 # 精力来自每月 token 上限：每日额度 = 本月剩余额度 ÷ 本月剩余天数，
 # 所以要在 [safety] 里写了 monthly_token_limit 才有意义；没写时精力记为「不限」。
 [body]
@@ -56,6 +56,34 @@ log_level = "INFO"
 # saving_below = 0.5
 # low_below = 0.2
 # overdraft_below = 0.05
+
+# 疲劳：来自最近一段时间的器官调用次数。偏高时，收到消息先等几秒，把同一个人的几条攒起来一起回。
+# fatigue_enabled = true
+# 看最近多少分钟的调用。
+# fatigue_window_minutes = 30
+# 窗口里调用满这么多次，疲劳就是 100%。
+# fatigue_full_calls = 60
+# 疲劳达到多少算偏高（0 到 1）。
+# fatigue_high_at = 0.7
+# 偏高时先等多少秒再开始回。
+# fatigue_batch_seconds = 20.0
+
+# 压力：来自最近的调用失败率和排队的消息数，取两项里较大的。偏高时发一次自检通知。
+# stress_enabled = true
+# 看最近多少次调用的成败。
+# stress_window_calls = 20
+# 排队的消息数达到这么多，积压带来的压力就是 100%。
+# stress_backlog_full = 5
+# 压力达到多少算偏高（0 到 1）。
+# stress_high_at = 0.6
+
+# 睡眠：夜间时段（当地时间，包含开始的钟点，不含结束的钟点；开始大于结束表示跨过午夜）。
+# 夜里定时拍放慢；有新消息时照样马上醒来。关掉后也不再告诉它每次停机停了多久。
+# sleep_enabled = true
+# night_start_hour = 1
+# night_end_hour = 7
+# 夜里定时拍的间隔（秒），只会比白天慢，不会更快。
+# night_tick_interval_seconds = 300.0
 
 # 「一天」和「一个月」怎么划分（设计见 docs/10-decisions.md 的 D53）。
 # 每月的 token 上限、将来每天的精力额度，都按这里的边界算。

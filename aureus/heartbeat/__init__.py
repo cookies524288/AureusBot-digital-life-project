@@ -10,6 +10,7 @@ from .events import (
     EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
+    EVENT_SELF_CHECK,
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "EVENT_EMERGENCY_STOP",
     "EVENT_MESSAGE",
     "EVENT_ORGAN_CALL_ABANDONED",
+    "EVENT_SELF_CHECK",
     "EVENT_SHUT_DOWN",
     "EVENT_WOKE_UP",
     "Downtime",
