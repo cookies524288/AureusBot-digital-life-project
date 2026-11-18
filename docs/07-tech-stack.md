@@ -16,7 +16,7 @@
 | 语言 | Python 3.12+ | A_memorix 要求 3.12+；AI 生态最好；读起来接近伪代码 |
 | 并发 | asyncio | 单线程事件循环，底层基于 select/epoll 等系统调用 |
 | 数据库 | SQLite + aiosqlite | 一个文件就是一个数据库；aiosqlite 让它在事件循环里用而不卡住 |
-| 数据结构与配置 | pydantic、pydantic-settings | 带自动校验的数据结构；配置文件读进来时自动检查 |
+| 数据结构与配置 | pydantic | 带自动校验的数据结构；配置文件读进来时自动检查 |
 | 调用模型 | litellm + openai（Python SDK） | litellm 是统一的多协议调用库（MIT 协议），支持 OpenAI、OpenAI Responses、Anthropic、Gemini 等 100+ 家，同一套代码切换模型只需改配置；openai SDK 由 litellm 在内部调用 |
 | 网络 | httpx、websockets | 调用 API、连接平台 |
 | 网页通道 | FastAPI + WebSocket | 聊天需要服务器主动推送消息（它主动找你） |

@@ -8,10 +8,7 @@ import pytest
 from loguru import logger
 
 from aureus.common import (
-    AureusPaths,
     configure_logging,
-    configure_logging_for,
-    load_settings,
     shutdown_logging,
 )
 from aureus.common.logging_setup import LOG_FILE_NAME, REDACTED
@@ -20,8 +17,7 @@ SECRET = "sk-test-0123456789abcdef"
 
 
 @pytest.fixture(autouse=True)
-def _clean_logging(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.delenv("AUREUS_LLM_API_KEY", raising=False)
+def _clean_logging() -> Iterator[None]:
     yield
     shutdown_logging()
 
@@ -97,16 +93,6 @@ def test_reconfiguring_does_not_duplicate_lines(tmp_path: Path) -> None:
     configure_logging(tmp_path, "INFO", to_console=False)
     logger.info("只写一次的消息")
     assert read_log(tmp_path).count("只写一次的消息") == 1
-
-
-def test_configure_logging_for_settings_hides_loaded_secrets(tmp_path: Path) -> None:
-    paths = AureusPaths(tmp_path)
-    paths.env_file.write_text(f"AUREUS_LLM_API_KEY={SECRET}\n", encoding="utf-8")
-    configure_logging_for(load_settings(paths), to_console=False)
-    logger.info(f"密钥是 {SECRET}")
-    text = read_log(paths.log_dir)
-    assert SECRET not in text
-    assert REDACTED in text
 
 
 def test_stdlib_logging_reaches_the_file_and_is_redacted(tmp_path: Path) -> None:

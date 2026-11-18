@@ -212,7 +212,6 @@ dependencies = [
     { name = "litellm" },
     { name = "loguru" },
     { name = "platformdirs" },
-    { name = "pydantic-settings" },
     { name = "python-dotenv" },
 ]
 
@@ -232,7 +231,6 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.109.1" },
     { name = "loguru", specifier = ">=0.8.0" },
     { name = "platformdirs", specifier = ">=4.14.5" },
-    { name = "pydantic-settings", specifier = ">=2.16.3" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
 ]
 

@@ -1,4 +1,4 @@
-"""配置读取的测试：运行配置、密钥、报错信息。"""
+"""配置读取的测试：运行配置和报错信息。"""
 
 from pathlib import Path
 
@@ -11,28 +11,14 @@ from aureus.common import (
     HeartbeatConfig,
     SafetyConfig,
     load_runtime_config,
-    load_secrets,
     load_settings,
 )
 from aureus.common.config import CONFIG_FORMAT_VERSION
-
-SECRET = "sk-test-0123456789abcdef"
-
-
-@pytest.fixture(autouse=True)
-def _isolated_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 开发者自己的环境里可能已经设了密钥，测试不能受它影响。
-    monkeypatch.delenv("AUREUS_LLM_API_KEY", raising=False)
 
 
 def write_runtime_config(paths: AureusPaths, text: str) -> None:
     paths.config_dir.mkdir(parents=True, exist_ok=True)
     paths.runtime_config_file.write_text(text, encoding="utf-8")
-
-
-def write_env(paths: AureusPaths, text: str) -> None:
-    paths.home.mkdir(parents=True, exist_ok=True)
-    paths.env_file.write_text(text, encoding="utf-8")
 
 
 def error_message_of(paths: AureusPaths) -> str:
@@ -296,70 +282,12 @@ def test_biomodel_rejects_bad_values(tmp_path: Path, field: str, text: str) -> N
     assert field in error_message_of(paths)
 
 
-# ---------- 密钥 ----------
-
-
-def test_secret_is_read_from_env_file(tmp_path: Path) -> None:
-    paths = AureusPaths(tmp_path)
-    write_env(paths, f"AUREUS_LLM_API_KEY={SECRET}\n")
-    secrets = load_secrets(paths)
-    assert secrets.llm_api_key is not None
-    assert secrets.llm_api_key.get_secret_value() == SECRET
-
-
-def test_environment_variable_overrides_env_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    paths = AureusPaths(tmp_path)
-    write_env(paths, "AUREUS_LLM_API_KEY=sk-from-file\n")
-    monkeypatch.setenv("AUREUS_LLM_API_KEY", "sk-from-env")
-    secrets = load_secrets(paths)
-    assert secrets.llm_api_key is not None
-    assert secrets.llm_api_key.get_secret_value() == "sk-from-env"
-
-
-def test_missing_env_file_means_no_secret(tmp_path: Path) -> None:
-    secrets = load_secrets(AureusPaths(tmp_path))
-    assert secrets.llm_api_key is None
-    assert secrets.secret_values() == []
-
-
-def test_empty_secret_value_means_unset(tmp_path: Path) -> None:
-    paths = AureusPaths(tmp_path)
-    write_env(paths, "AUREUS_LLM_API_KEY=\n")
-    secrets = load_secrets(paths)
-    assert secrets.llm_api_key is None
-    assert secrets.secret_values() == []
-
-
-def test_secret_is_masked_when_printed(tmp_path: Path) -> None:
-    paths = AureusPaths(tmp_path)
-    write_env(paths, f"AUREUS_LLM_API_KEY={SECRET}\n")
-    secrets = load_secrets(paths)
-    assert SECRET not in repr(secrets)
-    assert SECRET not in str(secrets)
-    assert secrets.secret_values() == [SECRET]
-
-
-def test_unrelated_variables_and_chinese_comments_in_env_file_are_fine(tmp_path: Path) -> None:
-    paths = AureusPaths(tmp_path)
-    write_env(
-        paths,
-        "# 这是中文注释\nOTHER_TOOL_TOKEN=abc\nAUREUS_UNKNOWN_SETTING=1\n"
-        f"AUREUS_LLM_API_KEY={SECRET}\n",
-    )
-    assert load_secrets(paths).secret_values() == [SECRET]
-
-
 # ---------- 合在一起 ----------
 
 
-def test_load_settings_combines_paths_runtime_and_secrets(tmp_path: Path) -> None:
+def test_load_settings_combines_paths_and_runtime(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, 'log_level = "WARNING"\n')
-    write_env(paths, f"AUREUS_LLM_API_KEY={SECRET}\n")
     settings = load_settings(paths)
     assert settings.paths == paths
     assert settings.runtime.log_level == "WARNING"
-    assert settings.secrets.secret_values() == [SECRET]
-    assert SECRET not in repr(settings)

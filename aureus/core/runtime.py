@@ -100,7 +100,7 @@ def open_core(
     resolver = KeyResolver(
         paths.env_file, vault=SecretVault(paths.vault_file, paths.master_key_file)
     )
-    hidden = settings.secrets.secret_values() + resolver.all_secret_values()
+    hidden = resolver.all_secret_values()
     with ExitStack() as stack:
         configure_logging(paths.log_dir, settings.runtime.log_level, hidden, to_console=to_console)
         stack.callback(shutdown_logging)

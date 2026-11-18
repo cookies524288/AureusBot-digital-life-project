@@ -24,8 +24,6 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from aureus.common.config import Settings
-
 if TYPE_CHECKING:
     from loguru import Record
 
@@ -173,21 +171,6 @@ def configure_logging(
     )
     # 放在最后：loguru 这边都设好了，才开始接标准库的日志，不会有日志掉进还没设好的空档。
     _install_stdlib_bridge(level)
-
-
-def configure_logging_for(settings: Settings, *, to_console: bool = True) -> None:
-    """按配置设置日志：文件夹、级别和要隐藏的密钥都从 settings 里取。
-
-    Args:
-        settings: 已加载的全部配置。
-        to_console: 是否同时输出到终端。
-    """
-    configure_logging(
-        settings.paths.log_dir,
-        settings.runtime.log_level,
-        settings.secrets.secret_values(),
-        to_console=to_console,
-    )
 
 
 def shutdown_logging() -> None:

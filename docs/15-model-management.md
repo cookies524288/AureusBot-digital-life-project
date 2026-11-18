@@ -97,7 +97,7 @@
 
 ### 7.6 日志过滤
 
-补上此前的缺口：日志过滤目前只接了 `Secrets.llm_api_key`，`AUREUS_KEY_*` 没接，所以 `AUREUS_KEY_STAIN` 现在不会被日志隐藏。新规则：交给日志模块的是所有来源的全部密钥（密钥库每一条，加上 `.env` 和环境变量里 `AUREUS_KEY_` 开头的）和主密钥本身，不管 `models.toml` 有没有引用。启动顺序：先解锁，再设置日志；解锁过程不写日志。
+补上此前的缺口：日志过滤目前只接了 `Secrets.llm_api_key`，`AUREUS_KEY_*` 没接，所以 `AUREUS_KEY_STAIN` 现在不会被日志隐藏。新规则：交给日志模块的是所有来源的全部密钥（密钥库每一条，加上 `.env` 和环境变量里 `AUREUS_KEY_` 开头的）和主密钥本身，不管 `models.toml` 有没有引用。启动顺序：先解锁，再设置日志；解锁过程不写日志。（D52 起 `Secrets.llm_api_key` 和整个 `Secrets` 类已删除，日志过滤的密钥全部来自 `KeyResolver.all_secret_values()`。）
 
 ### 7.7 导出导入与换电脑
 

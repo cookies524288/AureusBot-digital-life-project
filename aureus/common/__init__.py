@@ -10,14 +10,12 @@ from aureus.common.config import (
     HeartbeatConfig,
     RuntimeConfig,
     SafetyConfig,
-    Secrets,
     Settings,
     SnapshotsConfig,
     load_runtime_config,
-    load_secrets,
     load_settings,
 )
-from aureus.common.logging_setup import configure_logging, configure_logging_for, shutdown_logging
+from aureus.common.logging_setup import configure_logging, shutdown_logging
 from aureus.common.paths import AureusPaths, HomePathError, home_is_default, resolve_home
 
 __all__ = [
@@ -31,15 +29,12 @@ __all__ = [
     "ManualClock",
     "RuntimeConfig",
     "SafetyConfig",
-    "Secrets",
     "Settings",
     "SnapshotsConfig",
     "SystemClock",
     "configure_logging",
-    "configure_logging_for",
     "home_is_default",
     "load_runtime_config",
-    "load_secrets",
     "load_settings",
     "resolve_home",
     "shutdown_logging",

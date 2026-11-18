@@ -1,9 +1,7 @@
 """公共地基 common：配置读取。
 
-两个来源，各管各的：
-- 运行配置：数据根目录下的 config/aureus.toml，不含密钥；文件不存在就全部用默认值。
-- 密钥：数据根目录下的 .env 和环境变量（环境变量优先）。密钥用 SecretStr 保存，
-  打印出来只显示星号。
+运行配置在数据根目录下的 config/aureus.toml，不含密钥；文件不存在就全部用默认值。
+密钥不归这里管：它们在加密的密钥库里，由 organs/api_keys.py 读取（D36，D52 第 3 条）。
 
 配置缺字段、多字段或格式不对时，报错是中文，指出是哪个文件的哪个字段，
 但不回显填进去的值：万一填错的是密钥，也不会被打印出来。
@@ -14,16 +12,12 @@ import tomllib
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from aureus.common.paths import AureusPaths
 
 # 当前软件认识的配置格式版本。以后改了配置格式就加一，并写迁移说明。
 CONFIG_FORMAT_VERSION = 1
-
-# 环境变量的统一前缀，比如 AUREUS_LLM_API_KEY。
-ENV_PREFIX = "AUREUS_"
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
@@ -134,52 +128,12 @@ class RuntimeConfig(BaseModel):
         return value.upper() if isinstance(value, str) else value
 
 
-class Secrets(BaseSettings):
-    """密钥。来自 .env 文件和环境变量（环境变量优先），变量名统一加 AUREUS_ 前缀。
-
-    新增密钥字段时，类型一律用 SecretStr：它打印出来是星号，
-    而且 secret_values() 会自动把它交给日志模块去隐藏。
-    """
-
-    model_config = SettingsConfigDict(
-        env_prefix=ENV_PREFIX,
-        env_file_encoding="utf-8",
-        extra="ignore",  # .env 里可以放别的变量，不认识的忽略，不报错
-        frozen=True,
-    )
-
-    # 模型服务的密钥。步骤 0.5 设计器官、定下支持哪几种协议时，再按需要调整或增加字段。
-    llm_api_key: SecretStr | None = None
-
-    @field_validator("*", mode="before")
-    @classmethod
-    def _empty_means_unset(cls, value: object) -> object:
-        # .env.example 里留空的变量（AUREUS_LLM_API_KEY=）视为没有填写。
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
-    def secret_values(self) -> list[str]:
-        """列出所有已填写的密钥原文，交给日志模块，让它们不会出现在日志里。
-
-        Returns:
-            非空密钥的原文列表。
-        """
-        values: list[str] = []
-        for name in type(self).model_fields:
-            item = getattr(self, name)
-            if isinstance(item, SecretStr) and item.get_secret_value():
-                values.append(item.get_secret_value())
-        return values
-
-
 @dataclass(frozen=True)
 class Settings:
-    """一次启动用到的全部配置：路径、运行配置、密钥。"""
+    """一次启动用到的全部配置：路径和运行配置。"""
 
     paths: AureusPaths
     runtime: RuntimeConfig
-    secrets: Secrets
 
 
 _REASON_BY_ERROR_TYPE = {
@@ -233,26 +187,6 @@ def load_runtime_config(paths: AureusPaths) -> RuntimeConfig:
     return config
 
 
-def load_secrets(paths: AureusPaths) -> Secrets:
-    """读取密钥：数据根目录下的 .env，加上环境变量（环境变量优先）。
-
-    Args:
-        paths: 数据根目录的路径集合。
-
-    Returns:
-        密钥集合。.env 不存在也可以，对应的密钥就是 None。
-
-    Raises:
-        ConfigError: 密钥配置的格式不对。
-    """
-    try:
-        # pyright 误报 _env_file：pydantic-settings 确实接受这个参数，测试里有覆盖。
-        return Secrets(_env_file=paths.env_file)  # pyright: ignore[reportCallIssue]
-    except ValidationError as error:
-        # from None：不带上原始异常，免得追踪信息里带出填进去的值。
-        raise ConfigError(_describe_errors("密钥配置（.env 文件或环境变量）", error)) from None
-
-
 def load_settings(paths: AureusPaths) -> Settings:
     """读取全部配置。
 
@@ -260,13 +194,9 @@ def load_settings(paths: AureusPaths) -> Settings:
         paths: 数据根目录的路径集合。
 
     Returns:
-        路径、运行配置和密钥。
+        路径和运行配置。
 
     Raises:
-        ConfigError: 任何一部分配置有问题。
+        ConfigError: 运行配置有问题。
     """
-    return Settings(
-        paths=paths,
-        runtime=load_runtime_config(paths),
-        secrets=load_secrets(paths),
-    )
+    return Settings(paths=paths, runtime=load_runtime_config(paths))
