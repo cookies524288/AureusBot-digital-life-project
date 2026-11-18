@@ -24,5 +24,9 @@ class RunawayBlockedError(CallRejectedError):
     """失控拦截：这个器官调用太频繁，或者连续失败后正在暂停。"""
 
 
+class PermissionDeniedError(CallRejectedError):
+    """权限检查不通过：急停中，或者这个行动没有登记等级、需要批准、被禁止（D54）。"""
+
+
 class LedgerUnavailableError(CallRejectedError):
     """账本读不了或写不进去，用量没法记，所以不放行（D40）。"""

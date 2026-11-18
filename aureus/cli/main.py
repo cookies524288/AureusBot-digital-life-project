@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from aureus.cli.chat_command import run_chat_command
+from aureus.cli.halt_command import run_halt_command, run_resume_command
 from aureus.cli.init_command import run_init_command
 from aureus.cli.inspect_commands import (
     DEFAULT_TIMELINE_LIMIT,
@@ -27,7 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     """创建命令行参数解析器。
 
     Returns:
-        解析器。命令有 init、chat、timeline、usage、export、import 和 keys，用法见各个 --help。
+        解析器。命令有 init、chat、timeline、usage、halt、resume、export、import 和 keys，
+        用法见各个 --help。
     """
     parser = argparse.ArgumentParser(prog="aureus", description="Aureus 命令行。")
     parser.add_argument(
@@ -55,6 +57,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--event-type", metavar="事件类型", help="只看这种事件，比如 message、woke_up"
     )
     commands.add_parser("usage", help="查看本月的模型用量和费用（只读）")
+    halt = commands.add_parser(
+        "halt", help="急停：它不再调用模型、不再回复，消息照常记录（运行中的实例下一拍生效）"
+    )
+    halt.add_argument(
+        "reason", nargs="?", default="", metavar="原因", help="记进时间线的原因，可以不写"
+    )
+    commands.add_parser("resume", help="解除急停")
     export = commands.add_parser("export", help="把数据导出成一个 zip（不含密钥）")
     export.add_argument("archive", type=archive_argument, metavar="导出文件")
     export.add_argument("--include-logs", action="store_true", help="同时导出日志（默认不含）")
@@ -128,6 +137,10 @@ def main(
         return run_timeline_command(args, paths)
     if args.command == "usage":
         return run_usage_command(paths)
+    if args.command == "halt":
+        return run_halt_command(args, paths)
+    if args.command == "resume":
+        return run_resume_command(paths)
     if args.command == "export":
         return run_export_command(args, paths)
     if args.command == "import":

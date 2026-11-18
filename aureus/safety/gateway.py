@@ -17,9 +17,11 @@ from aureus.safety.errors import (
     BudgetExceededError,
     CallRejectedError,
     LedgerUnavailableError,
+    PermissionDeniedError,
     RunawayBlockedError,
 )
 from aureus.safety.ledger import Ledger
+from aureus.safety.permissions import ACTION_CALL_ORGAN, PermissionChecker
 from aureus.safety.runaway_guard import RunawayGuard
 from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
 
@@ -39,6 +41,7 @@ class SafetyGateway:
         timeline: TimelineDatabase,
         clock: Clock,
         config: SafetyConfig,
+        permissions: PermissionChecker,
     ) -> None:
         """创建网关。账本和时间线要由调用方先打开。
 
@@ -50,6 +53,7 @@ class SafetyGateway:
         self._timeline = timeline
         self._clock = clock
         self._config = config
+        self._permissions = permissions
         self._guard = RunawayGuard(config, clock)
         # 账本写入失败后置位，重启之前拒绝所有调用（D40）。
         self._ledger_write_failed = False
@@ -123,6 +127,11 @@ class SafetyGateway:
 
     def _admit(self, organ_id: str) -> None:
         """放行前的全部检查。任何一项不通过就抛 CallRejectedError。"""
+        # 权限放在最前面：急停中连账本都不读，更不会发起调用（D54）。
+        decision = self._permissions.check(ACTION_CALL_ORGAN)
+        if not decision.allowed:
+            raise PermissionDeniedError(organ_id, decision.reason)
+
         if self._ledger_write_failed:
             raise LedgerUnavailableError(
                 organ_id, "账本之前写入失败，用量可能没有记全，重启之前不再放行"

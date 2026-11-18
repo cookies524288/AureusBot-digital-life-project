@@ -15,6 +15,9 @@ class FakeHeartbeat:
         self.accepting = accepting
         self.received: list[Perception] = []
         self.stop_requests = 0
+        self.halts: list[str] = []
+        self.resumes = 0
+        self.halt_error: OSError | None = None
         self.thread_ids: list[int] = []
 
     def submit(self, perception: Perception) -> bool:
@@ -28,6 +31,18 @@ class FakeHeartbeat:
     def request_stop(self) -> None:
         self.thread_ids.append(threading.get_ident())
         self.stop_requests += 1
+
+    def halt(self, reason: str = "") -> bool:
+        if self.halt_error is not None:
+            raise self.halt_error
+        self.halts.append(reason)
+        return len(self.halts) == 1
+
+    def resume(self) -> bool:
+        if self.halt_error is not None:
+            raise self.halt_error
+        self.resumes += 1
+        return self.resumes == 1
 
 
 def scripted_input(*lines: str, end: BaseException | None = None) -> Iterator[str]:
@@ -159,3 +174,53 @@ def test_end_of_input_after_quit_does_not_announce_twice() -> None:
 
     assert terminal.output == ["正在关闭……"]
     assert terminal.heartbeat.stop_requests == 2  # 再请一次也无妨，心跳那边是幂等的
+
+
+def test_halt_command_halts_with_the_reason() -> None:
+    terminal = Terminal()
+
+    terminal.channel.handle_line("/halt 我要睡了")
+
+    assert terminal.heartbeat.halts == ["我要睡了"]
+    assert terminal.heartbeat.received == []  # 命令不会当成消息发给它
+    assert "已急停" in terminal.output[0]
+
+
+def test_halt_without_a_reason_and_repeated_halt() -> None:
+    terminal = Terminal()
+
+    terminal.channel.handle_line("/halt")
+    terminal.channel.handle_line("/HALT")
+
+    assert terminal.heartbeat.halts == ["", ""]
+    assert "已急停" in terminal.output[0]
+    assert "本来就在急停中" in terminal.output[1]
+
+
+def test_resume_command() -> None:
+    terminal = Terminal()
+
+    terminal.channel.handle_line("/resume")
+    terminal.channel.handle_line("/resume")
+
+    assert "已解除" in terminal.output[0]
+    assert "本来就没有急停" in terminal.output[1]
+
+
+def test_halt_that_cannot_be_written_says_so() -> None:
+    terminal = Terminal()
+    terminal.heartbeat.halt_error = PermissionError("拒绝访问")
+
+    terminal.channel.handle_line("/halt")
+    terminal.channel.handle_line("/resume")
+
+    assert "没有生效" in terminal.output[0]
+    assert "还在急停中" in terminal.output[1]
+
+
+def test_a_word_that_merely_starts_with_halt_is_a_message() -> None:
+    terminal = Terminal()
+
+    terminal.channel.handle_line("/halting")
+
+    assert terminal.heartbeat.halts == []

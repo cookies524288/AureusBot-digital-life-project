@@ -6,6 +6,8 @@
 from .downtime import Downtime, assess_downtime
 from .events import (
     EVENT_COGNITIVE_STATE,
+    EVENT_EMERGENCY_RESUME,
+    EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_SHUT_DOWN,
@@ -23,6 +25,8 @@ from .perception import (
 
 __all__ = [
     "EVENT_COGNITIVE_STATE",
+    "EVENT_EMERGENCY_RESUME",
+    "EVENT_EMERGENCY_STOP",
     "EVENT_MESSAGE",
     "EVENT_ORGAN_CALL_ABANDONED",
     "EVENT_SHUT_DOWN",

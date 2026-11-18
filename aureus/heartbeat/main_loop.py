@@ -2,6 +2,7 @@
 
 每一拍按顺序做：量身体 → 对结果（想法有结果了就说出来）→ 收感知（写进时间线）→
 定焦点、想一想（有没回复的消息就在后台调用器官）→ 广播认知状态。
+急停中（D54）照常收感知、记时间线，但不调用器官、不回复，只发系统通知。
 
 一拍里只有很短的同步操作。慢的器官调用放进后台任务，心跳照常跳；同一时间只想一件事
 （D34：前额叶是串行的）。所有状态写入都在拍里完成，后台任务只负责等器官的建议，
@@ -24,6 +25,8 @@ from aureus.heartbeat.context import build_reply_prompt, build_system_context
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
+    EVENT_EMERGENCY_RESUME,
+    EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_SHUT_DOWN,
@@ -38,7 +41,14 @@ from aureus.heartbeat.perception import (
 )
 from aureus.identity import Identity
 from aureus.organs import OrganCallError, OrganRequest, OrganResponse
-from aureus.safety import CallRejectedError
+from aureus.safety import (
+    ACTION_CALL_ORGAN,
+    ACTION_REPLY_TO_USER,
+    CallRejectedError,
+    EmergencyStop,
+    HaltStatus,
+    PermissionChecker,
+)
 from aureus.timeline import (
     ActorType,
     TimelineDatabase,
@@ -120,6 +130,8 @@ class Heartbeat:
         identity: Identity,
         bio_state: BiologicalState,
         config: HeartbeatConfig,
+        permissions: PermissionChecker,
+        emergency_stop: EmergencyStop,
         timezone: tzinfo | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
@@ -131,6 +143,8 @@ class Heartbeat:
             identity: 身份事实和四层人设。
             bio_state: 生物状态；心跳只在 advance_biomodel 打开时推进它。
             config: 心跳配置。
+            permissions: 权限检查器，要和安全网关用同一个。
+            emergency_stop: 急停开关，每拍读一次状态；要和权限检查器里的是同一个。
             timezone: 给人看的时间用哪个时区；不给就用这台电脑设置的时区。
                 生物状态没有自己设时区时，日周期也按这个时区算（D42 第 3 条）。
         """
@@ -140,6 +154,9 @@ class Heartbeat:
         self._identity = identity
         self._bio_state = bio_state
         self._config = config
+        self._permissions = permissions
+        self._emergency_stop = emergency_stop
+        self._halt_status = HaltStatus(halted=False)  # 最近一拍看到的急停状态
         self._timezone = timezone
         if bio_state.timezone is None:
             # 给人看的时间和日周期用同一个时区，免得“早上 8 点”皮质醇却在深夜达到高峰。
@@ -187,6 +204,32 @@ class Heartbeat:
         self._wake.set()
         return True
 
+    def halt(self, reason: str = "") -> bool:
+        """设急停，并叫醒心跳尽快跳一拍。
+
+        Returns:
+            这次新设的返回 True；本来就在急停中返回 False。
+
+        Raises:
+            OSError: 标记文件写不进去，急停没有生效。
+        """
+        engaged = self._emergency_stop.engage(reason)
+        self._wake.set()
+        return engaged
+
+    def resume(self) -> bool:
+        """解除急停，并叫醒心跳尽快跳一拍。
+
+        Returns:
+            这次解除的返回 True；本来就不在急停中返回 False。
+
+        Raises:
+            OSError: 标记文件删不掉，急停还在。
+        """
+        released = self._emergency_stop.release()
+        self._wake.set()
+        return released
+
     def describe_state(self) -> str:
         """此刻的状态，几行中文，给终端的 /state 之类的观察命令用。"""
         state = self._cognitive_state
@@ -205,6 +248,8 @@ class Heartbeat:
             lines.append("生物模型暂停中（advance_biomodel = false）：激素和精力不随时间变化。")
         if self._thought is not None:
             lines.append(f"正在想怎么回复 {len(self._thought.replying_to)} 条消息。")
+        if self._halt_status.halted:
+            lines.append(f"急停中：{self._halt_status.reason}。收到的消息只记录，不回复。")
         waiting = len(self._unanswered) + len(self._pending)
         if waiting:
             lines.append(f"还有 {waiting} 条消息在排队。")
@@ -289,6 +334,7 @@ class Heartbeat:
         if self._phase is not _Phase.RUNNING:
             raise RuntimeError("心跳没有在运行，不能跳")
         self._sense_body(self._clock.now())
+        self._watch_emergency_stop()
         self._collect_finished_thought()
         self._take_in_perceptions()
         self._maybe_start_thought()
@@ -351,6 +397,28 @@ class Heartbeat:
         if elapsed_seconds > 0:
             self._bio_state.update(elapsed_seconds, now=now)
 
+    def _watch_emergency_stop(self) -> None:
+        """读急停状态：变了就记进时间线；急停中就取消进行中的器官调用（D54）。"""
+        status = self._emergency_stop.status()
+        previous = self._halt_status
+        self._halt_status = status
+        if status.halted != previous.halted:
+            self._timeline.append(
+                event_type=EVENT_EMERGENCY_STOP if status.halted else EVENT_EMERGENCY_RESUME,
+                content=f"急停生效：{status.reason}" if status.halted else "急停解除",
+                actor_type=ActorType.ME,
+                visibility=VisibilityScope.PRIVATE,
+                metadata={
+                    "reason": status.reason,
+                    "since": status.since.isoformat() if status.since else "",
+                },
+            )
+            logger.warning("急停%s", f"生效：{status.reason}" if status.halted else "解除")
+        thought = self._thought
+        if status.halted and thought is not None and not thought.task.done():
+            # 取消的结果由 _collect_finished_thought 在下一拍处理（取消完成时会叫醒心跳）。
+            thought.task.cancel()
+
     def _collect_finished_thought(self) -> None:
         """对结果：想法有结果了，把它说的话记进时间线、发回通道；失败就发系统通知。"""
         thought = self._thought
@@ -358,12 +426,22 @@ class Heartbeat:
             return
         self._thought = None
         if thought.task.cancelled():
-            self._record_abandoned(thought)
+            self._record_abandoned(thought, halted=self._halt_status.halted)
             return
         outcome = thought.task.result()
         target = thought.replying_to[-1].perception
         if outcome.response is None:
             self._deliver(target, outcome.notice, MessageKind.NOTICE)
+            return
+        reply_permission = self._permissions.check(ACTION_REPLY_TO_USER)
+        if not reply_permission.allowed:
+            # 器官已经返回了，但此刻不允许说话：这句话不进时间线（它没有说出口）。
+            logger.warning("回复被权限检查拦下：%s", reply_permission.reason)
+            self._deliver(
+                target,
+                f"{reply_permission.reason}。这条消息已经记下，没有回复。",
+                MessageKind.NOTICE,
+            )
             return
         text = outcome.response.suggestion.strip()
         self._timeline.append(
@@ -407,6 +485,10 @@ class Heartbeat:
         """定焦点、想一想：有没回复的消息、又没在想别的，就在后台调用器官。"""
         if self._thought is not None or not self._unanswered or self._stop_requested:
             return
+        permission = self._permissions.check(ACTION_CALL_ORGAN)
+        if not permission.allowed:
+            self._decline_unanswered(permission.reason)
+            return
         first = self._unanswered[0].perception
         # 一次只回复同一个通道里同一个人的消息，回复才知道发给谁。
         batch = [
@@ -422,6 +504,18 @@ class Heartbeat:
         task = asyncio.create_task(self._think(request), name="aureus-thought")
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task=task, replying_to=batch)
+
+    def _decline_unanswered(self, reason: str) -> None:
+        """不允许调用器官时（急停中）：没回复的消息已经在时间线里，这里只通知，之后也不补回复。
+
+        每个对话对象只通知一次，不管他在这一拍里说了几句。
+        """
+        latest: dict[tuple[str, str], Perception] = {}
+        for heard in self._unanswered:
+            latest[(heard.perception.channel, heard.perception.sender_id)] = heard.perception
+        self._unanswered = []
+        for target in latest.values():
+            self._deliver(target, f"{reason}。这条消息已经记下，不会回复。", MessageKind.NOTICE)
 
     def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""
@@ -522,14 +616,19 @@ class Heartbeat:
             self._collect_finished_thought()
             return
         self._thought = None
-        self._record_abandoned(thought)
+        self._record_abandoned(thought, halted=False)
 
-    def _record_abandoned(self, thought: _Thought) -> None:
-        """记下被取消的想法：网关没机会记账，这次可能用掉的 token 不在账本里（0.8 已知缺口）。"""
+    def _record_abandoned(self, thought: _Thought, *, halted: bool) -> None:
+        """记下被取消的想法：网关没机会记账，这次可能用掉的 token 不在账本里（0.8 已知缺口）。
+
+        Args:
+            thought: 被取消的想法。
+            halted: 是因为急停取消的；否则是关闭时等不到。
+        """
+        cause = "急停时" if halted else "关闭时等不到进行中的器官调用，只好"
         self._timeline.append(
             event_type=EVENT_ORGAN_CALL_ABANDONED,
-            content="关闭时等不到进行中的器官调用，只好取消；"
-            "这次可能已经用掉的 token 没有记进账本。",
+            content=f"{cause}取消了进行中的器官调用；这次可能已经用掉的 token 没有记进账本。",
             actor_type=ActorType.ME,
             visibility=VisibilityScope.PRIVATE,
             metadata={
@@ -539,7 +638,9 @@ class Heartbeat:
         )
         self._deliver(
             thought.replying_to[-1].perception,
-            "正在关闭，这条消息来不及回复了。",
+            "急停中，这条消息已经记下，没有回复。"
+            if halted
+            else "正在关闭，这条消息来不及回复了。",
             MessageKind.NOTICE,
         )
 

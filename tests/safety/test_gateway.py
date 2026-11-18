@@ -30,8 +30,11 @@ from aureus.safety import (
     EVENT_CALL_REJECTED,
     BudgetExceededError,
     CallRejectedError,
+    EmergencyStop,
     Ledger,
     LedgerUnavailableError,
+    PermissionChecker,
+    PermissionDeniedError,
     RunawayBlockedError,
     SafetyGateway,
 )
@@ -100,10 +103,16 @@ class Harness:
     timeline: TimelineDatabase
     db_path: Path
     bio_state: BiologicalState
+    emergency_stop: EmergencyStop
 
     def build(self, config: SafetyConfig | None = None) -> SafetyGateway:
         return SafetyGateway(
-            self.bus, self.ledger, self.timeline, self.clock, config or SafetyConfig()
+            self.bus,
+            self.ledger,
+            self.timeline,
+            self.clock,
+            config or SafetyConfig(),
+            PermissionChecker(self.emergency_stop),
         )
 
     def add_organ(
@@ -131,7 +140,8 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     timeline = TimelineDatabase(db_path, clock)
     ledger.open()
     timeline.open()
-    yield Harness(clock, OrganBus(), ledger, timeline, db_path, BiologicalState(clock=clock))
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    yield Harness(clock, OrganBus(), ledger, timeline, db_path, BiologicalState(clock=clock), stop)
     ledger.close()
     timeline.close()
 
@@ -487,6 +497,50 @@ async def test_rejected_calls_do_not_touch_the_ledger(harness: Harness) -> None:
         with pytest.raises(BudgetExceededError):
             await gateway.call(harness.request())
     assert len(harness.ledger.entries()) == 1
+
+
+async def test_halted_gateway_rejects_without_calling_or_recording_usage(
+    harness: Harness,
+) -> None:
+    # 验收 8：急停后账本没有新增，器官根本没被调用。
+    organ = harness.add_organ([ok(make_attempt(100, 50))])
+    gateway = harness.build()
+    harness.emergency_stop.engage("测试急停")
+
+    with pytest.raises(PermissionDeniedError, match="急停中"):
+        await gateway.call(harness.request())
+
+    assert organ.calls == 0
+    assert harness.ledger.entries() == []
+    [event] = harness.events(EVENT_CALL_REJECTED)
+    assert "急停中" in event.content
+
+
+async def test_gateway_works_again_after_the_halt_is_lifted(harness: Harness) -> None:
+    organ = harness.add_organ([ok(make_attempt(10, 5))])
+    gateway = harness.build()
+    harness.emergency_stop.engage()
+    with pytest.raises(PermissionDeniedError):
+        await gateway.call(harness.request())
+
+    harness.emergency_stop.release()
+    await gateway.call(harness.request())
+
+    assert organ.calls == 1
+    assert len(harness.ledger.entries()) == 1
+
+
+async def test_halt_does_not_count_toward_the_runaway_guard(harness: Harness) -> None:
+    # 急停期间被拒绝的调用不是失控，不该让失控拦截误触发。
+    harness.add_organ([ok(make_attempt(1, 1))])
+    gateway = harness.build(SafetyConfig(max_calls_per_minute=1))
+    harness.emergency_stop.engage()
+    for _ in range(3):
+        with pytest.raises(PermissionDeniedError):
+            await gateway.call(harness.request())
+    harness.emergency_stop.release()
+
+    await gateway.call(harness.request())
 
 
 async def test_failures_are_recorded_in_ledger_and_timeline(harness: Harness) -> None:

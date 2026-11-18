@@ -31,7 +31,7 @@ from aureus.identity import Identity
 from aureus.identity.service import IdentityService
 from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
-from aureus.safety import Ledger, SafetyGateway
+from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
 from aureus.timeline import TimelineDatabase
 
 
@@ -124,7 +124,10 @@ def open_core(
         bus = _build_organ_bus(
             paths, runtime.heartbeat.reply_organ, resolver, fake_organs=fake_organs
         )
-        gateway = SafetyGateway(bus, ledger, timeline, the_clock, runtime.safety)
+        # 网关和心跳共用同一个权限检查器，两边看到的急停状态一致（D54）。
+        emergency_stop = EmergencyStop(paths.halt_file, the_clock)
+        permissions = PermissionChecker(emergency_stop)
+        gateway = SafetyGateway(bus, ledger, timeline, the_clock, runtime.safety, permissions)
         # 时区不用传：心跳会把自己的时区填给生物状态（D42 第 3 条）。
         bio_state = BiologicalState.from_config(runtime.biomodel, the_clock)
         heartbeat = Heartbeat(
@@ -134,6 +137,8 @@ def open_core(
             identity=identity,
             bio_state=bio_state,
             config=runtime.heartbeat,
+            permissions=permissions,
+            emergency_stop=emergency_stop,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

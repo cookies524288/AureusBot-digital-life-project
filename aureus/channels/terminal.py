@@ -29,12 +29,16 @@ TERMINAL_USER_ID = "local"
 
 COMMAND_HELP = "/help"
 COMMAND_STATE = "/state"
+COMMAND_HALT = "/halt"
+COMMAND_RESUME = "/resume"
 COMMAND_QUIT = "/quit"
 QUIT_COMMANDS = frozenset({COMMAND_QUIT, "/exit"})
 
 HELP_TEXT = (
     "直接输入文字就是和它说话。命令：\n"
     f"  {COMMAND_STATE}  看它此刻的状态\n"
+    f"  {COMMAND_HALT} [原因]  急停：它不再调用模型、不再回复，消息照常记录\n"
+    f"  {COMMAND_RESUME}  解除急停\n"
     f"  {COMMAND_QUIT}   关闭（也可以按 Ctrl+C，或者 Ctrl+D / Windows 上的 Ctrl+Z 回车）\n"
     f"  {COMMAND_HELP}   显示这段说明"
 )
@@ -56,6 +60,14 @@ class HeartbeatHandle(Protocol):
 
     def request_stop(self) -> None:
         """请心跳停下来。"""
+        ...
+
+    def halt(self, reason: str = "") -> bool:
+        """设急停；本来就在急停中返回 False。写不进标记文件时抛 OSError。"""
+        ...
+
+    def resume(self) -> bool:
+        """解除急停；本来就不在急停中返回 False。删不掉标记文件时抛 OSError。"""
         ...
 
 
@@ -99,6 +111,10 @@ class TerminalChannel:
             self._write_line(HELP_TEXT)
         elif command == COMMAND_STATE:
             self._write_line(self._heartbeat.describe_state())
+        elif command == COMMAND_HALT or command.startswith(f"{COMMAND_HALT} "):
+            self._halt(text[len(COMMAND_HALT) :].strip())
+        elif command == COMMAND_RESUME:
+            self._resume()
         elif command in QUIT_COMMANDS:
             self._request_stop("正在关闭……")
         elif command.startswith("/"):
@@ -115,6 +131,27 @@ class TerminalChannel:
             )
             if not accepted:
                 self._write_line("正在关闭，这句没有收到。")
+
+    def _halt(self, reason: str) -> None:
+        try:
+            engaged = self._heartbeat.halt(reason)
+        except OSError as error:
+            # 没写成功就要说清楚：用户会以为它已经停了。
+            self._write_line(f"急停没有生效：写不进急停标记（{error}）。")
+            return
+        self._write_line(
+            "已急停。它不会再调用模型、不会再回复，收到的消息照常记录。"
+            if engaged
+            else "本来就在急停中。"
+        )
+
+    def _resume(self) -> None:
+        try:
+            released = self._heartbeat.resume()
+        except OSError as error:
+            self._write_line(f"解除失败：删不掉急停标记（{error}），它还在急停中。")
+            return
+        self._write_line("已解除急停。" if released else "本来就没有急停。")
 
     def handle_end_of_input(self) -> None:
         """输入结束（Ctrl+D、Windows 上的 Ctrl+Z 回车，或者输入被关掉）：请心跳停下来。"""

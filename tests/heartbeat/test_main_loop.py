@@ -16,6 +16,8 @@ from aureus.common import sqlite as sqlite_support
 from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_COGNITIVE_STATE,
+    EVENT_EMERGENCY_RESUME,
+    EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_SHUT_DOWN,
@@ -29,7 +31,14 @@ from aureus.heartbeat import (
 from aureus.heartbeat.main_loop import SHUTDOWN_INTERRUPTED, TASK_IDLE, TASK_REPLYING
 from aureus.identity import Identity
 from aureus.organs import CallAttempt, OrganBus, OrganCallError, OrganRequest, OrganResponse
-from aureus.safety import EVENT_CALL_REJECTED, BudgetExceededError, Ledger, SafetyGateway
+from aureus.safety import (
+    EVENT_CALL_REJECTED,
+    BudgetExceededError,
+    EmergencyStop,
+    Ledger,
+    PermissionChecker,
+    SafetyGateway,
+)
 from aureus.timeline import (
     ActorType,
     TimelineDatabase,
@@ -99,6 +108,7 @@ class Harness:
     organs: ScriptedOrgans
     bio_state: BiologicalState
     heartbeat: Heartbeat
+    emergency_stop: EmergencyStop
     sent: list[OutgoingMessage] = field(default_factory=list)
 
     def records(self, event_type: str) -> list[TimelineRecord]:
@@ -133,6 +143,7 @@ class Factory:
         self.timelines.append(timeline)
         organs = organs or ScriptedOrgans()
         bio_state = BiologicalState(clock=clock)
+        emergency_stop = EmergencyStop(self.database_file.with_name("halt.json"), clock)
         heartbeat = Heartbeat(
             clock=clock,
             timeline=timeline,
@@ -140,9 +151,11 @@ class Factory:
             identity=make_identity(),
             bio_state=bio_state,
             config=HeartbeatConfig(**config),
+            permissions=PermissionChecker(emergency_stop),
+            emergency_stop=emergency_stop,
             timezone=CHINA,
         )
-        harness = Harness(clock, timeline, organs, bio_state, heartbeat)
+        harness = Harness(clock, timeline, organs, bio_state, heartbeat, emergency_stop)
         heartbeat.attach_channel(CHANNEL, harness.sent.append)
         return harness
 
@@ -378,8 +391,15 @@ async def test_with_the_real_gateway_a_budget_rejection_reaches_the_user(
         timeline = TimelineDatabase(database, clock=factory.clock)
         timeline.open()
         factory.timelines.append(timeline)
+        emergency_stop = EmergencyStop(tmp_path / "halt.json", factory.clock)
+        permissions = PermissionChecker(emergency_stop)
         gateway = SafetyGateway(
-            bus, ledger, timeline, factory.clock, SafetyConfig(monthly_token_limit=10)
+            bus,
+            ledger,
+            timeline,
+            factory.clock,
+            SafetyConfig(monthly_token_limit=10),
+            permissions,
         )
         heartbeat = Heartbeat(
             clock=factory.clock,
@@ -388,6 +408,8 @@ async def test_with_the_real_gateway_a_budget_rejection_reaches_the_user(
             identity=make_identity(),
             bio_state=BiologicalState(clock=factory.clock),
             config=HeartbeatConfig(),
+            permissions=permissions,
+            emergency_stop=emergency_stop,
             timezone=CHINA,
         )
         sent: list[OutgoingMessage] = []
@@ -787,3 +809,121 @@ async def test_a_locked_database_stops_the_beat_instead_of_losing_the_message(
         assert time.monotonic() - started < 1.0
     finally:
         holder.close()
+
+
+# ---------- 急停（1.1，D54） ----------
+
+
+def notices(harness: Harness) -> list[str]:
+    return [m.content for m in harness.sent if m.kind is MessageKind.NOTICE]
+
+
+async def test_halted_messages_are_recorded_but_not_answered(harness: Harness) -> None:
+    # 验收 8：急停后发消息，时间线有记录、没有调用器官、收到「急停中」通知。
+    harness.heartbeat.halt("测试急停")
+
+    assert harness.heartbeat.submit(said("在吗"))
+    harness.heartbeat.beat()
+
+    [user] = harness.records(EVENT_MESSAGE)
+    assert user.content == "在吗"
+    assert not harness.heartbeat.is_thinking
+    assert harness.organs.requests == []
+    [notice] = notices(harness)
+    assert "急停中" in notice
+    assert "测试急停" in notice
+    assert [m for m in harness.sent if m.kind is MessageKind.REPLY] == []
+
+
+async def test_halting_and_resuming_are_recorded_once_each(harness: Harness) -> None:
+    harness.heartbeat.halt("先停一下")
+    harness.heartbeat.beat()
+    harness.heartbeat.beat()  # 再跳一拍不重复记
+    [stopped] = harness.records(EVENT_EMERGENCY_STOP)
+    assert stopped.visibility is VisibilityScope.PRIVATE
+    assert stopped.metadata["reason"] == "先停一下"
+
+    harness.heartbeat.resume()
+    harness.heartbeat.beat()
+    [resumed] = harness.records(EVENT_EMERGENCY_RESUME)
+    assert resumed.content == "急停解除"
+
+
+async def test_replies_resume_after_the_halt_is_lifted(harness: Harness) -> None:
+    harness.organs.outcomes = ["我回来了。"]
+    harness.heartbeat.halt()
+    harness.heartbeat.submit(said("在吗"))
+    harness.heartbeat.beat()
+    assert harness.organs.requests == []
+
+    harness.heartbeat.resume()
+    await harness.exchange("现在呢")
+
+    assert len(harness.organs.requests) == 1
+    # 急停时的那句不补回复：请求里只有解除后才说的这一句。
+    assert "在吗" not in harness.organs.requests[0].prompt.split("刚收到、还没回复的消息：")[1]
+    assert [m.content for m in harness.sent if m.kind is MessageKind.REPLY] == ["我回来了。"]
+
+
+async def test_one_notice_per_sender_even_if_they_say_several_things(harness: Harness) -> None:
+    harness.heartbeat.halt()
+    for line in ("一", "二", "三"):
+        harness.heartbeat.submit(said(line))
+    harness.heartbeat.beat()
+
+    assert len(harness.records(EVENT_MESSAGE)) == 3
+    assert len(notices(harness)) == 1
+
+
+async def test_halt_cancels_a_call_in_progress_and_discards_the_answer(harness: Harness) -> None:
+    harness.organs.gate = asyncio.Event()
+    harness.heartbeat.submit(said("想个很久的问题"))
+    harness.heartbeat.beat()
+    assert harness.heartbeat.is_thinking
+    await asyncio.sleep(0)  # 让器官调用真的开始，停在 gate 上
+
+    harness.heartbeat.halt()
+    harness.heartbeat.beat()  # 看到急停，取消进行中的调用
+    await harness.heartbeat.wait_for_thought()
+    harness.heartbeat.beat()  # 收尾
+
+    assert harness.organs.cancelled
+    assert not harness.heartbeat.is_thinking
+    assert len(harness.records(EVENT_ORGAN_CALL_ABANDONED)) == 1
+    assert [m for m in harness.sent if m.kind is MessageKind.REPLY] == []
+    assert any("急停" in text for text in notices(harness))
+    # 只有用户那一条，没有它的回复。
+    assert [r.actor_type for r in harness.records(EVENT_MESSAGE)] == [ActorType.USER]
+
+
+async def test_an_answer_that_arrives_during_a_halt_is_not_spoken(harness: Harness) -> None:
+    # 想法已经做完、还没说出口时急停：回复权限检查把它拦下，不进时间线。
+    harness.organs.outcomes = ["这句不该说出口"]
+    harness.heartbeat.submit(said("你好"))
+    harness.heartbeat.beat()
+    await harness.heartbeat.wait_for_thought()
+
+    harness.heartbeat.halt()
+    harness.heartbeat.beat()
+
+    assert [m for m in harness.sent if m.kind is MessageKind.REPLY] == []
+    assert [r.actor_type for r in harness.records(EVENT_MESSAGE)] == [ActorType.USER]
+
+
+async def test_describe_state_mentions_the_halt(harness: Harness) -> None:
+    harness.heartbeat.halt("看看状态")
+    harness.heartbeat.beat()
+    assert "急停中：看看状态" in harness.heartbeat.describe_state()
+    harness.heartbeat.resume()
+    harness.heartbeat.beat()
+    assert "急停中" not in harness.heartbeat.describe_state()
+
+
+async def test_a_halt_set_from_another_process_is_noticed(harness: Harness) -> None:
+    # aureus halt 是另一个进程写的标记文件，心跳不经过 halt() 也要发现。
+    harness.emergency_stop.engage("外面设的")
+    harness.heartbeat.submit(said("在吗"))
+    harness.heartbeat.beat()
+
+    assert harness.organs.requests == []
+    assert len(harness.records(EVENT_EMERGENCY_STOP)) == 1

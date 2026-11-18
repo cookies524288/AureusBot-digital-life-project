@@ -91,6 +91,7 @@ class AureusPaths:
     master_key_file: Path = field(init=False)  # 主密钥 secrets.key，解开密钥库用（D36）
     data_dir: Path = field(init=False)  # 它的“家”：运行产生的数据
     database_file: Path = field(init=False)  # 核心数据库 aureus.db
+    halt_file: Path = field(init=False)  # 急停标记 halt.json，文件在就是急停中（D54）
     log_dir: Path = field(init=False)  # 日志
     diary_dir: Path = field(init=False)  # 每日日记
     memory_dir: Path = field(init=False)  # 记忆
@@ -111,6 +112,7 @@ class AureusPaths:
             "master_key_file": self.home / "secrets.key",
             "data_dir": data_dir,
             "database_file": data_dir / "aureus.db",
+            "halt_file": data_dir / "halt.json",
             "log_dir": data_dir / "logs",
             "diary_dir": data_dir / "diary",
             "memory_dir": data_dir / "memory",

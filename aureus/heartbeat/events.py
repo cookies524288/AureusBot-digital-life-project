@@ -10,3 +10,6 @@ EVENT_SHUT_DOWN = "shut_down"
 EVENT_COGNITIVE_STATE = "cognitive_state"
 # 关闭时等不到进行中的器官调用，只好取消；这次可能用掉的 token 没有记进账本（第 6 条）。
 EVENT_ORGAN_CALL_ABANDONED = "organ_call_abandoned"
+# 急停生效和解除（D54）：心跳发现标记文件出现或消失时各记一条，metadata 里有原因。
+EVENT_EMERGENCY_STOP = "emergency_stop"
+EVENT_EMERGENCY_RESUME = "emergency_resume"
