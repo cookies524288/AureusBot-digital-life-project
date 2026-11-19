@@ -7,16 +7,27 @@ cookie 设成 HttpOnly 加 SameSite=Strict，别的网站发来的请求带不�
 所以不加 Secure（D53 第 5 条）。
 """
 
+import asyncio
+import json
 import logging
 import math
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
 from aureus.common import WebConfig
-from aureus.heartbeat import EVENT_MESSAGE
+from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.timeline import TimelineDatabase, TimelineQuery
 
 from .auth import (
@@ -34,6 +45,12 @@ SESSION_COOKIE = "aureus_session"
 SECONDS_PER_DAY = 86400
 DEFAULT_HISTORY_LIMIT = 50
 MAX_HISTORY_LIMIT = 200
+# WebSocket 的关闭码 1008：违反策略（没登录、来源不对、登录已失效）。
+WS_POLICY_VIOLATION = 1008
+# 每个连着的网页最多攒多少条待推送的消息；网页收得太慢就丢掉新消息并记日志，不拖住心跳。
+OUTBOX_LIMIT = 256
+# 连着期间，隔多久核对一次登录是否还有效（退出所有设备、改口令后要把已连上的踢掉）。
+SESSION_RECHECK_SECONDS = 30.0
 
 
 class LoginRequest(BaseModel):
@@ -66,6 +83,78 @@ def _http_error(error: Exception) -> HTTPException:
     if isinstance(error, LoginRejectedError):
         return HTTPException(401, detail=str(error))
     return HTTPException(422, detail=str(error))
+
+
+def _same_origin(socket: WebSocket) -> bool:
+    """握手请求的 Origin 和 Host 是不是同一个地址。
+
+    cookie 的 SameSite 管不到 WebSocket 握手：别的网站的页面可以让用户的浏览器带着 cookie
+    连进来，所以要单独核对。浏览器连 WebSocket 时一定会带 Origin；没有就当作不是浏览器，拒绝。
+    """
+    origin = socket.headers.get("origin")
+    host = socket.headers.get("host")
+    if not origin or not host:
+        return False
+    return urlsplit(origin).netloc == host
+
+
+async def _send_error(socket: WebSocket, detail: str) -> None:
+    await socket.send_json({"type": "error", "detail": detail})
+
+
+async def _push(
+    socket: WebSocket,
+    outbox: "asyncio.Queue[OutgoingMessage]",
+    sessions: SessionStore,
+    token: str,
+) -> None:
+    """把心跳交回的消息推给这个网页；登录失效了就把它踢下线。"""
+    try:
+        while True:
+            try:
+                message = await asyncio.wait_for(outbox.get(), timeout=SESSION_RECHECK_SECONDS)
+            except TimeoutError:
+                message = None
+            if not sessions.touch(token):
+                await socket.close(code=WS_POLICY_VIOLATION)
+                return
+            if message is not None:
+                await socket.send_json(
+                    {
+                        "type": message.kind.value,
+                        "sender": message.sender_name,
+                        "content": message.content,
+                        "channel": message.channel,
+                    }
+                )
+    except Exception:
+        # 连接已经断了或发不出去：这个网页的推送结束，不影响别的网页和心跳。
+        logger.debug("网页连接的推送结束", exc_info=True)
+
+
+async def _listen(
+    socket: WebSocket, channel: WebChannel, sessions: SessionStore, token: str
+) -> None:
+    """收网页上说的话，交给网页通道；格式不对或太长只回一条错误，不断开连接。"""
+    while True:
+        raw = await socket.receive_text()
+        if not sessions.touch(token):
+            await socket.close(code=WS_POLICY_VIOLATION)
+            return
+        try:
+            text = json.loads(raw)["text"]
+            if not isinstance(text, str):
+                raise TypeError("text 不是字符串")
+        except (ValueError, KeyError, TypeError):
+            await _send_error(socket, "消息格式不对。")
+            continue
+        try:
+            accepted = channel.send_from_user(text)
+        except ValueError as error:
+            await _send_error(socket, str(error))
+            continue
+        if not accepted:
+            await _send_error(socket, "正在关闭，这句没有收到。")
 
 
 def create_app(
@@ -159,9 +248,27 @@ def create_app(
             for record in records
         ]
 
-    # ---------- WebSocket：实时收发（下一步） ----------
+    # ---------- WebSocket：实时收发 ----------
+
+    @app.websocket("/ws")
+    async def websocket(socket: WebSocket) -> None:
+        token = socket.cookies.get(SESSION_COOKIE, "")
+        # 来源不对、没登录、还在用默认口令：握手阶段就拒绝，和 HTTP 接口的规则一致。
+        if not _same_origin(socket) or not sessions.touch(token) or auth.password_is_default:
+            await socket.close(code=WS_POLICY_VIOLATION)
+            return
+        await socket.accept()
+        outbox: asyncio.Queue[OutgoingMessage] = asyncio.Queue(maxsize=OUTBOX_LIMIT)
+        unsubscribe = channel.subscribe(outbox.put_nowait)
+        pusher = asyncio.create_task(_push(socket, outbox, sessions, token))
+        try:
+            await _listen(socket, channel, sessions, token)
+        except (WebSocketDisconnect, RuntimeError):
+            pass  # 网页断开，或者已经被踢下线
+        finally:
+            unsubscribe()
+            pusher.cancel()
 
     # ---------- 设置页接口（后面的步骤） ----------
 
-    _ = channel  # 下一步的 WebSocket 要用
     return app
