@@ -244,9 +244,9 @@ class JudgeConfig(BaseModel):
     # 严格类型，理由同 SafetyConfig：开关写成数字、条数写成字符串要报错，不悄悄转换。
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    # 判断的总开关（D5）。默认关：2.2 的判断结果还没有人用，不该花钱；
-    # 2.3 激素接上之后再改成默认开（D68 第 7 条）。
-    enabled: bool = False
+    # 判断的总开关（D5）。默认开：2.3 激素已经读判断结果（D68 第 7 条）；
+    # 没配 judge 器官时会跳过判断并只记一次日志，不报错。
+    enabled: bool = True
     # models.toml 里的器官名；没配这个器官时跳过判断，不报错（D68 第 7 条）。
     organ: str = Field(default="judge", min_length=1)
     # 判断最多等多久。判断只是回复前的参考，等太久不如直接回复，所以给一个不长的上限；

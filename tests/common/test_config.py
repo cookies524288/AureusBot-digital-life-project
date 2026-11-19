@@ -563,8 +563,8 @@ JUDGE_FIELDS = tuple(JudgeConfig.model_fields)
 def test_judge_defaults_follow_d68(tmp_path: Path) -> None:
     judge = load_runtime_config(AureusPaths(tmp_path)).judge
     assert judge == JudgeConfig()
-    # 结果还没人用，默认不花钱。
-    assert judge.enabled is False
+    # 2.3 激素读判断结果，所以默认开；没配 judge 器官时会跳过。
+    assert judge.enabled is True
     assert judge.organ == "judge"
     assert (judge.timeout_seconds, judge.context_messages) == (10.0, 5)
 
