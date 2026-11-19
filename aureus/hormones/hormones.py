@@ -1,15 +1,21 @@
-"""激素计算：浓度 = 触发按半衰期衰减的和（D69 第 1 条）。
+"""激素计算和触发规则（D69，路线图 2.3）。
 
-这里只算数字，不读写任何状态、不调用器官、不碰时间线。
+这里只算数字和映射触发规则，不读写任何状态、不调用器官、不碰时间线。
 """
 
 import math
+from collections import Counter
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from aureus.common import HormonesConfig
 from aureus.timeline import VisibilityScope
+
+if TYPE_CHECKING:
+    from aureus.heartbeat.judging import TowardMe
 
 
 class HormoneKind(StrEnum):
@@ -19,6 +25,15 @@ class HormoneKind(StrEnum):
     JOY = "joy"  # 愉悦
     HURT = "hurt"  # 低落
     SURPRISE = "surprise"  # 惊讶
+
+
+# 判断器官「冲着它来的事」的种类（值和 heartbeat.judging.TowardMeKind 一致）对应的激素和原因。
+# 这里按值写字符串，不 import heartbeat：心跳要用本模块，反过来 import 会循环。
+_TOWARD_ME_RULES: dict[str, tuple[HormoneKind, str]] = {
+    "offense": (HormoneKind.ANGER, "被冒犯了"),
+    "praise": (HormoneKind.JOY, "被夸了"),
+    "rejection": (HormoneKind.HURT, "被拒绝或冷落了"),
+}
 
 
 @dataclass(frozen=True)
@@ -51,6 +66,128 @@ class HormoneTrigger:
             "source_record_id": self.source_record_id,
             "source_visibility": self.source_visibility.value,
         }
+
+
+def make_triggers_from_judgment(
+    toward_me: Sequence["TowardMe"],
+    *,
+    person_id: int,
+    source_record_id: int,
+    source_visibility: VisibilityScope,
+    now: datetime,
+    config: HormonesConfig,
+    recent_triggers: Iterable[HormoneTrigger],
+) -> list[HormoneTrigger]:
+    """判断器官报的「冲着它来的事」变成触发（D69 第 2 条）。
+
+    冒犯 → 怒气，夸奖 → 愉悦，拒绝 → 低落。上涨量 = 基础量 × 强度 × 把握，单次不超过上限；
+    把握低于 min_confidence 的不算；同一人在窗口里反复触发同一种激素，第 n 次乘以
+    repeat_decay 的 n−1 次方（刷屏刷不出情绪）。
+
+    Args:
+        toward_me: 判断结果里冲着它来的事。
+        person_id: 发消息的人。
+        source_record_id: 判断记录在时间线里的序号。
+        source_visibility: 判断记录的可见范围。
+        now: 触发时刻（UTC，由心跳从时钟对象取）。
+        config: 配置。
+        recent_triggers: 已有的触发（只数窗口内、这个人、同一种激素的）。
+
+    Returns:
+        触发列表，可能是空。
+    """
+    if not config.enabled:
+        return []
+    window_start = now - timedelta(seconds=config.repeat_window_seconds)
+    earlier_counts: Counter[HormoneKind] = Counter(
+        trigger.kind
+        for trigger in recent_triggers
+        if trigger.person_id == person_id and trigger.triggered_at >= window_start
+    )
+    triggers: list[HormoneTrigger] = []
+    for item in toward_me:
+        rule = _TOWARD_ME_RULES.get(item.kind.value)
+        if rule is None or item.confidence < config.min_confidence:
+            continue
+        kind, reason = rule
+        # 第 n 次（n 从 1 数）乘以 repeat_decay 的 n−1 次方：已有 k 次，这次乘 decay 的 k 次方。
+        decay = config.repeat_decay ** earlier_counts[kind]
+        rise = min(
+            config.base_amount * item.intensity * item.confidence * decay, config.max_single_rise
+        )
+        if rise <= 0.0:
+            continue
+        earlier_counts[kind] += 1  # 同一批里的第二条也算刷屏
+        triggers.append(
+            HormoneTrigger(
+                kind=kind,
+                rise=rise,
+                triggered_at=now,
+                person_id=person_id,
+                reason=reason,
+                source_record_id=source_record_id,
+                source_visibility=source_visibility,
+            )
+        )
+    return triggers
+
+
+def make_triggers_from_feedback(
+    *,
+    expected: float | None,
+    succeeded: bool,
+    source_record_id: int,
+    source_visibility: VisibilityScope,
+    now: datetime,
+    config: HormonesConfig,
+) -> list[HormoneTrigger]:
+    """反馈结果变成触发（D69 第 2 条）。
+
+    比预期顺利 → 愉悦，比预期糟糕 → 低落，差得很多（差距不小于 surprise_gap）→ 再加惊讶。
+    冲动（没写预期）不触发：没有预期就谈不上意外。触发不针对某个人（person_id 是 None）。
+
+    Args:
+        expected: 写下的预期把握 [0, 1]，冲动时是 None。
+        succeeded: 结果是成功还是失败。
+        source_record_id: 记结果的记录序号。
+        source_visibility: 来源记录的可见范围。
+        now: 触发时刻（UTC）。
+        config: 配置。
+    """
+    if not config.enabled or expected is None:
+        return []
+    gap = (1.0 if succeeded else 0.0) - expected
+    if gap == 0.0:
+        return []
+    better = gap > 0.0
+    rise = min(config.base_amount * abs(gap), config.max_single_rise)
+    specs = [
+        (
+            HormoneKind.JOY if better else HormoneKind.HURT,
+            rise,
+            "比预期顺利" if better else "比预期糟糕",
+        )
+    ]
+    if abs(gap) >= config.surprise_gap:
+        specs.append(
+            (
+                HormoneKind.SURPRISE,
+                min(config.base_amount, config.max_single_rise),
+                "结果和预期差得很多",
+            )
+        )
+    return [
+        HormoneTrigger(
+            kind=kind,
+            rise=amount,
+            triggered_at=now,
+            person_id=None,
+            reason=reason,
+            source_record_id=source_record_id,
+            source_visibility=source_visibility,
+        )
+        for kind, amount, reason in specs
+    ]
 
 
 def level_at(

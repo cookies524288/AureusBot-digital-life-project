@@ -7,10 +7,14 @@ from .hormones import (
     HormoneKind,
     HormoneTrigger,
     level_at,
+    make_triggers_from_feedback,
+    make_triggers_from_judgment,
 )
 
 __all__ = [
     "HormoneKind",
     "HormoneTrigger",
     "level_at",
+    "make_triggers_from_feedback",
+    "make_triggers_from_judgment",
 ]
