@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from aureus.body import Body
+from aureus.body import Body, BodySampleStore
 from aureus.channels import CHANNEL_NAME as TERMINAL_CHANNEL
 from aureus.channels import TERMINAL_USER_ID, WEB_CHANNEL_NAME, WEB_USER_ID
 from aureus.common import (
@@ -162,6 +162,13 @@ def open_core(
         ledger = Ledger(paths.database_file, the_clock, calendar=calendar)
         ledger.open()
         stack.callback(ledger.close)
+        # 身体信号样本（D64）：启动时清掉超过保留期限的行；样本只是读数，不是经历。
+        samples = BodySampleStore(paths.database_file, the_clock)
+        samples.open()
+        stack.callback(samples.close)
+        removed = samples.prune(runtime.body.sample_retention_days)
+        if removed:
+            logger.info("清理了 {} 行过期的身体信号样本", removed)
         people = _open_people(paths, the_clock, identity, stack)
 
         heartbeat_config = runtime.heartbeat
@@ -192,6 +199,7 @@ def open_core(
             body=body,
             people=people,
             identity_history=identity_history,
+            samples=samples,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
