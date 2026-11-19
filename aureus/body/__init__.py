@@ -2,6 +2,7 @@
 
 from .body import Body, BodyReading
 from .energy import UNLIMITED_READING, EnergyReading, EnergyTier, classify, compute_energy
+from .samples import BodySample, BodySampleStore, sample_from_reading, sample_of
 from .signals import (
     FatigueReading,
     SleepReading,
@@ -15,6 +16,8 @@ __all__ = [
     "UNLIMITED_READING",
     "Body",
     "BodyReading",
+    "BodySample",
+    "BodySampleStore",
     "EnergyReading",
     "EnergyTier",
     "FatigueReading",
@@ -25,4 +28,6 @@ __all__ = [
     "compute_fatigue",
     "compute_sleep",
     "compute_stress",
+    "sample_from_reading",
+    "sample_of",
 ]
