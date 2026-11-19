@@ -238,6 +238,24 @@ class FeedbackConfig(BaseModel):
         return self
 
 
+class JudgeConfig(BaseModel):
+    """判断器官的配置（aureus.toml 的 [judge]，设计见 docs/10-decisions.md 的 D68）。"""
+
+    # 严格类型，理由同 SafetyConfig：开关写成数字、条数写成字符串要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 判断的总开关（D5）。默认关：2.2 的判断结果还没有人用，不该花钱；
+    # 2.3 激素接上之后再改成默认开（D68 第 7 条）。
+    enabled: bool = False
+    # models.toml 里的器官名；没配这个器官时跳过判断，不报错（D68 第 7 条）。
+    organ: str = Field(default="judge", min_length=1)
+    # 判断最多等多久。判断只是回复前的参考，等太久不如直接回复，所以给一个不长的上限；
+    # 10 秒是随手挑的，没有实测依据。
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    # 除了这次要回复的消息，再带之前几条对话；0 表示只看这一条。
+    context_messages: int = Field(default=5, ge=0)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -258,6 +276,7 @@ class RuntimeConfig(BaseModel):
     snapshots: SnapshotsConfig = Field(default_factory=SnapshotsConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
+    judge: JudgeConfig = Field(default_factory=JudgeConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod

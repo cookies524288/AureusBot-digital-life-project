@@ -11,6 +11,7 @@ from aureus.common import (
     ConfigError,
     FeedbackConfig,
     HeartbeatConfig,
+    JudgeConfig,
     SafetyConfig,
     TimeConfig,
     WebConfig,
@@ -551,3 +552,69 @@ def test_feedback_min_samples_cannot_exceed_the_window(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, "[feedback]\nwindow_size = 5\nmin_samples = 6\n")
     assert "min_samples" in error_message_of(paths)
+
+
+# ---------- [judge] 判断器官配置（D68） ----------
+
+JUDGE_FIELDS = tuple(JudgeConfig.model_fields)
+
+
+def test_judge_defaults_follow_d68(tmp_path: Path) -> None:
+    judge = load_runtime_config(AureusPaths(tmp_path)).judge
+    assert judge == JudgeConfig()
+    # 结果还没人用，默认不花钱。
+    assert judge.enabled is False
+    assert judge.organ == "judge"
+    assert (judge.timeout_seconds, judge.context_messages) == (10.0, 5)
+
+
+def test_judge_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in JUDGE_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "judge")
+    assert sum(line.startswith(prefixes) for line in mine) == len(JUDGE_FIELDS)
+    start = lines.index("[judge]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "\n".join(lines))
+    assert load_runtime_config(paths).judge == JudgeConfig()
+
+
+def test_judge_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[judge]\n"
+        "enabled = true\n"
+        'organ = "empathy_judge"\n'
+        "timeout_seconds = 3\n"
+        "context_messages = 0\n",
+    )
+    judge = load_runtime_config(paths).judge
+    assert judge.enabled is True
+    assert judge.organ == "empathy_judge"
+    assert (judge.timeout_seconds, judge.context_messages) == (3.0, 0)
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("enabled", "1"),  # 数字 1 不是 true
+        ("organ", '""'),
+        ("organ", "5"),
+        ("timeout_seconds", "0"),
+        ("timeout_seconds", "-1.5"),
+        ("timeout_seconds", '"10"'),
+        ("timeout_seconds", "true"),
+        ("context_messages", "-1"),
+        ("context_messages", "2.5"),
+        ("context_messages", "true"),
+    ],
+)
+def test_judge_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[judge]\n{field} = {text}\n")
+    assert field in error_message_of(paths)
