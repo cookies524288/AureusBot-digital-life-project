@@ -14,6 +14,7 @@ from aureus.web.auth import (
     WebAuth,
     is_loopback,
 )
+from aureus.web.server import create_app
 from aureus.web.session import SessionStore
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "PasswordStore",
     "SessionStore",
     "WebAuth",
+    "create_app",
     "is_loopback",
 ]
