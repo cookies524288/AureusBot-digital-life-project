@@ -20,7 +20,7 @@
 | 调用模型 | litellm + openai（Python SDK） | litellm 是统一的多协议调用库（MIT 协议），支持 OpenAI、OpenAI Responses、Anthropic、Gemini 等 100+ 家，同一套代码切换模型只需改配置；openai SDK 由 litellm 在内部调用 |
 | 网络 | httpx、websockets | 调用 API、连接平台 |
 | 网页通道 | FastAPI + WebSocket | 聊天需要服务器主动推送消息（它主动找你） |
-| 观察台 | Streamlit | 纯 Python 写网页仪表盘，不用学前端；只读数据库 |
+| 观察台 | Streamlit | 纯 Python 写网页仪表盘，不用学前端；只读数据库。放在 pyproject 的可选依赖组 `monitor`，不装不影响核心；用 `aureus monitor` 启动，只绑本机（D64） |
 | 单实例锁 | filelock | 成熟的跨平台文件锁，支持 Windows |
 | 时区 | zoneinfo（标准库）+ tzdata | 按 IANA 时区名处理夏令时；Windows 没有系统时区库，靠 tzdata 补上 |
 | 日志 | loguru | 比标准库的 logging 简单 |
