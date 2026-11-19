@@ -176,6 +176,18 @@ def build_system_context(
     return "\n\n".join(sections)
 
 
+def build_judge_context(identity: Identity) -> str:
+    """判断器官的系统上下文：只放不变人格和可变人格，不放身体状态和行为风格（D68 第 6 条）。
+
+    为什么这么少：判断只需要知道“我是谁”才能分辨哪些话是冲着我来的，省 token。
+    """
+    sections = [f"【不变人格】\n{identity.persona.immutable.strip()}"]
+    mutable = identity.persona.mutable.strip()
+    if mutable:
+        sections.append(f"【可变人格】\n{mutable}")
+    return "\n\n".join(sections)
+
+
 def _speaker(record: TimelineRecord, user_name: str) -> str:
     if record.actor_type == ActorType.ME:
         return "你"

@@ -219,6 +219,7 @@ def open_core(
             identity_history=identity_history,
             samples=samples,
             feedback=feedback,
+            judge=runtime.judge,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

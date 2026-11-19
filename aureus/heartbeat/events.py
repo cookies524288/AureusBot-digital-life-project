@@ -20,3 +20,6 @@ EVENT_REPLY_DECLINED = "reply_declined"
 # 用户在 identity.toml 里改了设定（D62）：醒来后记一条，metadata 里有改了哪几层、
 # 和已经记到哪个版本（下次醒来从它之后找新的修改）。
 EVENT_IDENTITY_CHANGED = "identity_changed"
+# 判断器官看了刚收到的消息（D68）：只有自己可见，metadata 里有读懂的结果，
+# 或者没判断出来的原因（失败、超时、被拒、看不懂）。
+EVENT_JUDGMENT = "judgment"

@@ -15,18 +15,20 @@ import contextlib
 import logging
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, Protocol
 
 from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
-from aureus.common import Clock, HeartbeatConfig
+from aureus.common import Clock, HeartbeatConfig, JudgeConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
+    build_judge_context,
+    build_judge_prompt,
     build_plan_prompt,
     build_reply_prompt,
     build_system_context,
@@ -37,6 +39,7 @@ from aureus.heartbeat.events import (
     EVENT_EMERGENCY_RESUME,
     EVENT_EMERGENCY_STOP,
     EVENT_IDENTITY_CHANGED,
+    EVENT_JUDGMENT,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_REPLY_DECLINED,
@@ -44,6 +47,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from aureus.heartbeat.judging import Judgment, parse_judgment
 from aureus.heartbeat.perception import (
     MessageKind,
     MessageSink,
@@ -52,7 +56,7 @@ from aureus.heartbeat.perception import (
     TrustLevel,
 )
 from aureus.heartbeat.planning import Plan, parse_plan
-from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
+from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
@@ -134,6 +138,18 @@ class _ReplyJob:
     full_context: str
     # 规划之后的回复器看的背景：没有行为风格，什么时候开口、怎么回应已经由规划器定了。
     replyer_context: str
+    # 判断器官看的背景：只有不变人格和可变人格（D68 第 6 条）。
+    judge_context: str
+    # 判断器官要带的之前的对话；已经按 [judge] context_messages 截好。
+    judge_history: Sequence[TimelineRecord]
+
+
+@dataclass(frozen=True)
+class _JudgeAttempt:
+    """一次判断的结果：读懂了就有 judgment，否则 failure 写没判断出来的原因（D68 第 8 条）。"""
+
+    judgment: Judgment | None = None
+    failure: str = ""
 
 
 @dataclass(frozen=True)
@@ -146,6 +162,8 @@ class _ThoughtOutcome:
     plan: Plan | None = None
     # 规划器决定不回复：没有 response，也不是失败，不发失败通知。
     declined: bool = False
+    # 判断器官的结果；没调用判断（开关关着、档位低、没配器官）时是 None。
+    judge: _JudgeAttempt | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +198,7 @@ class Heartbeat:
         identity_history: IdentityHistory | None = None,
         samples: BodySampleStore | None = None,
         feedback: FeedbackStore | None = None,
+        judge: JudgeConfig | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -202,6 +221,7 @@ class Heartbeat:
             samples: 身体信号样本存储，要已经打开；心跳按 [body] sample_interval_seconds
                 定时记一行读数，观察台画曲线靠它（D64）。不给就不记样本。
             feedback: 反馈存储，要已经打开；认知状态里的信心读它（D67）。不给就显示没有数据。
+            judge: 判断器官的配置；不给或 enabled 为 False 就不调用判断（D68）。
         """
         self._clock = clock
         self._timeline = timeline
@@ -227,6 +247,8 @@ class Heartbeat:
         self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
         self._last_user_contact: Perception | None = None  # 自检通知发往的地方
         self._observer = CognitiveObserver(clock, feedback)
+        self._judge = judge
+        self._judge_missing_logged = False  # 没配判断器官的日志只记一次
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
@@ -605,6 +627,8 @@ class Heartbeat:
             return
         outcome = thought.task.result()
         target = thought.replying_to[-1].perception
+        if outcome.judge is not None:
+            self._record_judgment(thought, outcome.judge)
         if outcome.declined and outcome.plan is not None:
             self._record_declined(thought, outcome.plan, target)
             return
@@ -654,6 +678,25 @@ class Heartbeat:
             )
         for part in parts or [text]:
             self._deliver(target, part, MessageKind.REPLY)
+
+    def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> None:
+        """把判断器官的结果记进时间线，只有自己可见；暂时没有别的地方用它（D68 第 7、8 条）。"""
+        metadata: dict[str, Any] = {
+            "in_reply_to": [heard.record.id for heard in thought.replying_to]
+        }
+        if attempt.judgment is not None:
+            content = "判断了刚收到的消息里的情绪。"
+            metadata["judgment"] = attempt.judgment.to_metadata()
+        else:
+            content = f"没判断出刚收到的消息里的情绪：{attempt.failure}"
+            metadata["failure"] = attempt.failure
+        self._timeline.append(
+            event_type=EVENT_JUDGMENT,
+            content=content,
+            actor_type=ActorType.ME,
+            visibility=VisibilityScope.PRIVATE,
+            metadata=metadata,
+        )
 
     def _record_declined(self, thought: _Thought, plan: Plan, target: Perception) -> None:
         """规划器决定不回复：记进时间线，并在终端提示一行，让用户知道不是出了故障（D59）。
@@ -919,6 +962,8 @@ class Heartbeat:
                 identity_changes_live=live_changes,
             )
 
+        judge_count = self._judge.context_messages if self._judge is not None else 0
+        judge_history = list(history)[-judge_count:] if judge_count > 0 else []
         return _ReplyJob(
             strategy=strategy,
             history=history,
@@ -926,6 +971,8 @@ class Heartbeat:
             user_name=self._identity.user.name,
             full_context=context(include_behavior_style=True),
             replyer_context=context(include_behavior_style=False),
+            judge_context=build_judge_context(self._identity),
+            judge_history=judge_history,
         )
 
     def _body_state_for_context(self, strategy: ReplyStrategy) -> str:
@@ -956,16 +1003,67 @@ class Heartbeat:
         规划器出任何问题（调用失败、建议看不懂）都不影响回复：改成合并的一次调用，
         和没有规划器时一样，由回复器自己决定怎么回应（D59）。
         """
+        attempt = await self._judge_emotion(job)
         plan: Plan | None = None
         if job.strategy.plan_first:
             try:
                 plan = await self._plan(job)
             except CallRejectedError as rejection:
                 # 网关的拒绝（月度上限、失控拦截）对回复器同样成立，不必再试一次。
-                return _ThoughtOutcome(notice=f"没能调用模型，这次没有回复：{rejection.reason}")
+                return _ThoughtOutcome(
+                    notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
+                )
             if plan is not None and not plan.should_reply:
-                return _ThoughtOutcome(plan=plan, declined=True)
-        return await self._reply(job, plan)
+                return _ThoughtOutcome(plan=plan, declined=True, judge=attempt)
+        outcome = await self._reply(job, plan)
+        return replace(outcome, judge=attempt)
+
+    async def _judge_emotion(self, job: _ReplyJob) -> _JudgeAttempt | None:
+        """先调判断器官（D68）。不调用时返回 None；调用了就一定返回结果，任何失败都不影响回复。
+
+        为什么都不抛：判断只是参考，它被网关拒绝不代表回复也会被拒（回复算「回应用户」）。
+        """
+        config = self._judge
+        if config is None or not config.enabled or not judge_allowed(job.strategy.tier):
+            return None
+        request = OrganRequest(
+            organ_id=config.organ,
+            prompt=build_judge_prompt(
+                job.judge_history, job.messages, job.user_name, self._timezone
+            ),
+            bio_state=self._bio_state,
+            context={"task": "judge", "in_reply_to": [record.id for record in job.messages]},
+            purpose=CallPurpose.OPTIONAL,
+            system_context=job.judge_context,
+            model_preference=job.strategy.model_preference,
+        )
+        try:
+            async with asyncio.timeout(config.timeout_seconds):
+                response = await self._organs.call(request)
+        except TimeoutError:
+            logger.warning(
+                "判断器官 %s 超过 %s 秒没有返回，跳过判断", config.organ, config.timeout_seconds
+            )
+            return _JudgeAttempt(failure="超时")
+        except CallRejectedError as rejection:
+            return _JudgeAttempt(failure=f"被安全网关拒绝：{rejection.reason}")
+        except OrganCallError as failure:
+            logger.warning("判断器官调用失败，跳过判断：%s", failure)
+            return _JudgeAttempt(failure="调用失败")
+        except ValueError:
+            # 器官没注册：用户没配这个器官，不算出错，只提醒一次（D68 第 7 条）。
+            if not self._judge_missing_logged:
+                self._judge_missing_logged = True
+                logger.warning("没有配判断器官 %s，跳过判断", config.organ)
+            return None
+        except Exception:
+            logger.exception("调用判断器官 %s 时出错，跳过判断", config.organ)
+            return _JudgeAttempt(failure="调用出错")
+        judgment = parse_judgment(response.suggestion)
+        if judgment is None:
+            logger.warning("判断器官的建议看不懂，跳过判断")
+            return _JudgeAttempt(failure="返回的内容看不懂")
+        return _JudgeAttempt(judgment=judgment)
 
     async def _plan(self, job: _ReplyJob) -> Plan | None:
         """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""
