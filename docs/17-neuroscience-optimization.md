@@ -9,6 +9,8 @@
 > - 人类脑脊液清除的睡眠稳定态恢复机制
 >
 > **2026-11-18 注（D52 第 4 条）**：本文里没接真实来源的接口已从代码中删掉，包括 `trigger_*`、`on_novel_event` 等 `on_*` 事件（`on_conversation` 保留）、`consume_energy_for_*`、`generate_behavioral_constraints`、`planning_depth()`、`working_memory_items`、`priority_modifiers`、`risk_aversion`、`social_motivation`、`emotion_label`、`mood_text`、`AllostasisModel.burnout_risk`、睡眠债和褪黑素/警觉性曲线。下面的内容只当设计思路看；Phase 2 接真实来源时再按需加回。
+>
+> **2026-11-19 注（D69）**：多巴胺、皮质醇、血清素、去甲肾上腺素、日周期和稳态超载在路线图 2.3 删掉，换成 `aureus/hormones/` 的怒气、愉悦、低落、惊讶，参数以 D69 和 `[hormones]` 配置为准，不以本文为准。
 
 ---
 
