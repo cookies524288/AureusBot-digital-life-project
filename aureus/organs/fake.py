@@ -44,10 +44,11 @@ class FakePlanner:
         bio_state = request.bio_state
         cognitive = bio_state.observe_cognitive_state({"task": "规划任务"})
 
-        # 根据规划信心（激素算出来的）生成不同的规划
-        if cognitive.planning_confidence > 0.7:
+        # 根据规划信心（反馈里的真实成功率）生成不同的规划；没有数据时走保守的一档
+        confidence = cognitive.planning_confidence
+        if confidence is not None and confidence > 0.7:
             plan = "建议：开始一项长期任务，深入分析问题。"
-        elif cognitive.planning_confidence > 0.4:
+        elif confidence is not None and confidence > 0.4:
             plan = "建议：处理中等难度任务，保持专注。"
         else:
             plan = "建议：处理简单任务或休息。"
@@ -58,7 +59,7 @@ class FakePlanner:
             confidence=0.8,
             metadata={
                 "type": "fake",
-                "confidence_used": cognitive.planning_confidence,
+                "confidence_used": confidence,
                 "planning_depth": cognitive.planning_depth,
             },
         )

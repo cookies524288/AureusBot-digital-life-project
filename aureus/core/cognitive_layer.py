@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -18,10 +19,15 @@ from aureus.core.biomodel import (
     NORADRENALINE_BASELINE,
     SEROTONIN_BASELINE,
 )
+from aureus.feedback import FeedbackError
 
 if TYPE_CHECKING:
     from aureus.body.energy import EnergyReading
     from aureus.core.biomodel import BiologicalState
+    from aureus.feedback import FeedbackStore
+
+# 没有任何反馈历史时，信心栏显示的话（D67：不装作有把握）。
+_NO_CONFIDENCE_DATA = "没有数据"
 
 # 精力档位的显示名；这里只认值，不 import body（core 在 body 之上，运行时不绕回去）。
 _TIER_UNLIMITED = "不限"
@@ -37,7 +43,10 @@ class CognitiveState:
     # 当前焦点
     current_task: str = ""  # "回复用户" / "计划今天" / "思考问题" / "待机"
     planning_depth: int = 0  # 正在规划第几步 [0, 7]
-    planning_confidence: float = 0.5  # [0, 1] 对当前决策的信心
+    # 对当前决策的信心 [0, 1]：来自反馈里该类事情最近的真实成功率（D67）。
+    # None 表示没有数据（没有反馈存储、没指定类别，或这一类还没有有结果的历史）。
+    planning_confidence: float | None = None
+    confidence_note: str = _NO_CONFIDENCE_DATA  # 给人看的说明，含类别和样本数
 
     # 内部状态对决策的影响
     active_hormones: dict[str, float] = field(
@@ -93,6 +102,7 @@ class CognitiveState:
             "current_task": self.current_task,
             "planning_depth": self.planning_depth,
             "planning_confidence": self.planning_confidence,
+            "confidence_note": self.confidence_note,
             "active_hormones": self.active_hormones,
             "energy_state": self.energy_state,
             "energy_level": self.energy_level,
@@ -105,10 +115,12 @@ class CognitiveState:
 
 
 class CognitiveObserver:
-    """观察器：让它能观察自己的思考过程；精力读身体信号，激素读生物状态。"""
+    """观察器：让它能观察自己的思考过程；精力读身体信号，激素读生物状态，信心读反馈。"""
 
-    def __init__(self, clock: Clock | None = None):
+    def __init__(self, clock: Clock | None = None, feedback: FeedbackStore | None = None):
         self.clock = clock or SystemClock()
+        # 不给反馈存储（或 [feedback] 关闭）时，信心一律显示没有数据。
+        self._feedback = feedback
 
     def observe(
         self,
@@ -120,7 +132,7 @@ class CognitiveObserver:
 
         Args:
             bio_state: 生物学状态对象
-            context: 当前执行上下文（任务名、规划深度等）
+            context: 当前执行上下文（任务名、规划深度、反馈类别 feedback_category 等）
             energy: 身体的精力读数；不给时当作「不限」。
 
         Returns:
@@ -134,8 +146,10 @@ class CognitiveObserver:
         # 2. 规划深度（规划器提供）
         planning_depth = context.get("planning_depth", 0)
 
-        # 3. 规划信心（基于多巴胺和能量）
-        planning_confidence = self._compute_confidence(bio_state)
+        # 3. 规划信心：读反馈里这一类事情的真实成功率，不再用激素拼（D67）
+        planning_confidence, confidence_note = self._read_confidence(
+            context.get("feedback_category")
+        )
 
         # 4. 激素效应（相对于基线）
         active_hormones = {
@@ -165,6 +179,7 @@ class CognitiveObserver:
             current_task=current_task,
             planning_depth=planning_depth,
             planning_confidence=planning_confidence,
+            confidence_note=confidence_note,
             active_hormones=active_hormones,
             energy_state=energy_state,
             energy_level=energy_level,
@@ -175,13 +190,18 @@ class CognitiveObserver:
             last_updated=self.clock.now(),
         )
 
-    @staticmethod
-    def _compute_confidence(bio_state: BiologicalState) -> float:  # type: ignore
-        """基于多巴胺、皮质醇计算规划信心"""
-        # 高多巴胺 = 信心足
-        # 高皮质醇 = 谨慎（信心下降）
-        confidence = 0.5 + bio_state.hormones.dopamine * 0.3 - bio_state.hormones.cortisol * 0.2
-        return max(0.0, min(1.0, confidence))
+    def _read_confidence(self, category: str | None) -> tuple[float | None, str]:
+        """从反馈取这一类事情的自信；取不到就如实说没有数据。
+
+        反馈读失败时朝安全方向倒：当作没有数据，不让观察这一步拖垮心跳。
+        """
+        if self._feedback is None or not category:
+            return None, _NO_CONFIDENCE_DATA
+        try:
+            confidence = self._feedback.confidence(category)
+        except (FeedbackError, sqlite3.Error):
+            return None, _NO_CONFIDENCE_DATA
+        return confidence.value, confidence.describe()
 
     @staticmethod
     def _explain_current_state(bio_state: BiologicalState, energy_state: str) -> str:  # type: ignore

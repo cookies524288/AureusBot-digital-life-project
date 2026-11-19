@@ -5,9 +5,11 @@ from datetime import UTC, datetime
 import pytest
 
 from aureus.body.energy import UNLIMITED_READING, EnergyReading, EnergyTier
+from aureus.common import FeedbackConfig
 from aureus.common.clock import ManualClock
 from aureus.core.biomodel import BiologicalState, HormoneState
 from aureus.core.cognitive_layer import CognitiveObserver, CognitiveState
+from aureus.feedback import FeedbackStore, Outcome
 
 
 def reading(tier: EnergyTier, fraction: float) -> EnergyReading:
@@ -92,23 +94,45 @@ class TestCognitiveObserver:
         assert cognitive.planning_depth == 2
         assert cognitive.last_updated is not None
 
-    def test_confidence_computation(self):
-        """测试规划信心计算：只看多巴胺和皮质醇"""
+    def test_confidence_has_no_data_without_feedback(self):
+        """没有反馈存储时信心显示没有数据，激素再高也不拼一个出来（D67）"""
         clock = ManualClock(datetime(2024, 1, 1, 12, 0, tzinfo=UTC))
         bio_confident = BiologicalState(
             hormones=HormoneState(dopamine=0.9, cortisol=0.2, serotonin=0.5, noradrenaline=0.4),
             clock=clock,
         )
-        observer = CognitiveObserver(clock)
-        confidence1 = observer.observe(bio_confident, {}).planning_confidence
-
-        bio_anxious = BiologicalState(
-            hormones=HormoneState(dopamine=0.1, cortisol=0.9, serotonin=0.3, noradrenaline=0.2),
-            clock=clock,
+        cognitive = CognitiveObserver(clock).observe(
+            bio_confident, {"feedback_category": "sim_task:easy"}
         )
-        confidence2 = observer.observe(bio_anxious, {}).planning_confidence
+        assert cognitive.planning_confidence is None
+        assert cognitive.confidence_note == "没有数据"
 
-        assert confidence1 > confidence2
+    def test_confidence_comes_from_feedback_history(self, tmp_path):
+        """信心取反馈里该类事情最近的真实成功率，和激素无关"""
+        clock = ManualClock(datetime(2024, 1, 1, 12, 0, tzinfo=UTC))
+        store = FeedbackStore(tmp_path / "aureus.db", FeedbackConfig(min_samples=4), clock)
+        store.open()
+        try:
+            for outcome in (Outcome.SUCCESS, Outcome.SUCCESS, Outcome.SUCCESS, Outcome.FAILURE):
+                store.record_outcome(store.record_expectation("sim_task:easy", 0.5), outcome)
+            observer = CognitiveObserver(clock, store)
+            calm = BiologicalState(clock=clock)
+            tense = BiologicalState(
+                hormones=HormoneState(dopamine=0.1, cortisol=0.9, serotonin=0.3, noradrenaline=0.2),
+                clock=clock,
+            )
+            context = {"feedback_category": "sim_task:easy"}
+            assert observer.observe(calm, context).planning_confidence == 0.75
+            assert observer.observe(tense, context).planning_confidence == 0.75
+            # 没指定类别，或这一类没有历史：没有数据
+            assert observer.observe(calm, {}).planning_confidence is None
+            other = observer.observe(calm, {"feedback_category": "sim_task:other"})
+            assert other.planning_confidence is None
+            # 类别不认识（反馈报错）时朝安全方向倒，不抛出
+            bad = observer.observe(calm, {"feedback_category": "乱起的名字"})
+            assert bad.planning_confidence is None
+        finally:
+            store.close()
 
     def test_energy_comes_from_the_body_reading(self):
         """精力档位和比例直接取身体的读数，不另算"""
@@ -125,7 +149,7 @@ class TestCognitiveObserver:
         assert unlimited.energy_level is None  # 不限时没有比例，不假装有
 
     def test_energy_does_not_change_planning_confidence(self):
-        """精力不参与信心计算：信心只看激素（D56 去掉了模拟精力）"""
+        """精力不参与信心：信心只读反馈（D56 去掉了模拟精力，D67 去掉了激素拼信心）"""
         clock = ManualClock(datetime(2024, 1, 1, 12, 0, tzinfo=UTC))
         bio = BiologicalState(clock=clock)
         observer = CognitiveObserver(clock)

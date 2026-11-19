@@ -340,7 +340,7 @@ class Heartbeat:
                 if state.energy_level is None
                 else f"精力 {state.energy_level:.0%}（{state.energy_state}档）"
             )
-            lines.append(f"{energy}，信心 {state.planning_confidence:.2f}")
+            lines.append(f"{energy}，信心 {state.confidence_note}")
             lines.append(f"回复做法：{self._current_strategy().describe()}")
         lines.extend(self._describe_signals())
         hormones = self._bio_state.hormones
