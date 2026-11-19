@@ -5,13 +5,14 @@
 
 import math
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from aureus.common import HormonesConfig
+from aureus.common.clock import ensure_aware
 from aureus.timeline import VisibilityScope
 
 if TYPE_CHECKING:
@@ -66,6 +67,48 @@ class HormoneTrigger:
             "source_record_id": self.source_record_id,
             "source_visibility": self.source_visibility.value,
         }
+
+    @classmethod
+    def from_metadata(cls, metadata: Mapping[str, object]) -> "HormoneTrigger | None":
+        """从时间线 metadata 还原；任何一处看不懂就返回 None，由调用方跳过并记日志。"""
+        try:
+            kind = HormoneKind(metadata["kind"])
+            rise = metadata["rise"]
+            triggered_at = metadata["triggered_at"]
+            person_id = metadata["person_id"]
+            reason = metadata["reason"]
+            source_record_id = metadata["source_record_id"]
+            visibility = VisibilityScope(metadata["source_visibility"])
+        except (KeyError, ValueError):
+            return None
+        if (
+            not isinstance(rise, (int, float))
+            or isinstance(rise, bool)
+            or not math.isfinite(rise)
+            or rise < 0
+            or not isinstance(triggered_at, str)
+            or not isinstance(reason, str)
+            or isinstance(source_record_id, bool)
+            or not isinstance(source_record_id, int)
+            or (
+                person_id is not None
+                and (isinstance(person_id, bool) or not isinstance(person_id, int))
+            )
+        ):
+            return None
+        try:
+            moment = ensure_aware(datetime.fromisoformat(triggered_at))
+        except ValueError:
+            return None
+        return cls(
+            kind=kind,
+            rise=float(rise),
+            triggered_at=moment,
+            person_id=person_id,
+            reason=reason,
+            source_record_id=source_record_id,
+            source_visibility=visibility,
+        )
 
 
 def make_triggers_from_judgment(
@@ -229,7 +272,7 @@ def level_at(
         HormoneKind.SURPRISE: config.surprise_half_life_seconds,
     }
     half_life_seconds = half_life_by_kind[kind]
-    decay_rate = 0.693147 / half_life_seconds  # ln(2)
+    decay_rate = math.log(2) / half_life_seconds
     total = 0.0
     for trigger in triggers:
         if trigger.kind != kind:

@@ -23,3 +23,6 @@ EVENT_IDENTITY_CHANGED = "identity_changed"
 # 判断器官看了刚收到的消息（D68）：只有自己可见，metadata 里有读懂的结果，
 # 或者没判断出来的原因（失败、超时、被拒、看不懂）。
 EVENT_JUDGMENT = "judgment"
+# 激素被触发一次（D69）：只有自己可见，metadata 是 HormoneTrigger.to_metadata() 的样子
+# （种类、上涨量、时刻、对象、原因、来源记录序号和来源的可见范围）。重启时靠它还原浓度。
+EVENT_HORMONE_TRIGGERED = "hormone_triggered"

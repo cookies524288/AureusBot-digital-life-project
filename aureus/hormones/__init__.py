@@ -10,10 +10,12 @@ from .hormones import (
     make_triggers_from_feedback,
     make_triggers_from_judgment,
 )
+from .state import Hormones
 
 __all__ = [
     "HormoneKind",
     "HormoneTrigger",
+    "Hormones",
     "level_at",
     "make_triggers_from_feedback",
     "make_triggers_from_judgment",
