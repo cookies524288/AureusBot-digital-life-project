@@ -34,7 +34,7 @@ from .perception import (
     VisibilityScope,
 )
 from .planning import Plan, ReplyLength, parse_plan
-from .reply_strategy import ReplyStrategy, choose_strategy
+from .reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 
 __all__ = [
     "EVENT_COGNITIVE_STATE",
@@ -66,6 +66,7 @@ __all__ = [
     "VisibilityScope",
     "assess_downtime",
     "choose_strategy",
+    "judge_allowed",
     "parse_judgment",
     "parse_plan",
 ]

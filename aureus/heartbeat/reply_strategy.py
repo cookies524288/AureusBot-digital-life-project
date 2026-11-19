@@ -14,6 +14,10 @@ from aureus.common import HeartbeatConfig
 from aureus.heartbeat.planning import ReplyLength
 from aureus.organs import ModelPreference
 
+# 判断器官只在精力还够的档位调用（D68 第 3 条）。写成「允许的档位」而不是「禁止的档位」：
+# 以后新增档位时，默认不调用，朝省钱的方向倒。没有身体读数（tier 为 None）按正常档处理。
+_JUDGE_TIERS = frozenset({EnergyTier.NORMAL, EnergyTier.UNLIMITED, EnergyTier.SAVING})
+
 _PREFERENCE_DESCRIPTIONS = {
     ModelPreference.PREFERRED: "首选",
     ModelPreference.CHEAPER: "便宜一档",
@@ -104,3 +108,12 @@ def choose_strategy(tier: EnergyTier | None, config: HeartbeatConfig) -> ReplySt
         message_limit=min(config.low_message_limit, full),
         length_limit=ReplyLength.SHORT,
     )
+
+
+def judge_allowed(tier: EnergyTier | None) -> bool:
+    """这个档位该不该调用判断器官：正常、节省、不限和没有读数调用，低电量和透支保护不调用。
+
+    Args:
+        tier: 此刻的精力档位；None（没有身体、还没读到）按正常档处理。
+    """
+    return tier is None or tier in _JUDGE_TIERS

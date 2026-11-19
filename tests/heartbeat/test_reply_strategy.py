@@ -6,7 +6,7 @@ import pytest
 
 from aureus.body import EnergyTier
 from aureus.common import HeartbeatConfig
-from aureus.heartbeat import ReplyLength, choose_strategy
+from aureus.heartbeat import ReplyLength, choose_strategy, judge_allowed
 from aureus.organs import ModelPreference
 
 
@@ -90,3 +90,29 @@ def test_metadata_is_plain_json() -> None:
     }
     json.dumps(metadata, ensure_ascii=False)
     assert choose_strategy(None, HeartbeatConfig()).to_metadata()["energy_tier"] is None
+
+
+@pytest.mark.parametrize(
+    ("tier", "expected"),
+    [
+        (None, True),  # 没有身体读数按正常档处理
+        (EnergyTier.UNLIMITED, True),
+        (EnergyTier.NORMAL, True),
+        (EnergyTier.SAVING, True),
+        (EnergyTier.LOW, False),
+        (EnergyTier.OVERDRAFT, False),
+    ],
+)
+def test_judge_is_only_called_on_tiers_with_enough_energy(
+    tier: EnergyTier | None, expected: bool
+) -> None:
+    assert judge_allowed(tier) is expected
+
+
+def test_every_tier_has_an_explicit_judge_decision() -> None:
+    # 新增档位时这里会提醒：要想清楚判断器官在新档位上调不调用。
+    assert {tier for tier in EnergyTier if judge_allowed(tier)} == {
+        EnergyTier.UNLIMITED,
+        EnergyTier.NORMAL,
+        EnergyTier.SAVING,
+    }
