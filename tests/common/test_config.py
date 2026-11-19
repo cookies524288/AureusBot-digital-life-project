@@ -9,6 +9,7 @@ from aureus.common import (
     AureusPaths,
     BodyConfig,
     ConfigError,
+    FeedbackConfig,
     HeartbeatConfig,
     SafetyConfig,
     TimeConfig,
@@ -374,12 +375,25 @@ def test_web_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert web.session_days == 7  # D63 第 7 条
 
 
+def section_lines(lines: list[str], section: str) -> list[str]:
+    """模板里某一小节（从 [名字] 到下一个 [ 开头的行之前）的行。
+
+    不同小节可以有同名字段（比如 [web] 和 [feedback] 都有 enabled），
+    对照默认值时只能看自己那一节，免得数到别的节里的同名行。
+    """
+    header = f"[{section}]"
+    start = lines.index(header) + 1
+    end = next((i for i in range(start, len(lines)) if lines[i].startswith("[")), len(lines))
+    return lines[start:end]
+
+
 def test_web_example_values_equal_the_defaults(tmp_path: Path) -> None:
     example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
     prefixes = tuple(f"# {name} =" for name in WEB_FIELDS)
     lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "web")
+    assert sum(line.startswith(prefixes) for line in mine) == len(WEB_FIELDS)
     uncommented = [line.removeprefix("# ") if line.startswith(prefixes) else line for line in lines]
-    assert sum(line.startswith(prefixes) for line in lines) == len(WEB_FIELDS)
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, "\n".join(uncommented))
     assert load_runtime_config(paths).web == WebConfig()
@@ -477,3 +491,63 @@ def test_load_settings_combines_paths_and_runtime(tmp_path: Path) -> None:
     settings = load_settings(paths)
     assert settings.paths == paths
     assert settings.runtime.log_level == "WARNING"
+
+
+# ---------- [feedback] 反馈配置（D67） ----------
+
+FEEDBACK_FIELDS = tuple(FeedbackConfig.model_fields)
+
+
+def test_feedback_defaults_follow_d67(tmp_path: Path) -> None:
+    feedback = load_runtime_config(AureusPaths(tmp_path)).feedback
+    assert feedback == FeedbackConfig()
+    assert feedback.enabled is True
+    assert (feedback.window_size, feedback.min_samples) == (50, 10)
+
+
+def test_feedback_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in FEEDBACK_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "feedback")
+    assert sum(line.startswith(prefixes) for line in mine) == len(FEEDBACK_FIELDS)
+    # 只取消 [feedback] 这一节里的注释：别的小节也有 enabled，不能一起取消。
+    start = lines.index("[feedback]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "\n".join(lines))
+    assert load_runtime_config(paths).feedback == FeedbackConfig()
+
+
+def test_feedback_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[feedback]\nenabled = false\nwindow_size = 20\nmin_samples = 5\n")
+    feedback = load_runtime_config(paths).feedback
+    assert feedback.enabled is False
+    assert (feedback.window_size, feedback.min_samples) == (20, 5)
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("window_size", "0"),
+        ("window_size", "-1"),
+        ("window_size", "50.5"),  # 次数必须是整数
+        ("window_size", '"50"'),
+        ("min_samples", "0"),
+        ("min_samples", "true"),
+        ("enabled", "1"),  # 数字 1 不是 true
+    ],
+)
+def test_feedback_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[feedback]\n{field} = {text}\n")
+    assert field in error_message_of(paths)
+
+
+def test_feedback_min_samples_cannot_exceed_the_window(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[feedback]\nwindow_size = 5\nmin_samples = 6\n")
+    assert "min_samples" in error_message_of(paths)

@@ -153,3 +153,14 @@ log_level = "INFO"
 # login_window_seconds = 300
 # 锁定多久（秒）。
 # login_lockout_seconds = 900
+
+# 反馈（设计见 docs/10-decisions.md 的 D67）：做事前记下预期，做完记结果，
+# 用真实成功率算「自信」；它说「有几成把握」时，数字来自这里。下面的值都是默认值。
+[feedback]
+# 反馈的总开关。关掉后不记预期和结果，其余行为不受影响。
+# enabled = true
+# 自信取每个类别最近多少次有结果的行动，结果未知的不算。至少 1。
+# window_size = 50
+# 有结果的次数少于这么多时，自信和先验 0.5 按样本数混合，并标「样本不足」。
+# 至少 1，不能大于 window_size。
+# min_samples = 10

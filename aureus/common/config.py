@@ -218,6 +218,26 @@ class WebConfig(BaseModel):
     login_lockout_seconds: int = Field(default=900, ge=1)
 
 
+class FeedbackConfig(BaseModel):
+    """反馈的配置（aureus.toml 的 [feedback]，设计见 docs/10-decisions.md 的 D67）。"""
+
+    # 严格类型，理由同 SafetyConfig：窗口写成字符串或小数要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 反馈的总开关（D5）；关掉后不记预期和结果，行为不受影响。
+    enabled: bool = True
+    # 自信取每个类别最近多少次有结果的行动（结果未知的不计入）。
+    window_size: int = Field(default=50, ge=1)
+    # 有结果的次数少于这么多时，自信与先验 0.5 按样本数加权混合，并标「样本不足」。
+    min_samples: int = Field(default=10, ge=1)
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> Self:
+        if self.min_samples > self.window_size:
+            raise ValueError("min_samples 不能大于 window_size，否则样本永远不够")
+        return self
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -237,6 +257,7 @@ class RuntimeConfig(BaseModel):
     time: TimeConfig = Field(default_factory=TimeConfig)
     snapshots: SnapshotsConfig = Field(default_factory=SnapshotsConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod
