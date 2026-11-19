@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from aureus.body import BodySample, sample_of
 from aureus.common.clock import ensure_aware
+from aureus.heartbeat.events import EVENT_HORMONE_TRIGGERED
 from aureus.identity.history import IdentityLayer, IdentityVersion, VersionSource
 
 # 和账本、样本表一致：带微秒的 UTC，字符串比较大小就等于比较时间。
@@ -119,6 +121,26 @@ class MonitorReader:
             )
             for row in reversed(rows)
         ]
+
+    def hormone_trigger_records(self, since: datetime, limit: int = 500) -> list[dict[str, object]]:
+        """从某个时刻起（含）的 hormone_triggered 记录的 metadata，从旧到新。
+
+        读不出 JSON 或不是字典的记录跳过，不报错（观察台只读，不修数据）。
+        """
+        rows = self._rows(
+            "SELECT metadata FROM timeline WHERE event_type = ? AND timestamp >= ? "
+            "ORDER BY id ASC LIMIT ?",
+            (EVENT_HORMONE_TRIGGERED, _format(since), limit),
+        )
+        records: list[dict[str, object]] = []
+        for row in rows:
+            try:
+                decoded = json.loads(row["metadata"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(decoded, dict):
+                records.append(decoded)
+        return records
 
     def tokens_used(self, start: datetime, end: datetime) -> int:
         """起止之间（含起不含止）账本里的预算 token 之和（输入加输出）。

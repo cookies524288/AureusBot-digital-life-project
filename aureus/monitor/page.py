@@ -15,7 +15,9 @@ import streamlit as st
 from aureus.body import BodySample
 from aureus.common import AureusPaths, ConfigError, RuntimeConfig, SystemClock, load_runtime_config
 from aureus.common.time_format import format_local_time
+from aureus.hormones import HormoneKind
 from aureus.monitor import MonitorError, MonitorReader
+from aureus.monitor.hormone_curves import hormone_curves, lookback
 
 CURVE_HOURS = 24
 REFRESH_SECONDS = 10
@@ -65,6 +67,33 @@ def _show_curves(samples: list[BodySample]) -> None:
     st.line_chart(frame)
 
 
+HORMONE_NAMES = {
+    HormoneKind.ANGER: "怒气",
+    HormoneKind.JOY: "愉悦",
+    HormoneKind.HURT: "低落",
+    HormoneKind.SURPRISE: "惊讶",
+}
+
+
+def _show_hormones(reader: MonitorReader, runtime: RuntimeConfig) -> None:
+    if not runtime.hormones.enabled:
+        st.info("激素已关闭（[hormones] enabled = false）。")
+        return
+    end = SystemClock().now()
+    records = reader.hormone_trigger_records(end - lookback(CURVE_HOURS, runtime.hormones))
+    if not records:
+        st.info("还没有激素触发记录。")
+        return
+    moments, curves = hormone_curves(
+        records, end - timedelta(hours=CURVE_HOURS), end, runtime.hormones
+    )
+    frame = pd.DataFrame(
+        {HORMONE_NAMES[kind]: pd.Series(levels, dtype="float64") for kind, levels in curves.items()}
+    )
+    frame.index = pd.Index(moments, name="时间")
+    st.line_chart(frame)
+
+
 def _show_spending(reader: MonitorReader, runtime: RuntimeConfig) -> None:
     now = SystemClock().now()
     calendar = runtime.time.build_calendar()
@@ -82,6 +111,8 @@ def _show(reader: MonitorReader, runtime: RuntimeConfig) -> None:
     _show_latest(reader.latest_sample())
     since = SystemClock().now() - timedelta(hours=CURVE_HOURS)
     _show_curves(reader.samples_since(since))
+    st.subheader("激素")
+    _show_hormones(reader, runtime)
     st.subheader("花费")
     _show_spending(reader, runtime)
     st.subheader("最近的时间线")
