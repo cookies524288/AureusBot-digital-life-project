@@ -24,7 +24,7 @@ from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
-from aureus.heartbeat.body_summary import describe_body_state
+from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
     build_plan_prompt,
     build_reply_prompt,
@@ -926,7 +926,12 @@ class Heartbeat:
         )
 
     def _body_state_for_context(self, strategy: ReplyStrategy) -> str:
-        """放进系统上下文的身体状态摘要；没有读数或开关关着时是空字符串。"""
+        """放进系统上下文的身体状态摘要；没有读数或开关关着时是空字符串。
+
+        扮演模式下换成固定的提示词，没有任何真实读数（D65）。
+        """
+        if self._config.roleplay_mode:
+            return ROLEPLAY_NOTE
         if self._body is None or self._reading is None:
             return ""
         if not self._body.config.state_in_prompt_enabled:
@@ -935,6 +940,8 @@ class Heartbeat:
 
     def _downtime_for_context(self) -> Downtime | None:
         """放进系统上下文的停机情况。睡眠信号关掉后不告诉它睡了多久（04 号文档第 7 节）。"""
+        if self._config.roleplay_mode:
+            return None  # 扮演模式没有睡眠信号（D65）
         if self._body is not None and not self._body.config.sleep_enabled:
             return None
         return self._downtime

@@ -210,6 +210,16 @@ def test_heartbeat_example_values_equal_the_defaults(tmp_path: Path) -> None:
     assert load_runtime_config(paths).heartbeat == HeartbeatConfig()
 
 
+def test_roleplay_mode_is_off_by_default(tmp_path: Path) -> None:
+    assert load_runtime_config(AureusPaths(tmp_path)).heartbeat.roleplay_mode is False
+
+
+def test_roleplay_mode_can_be_turned_on_from_the_file(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[heartbeat]\nroleplay_mode = true\n")
+    assert load_runtime_config(paths).heartbeat.roleplay_mode is True
+
+
 def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, "[heartbeat]\ntick_interval_seconds = 5\n")
@@ -226,6 +236,8 @@ def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
         ("reply_organ", '""'),
         ("advance_biomodel", "1"),  # 数字 1 不是 true
         ("broadcast_cognitive_state", '"false"'),
+        ("roleplay_mode", "1"),  # 数字 1 不是 true
+        ("roleplay_mode", '"true"'),
         ("tick_interval_seconds", '"60"'),
         ("tick_interval_seconds", "true"),
     ],

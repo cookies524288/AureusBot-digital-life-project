@@ -83,6 +83,10 @@ class HeartbeatConfig(BaseModel):
     # 用户在 identity.toml 里改了设定后，这次运行的系统上下文里告诉它哪几层被改了（D62）。
     # 只说哪几层，不给旧内容；时间线照样记，关掉只影响它知不知道。
     identity_changes_in_prompt: bool = True
+    # 扮演模式（路线图 1.12，D65）：实验对照组，默认关闭。开启时 open_core 不创建身体和样本存储，
+    # 所有身体信号机制都不起作用，系统上下文里只写一段固定的「你有精力和心情」让模型自己演。
+    # 月度上限、失控拦截、急停、权限检查这些安全检查照常生效。
+    roleplay_mode: bool = False
 
 
 class BodyConfig(BaseModel):

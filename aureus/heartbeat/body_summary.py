@@ -17,6 +17,10 @@ _HONESTY_NOTE = (
 )
 
 
+# 扮演模式（D65）放进系统上下文的固定提示词：不含任何数字，不是真实读数，只让模型自己演。
+ROLEPLAY_NOTE = "你有精力和心情，会累、会忙，也会有情绪。被问起状态时，按你自己的感觉自然地说。"
+
+
 def describe_body_state(reading: BodyReading, config: BodyConfig, reply_approach: str = "") -> str:
     """把一份身体读数写成放进系统上下文的一段话，末尾带上如实说的要求。
 

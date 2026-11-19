@@ -163,12 +163,16 @@ def open_core(
         ledger.open()
         stack.callback(ledger.close)
         # 身体信号样本（D64）：启动时清掉超过保留期限的行；样本只是读数，不是经历。
-        samples = BodySampleStore(paths.database_file, the_clock)
-        samples.open()
-        stack.callback(samples.close)
-        removed = samples.prune(runtime.body.sample_retention_days)
-        if removed:
-            logger.info("清理了 {} 行过期的身体信号样本", removed)
+        # 扮演模式（D65）是对照组：不创建身体，也不记样本。
+        roleplay = runtime.heartbeat.roleplay_mode
+        samples: BodySampleStore | None = None
+        if not roleplay:
+            samples = BodySampleStore(paths.database_file, the_clock)
+            samples.open()
+            stack.callback(samples.close)
+            removed = samples.prune(runtime.body.sample_retention_days)
+            if removed:
+                logger.info("清理了 {} 行过期的身体信号样本", removed)
         people = _open_people(paths, the_clock, identity, stack)
 
         heartbeat_config = runtime.heartbeat
@@ -180,7 +184,13 @@ def open_core(
         emergency_stop = EmergencyStop(paths.halt_file, the_clock)
         permissions = PermissionChecker(emergency_stop)
         # 身体和账本用同一个日历，每日额度和每月上限的边界一致（D55、D56）。
-        body = Body(runtime.body, runtime.safety.monthly_token_limit, ledger, the_clock, calendar)
+        body: Body | None = None
+        if not roleplay:
+            body = Body(
+                runtime.body, runtime.safety.monthly_token_limit, ledger, the_clock, calendar
+            )
+        else:
+            logger.warning("扮演模式已开启：身体信号全部关闭，只在提示词里写「你有精力和心情」。")
         gateway = SafetyGateway(
             bus, ledger, timeline, the_clock, runtime.safety, permissions, energy_gate=body
         )
