@@ -182,6 +182,28 @@ class SnapshotsConfig(BaseModel):
     max_total_megabytes: int = Field(default=1024, ge=1)
 
 
+class WebConfig(BaseModel):
+    """网页通道的配置（aureus.toml 的 [web]，设计见 docs/10-decisions.md 的 D63、D53 第 5 条）。"""
+
+    # 严格类型，理由同 SafetyConfig：端口写成字符串要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 网页通道的总开关（D5）；关掉后 aureus chat 不启动网页服务。
+    enabled: bool = True
+    # 默认只监听本机 127.0.0.1；打开后监听局域网，手机才能用。
+    # 局域网里是不加密的 HTTP，同一 Wi-Fi 下有人抓包能看到内容（D53 第 5 条）。
+    allow_remote: bool = False
+    # 监听端口。默认值是随手挑的、不常被占用的端口，占用了可以改；
+    # 不许小于 1024：那一段在不少系统上需要管理员权限。
+    port: int = Field(default=8765, ge=1024, le=65535)
+    # 登录状态的有效天数，从最后一次活动算起，每次请求续期（D63 第 7 条）。
+    session_days: int = Field(default=7, ge=1)
+    # 登录失败限流（按 IP）：窗口内失败这么多次，就在锁定期内拒绝这个 IP 的登录（D63 第 7 条）。
+    login_max_failures: int = Field(default=5, ge=1)
+    login_window_seconds: int = Field(default=300, ge=1)
+    login_lockout_seconds: int = Field(default=900, ge=1)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -200,6 +222,7 @@ class RuntimeConfig(BaseModel):
     body: BodyConfig = Field(default_factory=BodyConfig)
     time: TimeConfig = Field(default_factory=TimeConfig)
     snapshots: SnapshotsConfig = Field(default_factory=SnapshotsConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod

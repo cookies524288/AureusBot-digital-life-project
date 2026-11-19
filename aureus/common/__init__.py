@@ -14,6 +14,7 @@ from aureus.common.config import (
     Settings,
     SnapshotsConfig,
     TimeConfig,
+    WebConfig,
     load_runtime_config,
     load_settings,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "SnapshotsConfig",
     "SystemClock",
     "TimeConfig",
+    "WebConfig",
     "configure_logging",
     "home_is_default",
     "load_runtime_config",

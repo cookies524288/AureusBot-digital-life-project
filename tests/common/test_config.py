@@ -12,6 +12,7 @@ from aureus.common import (
     HeartbeatConfig,
     SafetyConfig,
     TimeConfig,
+    WebConfig,
     load_runtime_config,
     load_settings,
 )
@@ -310,6 +311,74 @@ def test_old_biomodel_section_is_reported_as_unknown(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, "[biomodel]\nenergy_recovery_rate = 0.1\n")
     assert "biomodel" in error_message_of(paths)
+
+
+# ---------- [web] 网页通道配置（D63） ----------
+
+WEB_FIELDS = tuple(WebConfig.model_fields)
+
+
+def test_web_defaults_when_section_is_missing(tmp_path: Path) -> None:
+    web = load_runtime_config(AureusPaths(tmp_path)).web
+    assert web == WebConfig()
+    assert web.enabled is True
+    assert web.allow_remote is False  # 默认只监听本机（D53 第 5 条）
+    assert web.session_days == 7  # D63 第 7 条
+
+
+def test_web_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in WEB_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    uncommented = [line.removeprefix("# ") if line.startswith(prefixes) else line for line in lines]
+    assert sum(line.startswith(prefixes) for line in lines) == len(WEB_FIELDS)
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "\n".join(uncommented))
+    assert load_runtime_config(paths).web == WebConfig()
+
+
+def test_web_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[web]\nenabled = false\nallow_remote = true\nport = 9000\nsession_days = 3\n"
+        "login_max_failures = 2\nlogin_window_seconds = 60\nlogin_lockout_seconds = 120\n",
+    )
+    web = load_runtime_config(paths).web
+    assert (web.enabled, web.allow_remote, web.port, web.session_days) == (False, True, 9000, 3)
+    assert (web.login_max_failures, web.login_window_seconds) == (2, 60)
+    assert web.login_lockout_seconds == 120
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("port", "80"),  # 低端口在不少系统上要管理员权限
+        ("port", "1023"),
+        ("port", "65536"),
+        ("port", '"8765"'),  # 带引号的数字不是数字
+        ("port", "8765.0"),
+        ("allow_remote", "1"),  # 数字 1 不是 true：对外开放不能靠误写打开
+        ("allow_remote", '"true"'),
+        ("enabled", '"false"'),
+        ("session_days", "0"),
+        ("login_max_failures", "0"),
+        ("login_window_seconds", "-1"),
+        ("login_lockout_seconds", "0"),
+    ],
+)
+def test_web_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[web]\n{field} = {text}\n")
+    assert f"web.{field}" in error_message_of(paths)
+
+
+def test_web_unknown_field_is_reported(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[web]\nallow_remot = true\n")
+    message = error_message_of(paths)
+    assert "allow_remot" in message
+    assert "不认识" in message
 
 
 # ---------- 合在一起 ----------

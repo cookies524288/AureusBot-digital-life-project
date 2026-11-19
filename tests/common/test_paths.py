@@ -43,6 +43,7 @@ def test_all_paths_are_derived_from_home(tmp_path: Path) -> None:
     assert paths.runtime_config_file == tmp_path / "config" / "aureus.toml"
     assert paths.identity_file == tmp_path / "config" / "identity.toml"
     assert paths.env_file == tmp_path / ".env"
+    assert paths.web_password_file == tmp_path / "config" / "web_password.argon2"
     assert paths.database_file == tmp_path / "data" / "aureus.db"
     assert paths.log_dir == tmp_path / "data" / "logs"
     everything = (
@@ -71,6 +72,8 @@ def test_ensure_directories_creates_folders_but_no_files(tmp_path: Path) -> None
     assert not paths.database_file.exists()
     assert not paths.env_file.exists()
     assert not paths.runtime_config_file.exists()
+    # 没有口令文件就是默认口令状态（D63），初始化时不能替用户建出一个。
+    assert not paths.web_password_file.exists()
 
 
 def test_ensure_directories_is_repeatable_and_keeps_existing_files(tmp_path: Path) -> None:
