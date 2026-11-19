@@ -136,6 +136,16 @@ class BodyConfig(BaseModel):
     # 夜里定时拍的间隔；只会比白天慢，不会更快。有新消息时照样马上醒来。
     night_tick_interval_seconds: float = Field(default=300.0, ge=1)
 
+    # 身体信号样本（D64）：心跳每隔一段时间把当时的读数记一行，观察台画曲线靠它。
+    # 观察台是独立进程、只读数据库，看不到心跳内存，所以读数要先进数据库。
+    # 总开关关掉后不写样本，观察台显示「没有样本」。
+    sample_enabled: bool = True
+    # 两次记样本之间隔多少秒。
+    sample_interval_seconds: float = Field(default=60.0, ge=1)
+    # 样本留多少天，启动时清掉更早的行。样本只是读数、不是经历，
+    # 所以不受时间线只追加的规则约束（D64 第 2 条）。
+    sample_retention_days: int = Field(default=30, ge=1)
+
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:
         if not self.overdraft_below < self.low_below < self.saving_below:

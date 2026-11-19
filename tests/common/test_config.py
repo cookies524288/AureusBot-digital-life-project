@@ -273,6 +273,42 @@ def test_body_values_from_file_are_used(tmp_path: Path) -> None:
     assert body.user_reserve_fraction == 0.1
 
 
+def test_body_sample_defaults_follow_d64(tmp_path: Path) -> None:
+    body = load_runtime_config(AureusPaths(tmp_path)).body
+    assert body.sample_enabled is True
+    assert (body.sample_interval_seconds, body.sample_retention_days) == (60.0, 30)
+
+
+def test_body_sample_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[body]\nsample_enabled = false\nsample_interval_seconds = 5\nsample_retention_days = 7\n",
+    )
+    body = load_runtime_config(paths).body
+    assert body.sample_enabled is False
+    assert (body.sample_interval_seconds, body.sample_retention_days) == (5.0, 7)
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("sample_interval_seconds", "0"),
+        ("sample_interval_seconds", "0.5"),
+        ("sample_interval_seconds", "nan"),
+        ("sample_interval_seconds", '"60"'),
+        ("sample_retention_days", "0"),
+        ("sample_retention_days", "-1"),
+        ("sample_retention_days", "30.5"),  # 天数必须是整数
+        ("sample_enabled", "1"),  # 数字 1 不是 true
+    ],
+)
+def test_body_sample_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[body]\n{field} = {text}\n")
+    assert field in error_message_of(paths)
+
+
 @pytest.mark.parametrize(
     ("field", "text"),
     [
