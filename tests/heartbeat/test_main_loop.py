@@ -19,7 +19,6 @@ from aureus.common import (
     SafetyConfig,
 )
 from aureus.common import sqlite as sqlite_support
-from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
@@ -112,7 +111,6 @@ class Harness:
     clock: ManualClock
     timeline: TimelineDatabase
     organs: ScriptedOrgans
-    bio_state: BiologicalState
     heartbeat: Heartbeat
     emergency_stop: EmergencyStop
     sent: list[OutgoingMessage] = field(default_factory=list)
@@ -151,20 +149,18 @@ class Factory:
         timeline.open()
         self.timelines.append(timeline)
         organs = organs or ScriptedOrgans()
-        bio_state = BiologicalState(clock=clock)
         emergency_stop = EmergencyStop(self.database_file.with_name("halt.json"), clock)
         heartbeat = Heartbeat(
             clock=clock,
             timeline=timeline,
             organs=organs,
             identity=make_identity(),
-            bio_state=bio_state,
             config=HeartbeatConfig(**config),
             permissions=PermissionChecker(emergency_stop),
             emergency_stop=emergency_stop,
             timezone=CHINA,
         )
-        harness = Harness(clock, timeline, organs, bio_state, heartbeat, emergency_stop)
+        harness = Harness(clock, timeline, organs, heartbeat, emergency_stop)
         heartbeat.attach_channel(CHANNEL, harness.sent.append)
         return harness
 
@@ -240,7 +236,6 @@ async def test_the_request_carries_persona_wakeup_history_and_new_message(
 
     request = harness.organs.requests[-1]
     assert request.organ_id == "replyer"
-    assert request.bio_state is harness.bio_state
     assert "你是小绿。" in request.system_context
     assert "【表达风格】\n句子短。" in request.system_context
     assert "第一次醒来" in request.system_context
@@ -415,7 +410,6 @@ async def test_with_the_real_gateway_a_budget_rejection_reaches_the_user(
             timeline=timeline,
             organs=gateway,
             identity=make_identity(),
-            bio_state=BiologicalState(clock=factory.clock),
             config=HeartbeatConfig(),
             permissions=permissions,
             emergency_stop=emergency_stop,
@@ -480,112 +474,6 @@ async def test_broadcast_switch_turns_off_timeline_records(factory: Factory) -> 
 
     assert harness.records(EVENT_COGNITIVE_STATE) == []
     assert harness.heartbeat.cognitive_state is not None  # 内存里照样有
-
-
-# ---------- 生物模型开关（D41 第 2 条） ----------
-
-
-def body(state: BiologicalState) -> tuple[float, ...]:
-    hormones = state.hormones
-    return (hormones.dopamine, hormones.cortisol, hormones.serotonin, hormones.noradrenaline)
-
-
-class UpdateRecorder:
-    """代替 BiologicalState.update，记下每次推进了多少秒、到哪个时刻。"""
-
-    def __init__(self) -> None:
-        self.steps: list[float] = []
-        self.ends: list[datetime | None] = []
-
-    def __call__(self, dt: float, now: datetime | None = None) -> None:
-        self.steps.append(dt)
-        self.ends.append(now)
-
-
-async def test_biomodel_is_frozen_when_switched_off(factory: Factory) -> None:
-    harness = factory.make(advance_biomodel=False)
-    harness.heartbeat.wake_up()
-    before = body(harness.bio_state)
-
-    harness.clock.advance(timedelta(hours=2))
-    harness.heartbeat.beat()
-    await harness.exchange("在吗")  # 关着时谈话也不改任何激素（D42 第 8 条）
-
-    assert body(harness.bio_state) == before
-    assert "生物模型暂停中" in harness.heartbeat.describe_state()
-
-
-async def test_biomodel_advances_by_default(harness: Harness) -> None:
-    before = body(harness.bio_state)
-
-    harness.clock.advance(timedelta(hours=2))
-    harness.heartbeat.beat()
-
-    assert body(harness.bio_state) != before  # 激素随时间回到日周期的位置（D42）
-    assert "生物模型暂停中" not in harness.heartbeat.describe_state()
-
-
-async def test_a_conversation_does_not_touch_the_biomodel(harness: Harness) -> None:
-    # 社交需求和新奇感已经不在模型里（D53、D56）；谈话不改任何激素，时钟没走时一个数都不变。
-    before = body(harness.bio_state)
-
-    await harness.exchange("在吗")
-
-    assert len(harness.sent) == 1
-    assert body(harness.bio_state) == before
-
-
-async def test_heartbeat_timezone_drives_the_circadian_phase(factory: Factory) -> None:
-    harness = factory.make()
-    assert harness.bio_state.timezone is CHINA  # 生物状态没设时区时，用心跳的（D42 第 3 条）
-
-
-async def test_biomodel_advances_by_clock_time_when_enabled(
-    factory: Factory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness = factory.make(advance_biomodel=True)
-    recorder = UpdateRecorder()
-    steps = recorder.steps
-    monkeypatch.setattr(harness.bio_state, "update", recorder)
-    harness.heartbeat.wake_up()
-
-    harness.clock.advance(timedelta(seconds=90))
-    harness.heartbeat.beat()
-    harness.heartbeat.beat()  # 时间没走：不推进
-    harness.clock.advance(timedelta(minutes=5))
-    harness.heartbeat.beat()
-
-    assert steps == [90.0, 300.0]
-    assert recorder.ends[-1] == harness.clock.now()  # 按心跳量到的时刻推进，不各自读时钟
-
-
-async def test_biomodel_does_not_run_backwards_when_the_clock_jumps_back(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class SettableClock:
-        def __init__(self) -> None:
-            self.current = START
-
-        def now(self) -> datetime:
-            return self.current
-
-    clock = SettableClock()
-    made = Factory(tmp_path / "aureus.db")
-    try:
-        harness = made.make(clock=clock, advance_biomodel=True)
-        recorder = UpdateRecorder()
-        steps = recorder.steps
-        monkeypatch.setattr(harness.bio_state, "update", recorder)
-        harness.heartbeat.wake_up()
-
-        clock.current = START - timedelta(hours=1)
-        harness.heartbeat.beat()
-        clock.current = START - timedelta(minutes=59)
-        harness.heartbeat.beat()
-
-        assert steps == [60.0]  # 往回跳的那一拍不推进，之后从新的时间接着算
-    finally:
-        made.close()
 
 
 # ---------- 关闭与重启 ----------

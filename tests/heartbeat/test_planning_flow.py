@@ -13,7 +13,6 @@ import pytest
 
 from aureus.body import Body
 from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, ManualClock
-from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_MESSAGE,
     EVENT_REPLY_DECLINED,
@@ -146,7 +145,6 @@ def make_rig(
                 },
             }
         ),
-        bio_state=BiologicalState(clock=clock),
         config=HeartbeatConfig(**heartbeat),
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,

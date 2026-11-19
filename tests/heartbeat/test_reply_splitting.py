@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from aureus.common import HeartbeatConfig, ManualClock
-from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_MESSAGE,
     Heartbeat,
@@ -90,7 +89,6 @@ def make_rig(made: list[TimelineDatabase], tmp_path: Path, **config: Any) -> Rig
                 "persona": {"immutable": "温和。"},
             }
         ),
-        bio_state=BiologicalState(clock=clock),
         config=HeartbeatConfig(planning_enabled=False, **config),
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,

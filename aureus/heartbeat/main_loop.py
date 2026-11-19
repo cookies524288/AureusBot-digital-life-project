@@ -23,7 +23,7 @@ from typing import Any, Protocol
 from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import Clock, HeartbeatConfig, JudgeConfig
-from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
+from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
@@ -66,6 +66,7 @@ from aureus.hormones import (
     Hormones,
     HormoneTrigger,
     RetaliationMode,
+    kind_enabled,
     make_triggers_from_judgment,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
@@ -110,6 +111,8 @@ _STRESS_REARM_FRACTION = 0.5
 _CANCEL_WAIT_SECONDS = 5.0
 # 重启时最多读多少条激素触发记录；超过半衰期 8 倍的会被 Hormones 丢掉，这里只防读得太多。
 _HORMONE_RESTORE_LIMIT = 1000
+# /state 里激素的显示名（09 号文档术语表）。
+_HORMONE_NAMES = {"anger": "怒气", "joy": "愉悦", "hurt": "低落", "surprise": "惊讶"}
 
 
 class OrganCaller(Protocol):
@@ -222,7 +225,6 @@ class Heartbeat:
         timeline: TimelineDatabase,
         organs: OrganCaller,
         identity: Identity,
-        bio_state: BiologicalState,
         config: HeartbeatConfig,
         permissions: PermissionChecker,
         emergency_stop: EmergencyStop,
@@ -242,7 +244,6 @@ class Heartbeat:
             timeline: 时间线。
             organs: 调用器官用的对象，核心组装时传安全网关。
             identity: 身份事实和四层人设。
-            bio_state: 生物状态；心跳只在 advance_biomodel 打开时推进它。
             config: 心跳配置。
             permissions: 权限检查器，要和安全网关用同一个。
             emergency_stop: 急停开关，每拍读一次状态；要和权限检查器里的是同一个。
@@ -263,15 +264,11 @@ class Heartbeat:
         self._timeline = timeline
         self._organs = organs
         self._identity = identity
-        self._bio_state = bio_state
         self._config = config
         self._permissions = permissions
         self._emergency_stop = emergency_stop
         self._halt_status = HaltStatus(halted=False)  # 最近一拍看到的急停状态
         self._timezone = timezone
-        if bio_state.timezone is None:
-            # 给人看的时间和日周期用同一个时区，免得“早上 8 点”皮质醇却在深夜达到高峰。
-            bio_state.timezone = timezone
         self._body = body
         self._people = people
         self._identity_history = identity_history
@@ -293,7 +290,6 @@ class Heartbeat:
         self._wake = asyncio.Event()
         self._phase = _Phase.NOT_STARTED
         self._stop_requested = False
-        self._last_beat_at: datetime | None = None
         self._downtime: Downtime | None = None
         self._cognitive_state: CognitiveState | None = None
         self._last_broadcast: str | None = None
@@ -405,13 +401,12 @@ class Heartbeat:
             lines.append(f"{energy}，信心 {state.confidence_note}")
             lines.append(f"回复做法：{self._current_strategy().describe()}")
         lines.extend(self._describe_signals())
-        hormones = self._bio_state.hormones
-        lines.append(
-            f"多巴胺 {hormones.dopamine:.2f}，皮质醇 {hormones.cortisol:.2f}，"
-            f"血清素 {hormones.serotonin:.2f}，去甲肾上腺素 {hormones.noradrenaline:.2f}"
-        )
-        if not self._config.advance_biomodel:
-            lines.append("生物模型暂停中（advance_biomodel = false）：激素不随时间变化。")
+        levels = self._hormone_levels()
+        if levels is not None:
+            lines.append(
+                "激素："
+                + "，".join(f"{_HORMONE_NAMES[kind]} {level:.2f}" for kind, level in levels.items())
+            )
         if self._thought is not None:
             lines.append(f"正在想怎么回复 {len(self._thought.replying_to)} 条消息。")
         if self._halt_status.halted:
@@ -509,7 +504,6 @@ class Heartbeat:
         self._record_identity_changes()
         self._restore_hormones(now)
         self._downtime = downtime
-        self._last_beat_at = now
         self._phase = _Phase.RUNNING
         logger.info("心跳醒来：%s", downtime.describe(self._timezone))
         return downtime
@@ -578,7 +572,6 @@ class Heartbeat:
         """
         if self._phase is not _Phase.RUNNING:
             raise RuntimeError("心跳没有在运行，不能跳")
-        self._sense_body(self._clock.now())
         self._watch_emergency_stop()
         self._collect_finished_thought()
         self._take_in_perceptions()
@@ -633,17 +626,6 @@ class Heartbeat:
         logger.info("心跳已关闭：%s", reason)
 
     # ---------- 每一拍的步骤 ----------
-
-    def _sense_body(self, now: datetime) -> None:
-        """量身体：按两拍之间过去的时间推进生物模型（开关见 D41 第 2 条、D42 第 8 条）。"""
-        previous = self._last_beat_at
-        self._last_beat_at = now
-        if previous is None or not self._config.advance_biomodel:
-            return
-        elapsed_seconds = (now - previous).total_seconds()
-        # 时钟被往回调过时，经过的时间是负数，这一拍不推进，而不是让激素倒着走。
-        if elapsed_seconds > 0:
-            self._bio_state.update(elapsed_seconds, now=now)
 
     def _watch_emergency_stop(self) -> None:
         """读急停状态：变了就记进时间线；急停中就取消进行中的器官调用（D54）。"""
@@ -962,6 +944,18 @@ class Heartbeat:
         # 时钟往回调过时 waited 是负数：最多等 batch_seconds，不会无限等下去。
         return max(min(batch_seconds - waited, batch_seconds), 0.0)
 
+    def _hormone_levels(self) -> dict[str, float] | None:
+        """此刻各激素的浓度，键是激素名；激素没开时是 None。"""
+        hormones = self._hormones
+        if hormones is None:
+            return None
+        now = self._clock.now()
+        return {
+            kind.value: hormones.level(kind, now)
+            for kind in HormoneKind
+            if kind_enabled(kind, hormones.config)
+        }
+
     def _surprised(self) -> bool:
         """惊讶达到阈值了吗。"""
         hormones = self._hormones
@@ -988,7 +982,7 @@ class Heartbeat:
         if self._thought is not None:
             context = {"task_name": TASK_REPLYING, "focus_target": self._identity.user.name}
         energy = self._reading.energy if self._reading is not None else None
-        state = self._observer.observe(self._bio_state, context, energy)
+        state = self._observer.observe(context, energy, self._hormone_levels())
         self._cognitive_state = state
         if not self._config.broadcast_cognitive_state:
             return
@@ -1182,7 +1176,6 @@ class Heartbeat:
             prompt=build_judge_prompt(
                 job.judge_history, job.messages, job.user_name, self._timezone
             ),
-            bio_state=self._bio_state,
             context={"task": "judge", "in_reply_to": [record.id for record in job.messages]},
             purpose=CallPurpose.OPTIONAL,
             system_context=job.judge_context,
@@ -1310,7 +1303,6 @@ class Heartbeat:
         return OrganRequest(
             organ_id=organ_id,
             prompt=prompt,
-            bio_state=self._bio_state,
             context={"task": task, "in_reply_to": [record.id for record in job.messages]},
             purpose=CallPurpose.USER_REPLY,
             system_context=system_context,

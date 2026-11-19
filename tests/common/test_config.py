@@ -189,14 +189,17 @@ def test_safety_error_does_not_echo_unsafe_value(tmp_path: Path) -> None:
 
 # ---------- [heartbeat] 心跳配置（D41） ----------
 
-HEARTBEAT_FIELDS = tuple(HeartbeatConfig.model_fields)
+# advance_biomodel 已废弃（D69），示例配置里不再写它。
+HEARTBEAT_FIELDS = tuple(
+    name for name in HeartbeatConfig.model_fields if name != "advance_biomodel"
+)
 
 
 def test_heartbeat_defaults_when_section_is_missing(tmp_path: Path) -> None:
     heartbeat = load_runtime_config(AureusPaths(tmp_path)).heartbeat
     assert heartbeat == HeartbeatConfig()
     assert heartbeat.tick_interval_seconds == 60
-    assert heartbeat.advance_biomodel is True  # 0.9a 修好模型后默认开（D42 第 8 条）
+    assert heartbeat.advance_biomodel is None  # 已废弃，没写就是 None（D69 第 7 条）
     assert heartbeat.broadcast_cognitive_state is True
     assert heartbeat.reply_organ == "replyer"
 

@@ -55,9 +55,9 @@ class HeartbeatConfig(BaseModel):
     # 没有新消息时，隔多少真实秒跳一拍（02 号文档第 3 节“例如每分钟一次”）。
     # 不许小于 1 秒：写成 0.001 之类的数字，心跳就会空转、占满一个 CPU 核。
     tick_interval_seconds: float = Field(default=60.0, ge=1)
-    # 每拍是否让时间推进生物模型（激素随时间衰减）。0.9a 修好模型后默认开
-    # （D41 第 2 条、D42 第 8 条）；关掉后整个模型冻结，可以用来对照（D5）。
-    advance_biomodel: bool = True
+    # 已废弃（D69 第 7 条）：旧的四种神经递质模型已删，这个开关不再起作用。
+    # 写了它的旧配置照常启动，启动时警告一次；下个阶段删掉这个字段。None 表示没写。
+    advance_biomodel: bool | None = None
     # 每拍算出的认知状态是否在自述变化时写进时间线（D34、D41 第 4 条；D5 每个机制都能单独关）。
     broadcast_cognitive_state: bool = True
     # 关闭时最多等进行中的器官调用多少秒，等不到就取消（D41 第 6 条）。

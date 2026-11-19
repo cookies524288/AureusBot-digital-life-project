@@ -8,7 +8,6 @@ import pytest
 
 from aureus.body import Body
 from aureus.common import BodyConfig, HeartbeatConfig, HormonesConfig, JudgeConfig, ManualClock
-from aureus.core import BiologicalState
 from aureus.heartbeat import Heartbeat
 from aureus.hormones import HormoneKind, Hormones, HormoneTrigger
 from aureus.identity import Identity
@@ -100,7 +99,6 @@ class Env:
                     "persona": {"immutable": "温和。", "behavior_style": "少打断。"},
                 }
             ),
-            bio_state=BiologicalState(clock=self.clock),
             config=HeartbeatConfig(),
             permissions=PermissionChecker(stop),
             emergency_stop=stop,

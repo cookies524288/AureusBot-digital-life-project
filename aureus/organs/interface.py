@@ -5,10 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol
-
-if TYPE_CHECKING:
-    from aureus.core.biomodel import BiologicalState
+from typing import Any, Protocol
 
 
 class CallPurpose(StrEnum):
@@ -42,7 +39,6 @@ class OrganRequest:
 
     organ_id: str  # "replyer" / "planner" / "judge" / ...
     prompt: str  # 原始提示词
-    bio_state: BiologicalState  # 用于生成系统提示词修饰
     context: dict[str, Any] = field(default_factory=dict)  # 额外上下文
     # 调用方给的背景（身份、人设、现在几点、醒来信息），器官放在系统提示词最前面（D41 第 8 条）。
     system_context: str = ""

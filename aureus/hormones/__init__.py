@@ -7,6 +7,7 @@ from .effects import Conflict, HormoneEffects, RetaliationMode
 from .hormones import (
     HormoneKind,
     HormoneTrigger,
+    kind_enabled,
     level_at,
     make_triggers_from_feedback,
     make_triggers_from_judgment,
@@ -20,6 +21,7 @@ __all__ = [
     "HormoneTrigger",
     "Hormones",
     "RetaliationMode",
+    "kind_enabled",
     "level_at",
     "make_triggers_from_feedback",
     "make_triggers_from_judgment",

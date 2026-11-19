@@ -14,7 +14,6 @@ import pytest
 
 from aureus.body import Body
 from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, JudgeConfig, ManualClock
-from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_JUDGMENT,
     EVENT_MESSAGE,
@@ -151,7 +150,6 @@ def make_rig(
                 "persona": {"immutable": "温和。", "behavior_style": "少打断。"},
             }
         ),
-        bio_state=BiologicalState(clock=clock),
         config=HeartbeatConfig(),
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,

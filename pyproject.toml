@@ -84,7 +84,6 @@ convention = "google"       # docstring 用 Google 风格：Args / Returns / Rai
 # 时钟模块是整个项目里唯一允许读系统时间的地方（D26）。
 "aureus/common/clock.py" = ["TID251"]
 # 生物模型包含大量多行 docstring（技术性和科学性强），放宽格式要求
-"aureus/core/biomodel.py" = ["D205", "D212"]
 
 # 禁用清单：除时钟以外的代码不得直接读系统时间，一律用 Clock.now()（D15、D26）。
 # time.monotonic() 只量时长、不是 "几点"，所以不在清单里。

@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 from aureus.common import HeartbeatConfig, ManualClock
-from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_IDENTITY_CHANGED,
     EVENT_WOKE_UP,
@@ -67,7 +66,6 @@ class Rig:
             timeline=self.timeline,
             organs=self.organs,
             identity=identity,
-            bio_state=BiologicalState(clock=self.clock),
             config=HeartbeatConfig(planning_enabled=False, split_reply_enabled=False, **config),
             permissions=PermissionChecker(emergency_stop),
             emergency_stop=emergency_stop,

@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from aureus.common import HeartbeatConfig, ManualClock
-from aureus.core import BiologicalState
 from aureus.heartbeat import (
     EVENT_MESSAGE,
     Heartbeat,
@@ -121,7 +120,6 @@ def make_rig(made: list[Rig], tmp_path: Path, *, with_people: bool = True) -> Ri
                 "persona": {"immutable": "温和。"},
             }
         ),
-        bio_state=BiologicalState(clock=clock),
         config=HeartbeatConfig(planning_enabled=False, split_reply_enabled=False),
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,

@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 
 from aureus.common import BudgetCalendar, ManualClock, SafetyConfig
-from aureus.core import BiologicalState
 from aureus.organs import (
     CallAttempt,
     OrganBus,
@@ -102,7 +101,6 @@ class Harness:
     ledger: Ledger
     timeline: TimelineDatabase
     db_path: Path
-    bio_state: BiologicalState
     emergency_stop: EmergencyStop
 
     def build(self, config: SafetyConfig | None = None) -> SafetyGateway:
@@ -126,7 +124,7 @@ class Harness:
         return organ
 
     def request(self, organ_id: str = ORGAN) -> OrganRequest:
-        return OrganRequest(organ_id=organ_id, prompt="你好", bio_state=self.bio_state)
+        return OrganRequest(organ_id=organ_id, prompt="你好")
 
     def events(self, event_type: str) -> list[TimelineRecord]:
         return list(self.timeline.query(TimelineQuery(event_type=event_type)))
@@ -141,7 +139,7 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     ledger.open()
     timeline.open()
     stop = EmergencyStop(tmp_path / "halt.json", clock)
-    yield Harness(clock, OrganBus(), ledger, timeline, db_path, BiologicalState(clock=clock), stop)
+    yield Harness(clock, OrganBus(), ledger, timeline, db_path, stop)
     ledger.close()
     timeline.close()
 

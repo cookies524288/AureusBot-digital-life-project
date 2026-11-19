@@ -17,8 +17,6 @@ from typing import Any, Self
 from loguru import logger
 
 from aureus.common.config import ConfigError
-from aureus.core.biomodel import BiologicalState
-from aureus.core.cognitive_layer import CognitiveObserver
 from aureus.organs.api_keys import KeyResolver
 from aureus.organs.interface import (
     CallAttempt,
@@ -181,28 +179,8 @@ def _load_litellm_completion() -> CompletionFunction:
     return _import_litellm().acompletion
 
 
-def build_system_prompt(bio_state: BiologicalState) -> str:
-    """把身体状态翻译成系统提示词（只读，不改状态）。
-
-    Args:
-        bio_state: 当前的生物状态。
-
-    Returns:
-        系统提示词：几句话描述真实的精力、激素和情绪。
-    """
-    described = "".join(
-        sentence
-        for sentence in (
-            CognitiveObserver.system_prompt_modifier(bio_state),
-            bio_state.compute_emotion().system_prompt_modifier(),
-        )
-        if sentence
-    )
-    return (
-        "下面是你此刻真实的身体和情绪状态，由生物模型算出，不是设定：\n"
-        f"{described}\n"
-        "让语气和回复的长短自然地体现这些状态，不要编造这里没写到的身体感受。"
-    )
+# 调用方没给背景时的系统提示词：有些服务商不收空的系统消息。
+_EMPTY_SYSTEM_MESSAGE = "你是 Aureus 的一个器官，按用户消息里的要求回答。"
 
 
 def order_routes[T](routes: Sequence[T], preference: ModelPreference) -> list[T]:
@@ -230,10 +208,12 @@ def order_routes[T](routes: Sequence[T], preference: ModelPreference) -> list[T]
 
 
 def _system_message(request: OrganRequest) -> str:
-    """系统提示词：调用方给的背景在前，身体状态在后（D41 第 8 条）。"""
-    body = build_system_prompt(request.bio_state)
-    background = request.system_context.strip()
-    return f"{background}\n\n{body}" if background else body
+    """系统提示词：只有调用方给的背景（D41 第 8 条）。
+
+    身体和激素的状态由调用方以事实摘要写进背景里（D69）；这里不再另外编「你心情愉快」
+    这类没有来源的话（D66 第 2 条）。
+    """
+    return request.system_context.strip() or _EMPTY_SYSTEM_MESSAGE
 
 
 class LLMOrgan:

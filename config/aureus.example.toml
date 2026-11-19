@@ -31,9 +31,6 @@ log_level = "INFO"
 [heartbeat]
 # 没有新消息时，隔多少秒跳一拍。不能小于 1。
 # tick_interval_seconds = 60
-# 是否让时间推进生物模型（四种激素随时间衰减、皮质醇跟着昼夜变）。
-# 关掉后它们都停在原来的值。
-# advance_biomodel = true
 # 它对自己状态的描述变了时，是否记进时间线（只有它自己可见）。
 # broadcast_cognitive_state = true
 # 关闭时最多等进行中的模型调用多少秒，等不到就取消。

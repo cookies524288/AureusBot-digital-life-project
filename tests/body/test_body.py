@@ -17,7 +17,6 @@ import pytest
 
 from aureus.body import UNLIMITED_READING, Body, EnergyTier
 from aureus.common import BodyConfig, BudgetCalendar, ManualClock, SafetyConfig
-from aureus.core import BiologicalState
 from aureus.organs import (
     CallAttempt,
     CallPurpose,
@@ -65,7 +64,6 @@ class Rig:
     ledger: Ledger
     timeline: TimelineDatabase
     db_path: Path
-    bio_state: BiologicalState
     organ: TokenOrgan
     stop: EmergencyStop
     bus: OrganBus
@@ -88,9 +86,7 @@ class Rig:
         )
 
     def request(self, purpose: CallPurpose = CallPurpose.OPTIONAL) -> OrganRequest:
-        return OrganRequest(
-            organ_id=ORGAN, prompt="你好", bio_state=self.bio_state, purpose=purpose
-        )
+        return OrganRequest(organ_id=ORGAN, prompt="你好", purpose=purpose)
 
     def go_to(self, moment: datetime) -> None:
         self.clock.advance(moment - self.clock.now())
@@ -113,7 +109,7 @@ def rig(tmp_path: Path) -> Iterator[Rig]:
     bus = OrganBus()
     bus.register(organ)
     yield Rig(
-        clock, ledger, timeline, db_path, BiologicalState(clock=clock), organ,
+        clock, ledger, timeline, db_path, organ,
         EmergencyStop(tmp_path / "halt.json", clock), bus,
     )  # fmt: skip
     ledger.close()
@@ -199,7 +195,7 @@ def test_the_gate_lets_everything_through_when_unlimited(rig: Rig) -> None:
 
 def test_the_default_purpose_is_optional() -> None:
     # 忘了标用途时按可选处理，不确定就朝省的方向倒（04 号文档第 4 节）。
-    request = OrganRequest(organ_id=ORGAN, prompt="x", bio_state=BiologicalState())
+    request = OrganRequest(organ_id=ORGAN, prompt="x")
     assert request.purpose is CallPurpose.OPTIONAL
 
 

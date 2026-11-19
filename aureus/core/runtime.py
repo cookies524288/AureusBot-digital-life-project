@@ -29,7 +29,6 @@ from aureus.common import (
     shutdown_logging,
 )
 from aureus.common.vault import SecretVault
-from aureus.core.biomodel import BiologicalState
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat
@@ -185,6 +184,11 @@ def open_core(
             stack.callback(feedback.close)
 
         heartbeat_config = runtime.heartbeat
+        if heartbeat_config.advance_biomodel is not None:
+            logger.warning(
+                "配置里的 [heartbeat] advance_biomodel 已不起作用（旧的生物模型在 D69 删除），"
+                "请从配置里删掉它"
+            )
         if fake_organs and heartbeat_config.planning_enabled:
             # 假器官只有回复器：试运行和测试时不规划，每次一次调用。
             heartbeat_config = heartbeat_config.model_copy(update={"planning_enabled": False})
@@ -205,14 +209,11 @@ def open_core(
         )
         # 激素（D69）：关掉开关或扮演模式（D65，对照组只有提示词）时不创建。
         hormones = Hormones(runtime.hormones) if runtime.hormones.enabled and not roleplay else None
-        # 生物状态的时区不用传：心跳会把自己的时区填给它（D42 第 3 条）。
-        bio_state = BiologicalState(clock=the_clock)
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
             organs=gateway,
             identity=identity,
-            bio_state=bio_state,
             config=heartbeat_config,
             timezone=calendar.timezone,
             permissions=permissions,
