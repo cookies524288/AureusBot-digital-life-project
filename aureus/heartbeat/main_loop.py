@@ -24,6 +24,7 @@ from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
+from aureus.feedback import FeedbackStore
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
     build_plan_prompt,
@@ -178,6 +179,7 @@ class Heartbeat:
         people: PeopleDirectory | None = None,
         identity_history: IdentityHistory | None = None,
         samples: BodySampleStore | None = None,
+        feedback: FeedbackStore | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -199,6 +201,7 @@ class Heartbeat:
                 哪几层设定（D62）。不给就不记。
             samples: 身体信号样本存储，要已经打开；心跳按 [body] sample_interval_seconds
                 定时记一行读数，观察台画曲线靠它（D64）。不给就不记样本。
+            feedback: 反馈存储，要已经打开；认知状态里的信心读它（D67）。不给就显示没有数据。
         """
         self._clock = clock
         self._timeline = timeline
@@ -223,7 +226,7 @@ class Heartbeat:
         self._reading: BodyReading | None = None  # 最近一次读到的身体信号
         self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
         self._last_user_contact: Perception | None = None  # 自检通知发往的地方
-        self._observer = CognitiveObserver(clock)
+        self._observer = CognitiveObserver(clock, feedback)
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）

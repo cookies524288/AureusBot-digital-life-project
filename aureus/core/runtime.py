@@ -1,7 +1,7 @@
 """核心组装 core：启动和关闭流程（路线图 0.10，启动顺序见 15 号文档 7.6 节）。
 
 顺序：读配置 → 解锁密钥库 → 设置日志 → 明文密钥警告 → 单实例锁 → 读身份 →
-打开时间线、身份版本历史（和 identity.toml 对一遍）、账本、人物档案 →
+打开时间线、身份版本历史（和 identity.toml 对一遍）、账本、人物档案、反馈 →
 注册器官、建安全网关 → 建生物状态和心跳。关闭时倒着来。
 
 本模块没有放进 aureus.core 的 __init__ 导出：它要用心跳，心跳又要用 core 的生物模型，
@@ -31,6 +31,7 @@ from aureus.common import (
 from aureus.common.vault import SecretVault
 from aureus.core.biomodel import BiologicalState
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
+from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
@@ -54,6 +55,7 @@ class Core:
     heartbeat: Heartbeat
     people: PeopleDirectory
     identity_history: IdentityHistory
+    feedback: FeedbackStore | None = None  # [feedback] enabled 关闭时为 None
 
 
 def _open_people(
@@ -174,6 +176,12 @@ def open_core(
             if removed:
                 logger.info("清理了 {} 行过期的身体信号样本", removed)
         people = _open_people(paths, the_clock, identity, stack)
+        # 反馈（D67）：关掉时不创建，认知状态的信心显示没有数据，其它行为不变。
+        feedback: FeedbackStore | None = None
+        if runtime.feedback.enabled:
+            feedback = FeedbackStore(paths.database_file, runtime.feedback, the_clock)
+            feedback.open()
+            stack.callback(feedback.close)
 
         heartbeat_config = runtime.heartbeat
         if fake_organs and heartbeat_config.planning_enabled:
@@ -210,6 +218,7 @@ def open_core(
             people=people,
             identity_history=identity_history,
             samples=samples,
+            feedback=feedback,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
@@ -224,4 +233,5 @@ def open_core(
             heartbeat,
             people,
             identity_history,
+            feedback,
         )
