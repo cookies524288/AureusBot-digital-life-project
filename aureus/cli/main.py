@@ -16,19 +16,21 @@ from aureus.cli.inspect_commands import (
     run_usage_command,
 )
 from aureus.cli.keys_command import EXIT_FAILURE, ReadSecret, key_name_argument, run_keys_command
+from aureus.cli.persona_command import DEFAULT_PERSONA_LIMIT, run_persona_command
 from aureus.cli.portability_commands import (
     archive_argument,
     run_export_command,
     run_import_command,
 )
 from aureus.common.paths import AureusPaths, HomePathError, home_is_default, resolve_home
+from aureus.identity import IdentityLayer
 
 
 def build_parser() -> argparse.ArgumentParser:
     """创建命令行参数解析器。
 
     Returns:
-        解析器。命令有 init、chat、timeline、usage、halt、resume、export、import 和 keys，
+        解析器。命令有 init、chat、timeline、usage、persona、halt、resume、export、import 和 keys，
         用法见各个 --help。
     """
     parser = argparse.ArgumentParser(prog="aureus", description="Aureus 命令行。")
@@ -57,6 +59,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--event-type", metavar="事件类型", help="只看这种事件，比如 message、woke_up"
     )
     commands.add_parser("usage", help="查看本月的模型用量和费用（只读）")
+    persona = commands.add_parser("persona", help="查看身份和人设的历史版本（只读）")
+    persona.add_argument(
+        "--layer",
+        choices=[layer.value for layer in IdentityLayer],
+        help="只看这一层："
+        + "、".join(f"{layer.value}（{layer.describe()}）" for layer in IdentityLayer),
+    )
+    persona.add_argument(
+        "--limit",
+        type=positive_int,
+        default=DEFAULT_PERSONA_LIMIT,
+        metavar="个数",
+        help=f"最多显示几个版本，默认 {DEFAULT_PERSONA_LIMIT}",
+    )
+    persona.add_argument("--full", action="store_true", help="显示完整内容，不截断")
     halt = commands.add_parser(
         "halt", help="急停：它不再调用模型、不再回复，消息照常记录（运行中的实例下一拍生效）"
     )
@@ -137,6 +154,8 @@ def main(
         return run_timeline_command(args, paths)
     if args.command == "usage":
         return run_usage_command(paths)
+    if args.command == "persona":
+        return run_persona_command(args, paths)
     if args.command == "halt":
         return run_halt_command(args, paths)
     if args.command == "resume":

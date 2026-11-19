@@ -13,8 +13,8 @@ from aureus.common import AureusPaths, ConfigError, ManualClock, shutdown_loggin
 from aureus.common.logging_setup import LOG_FILE_NAME
 from aureus.common.vault import VaultError
 from aureus.core.runtime import open_core
-from aureus.heartbeat import EVENT_SHUT_DOWN, EVENT_WOKE_UP
-from aureus.identity import IdentityFileNotFoundError, SingleInstanceLockError
+from aureus.heartbeat import EVENT_IDENTITY_CHANGED, EVENT_SHUT_DOWN, EVENT_WOKE_UP
+from aureus.identity import IdentityFileNotFoundError, IdentityLayer, SingleInstanceLockError
 from aureus.timeline import TimelineQuery
 
 START = datetime(2026, 11, 17, 8, 0, tzinfo=UTC)
@@ -195,3 +195,23 @@ def test_an_account_owned_by_someone_else_stops_startup(paths: AureusPaths) -> N
         open_core(paths, fake_organs=True, to_console=False),
     ):
         pass
+
+
+@pytest.mark.asyncio
+async def test_editing_the_persona_is_remembered_across_restarts(paths: AureusPaths) -> None:
+    """路线图 1.9 的验收：改配置后重启，时间线有「用户修改了我的设定」，历史能看到旧版本。"""
+    with_style = IDENTITY + 'expression_style = "句子短。"\n'
+    paths.identity_file.write_text(with_style, encoding="utf-8")
+    with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
+        core.heartbeat.wake_up()
+        await core.heartbeat.shut_down()
+
+    paths.identity_file.write_text(with_style.replace("句子短。", "多用语气词。"), encoding="utf-8")
+    with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
+        assert core.identity.persona.expression_style == "多用语气词。"
+        core.heartbeat.wake_up()
+        changes = core.timeline.query(TimelineQuery(event_type=EVENT_IDENTITY_CHANGED))
+        old = core.identity_history.versions(IdentityLayer.EXPRESSION_STYLE, limit=10)
+
+    assert [record.content for record in changes] == ["用户修改了我的设定：表达风格。"]
+    assert [version.content for version in old] == ["句子短。", "多用语气词。"]

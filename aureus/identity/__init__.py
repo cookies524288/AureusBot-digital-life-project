@@ -3,6 +3,14 @@
 提供身份配置读取和单实例锁。
 """
 
+from .history import (
+    PERSONA_LAYERS,
+    IdentityHistory,
+    IdentityHistoryError,
+    IdentityLayer,
+    IdentityVersion,
+    VersionSource,
+)
 from .models import (
     Facts,
     Identity,
@@ -20,15 +28,21 @@ from .service import (
 )
 
 __all__ = [
+    "PERSONA_LAYERS",
     "Facts",
     "Identity",
     "IdentityError",
     "IdentityFileNotFoundError",
+    "IdentityHistory",
+    "IdentityHistoryError",
+    "IdentityLayer",
     "IdentityService",
     "IdentityValidationError",
+    "IdentityVersion",
     "Persona",
     "PersonaLocks",
     "SingleInstanceLockError",
     "User",
     "UserAccount",
+    "VersionSource",
 ]

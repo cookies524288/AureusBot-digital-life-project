@@ -35,6 +35,7 @@ from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
     EVENT_EMERGENCY_STOP,
+    EVENT_IDENTITY_CHANGED,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_REPLY_DECLINED,
@@ -53,7 +54,7 @@ from aureus.heartbeat.planning import Plan, parse_plan
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
-from aureus.identity import Identity
+from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory, Person
 from aureus.safety import (
@@ -175,6 +176,7 @@ class Heartbeat:
         timezone: tzinfo | None = None,
         body: Body | None = None,
         people: PeopleDirectory | None = None,
+        identity_history: IdentityHistory | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -192,6 +194,8 @@ class Heartbeat:
             body: 身体，提供精力读数；不给时精力记为「不限」。
             people: 人物档案，收感知时按（通道, 账号）认人；
                 不给就不认人，只按通道给的可信度分用户和别人。
+            identity_history: 身份的版本历史，要已经和 identity.toml 对过；醒来时据此记下用户改了
+                哪几层设定（D62）。不给就不记。
         """
         self._clock = clock
         self._timeline = timeline
@@ -208,6 +212,8 @@ class Heartbeat:
             bio_state.timezone = timezone
         self._body = body
         self._people = people
+        self._identity_history = identity_history
+        self._identity_changes: list[IdentityLayer] = []  # 这次醒来前用户改了哪几层
         self._reading: BodyReading | None = None  # 最近一次读到的身体信号
         self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
         self._last_user_contact: Perception | None = None  # 自检通知发往的地方
@@ -388,11 +394,56 @@ class Heartbeat:
             visibility=VisibilityScope.PRIVATE,
             metadata=downtime.to_metadata(),
         )
+        # 写在 woke_up 之后：停机时长看的是醒来前的最后一条记录，不能被这条挡住。
+        self._record_identity_changes()
         self._downtime = downtime
         self._last_beat_at = now
         self._phase = _Phase.RUNNING
         logger.info("心跳醒来：%s", downtime.describe(self._timezone))
         return downtime
+
+    def _record_identity_changes(self) -> None:
+        """醒来时：用户在 identity.toml 里改过设定的话，记一条「用户修改了我的设定」（D62）。
+
+        从上一条这种记录写下的版本号之后找新的用户修改，所以每次修改只记一次；
+        上次改完没来得及记就停了机，这次醒来也会补上。
+        """
+        if self._identity_history is None:
+            return
+        changes = self._identity_history.user_changes_after(self._announced_version())
+        if not changes:
+            return
+        layers = list(dict.fromkeys(change.layer for change in changes))
+        names = "、".join(layer.describe() for layer in layers)
+        self._timeline.append(
+            event_type=EVENT_IDENTITY_CHANGED,
+            content=f"用户修改了我的设定：{names}。",
+            actor_type=ActorType.USER,
+            visibility=VisibilityScope.PRIVATE,
+            metadata={
+                "layers": [layer.value for layer in layers],
+                "version_ids": [change.id for change in changes],
+                "up_to_version_id": changes[-1].id,
+            },
+        )
+        self._identity_changes = layers
+        logger.info("用户修改了设定：%s", names)
+
+    def _announced_version(self) -> int:
+        """上一条「用户修改了我的设定」记到了哪个版本；没有、或者读不懂时是 0。
+
+        读不懂时从头找：最多把以前的修改再说一遍，不会漏掉。
+        """
+        latest = self._timeline.query(
+            TimelineQuery(event_type=EVENT_IDENTITY_CHANGED, limit=1, latest=True)
+        )
+        if not latest:
+            return 0
+        value = latest[0].metadata.get("up_to_version_id")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        logger.warning("上一条设定修改记录里的版本号读不懂，从头找用户的修改")
+        return 0
 
     def beat(self) -> None:
         """跳一拍。只做很短的同步操作；要在事件循环里调用（会创建后台任务）。
@@ -762,6 +813,11 @@ class Heartbeat:
         body_state = self._body_state_for_context(strategy)
         now = self._clock.now()
         downtime = self._downtime_for_context()
+        identity_changes = (
+            [layer.describe() for layer in self._identity_changes]
+            if self._config.identity_changes_in_prompt
+            else []
+        )
 
         def context(*, include_behavior_style: bool) -> str:
             return build_system_context(
@@ -772,6 +828,7 @@ class Heartbeat:
                 body_state,
                 include_behavior_style=include_behavior_style,
                 contact_account=contact_account,
+                identity_changes=identity_changes,
             )
 
         return _ReplyJob(

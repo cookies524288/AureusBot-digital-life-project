@@ -80,6 +80,9 @@ class HeartbeatConfig(BaseModel):
     max_reply_messages: int = Field(default=4, ge=1)
     # 一条至少多少个字；更短的句子并进相邻的一句。
     min_message_chars: int = Field(default=4, ge=1)
+    # 用户在 identity.toml 里改了设定后，这次运行的系统上下文里告诉它哪几层被改了（D62）。
+    # 只说哪几层，不给旧内容；时间线照样记，关掉只影响它知不知道。
+    identity_changes_in_prompt: bool = True
 
 
 class BodyConfig(BaseModel):

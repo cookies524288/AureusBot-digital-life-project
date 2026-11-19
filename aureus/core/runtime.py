@@ -1,7 +1,8 @@
 """核心组装 core：启动和关闭流程（路线图 0.10，启动顺序见 15 号文档 7.6 节）。
 
 顺序：读配置 → 解锁密钥库 → 设置日志 → 明文密钥警告 → 单实例锁 → 读身份 →
-打开时间线和账本 → 注册器官、建安全网关 → 建生物状态和心跳。关闭时倒着来。
+打开时间线、身份版本历史（和 identity.toml 对一遍）、账本、人物档案 →
+注册器官、建安全网关 → 建生物状态和心跳。关闭时倒着来。
 
 本模块没有放进 aureus.core 的 __init__ 导出：它要用心跳，心跳又要用 core 的生物模型，
 导出会造成循环导入。要用时写 `from aureus.core.runtime import open_core`。
@@ -31,7 +32,7 @@ from aureus.common.vault import SecretVault
 from aureus.core.biomodel import BiologicalState
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.heartbeat import Heartbeat
-from aureus.identity import Identity
+from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
 from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
@@ -52,6 +53,7 @@ class Core:
     gateway: SafetyGateway
     heartbeat: Heartbeat
     people: PeopleDirectory
+    identity_history: IdentityHistory
 
 
 def _open_people(
@@ -143,11 +145,16 @@ def open_core(
 
         identity_service = IdentityService(paths)
         stack.enter_context(identity_service.acquire_lock())
-        identity = identity_service.load_identity()
+        from_file = identity_service.load_identity()
 
         timeline = TimelineDatabase(paths.database_file, the_clock)
         timeline.open()
         stack.callback(timeline.close)
+        # 人设后三层以数据库里的最新版本为准；identity.toml 改过的层在这里记成一次用户修改（D62）。
+        identity_history = IdentityHistory(paths.database_file, the_clock)
+        identity_history.open()
+        stack.callback(identity_history.close)
+        identity = identity_history.sync_from_file(from_file)
         runtime = settings.runtime
         calendar = runtime.time.build_calendar()
         ledger = Ledger(paths.database_file, the_clock, calendar=calendar)
@@ -182,8 +189,19 @@ def open_core(
             emergency_stop=emergency_stop,
             body=body,
             people=people,
+            identity_history=identity_history,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
         )
-        yield Core(paths, settings, identity, timeline, ledger, gateway, heartbeat, people)
+        yield Core(
+            paths,
+            settings,
+            identity,
+            timeline,
+            ledger,
+            gateway,
+            heartbeat,
+            people,
+            identity_history,
+        )
