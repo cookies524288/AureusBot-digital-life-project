@@ -21,7 +21,7 @@ from enum import Enum, auto
 from typing import Any, Protocol
 
 from aureus.attention import Inbox, Priority
-from aureus.body import Body, BodyReading
+from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
 from aureus.heartbeat.body_summary import describe_body_state
@@ -177,6 +177,7 @@ class Heartbeat:
         body: Body | None = None,
         people: PeopleDirectory | None = None,
         identity_history: IdentityHistory | None = None,
+        samples: BodySampleStore | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -196,6 +197,8 @@ class Heartbeat:
                 不给就不认人，只按通道给的可信度分用户和别人。
             identity_history: 身份的版本历史，要已经和 identity.toml 对过；醒来时据此记下用户改了
                 哪几层设定（D62）。不给就不记。
+            samples: 身体信号样本存储，要已经打开；心跳按 [body] sample_interval_seconds
+                定时记一行读数，观察台画曲线靠它（D64）。不给就不记样本。
         """
         self._clock = clock
         self._timeline = timeline
@@ -213,6 +216,8 @@ class Heartbeat:
         self._body = body
         self._people = people
         self._identity_history = identity_history
+        self._samples = samples
+        self._last_sample_at: datetime | None = None  # 上一次记样本的时刻
         self._identity_changes: list[IdentityLayer] = []  # 这次醒来前用户改了哪几层
         self._live_identity_changes: list[IdentityLayer] = []  # 运行中刚改的，只说一次
         self._reading: BodyReading | None = None  # 最近一次读到的身体信号
@@ -505,6 +510,7 @@ class Heartbeat:
         self._check_stress()
         self._maybe_start_thought()
         self._broadcast_cognitive_state()
+        self._record_body_sample()
 
     async def wait_for_thought(self) -> None:
         """等进行中的想法有结果（结果由下一拍处理）。没有在想就立即返回。"""
@@ -747,6 +753,34 @@ class Heartbeat:
         except Exception:
             # 为什么不抛：这里只是观察自己，读不到不该让心跳停下；真正的安全检查在网关里。
             logger.exception("读不了身体信号，沿用上一次的读数")
+
+    def _record_body_sample(self) -> None:
+        """按间隔把此刻的身体读数、焦点和收件箱条数记成一行样本（D64）。
+
+        写失败只记日志、跳过这一行：样本丢一行只是曲线断一小段，不值得让心跳停下
+        （和时间线不同，经历记不全才危险，见 D51）。失败后照样更新记样本的时刻，
+        免得数据库出问题时每一拍都重试、刷屏日志。
+        """
+        reading = self._reading
+        if self._samples is None or self._body is None or reading is None:
+            return
+        config = self._body.config
+        if not config.sample_enabled:
+            return
+        now = self._clock.now()
+        last = self._last_sample_at
+        # 时钟往回调过时 elapsed 是负数：当作到点，免得曲线长时间不更新。
+        if last is not None and 0 <= (now - last).total_seconds() < config.sample_interval_seconds:
+            return
+        self._last_sample_at = now
+        focus = self._cognitive_state.attention_focus if self._cognitive_state else ""
+        inbox_count = len(self._unanswered) + len(self._pending)
+        try:
+            self._samples.append(
+                sample_from_reading(now, reading, focus=focus, inbox_count=inbox_count)
+            )
+        except Exception:
+            logger.exception("身体信号样本没写进去，跳过这一行")
 
     def _check_stress(self) -> None:
         """压力刚变成偏高时做一次自检：记进时间线，并告诉用户（04 号文档第 5 节，D57）。"""
