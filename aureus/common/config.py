@@ -256,6 +256,56 @@ class JudgeConfig(BaseModel):
     context_messages: int = Field(default=5, ge=0)
 
 
+class HormonesConfig(BaseModel):
+    """激素的配置（aureus.toml 的 [hormones]，设计见 docs/10-decisions.md 的 D69）。
+
+    下面的数值都是随手挑的初值，没有实测依据，跑起来之后按表现调整。
+    """
+
+    # 严格类型，理由同 SafetyConfig：阈值写成字符串、开关写成数字要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 激素的总开关（D5）；关掉后不触发、不进状态摘要、不影响行为。
+    enabled: bool = True
+    # 四种激素各自的开关（D5）；关掉的那种不触发、不进摘要、不影响行为。
+    anger_enabled: bool = True
+    joy_enabled: bool = True
+    hurt_enabled: bool = True
+    surprise_enabled: bool = True
+    # 半衰期（秒）：浓度降到一半要多久（03 号文档）。
+    anger_half_life_seconds: float = Field(default=600.0, gt=0)
+    joy_half_life_seconds: float = Field(default=900.0, gt=0)
+    hurt_half_life_seconds: float = Field(default=1800.0, gt=0)
+    surprise_half_life_seconds: float = Field(default=180.0, gt=0)
+    # 判断器官报的事：上涨量 = 基础量 × 强度 × 把握，单次不超过上限（D69 第 2 条）。
+    base_amount: float = Field(default=0.5, gt=0, le=1)
+    max_single_rise: float = Field(default=0.4, gt=0, le=1)
+    # 把握低于这个值的判断不算，免得拿不准的猜测也让它动气。
+    min_confidence: float = Field(default=0.3, ge=0, le=1)
+    # 同一个人在窗口内反复触发，第 n 次乘以这个系数的 n − 1 次方，刷屏刷不出情绪。
+    repeat_decay: float = Field(default=0.6, gt=0, le=1)
+    repeat_window_seconds: float = Field(default=600.0, gt=0)
+    # 对某个人的怒气达到回击线，允许回击；回落到平息线以下，一场冲突结束；
+    # 达到冷处理线，规划器可以选择不回（D69 第 3 条）。要满足 平息 < 回击 < 冷处理。
+    calm_below: float = Field(default=0.2, ge=0, le=1)
+    retaliate_at: float = Field(default=0.5, gt=0, le=1)
+    cold_shoulder_at: float = Field(default=0.8, gt=0, le=1)
+    # 同一场冲突里最多回击几次；到了就改成冷静回应。
+    max_retaliations: int = Field(default=3, ge=0)
+    # 低落达到这个值，这次回复的长度上限降一档。
+    hurt_shorten_at: float = Field(default=0.5, gt=0, le=1)
+    # 惊讶达到这个值，这一拍不等疲劳攒消息。
+    surprise_at: float = Field(default=0.5, gt=0, le=1)
+    # 反馈里结果和预期把握差这么多，才算「差得很多」，触发惊讶。
+    surprise_gap: float = Field(default=0.5, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _check_conflict_levels(self) -> Self:
+        if not self.calm_below < self.retaliate_at < self.cold_shoulder_at:
+            raise ValueError("要满足 calm_below < retaliate_at < cold_shoulder_at")
+        return self
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -277,6 +327,7 @@ class RuntimeConfig(BaseModel):
     web: WebConfig = Field(default_factory=WebConfig)
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
+    hormones: HormonesConfig = Field(default_factory=HormonesConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod

@@ -178,3 +178,41 @@ log_level = "INFO"
 # timeout_seconds = 10.0
 # 除了这次要回复的消息，再带之前几条对话。0 表示只看这一条。
 # context_messages = 5
+
+# 激素（设计见 docs/10-decisions.md 的 D69）：怒气、愉悦、低落、惊讶四种几分钟尺度的短期情绪。
+# 由判断器官报告的事和反馈的结果触发，按半衰期消退；浓度由代码算，不由大模型决定。
+# 下面的值都是默认值，没有实测依据，跑起来之后按表现调整。
+[hormones]
+# 激素的总开关。关掉后不触发、不写进状态摘要、不影响行为。
+# enabled = true
+# 四种激素各自的开关。
+# anger_enabled = true
+# joy_enabled = true
+# hurt_enabled = true
+# surprise_enabled = true
+# 半衰期（秒）：浓度降到一半要多久。必须大于 0。
+# anger_half_life_seconds = 600.0
+# joy_half_life_seconds = 900.0
+# hurt_half_life_seconds = 1800.0
+# surprise_half_life_seconds = 180.0
+# 判断器官报的事：上涨量 = 基础量 × 强度 × 把握，单次不超过上限。都在 0 到 1 之间。
+# base_amount = 0.5
+# max_single_rise = 0.4
+# 把握低于这个值的判断不算。
+# min_confidence = 0.3
+# 同一个人在窗口内反复触发，第 n 次乘以这个系数的 n − 1 次方，刷屏刷不出情绪。
+# repeat_decay = 0.6
+# repeat_window_seconds = 600.0
+# 对某个人的怒气达到 retaliate_at 就允许回击，回落到 calm_below 以下算一场冲突结束，
+# 达到 cold_shoulder_at 时规划器可以选择不回。要满足 calm_below < retaliate_at < cold_shoulder_at。
+# calm_below = 0.2
+# retaliate_at = 0.5
+# cold_shoulder_at = 0.8
+# 同一场冲突里最多回击几次，到了就改成冷静回应。
+# max_retaliations = 3
+# 低落达到这个值，回复的长度上限降一档。
+# hurt_shorten_at = 0.5
+# 惊讶达到这个值，这一拍不等疲劳攒消息。
+# surprise_at = 0.5
+# 反馈里结果和预期把握差这么多，才算「差得很多」，触发惊讶。
+# surprise_gap = 0.5

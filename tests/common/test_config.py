@@ -11,6 +11,7 @@ from aureus.common import (
     ConfigError,
     FeedbackConfig,
     HeartbeatConfig,
+    HormonesConfig,
     JudgeConfig,
     SafetyConfig,
     TimeConfig,
@@ -618,3 +619,93 @@ def test_judge_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[judge]\n{field} = {text}\n")
     assert field in error_message_of(paths)
+
+
+# ---------- [hormones] 激素配置（D69） ----------
+
+HORMONES_FIELDS = tuple(HormonesConfig.model_fields)
+
+
+def test_hormones_defaults_follow_d69(tmp_path: Path) -> None:
+    hormones = load_runtime_config(AureusPaths(tmp_path)).hormones
+    assert hormones == HormonesConfig()
+    assert hormones.enabled is True
+    assert hormones.anger_half_life_seconds == 600.0
+    assert hormones.surprise_half_life_seconds == 180.0
+    assert (hormones.calm_below, hormones.retaliate_at, hormones.cold_shoulder_at) == (
+        0.2,
+        0.5,
+        0.8,
+    )
+
+
+def test_hormones_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in HORMONES_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "hormones")
+    assert sum(line.startswith(prefixes) for line in mine) == len(HORMONES_FIELDS)
+    start = lines.index("[hormones]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "\n".join(lines))
+    assert load_runtime_config(paths).hormones == HormonesConfig()
+
+
+def test_hormones_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[hormones]\n"
+        "enabled = false\n"
+        "anger_enabled = false\n"
+        "anger_half_life_seconds = 60\n"
+        "max_retaliations = 0\n",
+    )
+    hormones = load_runtime_config(paths).hormones
+    assert hormones.enabled is False
+    assert hormones.anger_enabled is False
+    assert hormones.anger_half_life_seconds == 60.0
+    assert hormones.max_retaliations == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("enabled", "1"),
+        ("joy_enabled", '"yes"'),
+        ("anger_half_life_seconds", "0"),
+        ("hurt_half_life_seconds", "-5"),
+        ("surprise_half_life_seconds", '"180"'),
+        ("base_amount", "0"),
+        ("base_amount", "1.5"),
+        ("max_single_rise", "true"),
+        ("min_confidence", "-0.1"),
+        ("repeat_decay", "0"),
+        ("repeat_window_seconds", "0"),
+        ("retaliate_at", "0"),
+        ("max_retaliations", "-1"),
+        ("max_retaliations", "1.5"),
+        ("surprise_gap", "2"),
+    ],
+)
+def test_hormones_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[hormones]\n{field} = {text}\n")
+    assert field in error_message_of(paths)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "calm_below = 0.5\nretaliate_at = 0.5",  # 平息线不低于回击线
+        "retaliate_at = 0.9",  # 回击线不低于冷处理线
+        "cold_shoulder_at = 0.4",
+    ],
+)
+def test_hormones_levels_must_be_ordered(tmp_path: Path, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[hormones]\n{text}\n")
+    assert "calm_below" in error_message_of(paths)
