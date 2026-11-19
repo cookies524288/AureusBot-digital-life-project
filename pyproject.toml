@@ -31,6 +31,11 @@ dependencies = [
 # 注册命令行入口：装好后可以直接敲 aureus chat（等价于 python -m aureus chat）。
 aureus = "aureus.cli.main:main"
 
+[project.optional-dependencies]
+monitor = [
+    "streamlit>=1.67.0",
+]
+
 # ---------------------------------------------------------------------
 # 打包方式：用 hatchling 把 aureus/ 目录当作一个 Python 包。
 # uv 会以"可编辑"方式安装它：改了代码立刻生效，测试里也能直接 import aureus。
@@ -162,6 +167,27 @@ source_modules = [
     "aureus.safety",
 ]
 forbidden_modules = ["aureus.web"]
+
+[[tool.importlinter.contracts]]
+name = "观察台在最上层：别的子系统不依赖它"
+type = "forbidden"
+# 观察台是独立进程，只读数据库（D64）；核心、心跳、网页等都不能 import 它，
+# 这样没装 Streamlit 或观察台出错都不影响核心。只有 cli 负责组装 aureus monitor 命令。
+source_modules = [
+    "aureus.common",
+    "aureus.core",
+    "aureus.identity",
+    "aureus.body",
+    "aureus.timeline",
+    "aureus.people",
+    "aureus.heartbeat",
+    "aureus.attention",
+    "aureus.organs",
+    "aureus.channels",
+    "aureus.safety",
+    "aureus.web",
+]
+forbidden_modules = ["aureus.monitor"]
 
 [dependency-groups]
 dev = [
