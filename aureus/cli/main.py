@@ -16,6 +16,7 @@ from aureus.cli.inspect_commands import (
     run_usage_command,
 )
 from aureus.cli.keys_command import EXIT_FAILURE, ReadSecret, key_name_argument, run_keys_command
+from aureus.cli.monitor_command import DEFAULT_MONITOR_PORT, run_monitor_command
 from aureus.cli.persona_command import DEFAULT_PERSONA_LIMIT, run_persona_command
 from aureus.cli.portability_commands import (
     archive_argument,
@@ -30,7 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
     """创建命令行参数解析器。
 
     Returns:
-        解析器。命令有 init、chat、timeline、usage、persona、halt、resume、export、import 和 keys，
+        解析器。命令有 init、chat、timeline、usage、persona、monitor、halt、resume、export、
+        import 和 keys，
         用法见各个 --help。
     """
     parser = argparse.ArgumentParser(prog="aureus", description="Aureus 命令行。")
@@ -74,6 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"最多显示几个版本，默认 {DEFAULT_PERSONA_LIMIT}",
     )
     persona.add_argument("--full", action="store_true", help="显示完整内容，不截断")
+    monitor = commands.add_parser(
+        "monitor", help="启动观察台：在浏览器里只读地看它的内部状态（只绑本机，要装 Streamlit）"
+    )
+    monitor.add_argument(
+        "--port",
+        type=positive_int,
+        default=DEFAULT_MONITOR_PORT,
+        metavar="端口",
+        help=f"监听端口，1024 到 65535，默认 {DEFAULT_MONITOR_PORT}",
+    )
     halt = commands.add_parser(
         "halt", help="急停：它不再调用模型、不再回复，消息照常记录（运行中的实例下一拍生效）"
     )
@@ -156,6 +168,8 @@ def main(
         return run_usage_command(paths)
     if args.command == "persona":
         return run_persona_command(args, paths)
+    if args.command == "monitor":
+        return run_monitor_command(args, paths)
     if args.command == "halt":
         return run_halt_command(args, paths)
     if args.command == "resume":
