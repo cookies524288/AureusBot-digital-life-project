@@ -5,6 +5,7 @@ import pytest
 from aureus.heartbeat import EVENT_SHUT_DOWN, assess_downtime
 from aureus.heartbeat.context import (
     age_on,
+    build_judge_prompt,
     build_reply_prompt,
     build_system_context,
     describe_aliases,
@@ -179,3 +180,23 @@ def test_system_context_for_the_user_is_unchanged_by_the_new_argument() -> None:
 
     assert "你称呼对方“阿明”" in context
     assert "不是你的用户" not in context
+
+
+def test_judge_prompt_has_dialogue_and_the_json_format() -> None:
+    history = [message(1, ActorType.ME, "早上好", 30)]
+    new = [message(2, ActorType.USER, "你就是个破程序", 1)]
+
+    prompt = build_judge_prompt(history, new, "阿明", CHINA)
+
+    assert "之前的对话" in prompt and "早上好" in prompt
+    assert "刚收到、还没回复的消息" in prompt and "你就是个破程序" in prompt
+    for word in ("others", "toward_me", "anger", "offense", "praise", "rejection"):
+        assert word in prompt
+    # 判断器官只判断，不写要说的话。
+    assert "不要加名字或时间前缀" not in prompt
+    assert prompt.rstrip().endswith("每个列表最多 5 项。")
+
+
+def test_judge_prompt_without_new_messages_is_an_error() -> None:
+    with pytest.raises(ValueError):
+        build_judge_prompt([], [], "阿明", CHINA)

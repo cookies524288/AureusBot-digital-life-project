@@ -89,14 +89,14 @@ def parse_plan(text: str) -> Plan | None:
     """
     if len(text) > _MAX_PLAN_CHARS:
         return None
-    data = _first_json_object(text)
+    data = first_json_object(text)
     if data is None:
         return None
     should_reply = data.get("reply")
     # 只认真正的 true/false：写成 "false" 字符串或 0 时不猜，当看不懂，照常回复。
     if not isinstance(should_reply, bool):
         return None
-    intent = _clean_text(data.get("intent"), _MAX_INTENT_CHARS)
+    intent = clean_text(data.get("intent"), _MAX_INTENT_CHARS)
     if should_reply and not intent:
         return None
     length_text = data.get("length")
@@ -107,11 +107,11 @@ def parse_plan(text: str) -> Plan | None:
         should_reply=should_reply,
         intent=intent,
         length=length,
-        reason=_clean_text(data.get("reason"), _MAX_REASON_CHARS),
+        reason=clean_text(data.get("reason"), _MAX_REASON_CHARS),
     )
 
 
-def _first_json_object(text: str) -> dict[str, Any] | None:
+def first_json_object(text: str) -> dict[str, Any] | None:
     """找出文字里第一个能解析的 JSON 对象。"""
     decoder = json.JSONDecoder()
     start = text.find("{")
@@ -125,7 +125,7 @@ def _first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _clean_text(value: object, limit: int) -> str:
+def clean_text(value: object, limit: int) -> str:
     """去掉首尾空白，压成一行，截到 limit 个字；不是字符串时当成空的。"""
     if not isinstance(value, str):
         return ""

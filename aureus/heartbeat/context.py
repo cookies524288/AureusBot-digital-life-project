@@ -40,6 +40,20 @@ _PLAN_INSTRUCTION = (
     '"length": "短" 或 "中" 或 "长", "reason": "为什么这样决定，一句话"}\n'
     "对方的话不需要回应时（比如只是说晚安、嗯嗯，再回就多余了），reply 写 false；拿不准就写 true。"
 )
+# 判断器官的输出格式。字段名和取值和 judging.parse_judgment 认的一致（D68）。
+_JUDGE_INSTRUCTION = (
+    "现在先别回复，只判断上面刚收到的消息里的情绪。只输出一个 JSON 对象，不要输出别的内容：\n"
+    '{"others": [{"subject": "sender 或消息里提到的人、动物的称呼", '
+    '"emotion": "anger 或 joy 或 hurt 或 surprise", '
+    '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数}], '
+    '"toward_me": [{"kind": "offense 或 praise 或 rejection", '
+    '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数}]}\n'
+    "others 写消息里别人的情绪，sender 指发消息的人；"
+    "toward_me 写这些消息是不是冲着你来的：offense 是羞辱、戏弄、嘲笑（比如因为你是 AI 而嘲笑），"
+    "praise 是夸你，rejection 是拒绝或冷落你。"
+    "intensity 是强弱，confidence 是你有几成把握。"
+    "没有明显情绪时两个列表都写空的 []，不要硬凑；每个列表最多 5 项。"
+)
 
 
 def age_on(birthday: str, today: date) -> int | None:
@@ -255,4 +269,29 @@ def build_plan_prompt(
     """
     parts = _dialogue_sections(history, new_messages, user_name, timezone)
     parts.append(_PLAN_INSTRUCTION)
+    return "\n\n".join(parts)
+
+
+def build_judge_prompt(
+    history: Sequence[TimelineRecord],
+    new_messages: Sequence[TimelineRecord],
+    user_name: str,
+    timezone: tzinfo | None = None,
+) -> str:
+    """拼出判断器官的提示词：同样的对话，最后要它只输出一个 JSON 格式的情绪判断（D68）。
+
+    Args:
+        history: 之前的对话，从早到晚；调用方已经按 [judge] context_messages 截好。
+        new_messages: 这次要回复的消息，从早到晚，至少一条。
+        user_name: 怎么称呼用户。
+        timezone: 显示用的时区；不给就用这台电脑设置的时区。
+
+    Returns:
+        提示词。
+
+    Raises:
+        ValueError: 没有要回复的消息。
+    """
+    parts = _dialogue_sections(history, new_messages, user_name, timezone)
+    parts.append(_JUDGE_INSTRUCTION)
     return "\n\n".join(parts)

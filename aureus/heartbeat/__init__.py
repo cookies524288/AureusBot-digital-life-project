@@ -16,6 +16,14 @@ from .events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from .judging import (
+    Judgment,
+    OtherEmotion,
+    OtherEmotionKind,
+    TowardMe,
+    TowardMeKind,
+    parse_judgment,
+)
 from .main_loop import Heartbeat, OrganCaller
 from .perception import (
     MessageKind,
@@ -41,17 +49,23 @@ __all__ = [
     "EVENT_WOKE_UP",
     "Downtime",
     "Heartbeat",
+    "Judgment",
     "MessageKind",
     "MessageSink",
     "OrganCaller",
+    "OtherEmotion",
+    "OtherEmotionKind",
     "OutgoingMessage",
     "Perception",
     "Plan",
     "ReplyLength",
     "ReplyStrategy",
+    "TowardMe",
+    "TowardMeKind",
     "TrustLevel",
     "VisibilityScope",
     "assess_downtime",
     "choose_strategy",
+    "parse_judgment",
     "parse_plan",
 ]
