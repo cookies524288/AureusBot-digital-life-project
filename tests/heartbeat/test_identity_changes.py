@@ -17,7 +17,7 @@ from aureus.heartbeat import (
     Perception,
     TrustLevel,
 )
-from aureus.identity import Identity, IdentityHistory
+from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.safety import EmergencyStop, PermissionChecker
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
@@ -192,3 +192,87 @@ async def test_an_unreadable_cursor_starts_over_instead_of_missing_changes(rig: 
     rig.start(make_identity(expression_style="多用语气词。"))
 
     assert rig.changes()[-1].content == "用户修改了我的设定：表达风格。"
+
+
+# ---------- 运行中在网页上改设定（路线图 1.10，D63 第 4 条） ----------
+
+NEW_STYLE = "多用语气词。"
+STYLE = IdentityLayer.EXPRESSION_STYLE
+
+
+def edit_live(heartbeat: Heartbeat, rig: Rig, layers: list[IdentityLayer]) -> Identity:
+    new = make_identity(expression_style=NEW_STYLE)
+    version = rig.history.versions(None, limit=1)[0].id
+    heartbeat.apply_identity_edit(new, layers, up_to_version_id=version, via="web")
+    return new
+
+
+async def test_a_live_edit_takes_effect_on_the_next_reply(rig: Rig) -> None:
+    heartbeat = rig.start(make_identity())
+    edit_live(heartbeat, rig, [STYLE])
+
+    context = await rig.ask(heartbeat)
+
+    assert f"【表达风格】\n{NEW_STYLE}" in context
+    assert "句子短。" not in context
+    assert "刚才，用户修改了你的表达风格，上面写的是改过之后的样子。" in context
+
+
+async def test_a_live_edit_is_mentioned_only_in_the_next_reply(rig: Rig) -> None:
+    heartbeat = rig.start(make_identity())
+    edit_live(heartbeat, rig, [STYLE])
+    await rig.ask(heartbeat)
+
+    second = await rig.ask(heartbeat)
+
+    assert "用户修改了你的" not in second
+    assert f"【表达风格】\n{NEW_STYLE}" in second  # 新设定一直生效，只是不再重复说
+
+
+async def test_a_live_edit_is_recorded_with_where_it_came_from(rig: Rig) -> None:
+    heartbeat = rig.start(make_identity())
+    edit_live(heartbeat, rig, [STYLE])
+
+    record = rig.changes()[-1]
+    assert record.content == "用户修改了我的设定：表达风格。"
+    assert record.actor_type is ActorType.USER
+    assert record.visibility is VisibilityScope.PRIVATE
+    assert record.metadata["via"] == "web"
+    assert record.metadata["layers"] == ["expression_style"]
+
+
+async def test_the_switch_keeps_a_live_edit_out_of_the_context_but_not_the_timeline(
+    rig: Rig,
+) -> None:
+    heartbeat = rig.start(make_identity(), identity_changes_in_prompt=False)
+    edit_live(heartbeat, rig, [STYLE])
+
+    context = await rig.ask(heartbeat)
+
+    assert len(rig.changes()) == 1
+    assert "用户修改了你的" not in context
+    assert f"【表达风格】\n{NEW_STYLE}" in context  # 开关只管说不说，不管生效不生效
+
+
+async def test_a_lock_only_edit_changes_the_identity_but_records_nothing(rig: Rig) -> None:
+    heartbeat = rig.start(make_identity())
+    edit_live(heartbeat, rig, [])
+
+    context = await rig.ask(heartbeat)
+
+    assert rig.changes() == []
+    assert "用户修改了你的" not in context
+
+
+async def test_a_live_edit_is_not_announced_again_on_the_next_start(rig: Rig) -> None:
+    heartbeat = rig.start(make_identity())
+    new = make_identity(expression_style=NEW_STYLE)
+    rig.history.sync_from_file(new)  # 网页写回文件、记了版本，就是这一步
+    version = rig.history.versions(None, limit=1)[0].id
+    heartbeat.apply_identity_edit(new, [STYLE], up_to_version_id=version, via="web")
+    await heartbeat.shut_down()
+
+    restarted = rig.start(new)
+
+    assert len(rig.changes()) == 1
+    assert "用户修改了你的" not in await rig.ask(restarted)

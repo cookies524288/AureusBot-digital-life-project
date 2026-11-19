@@ -98,6 +98,7 @@ def build_system_context(
     include_behavior_style: bool = True,
     contact_account: str | None = None,
     identity_changes: Sequence[str] = (),
+    identity_changes_live: Sequence[str] = (),
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -110,6 +111,8 @@ def build_system_context(
         include_behavior_style: 放不放行为风格；给回复器时传 False（D59）。
         contact_account: 对方不是用户时，对方的“通道:账号”；None 表示对方是用户（D61）。
         identity_changes: 这次醒来前用户改了哪几层设定的中文名；空的表示没改，或者开关关着（D62）。
+        identity_changes_live: 运行中用户刚改了哪几层设定的中文名（网页设置页，D63 第 4 条）；
+            空的表示没改，或者开关关着。
 
     Returns:
         几段中文，段与段之间空一行。
@@ -149,6 +152,10 @@ def build_system_context(
         # 只说哪几层被改了，不给旧内容：上面写的就是改过之后的样子（D62）。
         sections.append(
             f"这次醒来前，用户修改了你的{'、'.join(identity_changes)}，上面写的是改过之后的样子。"
+        )
+    if identity_changes_live:
+        sections.append(
+            f"刚才，用户修改了你的{'、'.join(identity_changes_live)}，上面写的是改过之后的样子。"
         )
     if body_state:
         sections.append(body_state)

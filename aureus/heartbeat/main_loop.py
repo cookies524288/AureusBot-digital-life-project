@@ -214,6 +214,7 @@ class Heartbeat:
         self._people = people
         self._identity_history = identity_history
         self._identity_changes: list[IdentityLayer] = []  # 这次醒来前用户改了哪几层
+        self._live_identity_changes: list[IdentityLayer] = []  # 运行中刚改的，只说一次
         self._reading: BodyReading | None = None  # 最近一次读到的身体信号
         self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
         self._last_user_contact: Perception | None = None  # 自检通知发往的地方
@@ -259,6 +260,44 @@ class Heartbeat:
         self._pending.append(perception)
         self._wake.set()
         return True
+
+    def apply_identity_edit(
+        self,
+        identity: Identity,
+        layers: Sequence[IdentityLayer],
+        *,
+        up_to_version_id: int,
+        via: str,
+    ) -> None:
+        """用户在运行中改了设定（网页设置页，D63 第 4 条）：下一次回复就用新设定。
+
+        要在事件循环里调用（网页服务和心跳在同一个循环里）。内容真的变了的层记一条时间线，
+        metadata 带 via，并写明记到了哪个版本，下次醒来就不会重复通知；只切换了锁定开关时
+        layers 是空的，只换身份，不记。先换身份再记时间线：记不进去时，设定照样生效。
+
+        Args:
+            identity: 改完之后生效的身份。
+            layers: 内容真的变了的层。
+            up_to_version_id: 记到了哪个版本。
+            via: 从哪里改的，比如 web。
+        """
+        self._identity = identity
+        if not layers:
+            return
+        names = "、".join(layer.describe() for layer in layers)
+        self._live_identity_changes = list(layers)
+        self._timeline.append(
+            event_type=EVENT_IDENTITY_CHANGED,
+            content=f"用户修改了我的设定：{names}。",
+            actor_type=ActorType.USER,
+            visibility=VisibilityScope.PRIVATE,
+            metadata={
+                "layers": [layer.value for layer in layers],
+                "up_to_version_id": up_to_version_id,
+                "via": via,
+            },
+        )
+        logger.info("用户通过 %s 修改了设定：%s", via, names)
 
     def halt(self, reason: str = "") -> bool:
         """设急停，并叫醒心跳尽快跳一拍。
@@ -818,6 +857,12 @@ class Heartbeat:
             if self._config.identity_changes_in_prompt
             else []
         )
+        live_changes = (
+            [layer.describe() for layer in self._live_identity_changes]
+            if self._config.identity_changes_in_prompt
+            else []
+        )
+        self._live_identity_changes = []  # 只在刚改完的这一次回复里说
 
         def context(*, include_behavior_style: bool) -> str:
             return build_system_context(
@@ -829,6 +874,7 @@ class Heartbeat:
                 include_behavior_style=include_behavior_style,
                 contact_account=contact_account,
                 identity_changes=identity_changes,
+                identity_changes_live=live_changes,
             )
 
         return _ReplyJob(
