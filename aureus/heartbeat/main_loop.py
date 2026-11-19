@@ -38,6 +38,7 @@ from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
     EVENT_EMERGENCY_STOP,
+    EVENT_HORMONE_TRIGGERED,
     EVENT_IDENTITY_CHANGED,
     EVENT_JUDGMENT,
     EVENT_MESSAGE,
@@ -59,6 +60,7 @@ from aureus.heartbeat.planning import Plan, parse_plan
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
+from aureus.hormones import Hormones, HormoneTrigger, make_triggers_from_judgment
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory, Person
@@ -99,6 +101,8 @@ _STRESS_REARM_FRACTION = 0.5
 # 取消进行中的器官调用后，最多再等它这么多秒。正常情况下取消会立刻生效；
 # 万一器官代码吞掉了取消，也不能让关闭流程永远卡住。
 _CANCEL_WAIT_SECONDS = 5.0
+# 重启时最多读多少条激素触发记录；超过半衰期 8 倍的会被 Hormones 丢掉，这里只防读得太多。
+_HORMONE_RESTORE_LIMIT = 1000
 
 
 class OrganCaller(Protocol):
@@ -150,6 +154,8 @@ class _JudgeAttempt:
 
     judgment: Judgment | None = None
     failure: str = ""
+    # 这次判断引起的激素触发（D69 第 2 条）；后台任务只算出来，由收结果的那一拍写进状态和时间线。
+    triggers: tuple[HormoneTrigger, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -199,6 +205,7 @@ class Heartbeat:
         samples: BodySampleStore | None = None,
         feedback: FeedbackStore | None = None,
         judge: JudgeConfig | None = None,
+        hormones: Hormones | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -222,6 +229,7 @@ class Heartbeat:
                 定时记一行读数，观察台画曲线靠它（D64）。不给就不记样本。
             feedback: 反馈存储，要已经打开；认知状态里的信心读它（D67）。不给就显示没有数据。
             judge: 判断器官的配置；不给或 enabled 为 False 就不调用判断（D68）。
+            hormones: 激素的内存状态，醒来时从时间线还原；不给就没有激素（D69）。
         """
         self._clock = clock
         self._timeline = timeline
@@ -249,6 +257,7 @@ class Heartbeat:
         self._observer = CognitiveObserver(clock, feedback)
         self._judge = judge
         self._judge_missing_logged = False  # 没配判断器官的日志只记一次
+        self._hormones = hormones
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
@@ -470,11 +479,25 @@ class Heartbeat:
         )
         # 写在 woke_up 之后：停机时长看的是醒来前的最后一条记录，不能被这条挡住。
         self._record_identity_changes()
+        self._restore_hormones(now)
         self._downtime = downtime
         self._last_beat_at = now
         self._phase = _Phase.RUNNING
         logger.info("心跳醒来：%s", downtime.describe(self._timezone))
         return downtime
+
+    def _restore_hormones(self, now: datetime) -> None:
+        """醒来时从时间线上的触发记录还原激素浓度；停机的时间照样算作消退（D69 第 5 条）。"""
+        if self._hormones is None:
+            return
+        records = self._timeline.query(
+            TimelineQuery(
+                event_type=EVENT_HORMONE_TRIGGERED, limit=_HORMONE_RESTORE_LIMIT, latest=True
+            )
+        )
+        restored = self._hormones.restore([record.metadata for record in records], now)
+        if restored:
+            logger.info("还原了 %s 条还没消退的激素触发", restored)
 
     def _record_identity_changes(self) -> None:
         """醒来时：用户在 identity.toml 里改过设定的话，记一条「用户修改了我的设定」（D62）。
@@ -629,6 +652,7 @@ class Heartbeat:
         target = thought.replying_to[-1].perception
         if outcome.judge is not None:
             self._record_judgment(thought, outcome.judge)
+            self._record_triggers(outcome.judge.triggers)
         if outcome.declined and outcome.plan is not None:
             self._record_declined(thought, outcome.plan, target)
             return
@@ -697,6 +721,20 @@ class Heartbeat:
             visibility=VisibilityScope.PRIVATE,
             metadata=metadata,
         )
+
+    def _record_triggers(self, triggers: Sequence[HormoneTrigger]) -> None:
+        """激素触发写进状态和时间线（只有自己可见）；重启时靠这些记录还原浓度（D69 第 4、5 条）。"""
+        if self._hormones is None or not triggers:
+            return
+        for trigger in triggers:
+            self._timeline.append(
+                event_type=EVENT_HORMONE_TRIGGERED,
+                content=f"{trigger.kind.value} 上涨 {trigger.rise:.2f}：{trigger.reason}",
+                actor_type=ActorType.ME,
+                visibility=VisibilityScope.PRIVATE,
+                metadata=trigger.to_metadata(),
+            )
+        self._hormones.add(triggers, self._clock.now())
 
     def _record_declined(self, thought: _Thought, plan: Plan, target: Perception) -> None:
         """规划器决定不回复：记进时间线，并在终端提示一行，让用户知道不是出了故障（D59）。
@@ -1063,7 +1101,27 @@ class Heartbeat:
         if judgment is None:
             logger.warning("判断器官的建议看不懂，跳过判断")
             return _JudgeAttempt(failure="返回的内容看不懂")
-        return _JudgeAttempt(judgment=judgment)
+        return _JudgeAttempt(judgment=judgment, triggers=self._triggers_from(judgment, job))
+
+    def _triggers_from(self, judgment: Judgment, job: _ReplyJob) -> tuple[HormoneTrigger, ...]:
+        """判断结果变成激素触发（D69 第 2 条）。只算不写；认不出是谁发的就不触发。"""
+        hormones = self._hormones
+        latest = job.messages[-1]
+        person_id = latest.metadata.get("person_id")
+        if hormones is None or not isinstance(person_id, int) or isinstance(person_id, bool):
+            return ()
+        now = self._clock.now()
+        return tuple(
+            make_triggers_from_judgment(
+                judgment.toward_me,
+                person_id=person_id,
+                source_record_id=latest.id,
+                source_visibility=latest.visibility,
+                now=now,
+                config=hormones.config,
+                recent_triggers=hormones.triggers,
+            )
+        )
 
     async def _plan(self, job: _ReplyJob) -> Plan | None:
         """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""

@@ -24,6 +24,11 @@ class Hormones:
         self._triggers: list[HormoneTrigger] = []
 
     @property
+    def config(self) -> HormonesConfig:
+        """这套激素用的配置。"""
+        return self._config
+
+    @property
     def triggers(self) -> tuple[HormoneTrigger, ...]:
         """现在记着的触发（只读）。"""
         return tuple(self._triggers)

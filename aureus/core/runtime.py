@@ -33,6 +33,7 @@ from aureus.core.biomodel import BiologicalState
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat
+from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
 from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, OrganBus, load_models_config
@@ -202,6 +203,8 @@ def open_core(
         gateway = SafetyGateway(
             bus, ledger, timeline, the_clock, runtime.safety, permissions, energy_gate=body
         )
+        # 激素（D69）：关掉开关或扮演模式（D65，对照组只有提示词）时不创建。
+        hormones = Hormones(runtime.hormones) if runtime.hormones.enabled and not roleplay else None
         # 生物状态的时区不用传：心跳会把自己的时区填给它（D42 第 3 条）。
         bio_state = BiologicalState(clock=the_clock)
         heartbeat = Heartbeat(
@@ -220,6 +223,7 @@ def open_core(
             samples=samples,
             feedback=feedback,
             judge=runtime.judge,
+            hormones=hormones,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
