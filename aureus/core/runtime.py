@@ -16,7 +16,7 @@ from loguru import logger
 
 from aureus.body import Body
 from aureus.channels import CHANNEL_NAME as TERMINAL_CHANNEL
-from aureus.channels import TERMINAL_USER_ID
+from aureus.channels import TERMINAL_USER_ID, WEB_CHANNEL_NAME, WEB_USER_ID
 from aureus.common import (
     AureusPaths,
     Clock,
@@ -61,7 +61,8 @@ def _open_people(
 ) -> PeopleDirectory:
     """打开人物档案，登记用户和用户的账号（1.8，05 号文档）。
 
-    用户的账号来自 identity.toml，再加上本机终端：终端只有本机能用，默认就是用户。
+    用户的账号来自 identity.toml，再加上本机终端和登录后的网页：终端只有本机能用，
+    网页要口令登录（D63 第 8 条），所以都默认就是用户。
     账号已经登记在别人名下时报配置错误，不悄悄换主人。
     """
     people = PeopleDirectory(paths.database_file, clock)
@@ -69,6 +70,7 @@ def _open_people(
     stack.callback(people.close)
     accounts = [(account.platform, account.id) for account in identity.user.accounts]
     accounts.append((TERMINAL_CHANNEL, TERMINAL_USER_ID))
+    accounts.append((WEB_CHANNEL_NAME, WEB_USER_ID))
     try:
         people.ensure_user(identity.user.name, accounts)
     except PeopleError as error:

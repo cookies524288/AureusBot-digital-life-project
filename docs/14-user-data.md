@@ -16,7 +16,8 @@
 <数据根目录>/
 ├── config/
 │   ├── aureus.toml        运行配置（不含密钥）
-│   └── identity.toml      身份事实与四层人设
+│   ├── identity.toml      身份事实与四层人设（网页设置页改了也会写回这里，D63）
+│   └── web_password.argon2  网页口令的哈希；没有这个文件就是默认口令 admin（D63）
 ├── secrets.vault          加密的密钥库（D36）
 ├── secrets.key            主密钥，解开密钥库用（D36）
 ├── .env                   旧的明文密钥，最低优先级回退（D36）

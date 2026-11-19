@@ -215,3 +215,16 @@ async def test_editing_the_persona_is_remembered_across_restarts(paths: AureusPa
 
     assert [record.content for record in changes] == ["用户修改了我的设定：表达风格。"]
     assert [version.content for version in old] == ["句子短。", "多用语气词。"]
+
+
+def test_the_web_account_is_registered_as_the_same_user_as_the_terminal(
+    paths: AureusPaths,
+) -> None:
+    # 网页要口令登录，能走到心跳的网页消息一定是用户本人（D63 第 8 条）：
+    # 终端和网页是同一个人，所以共用同一份档案、同一个注意力。
+    with open_core(paths, fake_organs=True, to_console=False) as core:
+        terminal = core.people.find("terminal", "local")
+        web = core.people.find("web", "local")
+        assert terminal is not None and web is not None
+        assert web.is_user
+        assert web.id == terminal.id

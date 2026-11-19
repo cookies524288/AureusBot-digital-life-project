@@ -43,7 +43,7 @@ def paths(tmp_path: Path) -> AureusPaths:
     paths.identity_file.write_text(IDENTITY, encoding="utf-8")
     # 心跳默认 60 秒一拍；测试里调成 1 秒，免得关闭时多等。
     paths.runtime_config_file.write_text(
-        "[heartbeat]\ntick_interval_seconds = 1.0\n", encoding="utf-8"
+        "[heartbeat]\ntick_interval_seconds = 1.0\n[web]\nenabled = false\n", encoding="utf-8"
     )
     return paths
 

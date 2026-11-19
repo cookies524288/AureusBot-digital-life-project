@@ -9,10 +9,12 @@ import sys
 from collections.abc import Callable
 
 from aureus.channels import CHANNEL_NAME, TerminalChannel
-from aureus.common import AureusPaths, ConfigError
+from aureus.common import AureusPaths, ConfigError, SystemClock
 from aureus.common.vault import VaultError
 from aureus.core.runtime import Core, open_core
 from aureus.identity.service import IdentityError
+from aureus.web.assemble import open_web
+from aureus.web.runner import WebServer, WebServerError
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -21,8 +23,18 @@ ReadLine = Callable[[], str]
 WriteLine = Callable[[str], None]
 
 
-async def _chat(core: Core, read_line: ReadLine, write_line: WriteLine) -> None:
-    """先让心跳跳起来，再接上终端；心跳停下（/quit、输入结束或出错）时返回。"""
+async def _serve_web(web: WebServer, write_line: WriteLine) -> None:
+    """跑网页服务；没能启动（比如端口被占用）只提示一行，不影响终端和心跳（D63）。"""
+    try:
+        await web.run()
+    except WebServerError as error:
+        write_line(f"网页没有开启：{error}")
+
+
+async def _chat(
+    core: Core, web: WebServer | None, read_line: ReadLine, write_line: WriteLine
+) -> None:
+    """先让心跳跳起来，再接上终端和网页；心跳停下（/quit、输入结束或出错）时返回。"""
     heartbeat = core.heartbeat
     terminal = TerminalChannel(heartbeat, read_line=read_line, write_line=write_line)
     heartbeat.attach_channel(CHANNEL_NAME, terminal.show)
@@ -31,8 +43,20 @@ async def _chat(core: Core, read_line: ReadLine, write_line: WriteLine) -> None:
     await asyncio.sleep(0)
     if heartbeat.downtime is not None:
         write_line(f"它醒来了。{heartbeat.downtime.describe()}")
+    serving: asyncio.Task[None] | None = None
+    if web is not None:
+        web_config = core.settings.runtime.web
+        serving = asyncio.create_task(_serve_web(web, write_line), name="aureus-web")
+        where = "局域网内" if web_config.allow_remote else "本机"
+        write_line(f"网页：http://127.0.0.1:{web_config.port}（{where}可以打开）")
     terminal.start()
-    await beating
+    try:
+        await beating
+    finally:
+        # 心跳停了（或被取消）网页也跟着停：网页消息已经没人回复了。
+        if web is not None and serving is not None:
+            web.request_stop()
+            await serving
 
 
 def run_chat_command(
@@ -55,8 +79,11 @@ def run_chat_command(
     if args.fake:
         write_line("用的是假器官：不调用模型，不花钱。")
     try:
-        with open_core(paths, fake_organs=args.fake) as core:
-            asyncio.run(_chat(core, read_line, write_line))
+        with (
+            open_core(paths, fake_organs=args.fake) as core,
+            open_web(core, SystemClock()) as web,
+        ):
+            asyncio.run(_chat(core, web, read_line, write_line))
     except (ConfigError, VaultError, IdentityError) as error:
         # 启动前就发现的问题：说清楚原因就退出，不带一大段追踪信息。
         print(f"错误：{error}", file=sys.stderr)
