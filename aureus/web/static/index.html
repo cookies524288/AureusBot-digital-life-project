@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang='zh-CN'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>AureusBot</title>
+<style>
+body{font-family:sans-serif;max-width:720px;margin:0 auto;padding:1rem}
+.hidden{display:none}
+#log{border:1px solid #ccc;height:55vh;overflow:auto;padding:.5rem}
+.msg{margin:.25rem 0;white-space:pre-wrap}
+.msg small{color:#888}
+.notice{color:#a60}
+.error{color:#c00}
+nav button{margin-right:.5rem}
+input,textarea{box-sizing:border-box}
+#text{width:80%}
+</style>
+</head>
+<body>
+<h1>AureusBot</h1>
+<p id='error' class='error'></p>
+<section id='login' class='hidden'>
+<h2>登录</h2>
+<input id='password' type='password' placeholder='口令' autocomplete='current-password'>
+<button id='login-btn'>登录</button>
+</section>
+<section id='change' class='hidden'>
+<h2>修改口令</h2>
+<p id='change-hint'></p>
+<input id='old-password' type='password' placeholder='旧口令' autocomplete='current-password'>
+<input id='new-password' type='password' placeholder='新口令（至少 8 位）' autocomplete='new-password'>
+<button id='change-btn'>修改</button>
+</section>
+<section id='main' class='hidden'>
+<nav>
+<button id='tab-chat'>聊天</button>
+<button id='tab-settings'>设置</button>
+<button id='logout-btn'>退出</button>
+</nav>
+<div id='chat'>
+<div id='log'></div>
+<input id='text' placeholder='说点什么'>
+<button id='send-btn'>发送</button>
+</div>
+<div id='settings' class='hidden'>
+<h2>可以自由改的三层</h2>
+<div id='free-layers'></div>
+<h3>锁定</h3>
+<p>锁定后，它自己不能再改这一层（以后它开始自己改设定时才起作用）。</p>
+<div id='locks'></div>
+<button id='save-locks'>保存锁定</button>
+<h2>底线（要再输一次口令）</h2>
+<p>身份事实和不变人格。口令被人看到，就能改这里，请保管好口令。</p>
+<div>名字 <input id='f-name'></div>
+<div>昵称（用逗号分开） <input id='f-aliases'></div>
+<div>性别 <input id='f-gender'></div>
+<div>生日（YYYY-MM-DD） <input id='f-birthday'></div>
+<div>它怎么称呼你 <input id='u-name'></div>
+<div>你的账号（每行一个，写成 平台:账号）<br><textarea id='u-accounts' rows='3' cols='40'></textarea></div>
+<div>不变人格<br><textarea id='immutable' rows='8' style='width:100%'></textarea></div>
+<input id='baseline-password' type='password' placeholder='当前口令' autocomplete='current-password'>
+<button id='save-baseline'>保存底线</button>
+</div>
+</section>
+<script>
+const $=id=>document.getElementById(id);
+let socket=null;
+let loggedIn=false;
+const WHO={user:'你',me:'它'};
+function showView(name){for(const id of ['login','change','main'])$(id).classList.toggle('hidden',id!==name);}
+function showTab(name){for(const id of ['chat','settings'])$(id).classList.toggle('hidden',id!==name);}
+function say(text){$('error').textContent=text||'';}
+async function api(path,method,body){
+  const opt={method:method||'GET',headers:{},credentials:'same-origin'};
+  if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body);}
+  const r=await fetch(path,opt);
+  let data=null;
+  try{data=await r.json();}catch(e){}
+  return {ok:r.ok,status:r.status,data:data};
+}
+function detail(res){const d=res.data&&res.data.detail;return typeof d==='string'?d:'请求没有成功（'+res.status+'）。';}
+function addLine(who,channel,text,notice){
+  const div=document.createElement('div');
+  div.className='msg'+(notice?' notice':'');
+  const tag=document.createElement('small');
+  tag.textContent='['+channel+'] '+who+'：';
+  div.appendChild(tag);
+  div.appendChild(document.createTextNode(text));
+  const log=$('log');
+  log.appendChild(div);
+  log.scrollTop=log.scrollHeight;
+}
+async function loadHistory(){
+  $('log').textContent='';
+  const res=await api('/api/history');
+  if(!res.ok){say(detail(res));return;}
+  for(const item of res.data)addLine(WHO[item.who]||item.who,item.channel,item.content,false);
+}
+function connect(){
+  if(socket||!loggedIn)return;
+  const scheme=location.protocol==='https:'?'wss':'ws';
+  socket=new WebSocket(scheme+'://'+location.host+'/ws');
+  socket.onmessage=ev=>{
+    const m=JSON.parse(ev.data);
+    if(m.type==='error')say(m.detail);
+    else addLine(m.sender,m.channel,m.content,m.type==='notice');
+  };
+  socket.onclose=()=>{socket=null;if(loggedIn)setTimeout(connect,3000);};
+}
+async function enter(){
+  const res=await api('/api/status');
+  if(res.status===401){loggedIn=false;showView('login');return;}
+  if(res.data.must_change_password){
+    showView('change');
+    $('change-hint').textContent='现在用的是默认口令，必须先改成自己的口令才能使用。';
+    return;
+  }
+  loggedIn=true;
+  showView('main');
+  showTab('chat');
+  await loadHistory();
+  connect();
+}
+$('login-btn').onclick=async()=>{
+  say('');
+  const res=await api('/api/login','POST',{password:$('password').value});
+  $('password').value='';
+  if(!res.ok){say(detail(res));return;}
+  await enter();
+};
+$('password').onkeydown=ev=>{if(ev.key==='Enter')$('login-btn').click();};
+$('change-btn').onclick=async()=>{
+  say('');
+  const res=await api('/api/password','POST',{old_password:$('old-password').value,new_password:$('new-password').value});
+  $('old-password').value='';
+  $('new-password').value='';
+  if(!res.ok){say(detail(res));return;}
+  loggedIn=false;
+  if(socket)socket.close();
+  showView('login');
+  say('口令已修改，所有设备都已退出，请用新口令重新登录。');
+};
+function send(){
+  const text=$('text').value.trim();
+  if(!text||!socket||socket.readyState!==1)return;
+  socket.send(JSON.stringify({text:text}));
+  addLine('你','web',text,false);
+  $('text').value='';
+}
+$('send-btn').onclick=send;
+$('text').onkeydown=ev=>{if(ev.key==='Enter')send();};
+$('tab-chat').onclick=()=>showTab('chat');
+$('tab-settings').onclick=()=>showTab('settings');
+$('logout-btn').onclick=async()=>{
+  await api('/api/logout','POST');
+  loggedIn=false;
+  if(socket)socket.close();
+  showView('login');
+};
+const FREE=[['mutable','可变人格'],['behavior_style','行为风格'],['expression_style','表达风格']];
+function el(tag,text,props){const e=document.createElement(tag);if(text)e.textContent=text;return Object.assign(e,props||{});}
+async function saveSettings(body,okText){
+  say('');
+  const res=await api('/api/settings','PUT',body);
+  if(!res.ok){say(detail(res));return;}
+  say(okText);
+  await loadSettings();
+}
+function renderFreeLayer(box,key,title,content,history){
+  const wrap=el('div');
+  wrap.appendChild(el('h3',title));
+  const area=el('textarea','',{rows:5});
+  area.style.width='100%';
+  area.value=content;
+  wrap.appendChild(area);
+  const save=el('button','保存'+title);
+  save.onclick=()=>{const body={text:{}};body.text[key]=area.value;saveSettings(body,title+'已保存，下一次回复就会用新的。');};
+  wrap.appendChild(save);
+  wrap.appendChild(el('p','最近的版本（点「用这个版本」会存成一个新版本，历史不会删）：'));
+  for(const item of history){
+    const row=el('div');
+    row.appendChild(el('small',item.source+' '+item.time+'：'));
+    row.appendChild(el('span',item.content?item.content.slice(0,60):'（空）'));
+    const back=el('button','用这个版本');
+    back.onclick=async()=>{
+      say('');
+      const res=await api('/api/settings/rollback','POST',{layer:key,version_id:item.id});
+      if(!res.ok){say(detail(res));return;}
+      say(title+'已回退。');
+      await loadSettings();
+    };
+    row.appendChild(back);
+    wrap.appendChild(row);
+  }
+  box.appendChild(wrap);
+}
+async function loadSettings(){
+  const res=await api('/api/settings');
+  if(!res.ok){say(detail(res));return;}
+  const v=res.data;
+  const free=$('free-layers');
+  free.textContent='';
+  const locks=$('locks');
+  locks.textContent='';
+  for(const [key,title] of FREE){
+    renderFreeLayer(free,key,title,v.layers[key],v.history[key]||[]);
+    const label=el('label');
+    const box=el('input','',{type:'checkbox',id:'lock-'+key,checked:!!v.locks[key]});
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(' 锁定'+title+' '));
+    locks.appendChild(label);
+  }
+  const facts=v.layers.facts.facts, user=v.layers.facts.user;
+  $('f-name').value=facts.name;
+  $('f-aliases').value=facts.alias_names.join('，');
+  $('f-gender').value=facts.gender;
+  $('f-birthday').value=facts.birthday;
+  $('u-name').value=user.name;
+  $('u-accounts').value=user.accounts.map(a=>a.platform+':'+a.id).join('\n');
+  $('immutable').value=v.layers.immutable;
+  $('baseline-password').value='';
+}
+$('save-locks').onclick=()=>{
+  const locks={};
+  for(const [key] of FREE)locks[key]=$('lock-'+key).checked;
+  saveSettings({locks:locks},'锁定已保存。');
+};
+$('save-baseline').onclick=()=>{
+  const accounts=[];
+  for(const line of $('u-accounts').value.split('\n')){
+    const text=line.trim();
+    if(!text)continue;
+    const at=text.indexOf(':');
+    if(at<1||at===text.length-1){say('账号要写成 平台:账号，比如 qq:10000。');return;}
+    accounts.push({platform:text.slice(0,at).trim(),id:text.slice(at+1).trim()});
+  }
+  const aliases=$('f-aliases').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+  saveSettings({
+    password:$('baseline-password').value,
+    text:{immutable:$('immutable').value},
+    facts:{name:$('f-name').value.trim(),alias_names:aliases,gender:$('f-gender').value.trim(),birthday:$('f-birthday').value.trim()},
+    user:{name:$('u-name').value.trim(),accounts:accounts}
+  },'底线已保存。');
+};
+$('tab-settings').addEventListener('click',loadSettings);
+enter();
+</script>
+</body>
+</html>

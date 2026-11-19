@@ -1,4 +1,4 @@
-"""网页服务端：登录、改口令、历史对话；WebSocket 和设置页在后面的步骤里补（路线图 1.10，D63）。
+"""网页服务端：登录、改口令、历史对话、WebSocket、设置页和首页（路线图 1.10，D63）。
 
 只做翻译和登录检查：消息交给 WebChannel，口令和登录状态交给 WebAuth。没登录什么都看不到；
 还在用默认口令时，登录后只能进改口令接口（D63 第 6 条）。接口都是 async def：它们要和心跳
@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
 
@@ -23,6 +24,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
@@ -38,6 +40,8 @@ from .auth import (
     WebAuth,
 )
 from .session import SessionStore
+from .settings import SettingsService
+from .settings_api import register_settings_routes
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +55,9 @@ WS_POLICY_VIOLATION = 1008
 OUTBOX_LIMIT = 256
 # 连着期间，隔多久核对一次登录是否还有效（退出所有设备、改口令后要把已连上的踢掉）。
 SESSION_RECHECK_SECONDS = 30.0
+# 网页本身是随代码放在 static 目录里的一个静态文件，登录页、聊天页和设置页都在里面；
+# 页面不含任何数据，数据都走要登录的接口。路径从本文件派生，不写死（D38）。
+INDEX_PAGE = Path(__file__).parent / "static" / "index.html"
 
 
 class LoginRequest(BaseModel):
@@ -164,6 +171,7 @@ def create_app(
     sessions: SessionStore,
     channel: WebChannel,
     timeline: TimelineDatabase,
+    settings: SettingsService | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -269,6 +277,16 @@ def create_app(
             unsubscribe()
             pusher.cancel()
 
-    # ---------- 设置页接口（后面的步骤） ----------
+    # ---------- 设置页接口 ----------
+
+    if settings is not None:
+        register_settings_routes(app, settings, require_ready)
+
+    # ---------- 网页本身 ----------
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> FileResponse:
+        """登录前也要能打开页面，所以不检查登录；页面里没有数据，数据都要登录后从接口取。"""
+        return FileResponse(INDEX_PAGE, headers={"Cache-Control": "no-store"})
 
     return app
