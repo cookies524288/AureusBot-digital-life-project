@@ -14,13 +14,17 @@ description = "一个独立存在的数字生命：自我监控、反馈驱动�
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "argon2-cffi>=25.1.0",
     "cryptography>=50.0.2",
+    "fastapi>=0.165.0",
     "filelock>=4.2.10",
     "litellm>=1.109.1",
     "loguru>=0.8.0",
     "platformdirs>=4.14.5",
     "python-dotenv>=1.2.4",
+    "tomlkit>=0.15.2",
     "tzdata>=2026.6",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
@@ -139,6 +143,25 @@ type = "forbidden"
 # 通道依赖心跳（感知和消息的格式由心跳定义），反过来不行：任何通道断开都不影响核心（D41 第 7 条）。
 source_modules = ["aureus.heartbeat"]
 forbidden_modules = ["aureus.channels"]
+
+[[tool.importlinter.contracts]]
+name = "网页通道在最上层：别的子系统不依赖它"
+type = "forbidden"
+# 网页服务由核心组装时接进去；心跳、身份、时间线等都不能 import 它，
+# 这样关掉网页或网页出错都不影响核心（D41 第 7 条、D63）。cli 和 core 负责组装，不在禁止之列。
+source_modules = [
+    "aureus.common",
+    "aureus.identity",
+    "aureus.body",
+    "aureus.timeline",
+    "aureus.people",
+    "aureus.heartbeat",
+    "aureus.attention",
+    "aureus.organs",
+    "aureus.channels",
+    "aureus.safety",
+]
+forbidden_modules = ["aureus.web"]
 
 [dependency-groups]
 dev = [
