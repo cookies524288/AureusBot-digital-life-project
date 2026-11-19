@@ -233,6 +233,28 @@ def make_triggers_from_feedback(
     ]
 
 
+def kind_enabled(kind: HormoneKind, config: HormonesConfig) -> bool:
+    """这种激素现在算不算数：总开关和这一种的开关都开着才算（D69 第 8 条）。"""
+    if not config.enabled:
+        return False
+    return {
+        HormoneKind.ANGER: config.anger_enabled,
+        HormoneKind.JOY: config.joy_enabled,
+        HormoneKind.HURT: config.hurt_enabled,
+        HormoneKind.SURPRISE: config.surprise_enabled,
+    }[kind]
+
+
+def half_life_seconds_of(kind: HormoneKind, config: HormonesConfig) -> float:
+    """这种激素的半衰期（秒）。"""
+    return {
+        HormoneKind.ANGER: config.anger_half_life_seconds,
+        HormoneKind.JOY: config.joy_half_life_seconds,
+        HormoneKind.HURT: config.hurt_half_life_seconds,
+        HormoneKind.SURPRISE: config.surprise_half_life_seconds,
+    }[kind]
+
+
 def level_at(
     triggers: list[HormoneTrigger],
     kind: HormoneKind,
@@ -255,23 +277,9 @@ def level_at(
     Returns:
         浓度 [0, 1]，这种激素被关掉时是 0。
     """
-    if not config.enabled:
+    if not kind_enabled(kind, config):
         return 0.0
-    enabled_by_kind = {
-        HormoneKind.ANGER: config.anger_enabled,
-        HormoneKind.JOY: config.joy_enabled,
-        HormoneKind.HURT: config.hurt_enabled,
-        HormoneKind.SURPRISE: config.surprise_enabled,
-    }
-    if not enabled_by_kind[kind]:
-        return 0.0
-    half_life_by_kind = {
-        HormoneKind.ANGER: config.anger_half_life_seconds,
-        HormoneKind.JOY: config.joy_half_life_seconds,
-        HormoneKind.HURT: config.hurt_half_life_seconds,
-        HormoneKind.SURPRISE: config.surprise_half_life_seconds,
-    }
-    half_life_seconds = half_life_by_kind[kind]
+    half_life_seconds = half_life_seconds_of(kind, config)
     decay_rate = math.log(2) / half_life_seconds
     total = 0.0
     for trigger in triggers:

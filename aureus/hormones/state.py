@@ -4,10 +4,11 @@
 """
 
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 
 from aureus.common import HormonesConfig
+from aureus.hormones.effects import Conflict, HormoneEffects, compute_effects
 from aureus.hormones.hormones import HormoneKind, HormoneTrigger, level_at
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,8 @@ class Hormones:
     def __init__(self, config: HormonesConfig) -> None:
         self._config = config
         self._triggers: list[HormoneTrigger] = []
+        # 和每个人的冲突计数。只在内存里：重启后算新的一场，最多多回击几次，上限照样管着。
+        self._conflicts: dict[int, Conflict] = {}
 
     @property
     def config(self) -> HormonesConfig:
@@ -45,7 +48,11 @@ class Hormones:
 
     def add(self, triggers: Iterable[HormoneTrigger], now: datetime) -> None:
         """记下新触发，顺手丢掉已经消退的。"""
-        self._triggers.extend(triggers)
+        new_triggers = list(triggers)
+        # 新触发来之前先收尾已经平息的冲突，免得新的一场接着旧的计数算。
+        for person_id in {t.person_id for t in new_triggers}:
+            self._live_conflict(person_id, now)
+        self._triggers.extend(new_triggers)
         self._forget_faded(now)
 
     def restore(self, records: Iterable[Mapping[str, object]], now: datetime) -> int:
@@ -74,3 +81,55 @@ class Hormones:
     def _forget_faded(self, now: datetime) -> None:
         horizon = now - self.lookback()
         self._triggers = [t for t in self._triggers if t.triggered_at >= horizon]
+
+    def effects(
+        self,
+        now: datetime,
+        *,
+        person_id: int | None,
+        viewer_is_user: bool,
+        extra: Sequence[HormoneTrigger] = (),
+    ) -> HormoneEffects:
+        """此刻激素对回复这个人的影响（D69 第 3 条）。
+
+        Args:
+            now: 此刻（UTC）。
+            person_id: 回复的对象；认不出是谁时为 None。
+            viewer_is_user: 回复的对象是用户。
+            extra: 刚算出、还没正式记下的触发。后台任务里只算不写（D41），
+                所以回复这一次要把它们算进去，但不改内存。
+        """
+        return compute_effects(
+            [*self._triggers, *extra],
+            self._conflicts.get(person_id, Conflict()) if person_id is not None else Conflict(),
+            now=now,
+            config=self._config,
+            person_id=person_id,
+            viewer_is_user=viewer_is_user,
+        )
+
+    def note_reply(self, person_id: int | None, now: datetime, *, retaliated: bool) -> None:
+        """记一次回复：回击了就算一次，连续不回的计数清零。"""
+        conflict = self._live_conflict(person_id, now)
+        if person_id is None or conflict is None:
+            return
+        self._conflicts[person_id] = Conflict(
+            retaliations=conflict.retaliations + (1 if retaliated else 0), declines=0
+        )
+
+    def note_decline(self, person_id: int | None, now: datetime) -> None:
+        """记一次不回：连续不回的计数加一。"""
+        conflict = self._live_conflict(person_id, now)
+        if person_id is None or conflict is None:
+            return
+        self._conflicts[person_id] = Conflict(conflict.retaliations, conflict.declines + 1)
+
+    def _live_conflict(self, person_id: int | None, now: datetime) -> Conflict | None:
+        """这个人的冲突计数；怒气已回落到平息线以下就当这场冲突结束，计数清掉。"""
+        if person_id is None:
+            return None
+        anger = self.level(HormoneKind.ANGER, now, person_id)
+        if anger < self._config.calm_below:
+            self._conflicts.pop(person_id, None)
+            return Conflict()
+        return self._conflicts.get(person_id, Conflict())

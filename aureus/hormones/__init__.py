@@ -3,6 +3,7 @@
 由事件触发，按半衰期消退，浓度由代码算，不由大模型决定。
 """
 
+from .effects import Conflict, HormoneEffects, RetaliationMode
 from .hormones import (
     HormoneKind,
     HormoneTrigger,
@@ -13,9 +14,12 @@ from .hormones import (
 from .state import Hormones
 
 __all__ = [
+    "Conflict",
+    "HormoneEffects",
     "HormoneKind",
     "HormoneTrigger",
     "Hormones",
+    "RetaliationMode",
     "level_at",
     "make_triggers_from_feedback",
     "make_triggers_from_judgment",

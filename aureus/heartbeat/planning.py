@@ -29,6 +29,11 @@ class ReplyLength(StrEnum):
             return self
         return limit
 
+    def lowered(self) -> "ReplyLength":
+        """降一档：长变中，中变短，短还是短。"""
+        index = _LENGTH_ORDER.index(self)
+        return _LENGTH_ORDER[max(index - 1, 0)]
+
 
 _LENGTH_ORDER = (ReplyLength.SHORT, ReplyLength.MEDIUM, ReplyLength.LONG)
 _LENGTH_DESCRIPTIONS = {

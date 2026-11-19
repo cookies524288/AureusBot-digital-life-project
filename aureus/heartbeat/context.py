@@ -113,6 +113,7 @@ def build_system_context(
     contact_account: str | None = None,
     identity_changes: Sequence[str] = (),
     identity_changes_live: Sequence[str] = (),
+    hormone_state: str = "",
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -127,6 +128,8 @@ def build_system_context(
         identity_changes: 这次醒来前用户改了哪几层设定的中文名；空的表示没改，或者开关关着（D62）。
         identity_changes_live: 运行中用户刚改了哪几层设定的中文名（网页设置页，D63 第 4 条）；
             空的表示没改，或者开关关着。
+        hormone_state: 激素的事实摘要和行为说明（HormoneEffects.context_text）；
+            空字符串表示不放（D69 第 3 条）。
 
     Returns:
         几段中文，段与段之间空一行。
@@ -173,6 +176,8 @@ def build_system_context(
         )
     if body_state:
         sections.append(body_state)
+    if hormone_state:
+        sections.append(hormone_state)
     return "\n\n".join(sections)
 
 

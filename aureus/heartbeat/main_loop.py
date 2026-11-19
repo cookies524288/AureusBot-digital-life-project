@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import logging
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, tzinfo
 from enum import Enum, auto
@@ -56,11 +56,18 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
-from aureus.heartbeat.planning import Plan, parse_plan
+from aureus.heartbeat.planning import Plan, ReplyLength, parse_plan
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
-from aureus.hormones import Hormones, HormoneTrigger, make_triggers_from_judgment
+from aureus.hormones import (
+    HormoneEffects,
+    HormoneKind,
+    Hormones,
+    HormoneTrigger,
+    RetaliationMode,
+    make_triggers_from_judgment,
+)
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory, Person
@@ -113,6 +120,14 @@ class OrganCaller(Protocol):
         ...
 
 
+def _person_id_of(record: TimelineRecord) -> int | None:
+    """这条消息是哪个人发的（人物 ID）；认不出是谁时是 None。"""
+    person_id = record.metadata.get("person_id")
+    if isinstance(person_id, int) and not isinstance(person_id, bool):
+        return person_id
+    return None
+
+
 class _Phase(Enum):
     NOT_STARTED = auto()
     RUNNING = auto()
@@ -146,6 +161,15 @@ class _ReplyJob:
     judge_context: str
     # 判断器官要带的之前的对话；已经按 [judge] context_messages 截好。
     judge_history: Sequence[TimelineRecord]
+    # 激素影响之前的做法；激素的影响（降长度）每次都从它重新算，不叠加。
+    base_strategy: ReplyStrategy
+    # 回复的对象：认不出是谁时为 None；对象是不是用户。
+    person_id: int | None
+    viewer_is_user: bool
+    # 把激素的文字（规划器和合并调用用的、回复器用的）放进系统上下文，返回两份新的上下文。
+    build_contexts: Callable[[str, str], tuple[str, str]]
+    # 此刻激素对这次回复的影响；激素没开时是 None。
+    effects: HormoneEffects | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +194,10 @@ class _ThoughtOutcome:
     declined: bool = False
     # 判断器官的结果；没调用判断（开关关着、档位低、没配器官）时是 None。
     judge: _JudgeAttempt | None = None
+    # 这次回复用的激素影响；收结果的那一拍用它记回击次数和不回次数。
+    effects: HormoneEffects | None = None
+    # 规划器想不回，但这场冲突里已经不回过一次，代码要求这次必须回（D69 第 3 条）。
+    forced_reply: bool = False
 
 
 @dataclass(frozen=True)
@@ -653,8 +681,11 @@ class Heartbeat:
         if outcome.judge is not None:
             self._record_judgment(thought, outcome.judge)
             self._record_triggers(outcome.judge.triggers)
+        person_id = _person_id_of(thought.replying_to[-1].record)
         if outcome.declined and outcome.plan is not None:
-            self._record_declined(thought, outcome.plan, target)
+            if self._hormones is not None:
+                self._hormones.note_decline(person_id, self._clock.now())
+            self._record_declined(thought, outcome.plan, target, outcome.effects)
             return
         if outcome.response is None:
             self._deliver(target, outcome.notice, MessageKind.NOTICE)
@@ -678,6 +709,13 @@ class Heartbeat:
         }
         if outcome.plan is not None:
             metadata["plan"] = outcome.plan.to_metadata()
+        if outcome.effects is not None:
+            metadata["hormones"] = outcome.effects.to_metadata()
+            if outcome.forced_reply:
+                metadata["forced_reply"] = True
+            if self._hormones is not None:
+                retaliated = outcome.effects.retaliation is RetaliationMode.ALLOWED
+                self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)
         self._timeline.append(
             event_type=EVENT_MESSAGE,
             content=text,
@@ -736,22 +774,32 @@ class Heartbeat:
             )
         self._hormones.add(triggers, self._clock.now())
 
-    def _record_declined(self, thought: _Thought, plan: Plan, target: Perception) -> None:
+    def _record_declined(
+        self,
+        thought: _Thought,
+        plan: Plan,
+        target: Perception,
+        effects: HormoneEffects | None,
+    ) -> None:
         """规划器决定不回复：记进时间线，并在终端提示一行，让用户知道不是出了故障（D59）。
 
         为什么要提示：用户看到的是「没有回应」，分不清是没看到、出了错、还是它选择不说话。
         """
         reason = plan.reason or "觉得不需要回应"
+        metadata: dict[str, Any] = {
+            "in_reply_to": [heard.record.id for heard in thought.replying_to],
+            "plan": plan.to_metadata(),
+            "strategy": thought.strategy.to_metadata(),
+        }
+        if effects is not None:
+            # 写明当时的怒气，回头查「为什么没回」时分得清是冷处理还是别的原因（D69 第 3 条）。
+            metadata["hormones"] = effects.to_metadata()
         self._timeline.append(
             event_type=EVENT_REPLY_DECLINED,
             content=f"看了刚收到的消息，决定不回复：{reason}",
             actor_type=ActorType.ME,
             visibility=VisibilityScope.PRIVATE,
-            metadata={
-                "in_reply_to": [heard.record.id for heard in thought.replying_to],
-                "plan": plan.to_metadata(),
-                "strategy": thought.strategy.to_metadata(),
-            },
+            metadata=metadata,
         )
         self._deliver(target, f"（没有回复：{reason}）", MessageKind.NOTICE)
 
@@ -903,6 +951,9 @@ class Heartbeat:
         reading = self._reading
         if reading is None or self._body is None or not reading.fatigue.high:
             return 0.0
+        if self._surprised():
+            # 惊讶时这件事的注意力优先级上升：不等疲劳攒消息，马上处理（D69 第 3 条）。
+            return 0.0
         oldest = self._unanswered.peek_oldest()
         if oldest is None:
             return 0.0
@@ -910,6 +961,14 @@ class Heartbeat:
         waited = (self._clock.now() - oldest.record.timestamp).total_seconds()
         # 时钟往回调过时 waited 是负数：最多等 batch_seconds，不会无限等下去。
         return max(min(batch_seconds - waited, batch_seconds), 0.0)
+
+    def _surprised(self) -> bool:
+        """惊讶达到阈值了吗。"""
+        hormones = self._hormones
+        if hormones is None:
+            return False
+        level = hormones.level(HormoneKind.SURPRISE, self._clock.now())
+        return level >= hormones.config.surprise_at
 
     def seconds_until_next_beat(self) -> float:
         """到下一个定时拍还有多少秒：夜里放慢；攒消息等到点的话，提前到点那一刻。"""
@@ -987,7 +1046,7 @@ class Heartbeat:
         )
         self._live_identity_changes = []  # 只在刚改完的这一次回复里说
 
-        def context(*, include_behavior_style: bool) -> str:
+        def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
             return build_system_context(
                 self._identity,
                 now,
@@ -998,11 +1057,18 @@ class Heartbeat:
                 contact_account=contact_account,
                 identity_changes=identity_changes,
                 identity_changes_live=live_changes,
+                hormone_state=hormone_state,
+            )
+
+        def build_contexts(full_text: str, replyer_text: str) -> tuple[str, str]:
+            return (
+                context(include_behavior_style=True, hormone_state=full_text),
+                context(include_behavior_style=False, hormone_state=replyer_text),
             )
 
         judge_count = self._judge.context_messages if self._judge is not None else 0
         judge_history = list(history)[-judge_count:] if judge_count > 0 else []
-        return _ReplyJob(
+        job = _ReplyJob(
             strategy=strategy,
             history=history,
             messages=[heard.record for heard in batch],
@@ -1011,6 +1077,44 @@ class Heartbeat:
             replyer_context=context(include_behavior_style=False),
             judge_context=build_judge_context(self._identity),
             judge_history=judge_history,
+            base_strategy=strategy,
+            person_id=_person_id_of(batch[-1].record),
+            viewer_is_user=not contact,
+            build_contexts=build_contexts,
+        )
+        return self._apply_hormones(job, ())
+
+    def _apply_hormones(self, job: _ReplyJob, extra: Sequence[HormoneTrigger]) -> _ReplyJob:
+        """把激素的影响放进这次回复：摘要和行为说明进上下文，低落时回复长度降一档（D69 第 3 条）。
+
+        Args:
+            job: 回复要用的材料；每次都从 base_strategy 重新算，重复调用不会叠加。
+            extra: 刚算出、还没正式记下的触发。后台任务不写状态（D41），回复却要带上这次的情绪，
+                所以先拿它们临时算，正式写入在收结果的那一拍。
+        """
+        hormones = self._hormones
+        if hormones is None:
+            return job
+        effects = hormones.effects(
+            self._clock.now(),
+            person_id=job.person_id,
+            viewer_is_user=job.viewer_is_user,
+            extra=extra,
+        )
+        strategy = job.base_strategy
+        if effects.shorten_reply:
+            current = strategy.length_limit or ReplyLength.LONG
+            strategy = replace(strategy, length_limit=current.lowered())
+        full_context, replyer_context = job.build_contexts(
+            effects.context_text(plan_first=strategy.plan_first),
+            effects.context_text(plan_first=False),
+        )
+        return replace(
+            job,
+            strategy=strategy,
+            full_context=full_context,
+            replyer_context=replyer_context,
+            effects=effects,
         )
 
     def _body_state_for_context(self, strategy: ReplyStrategy) -> str:
@@ -1042,7 +1146,10 @@ class Heartbeat:
         和没有规划器时一样，由回复器自己决定怎么回应（D59）。
         """
         attempt = await self._judge_emotion(job)
+        if attempt is not None and attempt.triggers:
+            job = self._apply_hormones(job, attempt.triggers)
         plan: Plan | None = None
+        forced_reply = False
         if job.strategy.plan_first:
             try:
                 plan = await self._plan(job)
@@ -1052,9 +1159,15 @@ class Heartbeat:
                     notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
                 )
             if plan is not None and not plan.should_reply:
-                return _ThoughtOutcome(plan=plan, declined=True, judge=attempt)
+                if job.effects is None or not job.effects.must_reply:
+                    return _ThoughtOutcome(
+                        plan=plan, declined=True, judge=attempt, effects=job.effects
+                    )
+                # 这场冲突里已经不回过一次：这次必须回，由回复器自己决定怎么回（D69 第 3 条）。
+                plan = None
+                forced_reply = True
         outcome = await self._reply(job, plan)
-        return replace(outcome, judge=attempt)
+        return replace(outcome, judge=attempt, effects=job.effects, forced_reply=forced_reply)
 
     async def _judge_emotion(self, job: _ReplyJob) -> _JudgeAttempt | None:
         """先调判断器官（D68）。不调用时返回 None；调用了就一定返回结果，任何失败都不影响回复。
@@ -1107,8 +1220,8 @@ class Heartbeat:
         """判断结果变成激素触发（D69 第 2 条）。只算不写；认不出是谁发的就不触发。"""
         hormones = self._hormones
         latest = job.messages[-1]
-        person_id = latest.metadata.get("person_id")
-        if hormones is None or not isinstance(person_id, int) or isinstance(person_id, bool):
+        person_id = job.person_id
+        if hormones is None or person_id is None:
             return ()
         now = self._clock.now()
         return tuple(
