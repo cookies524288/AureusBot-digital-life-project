@@ -20,6 +20,7 @@ from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, Protocol
 
+from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading
 from aureus.common import Clock, HeartbeatConfig
 from aureus.core import BiologicalState, CognitiveObserver, CognitiveState
@@ -54,6 +55,7 @@ from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
 from aureus.identity import Identity
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
+from aureus.people import PeopleDirectory, Person
 from aureus.safety import (
     ACTION_CALL_ORGAN,
     ACTION_REPLY_TO_USER,
@@ -172,6 +174,7 @@ class Heartbeat:
         emergency_stop: EmergencyStop,
         timezone: tzinfo | None = None,
         body: Body | None = None,
+        people: PeopleDirectory | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -187,6 +190,8 @@ class Heartbeat:
             timezone: 给人看的时间用哪个时区；不给就用这台电脑设置的时区。
                 生物状态没有自己设时区时，日周期也按这个时区算（D42 第 3 条）。
             body: 身体，提供精力读数；不给时精力记为「不限」。
+            people: 人物档案，收感知时按（通道, 账号）认人；
+                不给就不认人，只按通道给的可信度分用户和别人。
         """
         self._clock = clock
         self._timeline = timeline
@@ -202,13 +207,14 @@ class Heartbeat:
             # 给人看的时间和日周期用同一个时区，免得“早上 8 点”皮质醇却在深夜达到高峰。
             bio_state.timezone = timezone
         self._body = body
+        self._people = people
         self._reading: BodyReading | None = None  # 最近一次读到的身体信号
         self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
         self._last_user_contact: Perception | None = None  # 自检通知发往的地方
         self._observer = CognitiveObserver(clock)
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
-        self._unanswered: list[_Heard] = []  # 记进时间线了、还没开始回复
+        self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
         self._thought: _Thought | None = None
         self._wake = asyncio.Event()
         self._phase = _Phase.NOT_STARTED
@@ -568,23 +574,43 @@ class Heartbeat:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
         while self._pending:
             perception = self._pending[0]
+            person = self._identify(perception)
+            metadata: dict[str, Any] = {
+                "channel": perception.channel,
+                "trust": perception.trust.value,
+            }
+            if person is not None:
+                metadata["person_id"] = person.id
             record = self._timeline.append(
                 event_type=EVENT_MESSAGE,
                 content=perception.content,
                 actor_type=_actor_type_of(perception),
                 actor_id=perception.sender_id,
                 visibility=perception.visibility,
-                metadata={"channel": perception.channel, "trust": perception.trust.value},
+                metadata=metadata,
             )
             self._pending.popleft()
-            if perception.trust is TrustLevel.VERIFIED_USER:
-                self._unanswered.append(_Heard(perception, record))
-                self._last_user_contact = perception
-            else:
-                # 回复时会带上用户的私聊记录和人设，确认不了身份就不回（朝安全方向倒）。
+            priority = _priority_of(perception, person)
+            if priority is None:
+                # 确认不了身份（或通道和档案对不上）就不回，朝安全方向倒。
                 logger.info(
                     "收到来自 %s 上未确认身份的账号的消息：只记录，不回复", perception.channel
                 )
+                continue
+            self._unanswered.add(_Heard(perception, record), priority, _conversation_of(perception))
+            if priority is Priority.USER:
+                self._last_user_contact = perception
+
+    def _identify(self, perception: Perception) -> Person | None:
+        """按（通道, 账号）认人；没有人物档案时返回 None。
+
+        用户的账号只查不建：没登记的话，宁可认不出，也不把用户建成一个陌生的联系人。
+        """
+        if self._people is None:
+            return None
+        if perception.trust is TrustLevel.VERIFIED_USER:
+            return self._people.find(perception.channel, perception.sender_id)
+        return self._people.meet(perception.channel, perception.sender_id)
 
     def _maybe_start_thought(self) -> None:
         """定焦点、想一想：有没回复的消息、又没在想别的，就在后台调用器官。"""
@@ -596,18 +622,11 @@ class Heartbeat:
             return
         if self._batch_wait_remaining() > 0:
             return  # 疲劳偏高：再等等，攒几条一起回（到点后下一拍会开始）
-        first = self._unanswered[0].perception
-        # 一次只回复同一个通道里同一个人的消息，回复才知道发给谁。
-        batch = [
-            heard
-            for heard in self._unanswered
-            if (heard.perception.channel, heard.perception.sender_id)
-            == (first.channel, first.sender_id)
-        ]
-        taken = {heard.record.id for heard in batch}
+        # 一次只回复同一个通道里同一个人的消息，回复才知道发给谁；先回用户，同级先来先回。
+        batch = self._unanswered.peek_batch()
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
         job = self._reply_job(batch)
-        self._unanswered = [heard for heard in self._unanswered if heard.record.id not in taken]
+        self._unanswered.take_next()
         task = asyncio.create_task(self._think(job), name="aureus-thought")
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task=task, replying_to=batch, strategy=job.strategy)
@@ -618,9 +637,8 @@ class Heartbeat:
         每个对话对象只通知一次，不管他在这一拍里说了几句。
         """
         latest: dict[tuple[str, str], Perception] = {}
-        for heard in self._unanswered:
-            latest[(heard.perception.channel, heard.perception.sender_id)] = heard.perception
-        self._unanswered = []
+        for heard in self._unanswered.drain():
+            latest[_conversation_of(heard.perception)] = heard.perception
         for target in latest.values():
             self._deliver(target, f"{reason}。这条消息已经记下，不会回复。", MessageKind.NOTICE)
 
@@ -672,10 +690,11 @@ class Heartbeat:
         reading = self._reading
         if reading is None or self._body is None or not reading.fatigue.high:
             return 0.0
-        if not self._unanswered:
+        oldest = self._unanswered.peek_oldest()
+        if oldest is None:
             return 0.0
         batch_seconds = self._body.config.fatigue_batch_seconds
-        waited = (self._clock.now() - self._unanswered[0].record.timestamp).total_seconds()
+        waited = (self._clock.now() - oldest.record.timestamp).total_seconds()
         # 时钟往回调过时 waited 是负数：最多等 batch_seconds，不会无限等下去。
         return max(min(batch_seconds - waited, batch_seconds), 0.0)
 
@@ -724,11 +743,15 @@ class Heartbeat:
         """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
         strategy = self._current_strategy()
         batch_ids = {heard.record.id for heard in batch}
-        # 只带同一可见范围的对话：私聊的回复里不能混进群聊的内容，反过来也一样。
+        target = batch[0].perception
+        contact = target.trust is not TrustLevel.VERIFIED_USER
+        contact_account = f"{target.channel}:{target.sender_id}" if contact else None
+        # 回复用户时只带同一可见范围的对话。回复别人时不按范围过滤（D61，用户决定）：
+        # 它的记忆是连续的一份，防套话靠系统上下文里的说明，由规划器和回复器各自判断。
         recent = self._timeline.query(
             TimelineQuery(
                 event_type=EVENT_MESSAGE,
-                visibility=batch[0].perception.visibility,
+                visibility=None if contact else target.visibility,
                 latest=True,
                 limit=strategy.message_limit,
             )
@@ -748,6 +771,7 @@ class Heartbeat:
                 self._timezone,
                 body_state,
                 include_behavior_style=include_behavior_style,
+                contact_account=contact_account,
             )
 
         return _ReplyJob(
@@ -951,7 +975,26 @@ class Heartbeat:
 
 
 def _actor_type_of(perception: Perception) -> ActorType:
-    """确认是用户本人的记成用户，其余记成某个联系人（以后由人物子系统认人）。"""
+    """确认是用户本人的记成用户，其余记成某个联系人（具体是谁看 metadata 里的 person_id）。"""
     if perception.trust is TrustLevel.VERIFIED_USER:
         return ActorType.USER
     return ActorType.PERSON
+
+
+def _conversation_of(perception: Perception) -> tuple[str, str]:
+    """一个对话 = 一个通道里的一个账号；收件箱按它把同一个人的几句话合成一次回复。"""
+    return (perception.channel, perception.sender_id)
+
+
+def _priority_of(perception: Perception, person: Person | None) -> Priority | None:
+    """这条消息按什么优先级排队；不该回复的返回 None（只记录）。
+
+    通道说是别人、档案却说这个账号是用户，两边对不上：宁可不回，也不当成用户或别人处理。
+    """
+    if perception.trust is TrustLevel.VERIFIED_USER:
+        return Priority.USER
+    if perception.trust is TrustLevel.VERIFIED_CONTACT:
+        if person is not None and person.is_user:
+            return None
+        return Priority.CONTACT
+    return None

@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from loguru import logger
 
 from aureus.body import Body
+from aureus.channels import CHANNEL_NAME as TERMINAL_CHANNEL
+from aureus.channels import TERMINAL_USER_ID
 from aureus.common import (
     AureusPaths,
     Clock,
@@ -33,6 +35,7 @@ from aureus.identity import Identity
 from aureus.identity.service import IdentityService
 from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
+from aureus.people import PeopleDirectory, PeopleError
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
 from aureus.timeline import TimelineDatabase
 
@@ -48,6 +51,27 @@ class Core:
     ledger: Ledger
     gateway: SafetyGateway
     heartbeat: Heartbeat
+    people: PeopleDirectory
+
+
+def _open_people(
+    paths: AureusPaths, clock: Clock, identity: Identity, stack: ExitStack
+) -> PeopleDirectory:
+    """打开人物档案，登记用户和用户的账号（1.8，05 号文档）。
+
+    用户的账号来自 identity.toml，再加上本机终端：终端只有本机能用，默认就是用户。
+    账号已经登记在别人名下时报配置错误，不悄悄换主人。
+    """
+    people = PeopleDirectory(paths.database_file, clock)
+    people.open()
+    stack.callback(people.close)
+    accounts = [(account.platform, account.id) for account in identity.user.accounts]
+    accounts.append((TERMINAL_CHANNEL, TERMINAL_USER_ID))
+    try:
+        people.ensure_user(identity.user.name, accounts)
+    except PeopleError as error:
+        raise ConfigError(f"身份配置里用户的账号有问题：{error}") from None
+    return people
 
 
 def _build_organ_bus(
@@ -129,6 +153,7 @@ def open_core(
         ledger = Ledger(paths.database_file, the_clock, calendar=calendar)
         ledger.open()
         stack.callback(ledger.close)
+        people = _open_people(paths, the_clock, identity, stack)
 
         heartbeat_config = runtime.heartbeat
         if fake_organs and heartbeat_config.planning_enabled:
@@ -156,8 +181,9 @@ def open_core(
             permissions=permissions,
             emergency_stop=emergency_stop,
             body=body,
+            people=people,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
         )
-        yield Core(paths, settings, identity, timeline, ledger, gateway, heartbeat)
+        yield Core(paths, settings, identity, timeline, ledger, gateway, heartbeat, people)

@@ -26,7 +26,10 @@ class TrustLevel(StrEnum):
 
     # 通道能确认是用户本人：本机的终端；以后登录过的网页。
     VERIFIED_USER = "verified_user"
-    # 只知道平台账号，没法确认是谁（以后的 QQ 等平台）。
+    # 通道能确认这是某个具体的账号，而且不是用户：可以回复，按这个账号的档案认人（1.8）。
+    # Phase 1 里只有测试的模拟通道会给这个等级；真实通道放开留到 Phase 3（D53 第 7 条）。
+    VERIFIED_CONTACT = "verified_contact"
+    # 只知道平台账号，没法确认是谁（以后的 QQ 等平台）：只记录，不回复。
     UNVERIFIED = "unverified"
 
 

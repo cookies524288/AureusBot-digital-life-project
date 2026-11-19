@@ -164,3 +164,34 @@ def test_startup_prunes_snapshots_over_the_limit(paths: AureusPaths) -> None:
         pass
     assert not old.exists()
     assert new.exists()
+
+
+def test_the_user_and_the_terminal_account_are_registered(paths: AureusPaths) -> None:
+    paths.identity_file.write_text(
+        IDENTITY.replace(
+            'name = "测试用户"', 'name = "测试用户"\naccounts = [{ platform = "qq", id = "10000" }]'
+        ),
+        encoding="utf-8",
+    )
+    with open_core(paths, fake_organs=True, to_console=False) as core:
+        user = core.people.find("terminal", "local")
+        assert user is not None and user.is_user
+        assert user.name == "测试用户"
+        same = core.people.find("qq", "10000")
+        assert same is not None and same.id == user.id
+
+
+def test_an_account_owned_by_someone_else_stops_startup(paths: AureusPaths) -> None:
+    with open_core(paths, fake_organs=True, to_console=False) as core:
+        core.people.meet("qq", "10000")
+    paths.identity_file.write_text(
+        IDENTITY.replace(
+            'name = "测试用户"', 'name = "测试用户"\naccounts = [{ platform = "qq", id = "10000" }]'
+        ),
+        encoding="utf-8",
+    )
+    with (
+        pytest.raises(ConfigError, match="已经登记在别人名下"),
+        open_core(paths, fake_organs=True, to_console=False),
+    ):
+        pass
