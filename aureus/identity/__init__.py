@@ -3,6 +3,12 @@
 提供身份配置读取和单实例锁。
 """
 
+from .editor import (
+    IdentityEdit,
+    IdentityEditError,
+    IdentityEditor,
+    IdentityEditResult,
+)
 from .history import (
     PERSONA_LAYERS,
     IdentityHistory,
@@ -31,6 +37,10 @@ __all__ = [
     "PERSONA_LAYERS",
     "Facts",
     "Identity",
+    "IdentityEdit",
+    "IdentityEditError",
+    "IdentityEditResult",
+    "IdentityEditor",
     "IdentityError",
     "IdentityFileNotFoundError",
     "IdentityHistory",
