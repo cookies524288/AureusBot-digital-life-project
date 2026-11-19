@@ -377,6 +377,11 @@ class Heartbeat:
         return self._downtime
 
     @property
+    def identity(self) -> Identity:
+        """此刻生效的身份；用户在网页上改了设定后，这里就是改过之后的（D63）。"""
+        return self._identity
+
+    @property
     def cognitive_state(self) -> CognitiveState | None:
         """最近一拍广播的认知状态；还没跳过时是 None。"""
         return self._cognitive_state
