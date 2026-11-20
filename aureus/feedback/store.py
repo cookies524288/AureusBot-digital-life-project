@@ -25,8 +25,10 @@ PRIOR_CONFIDENCE = 0.5
 SIM_TASK_PREFIX = "sim_task:"
 # 承诺有没有兑现（D74 第 6 条）：答应的事做完算成功，放弃或过期算失败。
 COMMITMENT_KEPT = "commitment_kept"
+# 主动联系有没有得到回应（D76）：窗口内用户开口算成功，否则算失败。
+PROACTIVE_CONTACT = "proactive_contact"
 # 代码认识的固定类别（D67 第 2 条）；模拟任务另按前缀认。
-_FIXED_CATEGORIES = frozenset({COMMITMENT_KEPT})
+_FIXED_CATEGORIES = frozenset({COMMITMENT_KEPT, PROACTIVE_CONTACT})
 
 
 class Outcome(StrEnum):

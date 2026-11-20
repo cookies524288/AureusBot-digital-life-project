@@ -9,6 +9,7 @@ from .simulation import (
 from .store import (
     COMMITMENT_KEPT,
     PRIOR_CONFIDENCE,
+    PROACTIVE_CONTACT,
     SIM_TASK_PREFIX,
     Confidence,
     FeedbackError,
@@ -21,6 +22,7 @@ from .store import (
 __all__ = [
     "COMMITMENT_KEPT",
     "PRIOR_CONFIDENCE",
+    "PROACTIVE_CONTACT",
     "SIM_TASK_PREFIX",
     "Confidence",
     "FeedbackError",
