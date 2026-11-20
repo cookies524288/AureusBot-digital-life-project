@@ -125,6 +125,8 @@ _STRESS_REARM_FRACTION = 0.5
 _CANCEL_WAIT_SECONDS = 5.0
 # 重启时最多读多少条激素触发记录；超过半衰期 8 倍的会被 Hormones 丢掉，这里只防读得太多。
 _HORMONE_RESTORE_LIMIT = 1000
+# D76：只往回看最近这些条，避免醒来时扫描整条时间线。
+_CONVERSATION_RESTORE_LIMIT = 50
 # /state 里激素的显示名（09 号文档术语表）。
 # 好感账关着时，共情按陌生人的默认好感算（D72 第 2 条）。
 _DEFAULT_STRANGER_AFFINITY = PeopleConfig().stranger_affinity
@@ -333,6 +335,8 @@ class Heartbeat:
         self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
         self._stress_lowering = False  # 压力偏高，回复做法降一档中（D70），回落有滞后
         self._last_user_contact: Perception | None = None  # 自检通知发往的地方
+        self._last_conversation_at: datetime | None = None  # 用户说了、它实际回了才更新（D76）
+        self._conversation_restored = False
         self._observer = CognitiveObserver(clock, feedback)
         self._judge = judge
         self._judge_missing_logged = False  # 没配判断器官的日志只记一次
@@ -569,6 +573,7 @@ class Heartbeat:
         # 写在 woke_up 之后：停机时长看的是醒来前的最后一条记录，不能被这条挡住。
         self._record_identity_changes()
         self._restore_hormones(now)
+        self._restore_last_conversation()
         self._downtime = downtime
         self._phase = _Phase.RUNNING
         logger.info("心跳醒来：%s", downtime.describe(self._timezone))
@@ -591,6 +596,48 @@ class Heartbeat:
         if self._mood is not None:
             # 心情的半衰期比激素长得多，同一批记录里激素已经消退的，心情还记着（D73 第 3 条）。
             self._mood.restore(metadata, now)
+
+    def _restore_last_conversation(self) -> None:
+        """从最近的回复恢复有效对话；主动开口和没发成功的话都不算（D76）。"""
+        try:
+            records = self._timeline.query(
+                TimelineQuery(
+                    event_type=EVENT_MESSAGE,
+                    actor_type=ActorType.ME,
+                    latest=True,
+                    limit=_CONVERSATION_RESTORE_LIMIT,
+                )
+            )
+            self._last_conversation_at = None
+            for record in reversed(records):
+                if record.metadata.get("initiative") is True:
+                    continue
+                if "to_user" in record.metadata:
+                    if record.metadata["to_user"] is True:
+                        self._last_conversation_at = record.timestamp
+                        break
+                    continue
+                # 老版本没有 to_user，只认它明确回复过的用户记录。
+                reply_ids = record.metadata.get("in_reply_to", [])
+                if not isinstance(reply_ids, list):
+                    continue
+                for record_id in reply_ids:
+                    if not isinstance(record_id, int) or isinstance(record_id, bool):
+                        continue
+                    source = self._timeline.query(TimelineQuery(since_id=record_id - 1, limit=1))
+                    if (
+                        source
+                        and source[0].id == record_id
+                        and source[0].actor_type is ActorType.USER
+                    ):
+                        self._last_conversation_at = record.timestamp
+                        break
+                if self._last_conversation_at is not None:
+                    break
+            self._conversation_restored = True
+        except Exception:
+            self._conversation_restored = False
+            logger.exception("上次有效对话读不了，不凭空当作刚聊过")
 
     def _record_identity_changes(self) -> None:
         """醒来时：用户在 identity.toml 里改过设定的话，记一条「用户修改了我的设定」（D62）。
@@ -771,6 +818,11 @@ class Heartbeat:
             if self._hormones is not None:
                 retaliated = outcome.effects.retaliation is RetaliationMode.ALLOWED
                 self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)
+        delivered = self._deliver_reply(target, text)
+        if target.trust is TrustLevel.VERIFIED_USER:
+            metadata["to_user"] = delivered
+            if delivered:
+                self._last_conversation_at = self._clock.now()
         reply_record = self._timeline.append(
             event_type=EVENT_MESSAGE,
             content=text,
@@ -778,12 +830,11 @@ class Heartbeat:
             visibility=target.visibility,
             metadata=metadata,
         )
-        self._deliver_reply(target, text)
-        if outcome.plan is not None and person_id is not None:
+        if delivered and outcome.plan is not None and person_id is not None:
             # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
             self._apply_agenda(outcome.plan, person_id, reply_record)
 
-    def _deliver_reply(self, target: Perception, text: str) -> None:
+    def _deliver_reply(self, target: Perception, text: str) -> bool:
         """把回复拆成几条短消息发出（D60）。
 
         时间线里仍然是完整的一条：它说的是一段话，拆开只是发出去的样子。
@@ -796,8 +847,10 @@ class Heartbeat:
                 max_messages=self._config.max_reply_messages,
                 min_chars=self._config.min_message_chars,
             )
+        delivered = False
         for part in parts or [text]:
-            self._deliver(target, part, MessageKind.REPLY)
+            delivered = self._deliver(target, part, MessageKind.REPLY) or delivered
+        return delivered
 
     def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> TimelineRecord:
         """把判断器官的结果记进时间线，只有自己可见（D68 第 7、8 条）。"""
@@ -1114,7 +1167,7 @@ class Heartbeat:
             return
         backlog = len(self._unanswered) + len(self._pending)
         try:
-            self._reading = self._body.read(backlog)
+            self._reading = self._body.read(backlog, self._last_conversation_at)
         except Exception:
             # 为什么不抛：这里只是观察自己，读不到不该让心跳停下；真正的安全检查在网关里。
             logger.exception("读不了身体信号，沿用上一次的读数")
@@ -1678,7 +1731,7 @@ class Heartbeat:
             MessageKind.NOTICE,
         )
 
-    def _deliver(self, target: Perception, content: str, kind: MessageKind) -> None:
+    def _deliver(self, target: Perception, content: str, kind: MessageKind) -> bool:
         """把消息交给通道。通道出错只记日志：任何通道出问题都不影响核心（03 号文档）。"""
         sender = self._identity.facts.name if kind is MessageKind.REPLY else NOTICE_SENDER
         message = OutgoingMessage(
@@ -1691,11 +1744,13 @@ class Heartbeat:
         sink = self._sinks.get(message.channel)
         if sink is None:
             logger.warning("通道 %s 没有接上，消息发不出去", message.channel)
-            return
+            return False
         try:
             sink(message)
         except Exception:
             logger.exception("通道 %s 没能发出消息", message.channel)
+            return False
+        return True
 
 
 def _actor_type_of(perception: Perception) -> ActorType:
