@@ -34,3 +34,6 @@ EVENT_AGENDA_CLOSED = "agenda_closed"
 # 主动联系（D76）：每次考虑和之后有没有得到回应，只有自己可见。
 EVENT_INITIATIVE_CONSIDERED = "initiative_considered"
 EVENT_INITIATIVE_RESULT = "initiative_result"
+EVENT_INTEREST_CHANGED = "interest_changed"  # 兴趣改动（D79）
+EVENT_EXPLORATION_STARTED = "exploration_started"
+EVENT_EXPLORATION_RESULT = "exploration_result"

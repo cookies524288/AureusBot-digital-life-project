@@ -108,6 +108,7 @@ class Plan:
     commit: Commitment | None = None
     # 处理了哪几项约定（D74）；看不懂的项直接丢掉。
     resolutions: tuple[Resolution, ...] = ()
+    interest: "InterestChange | None" = None
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -121,6 +122,13 @@ class Plan:
             metadata["commit"] = self.commit.to_metadata()
         if self.resolutions:
             metadata["resolve"] = [item.to_metadata() for item in self.resolutions]
+        if self.interest is not None:
+            metadata["interest"] = {
+                "action": self.interest.action.value,
+                "text": self.interest.text,
+                "interest_id": self.interest.interest_id,
+                "reason": self.interest.reason,
+            }
         return metadata
 
 
@@ -159,6 +167,7 @@ def parse_plan(text: str) -> Plan | None:
         reason=clean_text(data.get("reason"), _MAX_REASON_CHARS),
         commit=_parse_commit(data.get("commit")),
         resolutions=_parse_resolutions(data.get("resolve")),
+        interest=_parse_interest(data.get("interest")),
     )
 
 
@@ -187,6 +196,48 @@ def parse_initiative_plan(text: str) -> InitiativePlan | None:
     if reach_out and not intent:
         return None
     return InitiativePlan(reach_out, intent, clean_text(data.get("reason"), _MAX_REASON_CHARS))
+
+
+class InterestAction(StrEnum):
+    """用户私聊里可提出的一项兴趣改动（D79）。"""
+
+    ADD = "add"
+    REMOVE = "remove"
+    REPLACE = "replace"
+
+
+@dataclass(frozen=True)
+class InterestChange:
+    """通过形状校验的兴趣建议；写入前还要核对来源和每日限额（D79）。"""
+
+    action: InterestAction
+    text: str | None
+    interest_id: int | None
+    reason: str
+
+
+def _parse_interest(value: object) -> InterestChange | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        action = InterestAction(value.get("action"))
+    except (ValueError, TypeError):
+        return None
+    text, reason, interest_id = value.get("text"), value.get("reason"), value.get("interest_id")
+    if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 100:
+        return None
+    if action is not InterestAction.REMOVE and (
+        not isinstance(text, str) or not 1 <= len(text.strip()) <= 30
+    ):
+        return None
+    if action is not InterestAction.ADD and (type(interest_id) is not int or interest_id < 1):
+        return None
+    return InterestChange(
+        action,
+        text.strip() if isinstance(text, str) else None,
+        interest_id if type(interest_id) is int else None,
+        reason.strip(),
+    )
 
 
 def _parse_commit(value: object) -> Commitment | None:

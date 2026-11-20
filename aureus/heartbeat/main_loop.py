@@ -22,6 +22,8 @@ from enum import Enum, auto
 from typing import Any, Protocol
 
 from aureus.agenda import AgendaItem, AgendaStore, ItemStatus, describe_agenda, parse_due
+from aureus.agenda.findings import FindingStore
+from aureus.agenda.interests import InterestStore
 from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import (
@@ -63,6 +65,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from aureus.heartbeat.exploration_runner import ExplorationTracker
 from aureus.heartbeat.initiative import decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, TowardMeKind, parse_judgment
@@ -234,6 +237,7 @@ class _ReplyJob:
     build_contexts: Callable[[str, str], tuple[str, str]]
     # 此刻激素对这次回复的影响；激素没开时是 None。
     effects: HormoneEffects | None = None
+    with_interests: bool = False
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,8 @@ class Heartbeat:
         agenda: AgendaStore | None = None,
         initiative: InitiativeConfig | None = None,
         calendar: BudgetCalendar | None = None,
+        interests: InterestStore | None = None,
+        findings: FindingStore | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -349,6 +355,8 @@ class Heartbeat:
                 不给就没有日程。
             initiative: 主动联系的开关和退避参数；不给时关闭（D76）。
             calendar: 每日次数的分界，与预算共用日历；不给时按 timezone 创建。
+            interests: 兴趣存储，开关开启时允许用户私聊提出修改（D79）。
+            findings: 私密收获存储（D79）。
         """
         self._clock = clock
         self._timeline = timeline
@@ -390,6 +398,12 @@ class Heartbeat:
             initiative_config, timeline, feedback, calendar or BudgetCalendar(timezone)
         )
         self._sinks: dict[str, MessageSink] = {}
+        self._exploration = ExplorationTracker(
+            timeline,
+            calendar or BudgetCalendar(timezone),
+            None if config.roleplay_mode else interests,
+            findings,
+        )
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
         self._thought: _Thought | None = None
@@ -850,6 +864,9 @@ class Heartbeat:
         if delivered and outcome.plan is not None and person_id is not None:
             # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
             self._apply_agenda(outcome.plan, person_id, reply_record)
+            self._exploration.apply_interest(
+                outcome.plan.interest, thought.replying_to[-1].record, self._clock.now()
+            )
 
     def _deliver_reply(self, target: Perception, text: str) -> bool:
         """把回复拆成几条短消息发出（D60）。
@@ -1551,6 +1568,7 @@ class Heartbeat:
             mood_state = mood_reading.summary if mood_reading is not None else ""
         if agenda_state is None:
             agenda_state = self._agenda_for_context(person_id)
+        interests_state = self._exploration.context(target, self._timezone)
 
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
             return build_system_context(
@@ -1567,6 +1585,7 @@ class Heartbeat:
                 affinity_state=affinity_state,
                 mood_state=mood_state,
                 agenda_state=agenda_state,
+                interests_state=interests_state,
                 initiative_note=initiative_note if not include_behavior_style else "",
             )
 
@@ -1591,6 +1610,7 @@ class Heartbeat:
             person_id=person_id,
             viewer_is_user=not contact,
             build_contexts=build_contexts,
+            with_interests=bool(interests_state),
         )
         return self._apply_hormones(job, ())
 
@@ -1782,6 +1802,7 @@ class Heartbeat:
                 job.user_name,
                 self._timezone,
                 with_agenda=self._agenda is not None,
+                with_interests=job.with_interests,
             ),
             system_context=job.full_context,
         )

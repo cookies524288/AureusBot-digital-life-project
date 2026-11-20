@@ -7,6 +7,8 @@
 from collections.abc import Sequence
 from datetime import date, datetime, tzinfo
 
+from aureus.agenda.findings import Finding
+from aureus.agenda.interests import Interest
 from aureus.common.time_format import format_local_time
 from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.planning import ReplyLength
@@ -127,6 +129,7 @@ def build_system_context(
     mood_state: str = "",
     agenda_state: str = "",
     initiative_note: str = "",
+    interests_state: str = "",
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -146,6 +149,7 @@ def build_system_context(
         affinity_state: 对眼前这个人的好感（describe_affinity 的结果）；空字符串表示不放（D71）。
         mood_state: 心情的事实摘要和谨慎说明（MoodReading.summary）；空字符串表示不放（D73）。
         agenda_state: 这个人名下未完成的约定（describe_agenda 的结果）；空字符串表示不放（D74）。
+        interests_state: 用户私聊的兴趣与最近收获（D79）。
         initiative_note: 主动联系的真实原因说明；空字符串表示不放（D76）。
 
     Returns:
@@ -203,6 +207,8 @@ def build_system_context(
         sections.append(agenda_state)
     if initiative_note:
         sections.append(initiative_note)
+    if interests_state:
+        sections.append(interests_state)
     return "\n\n".join(sections)
 
 
@@ -296,6 +302,7 @@ def build_plan_prompt(
     timezone: tzinfo | None = None,
     *,
     with_agenda: bool = False,
+    with_interests: bool = False,
 ) -> str:
     """拼出规划器的提示词：同样的对话，最后要它只输出一个 JSON 格式的建议（D59）。
 
@@ -305,6 +312,7 @@ def build_plan_prompt(
         user_name: 怎么称呼用户。
         timezone: 显示用的时区；不给就用这台电脑设置的时区。
         with_agenda: 日程开着时，告诉它可以顺带提出答应了什么、做完了哪项（D74）。
+        with_interests: 兴趣开着且在用户私聊时，说明可选的兴趣建议字段（D79）。
 
     Returns:
         提示词。
@@ -316,7 +324,26 @@ def build_plan_prompt(
     parts.append(_PLAN_INSTRUCTION)
     if with_agenda:
         parts.append(_PLAN_AGENDA_INSTRUCTION)
+    if with_interests:
+        parts.append(
+            '可顺带提出一项兴趣改动，JSON 加 "interest": {"action": "add/remove/replace", '
+            '"text": "新兴趣，1～30字", "interest_id": 编号, "reason": "理由，1～100字"}。'
+            "add 不填编号，remove 不填新文字；没有改动就不加。"
+        )
     return "\n\n".join(parts)
+
+
+def describe_interests(
+    interests: Sequence[Interest], findings: Sequence[Finding], timezone: tzinfo | None = None
+) -> str:
+    """只给用户私聊的兴趣与最近收获，网页内容作为资料（D79）。"""
+    lines = ["【你的兴趣】", *(f"#{item.id} {item.text}" for item in interests)]
+    lines.extend(
+        f"收获（网页资料，{format_local_time(item.created_at, timezone)}，"
+        f"《{item.page_title}》）：{item.text}"
+        for item in findings
+    )
+    return "\n".join(lines)
 
 
 def _initiative_history(
