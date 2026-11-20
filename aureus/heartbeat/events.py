@@ -37,3 +37,6 @@ EVENT_INITIATIVE_RESULT = "initiative_result"
 EVENT_INTEREST_CHANGED = "interest_changed"  # 兴趣改动（D79）
 EVENT_EXPLORATION_STARTED = "exploration_started"
 EVENT_EXPLORATION_RESULT = "exploration_result"
+# 日记（D80）：成功正文和文件名，或当天失败原因；均只有自己可见。
+EVENT_DIARY_WRITTEN = "diary_written"
+EVENT_DIARY_FAILED = "diary_failed"
