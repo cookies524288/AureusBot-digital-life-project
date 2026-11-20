@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from aureus.common import (
+    AgendaConfig,
     AureusPaths,
     BodyConfig,
     ConfigError,
@@ -859,3 +860,48 @@ def test_mood_caution_levels_must_be_ordered(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[mood]{NEWLINE}cautious_below = -0.1{NEWLINE}")
     assert "cautious_below" in error_message_of(paths)
+
+
+# ---------- [agenda] 日程配置（D74） ----------
+
+AGENDA_FIELDS = tuple(AgendaConfig.model_fields)
+
+
+def test_agenda_defaults_follow_d74(tmp_path: Path) -> None:
+    agenda = load_runtime_config(AureusPaths(tmp_path)).agenda
+    assert agenda == AgendaConfig()
+    assert agenda.enabled is True
+    assert (agenda.max_open_per_person, agenda.max_due_days) == (20, 90)
+    assert (agenda.expire_grace_days, agenda.context_items) == (3.0, 5)
+
+
+def test_agenda_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in AGENDA_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "agenda")
+    assert sum(line.startswith(prefixes) for line in mine) == len(AGENDA_FIELDS)
+    start = lines.index("[agenda]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, NEWLINE.join(lines))
+    assert load_runtime_config(paths).agenda == AgendaConfig()
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("enabled", "1"),
+        ("max_open_per_person", "0"),
+        ("max_open_per_person", "2.5"),
+        ("max_due_days", "0"),
+        ("expire_grace_days", "-1"),
+        ("context_items", '"5"'),
+    ],
+)
+def test_agenda_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[agenda]{NEWLINE}{field} = {text}{NEWLINE}")
+    assert field in error_message_of(paths)

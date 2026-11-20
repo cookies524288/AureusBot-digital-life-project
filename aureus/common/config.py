@@ -386,6 +386,27 @@ class MoodConfig(BaseModel):
         return self
 
 
+class AgendaConfig(BaseModel):
+    """日程的配置（aureus.toml 的 [agenda]，设计见 docs/10-decisions.md 的 D74）。
+
+    这里管记下承诺、到期提醒和兑现记账；自己去推进日程、主动联系对方是 2.8 的 [initiative]。
+    """
+
+    # 严格类型，理由同 SafetyConfig：开关写成数字、条数写成字符串要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 日程的开关（D5）。关掉后不记承诺、不提醒、不记兑现。
+    enabled: bool = True
+    # 每个人名下未完成的条目最多几条，超过的新承诺不记（防止被刷满）。
+    max_open_per_person: int = Field(default=20, ge=1)
+    # 到期时间最远能定在几天后；更远的只丢掉时间，条目照记。
+    max_due_days: int = Field(default=90, ge=1)
+    # 到期后再过几天还没交代，就算过期（承诺失败）。
+    expire_grace_days: float = Field(default=3.0, ge=0)
+    # 回复时上下文里最多列几条这个人名下未完成的条目。
+    context_items: int = Field(default=5, ge=1)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -411,6 +432,7 @@ class RuntimeConfig(BaseModel):
     people: PeopleConfig = Field(default_factory=PeopleConfig)
     empathy: EmpathyConfig = Field(default_factory=EmpathyConfig)
     mood: MoodConfig = Field(default_factory=MoodConfig)
+    agenda: AgendaConfig = Field(default_factory=AgendaConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod

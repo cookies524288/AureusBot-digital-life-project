@@ -49,6 +49,7 @@ def add_results(store: FeedbackStore, outcomes: list[Outcome], category: str = C
 
 def test_category_must_be_known() -> None:
     assert check_category("sim_task:easy") == "sim_task:easy"
+    assert check_category("commitment_kept") == "commitment_kept"  # D74 的固定类别
     for bad in ("", "sim_task:", "sim_task:   ", "reply_accepted", "任意起的名字"):
         with pytest.raises(FeedbackError):
             check_category(bad)

@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from aureus.cli.agenda_command import DEFAULT_AGENDA_LIMIT, run_agenda_command
 from aureus.cli.chat_command import run_chat_command
 from aureus.cli.halt_command import run_halt_command, run_resume_command
 from aureus.cli.init_command import run_init_command
@@ -76,6 +77,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"最多显示几个版本，默认 {DEFAULT_PERSONA_LIMIT}",
     )
     persona.add_argument("--full", action="store_true", help="显示完整内容，不截断")
+    agenda = commands.add_parser("agenda", help="查看它答应过的事；--cancel 编号 取消一条")
+    agenda.add_argument("--all", action="store_true", help="也列出已经结束的")
+    agenda.add_argument(
+        "--limit",
+        type=positive_int,
+        default=DEFAULT_AGENDA_LIMIT,
+        metavar="条数",
+        help=f"和 --all 一起用，最多显示几条，默认 {DEFAULT_AGENDA_LIMIT}",
+    )
+    agenda.add_argument("--cancel", type=positive_int, metavar="编号", help="取消这一条约定")
     monitor = commands.add_parser(
         "monitor", help="启动观察台：在浏览器里只读地看它的内部状态（只绑本机，要装 Streamlit）"
     )
@@ -168,6 +179,8 @@ def main(
         return run_usage_command(paths)
     if args.command == "persona":
         return run_persona_command(args, paths)
+    if args.command == "agenda":
+        return run_agenda_command(args, paths)
     if args.command == "monitor":
         return run_monitor_command(args, paths)
     if args.command == "halt":

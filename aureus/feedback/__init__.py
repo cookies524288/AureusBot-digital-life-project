@@ -7,6 +7,7 @@ from .simulation import (
     run_simulation,
 )
 from .store import (
+    COMMITMENT_KEPT,
     PRIOR_CONFIDENCE,
     SIM_TASK_PREFIX,
     Confidence,
@@ -18,6 +19,7 @@ from .store import (
 )
 
 __all__ = [
+    "COMMITMENT_KEPT",
     "PRIOR_CONFIDENCE",
     "SIM_TASK_PREFIX",
     "Confidence",

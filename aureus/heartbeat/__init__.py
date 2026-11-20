@@ -5,6 +5,9 @@
 
 from .downtime import Downtime, assess_downtime
 from .events import (
+    EVENT_AGENDA_ADDED,
+    EVENT_AGENDA_CLOSED,
+    EVENT_AGENDA_DUE,
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
     EVENT_EMERGENCY_STOP,
@@ -38,6 +41,9 @@ from .planning import Plan, ReplyLength, parse_plan
 from .reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 
 __all__ = [
+    "EVENT_AGENDA_ADDED",
+    "EVENT_AGENDA_CLOSED",
+    "EVENT_AGENDA_DUE",
     "EVENT_COGNITIVE_STATE",
     "EVENT_EMERGENCY_RESUME",
     "EVENT_EMERGENCY_STOP",

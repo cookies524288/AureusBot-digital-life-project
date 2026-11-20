@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from aureus.agenda import AgendaStore
 from aureus.body import Body, BodySampleStore
 from aureus.channels import CHANNEL_NAME as TERMINAL_CHANNEL
 from aureus.channels import TERMINAL_USER_ID, WEB_CHANNEL_NAME, WEB_USER_ID
@@ -211,6 +212,12 @@ def open_core(
         # 激素（D69）：关掉开关或扮演模式（D65，对照组只有提示词）时不创建。
         hormones = Hormones(runtime.hormones) if runtime.hormones.enabled and not roleplay else None
         # 好感（D71）：扮演模式是对照组，和激素一样不创建；关掉时不记变化、不进上下文。
+        # 日程（D74）：记下答应的事、到期提醒、兑现记账；扮演模式是对照组，不创建。
+        agenda: AgendaStore | None = None
+        if runtime.agenda.enabled and not roleplay:
+            agenda = AgendaStore(paths.database_file, the_clock, runtime.agenda)
+            agenda.open()
+            stack.callback(agenda.close)
         # 心情（D73）：扮演模式是对照组，不创建；关掉时不算心情、不进上下文。
         mood = Mood(runtime.mood) if runtime.mood.enabled and not roleplay else None
         affinity: AffinityBook | None = None
@@ -243,6 +250,7 @@ def open_core(
             affinity=affinity,
             empathy=runtime.empathy,
             mood=mood,
+            agenda=agenda,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

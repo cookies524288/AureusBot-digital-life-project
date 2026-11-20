@@ -23,6 +23,10 @@ _TIMESTAMP_PRECISION = "microseconds"
 PRIOR_CONFIDENCE = 0.5
 # 模拟任务类别的前缀（2.1 只有这一种类别，D67 第 2 条）。
 SIM_TASK_PREFIX = "sim_task:"
+# 承诺有没有兑现（D74 第 6 条）：答应的事做完算成功，放弃或过期算失败。
+COMMITMENT_KEPT = "commitment_kept"
+# 代码认识的固定类别（D67 第 2 条）；模拟任务另按前缀认。
+_FIXED_CATEGORIES = frozenset({COMMITMENT_KEPT})
 
 
 class Outcome(StrEnum):
@@ -78,11 +82,13 @@ class Confidence:
 
 
 def check_category(category: str) -> str:
-    """类别必须是代码认识的：2.1 只有模拟任务 sim_task:<名字>（D67 第 2 条）。
+    """类别必须是代码认识的：模拟任务 sim_task:<名字>，和固定类别（D67 第 2 条、D74）。
 
     Raises:
         FeedbackError: 类别不认识，或模拟任务没有名字。
     """
+    if category in _FIXED_CATEGORIES:
+        return category
     if category.startswith(SIM_TASK_PREFIX) and category[len(SIM_TASK_PREFIX) :].strip():
         return category
     raise FeedbackError(f"不认识的反馈类别：{category!r}（类别由代码固定，器官不能自己起名）")

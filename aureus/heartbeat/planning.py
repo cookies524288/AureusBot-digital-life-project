@@ -55,6 +55,41 @@ _MAX_PLAN_CHARS = 4000
 # 意图和理由会写进回复器的提示词和时间线，截到这么长，免得一条建议把上下文撑满。
 _MAX_INTENT_CHARS = 300
 _MAX_REASON_CHARS = 200
+# 日程字段（D74 第 3 条）：一次最多处理几项、约定内容截到多长（和 agenda 的上限一致）。
+_MAX_RESOLUTIONS = 5
+_MAX_COMMIT_CHARS = 200
+
+
+class ResolutionResult(StrEnum):
+    """规划器说某项约定怎么样了。"""
+
+    DONE = "done"  # 做完了
+    DROPPED = "dropped"  # 做不了（必须给原因）
+
+
+@dataclass(frozen=True)
+class Commitment:
+    """规划器说这次答应了什么。到期时间是原样的文字，由日程按时区解析（D74 第 3 条）。"""
+
+    what: str
+    due_text: str | None
+
+    def to_metadata(self) -> dict[str, Any]:
+        """写进时间线 metadata 的样子。"""
+        return {"what": self.what, "due": self.due_text}
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """规划器说某项约定做完了或做不了。"""
+
+    item_id: int
+    result: ResolutionResult
+    reason: str
+
+    def to_metadata(self) -> dict[str, Any]:
+        """写进时间线 metadata 的样子。"""
+        return {"id": self.item_id, "result": self.result.value, "reason": self.reason}
 
 
 @dataclass(frozen=True)
@@ -69,15 +104,24 @@ class Plan:
     length: ReplyLength | None
     # 为什么这样决定；可以是空的。
     reason: str
+    # 这次答应了什么（D74）；没有或看不懂时是 None。
+    commit: Commitment | None = None
+    # 处理了哪几项约定（D74）；看不懂的项直接丢掉。
+    resolutions: tuple[Resolution, ...] = ()
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
-        return {
+        metadata: dict[str, Any] = {
             "reply": self.should_reply,
             "intent": self.intent,
             "length": self.length.value if self.length is not None else None,
             "reason": self.reason,
         }
+        if self.commit is not None:
+            metadata["commit"] = self.commit.to_metadata()
+        if self.resolutions:
+            metadata["resolve"] = [item.to_metadata() for item in self.resolutions]
+        return metadata
 
 
 def parse_plan(text: str) -> Plan | None:
@@ -113,7 +157,47 @@ def parse_plan(text: str) -> Plan | None:
         intent=intent,
         length=length,
         reason=clean_text(data.get("reason"), _MAX_REASON_CHARS),
+        commit=_parse_commit(data.get("commit")),
+        resolutions=_parse_resolutions(data.get("resolve")),
     )
+
+
+def _parse_commit(value: object) -> Commitment | None:
+    """可选的 commit 字段；看不懂就当没有，不影响规划本身（D74 第 3 条）。"""
+    if not isinstance(value, dict):
+        return None
+    what = clean_text(value.get("what"), _MAX_COMMIT_CHARS)
+    if not what:
+        return None
+    due = value.get("due")
+    return Commitment(what=what, due_text=due.strip() if isinstance(due, str) else None)
+
+
+def _parse_resolutions(value: object) -> tuple[Resolution, ...]:
+    """可选的 resolve 字段：只留看得懂的项，取前 5 个；放弃却没写原因的不收（D74 第 6 条）。"""
+    if not isinstance(value, list):
+        return ()
+    results: list[Resolution] = []
+    for entry in value:
+        if len(results) >= _MAX_RESOLUTIONS:
+            break
+        if not isinstance(entry, dict):
+            continue
+        item_id = entry.get("id")
+        result_text = entry.get("result")
+        if isinstance(item_id, bool) or not isinstance(item_id, int):
+            continue
+        if not isinstance(result_text, str):
+            continue
+        try:
+            result = ResolutionResult(result_text.strip().lower())
+        except ValueError:
+            continue
+        reason = clean_text(entry.get("reason"), _MAX_REASON_CHARS)
+        if result is ResolutionResult.DROPPED and not reason:
+            continue
+        results.append(Resolution(item_id, result, reason))
+    return tuple(results)
 
 
 def first_json_object(text: str) -> dict[str, Any] | None:

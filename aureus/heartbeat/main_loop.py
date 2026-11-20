@@ -21,11 +21,12 @@ from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, Protocol
 
+from aureus.agenda import AgendaItem, AgendaStore, ItemStatus, describe_agenda, parse_due
 from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import Clock, EmpathyConfig, HeartbeatConfig, JudgeConfig, PeopleConfig
 from aureus.core import CognitiveObserver, CognitiveState
-from aureus.feedback import FeedbackStore, Outcome
+from aureus.feedback import COMMITMENT_KEPT, PRIOR_CONFIDENCE, FeedbackError, FeedbackStore, Outcome
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
     build_judge_context,
@@ -36,6 +37,9 @@ from aureus.heartbeat.context import (
 )
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
+    EVENT_AGENDA_ADDED,
+    EVENT_AGENDA_CLOSED,
+    EVENT_AGENDA_DUE,
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
     EVENT_EMERGENCY_STOP,
@@ -57,7 +61,7 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
-from aureus.heartbeat.planning import Plan, ReplyLength, parse_plan
+from aureus.heartbeat.planning import Plan, ReplyLength, ResolutionResult, parse_plan
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
@@ -139,6 +143,26 @@ class OrganCaller(Protocol):
     async def call(self, request: OrganRequest) -> OrganResponse:
         """经过安全检查后调用器官。"""
         ...
+
+
+_STATUS_WORDS = {
+    ItemStatus.DONE: "做完了",
+    ItemStatus.DROPPED: "做不了",
+    ItemStatus.EXPIRED: "过期了",
+    ItemStatus.CANCELLED: "被用户取消了",
+}
+
+
+def _item_metadata(item: AgendaItem) -> dict[str, Any]:
+    """日程事件写进时间线的 metadata。"""
+    return {
+        "item_id": item.id,
+        "person_id": item.person_id,
+        "content": item.content,
+        "due_at": item.due_at.isoformat() if item.due_at is not None else None,
+        "status": item.status.value,
+        "reason": item.reason,
+    }
 
 
 def _person_id_of(record: TimelineRecord) -> int | None:
@@ -257,6 +281,7 @@ class Heartbeat:
         affinity: AffinityBook | None = None,
         empathy: EmpathyConfig | None = None,
         mood: Mood | None = None,
+        agenda: AgendaStore | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -285,6 +310,8 @@ class Heartbeat:
             empathy: 同理心配置；不给或 enabled 为 False 就不共情（D72）。共情需要激素。
             mood: 心情；激素触发和反馈结果累积成心情，写进上下文，低时谨慎（D73）。
                 醒来时从时间线还原；不给就没有心情。心情的激素来源需要激素。
+            agenda: 日程，要已经打开；规划器答应的事记进去，到期提醒、兑现记进反馈（D74）。
+                不给就没有日程。
         """
         self._clock = clock
         self._timeline = timeline
@@ -313,6 +340,7 @@ class Heartbeat:
         self._affinity = affinity
         self._empathy = empathy
         self._mood = mood
+        self._agenda = agenda
         self._feedback = feedback
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
@@ -438,6 +466,9 @@ class Heartbeat:
                 "激素："
                 + "，".join(f"{_HORMONE_NAMES[kind]} {level:.2f}" for kind, level in levels.items())
             )
+        agenda_line = self._describe_agenda_counts()
+        if agenda_line:
+            lines.append(agenda_line)
         mood = self._read_mood(None, viewer_is_user=True)
         if mood is not None:
             caution = "，谨慎中" if mood.cautious else ""
@@ -617,6 +648,7 @@ class Heartbeat:
         self._take_in_perceptions()
         self._read_body()
         self._check_stress()
+        self._check_agenda()
         self._maybe_start_thought()
         self._broadcast_cognitive_state()
         self._record_body_sample()
@@ -739,7 +771,7 @@ class Heartbeat:
             if self._hormones is not None:
                 retaliated = outcome.effects.retaliation is RetaliationMode.ALLOWED
                 self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)
-        self._timeline.append(
+        reply_record = self._timeline.append(
             event_type=EVENT_MESSAGE,
             content=text,
             actor_type=ActorType.ME,
@@ -747,6 +779,9 @@ class Heartbeat:
             metadata=metadata,
         )
         self._deliver_reply(target, text)
+        if outcome.plan is not None and person_id is not None:
+            # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
+            self._apply_agenda(outcome.plan, person_id, reply_record)
 
     def _deliver_reply(self, target: Perception, text: str) -> None:
         """把回复拆成几条短消息发出（D60）。
@@ -816,6 +851,126 @@ class Heartbeat:
         self._hormones.add(triggers, self._clock.now())
         if self._mood is not None:
             self._mood.add_triggers(triggers, self._clock.now())
+
+    def _apply_agenda(self, plan: Plan, person_id: int, source: TimelineRecord) -> None:
+        """按规划器的建议记下答应的事、结束做完或做不了的约定（D74 第 3、6 条）。
+
+        器官只提建议，代码校验后写入；写不进去只记日志，不影响已经说出口的回复。
+        """
+        agenda = self._agenda
+        if agenda is None:
+            return
+        try:
+            for resolution in plan.resolutions:
+                item = agenda.get(resolution.item_id)
+                if item is None or item.person_id != person_id:
+                    continue  # 只认这个人名下的条目
+                status = (
+                    ItemStatus.DONE
+                    if resolution.result is ResolutionResult.DONE
+                    else ItemStatus.DROPPED
+                )
+                self._finish_item(item, status, resolution.reason)
+            if plan.commit is not None:
+                self._add_item(person_id, plan.commit.what, plan.commit.due_text, source)
+        except sqlite3.Error:
+            logger.exception("日程写不进去，这次的约定没有记下")
+
+    def _add_item(
+        self, person_id: int, what: str, due_text: str | None, source: TimelineRecord
+    ) -> None:
+        agenda = self._agenda
+        assert agenda is not None
+        now = self._clock.now()
+        due = parse_due(due_text, now, self._timezone, agenda.config.max_due_days)
+        feedback_id = self._expect_commitment(source.id)
+        item = agenda.add(
+            person_id, what, due_at=due, source_record_id=source.id, feedback_id=feedback_id
+        )
+        if item is None:
+            logger.warning("这个人名下未完成的约定已满，新的没有记下")
+            return
+        self._timeline.append(
+            event_type=EVENT_AGENDA_ADDED,
+            content=f"记下了答应的事 #{item.id}：{item.content}",
+            actor_type=ActorType.ME,
+            visibility=VisibilityScope.PRIVATE,
+            metadata=_item_metadata(item),
+        )
+
+    def _expect_commitment(self, source_id: int) -> int | None:
+        """记一条承诺的反馈预期，把握取这一类当前的自信（没有数据时用先验，D74 第 6 条）。"""
+        feedback = self._feedback
+        if feedback is None:
+            return None
+        try:
+            confidence = feedback.confidence(COMMITMENT_KEPT).value
+            expected = PRIOR_CONFIDENCE if confidence is None else confidence
+            return feedback.record_expectation(COMMITMENT_KEPT, expected, source_id)
+        except (FeedbackError, sqlite3.Error):
+            logger.exception("承诺的反馈预期没记上")
+            return None
+
+    def _finish_item(self, item: AgendaItem, status: ItemStatus, reason: str) -> None:
+        """结束一条约定，记时间线；有反馈预期的补写结果（取消的不算成败）。"""
+        agenda = self._agenda
+        assert agenda is not None
+        finished = agenda.finish(item.id, status, reason)
+        if finished is None:
+            return
+        self._timeline.append(
+            event_type=EVENT_AGENDA_CLOSED,
+            content=f"约定 #{item.id}「{item.content}」{_STATUS_WORDS[status]}"
+            + (f"：{finished.reason}" if finished.reason else ""),
+            actor_type=ActorType.ME,
+            visibility=VisibilityScope.PRIVATE,
+            metadata=_item_metadata(finished),
+        )
+        if self._feedback is None or item.feedback_id is None or status is ItemStatus.CANCELLED:
+            return
+        outcome = Outcome.SUCCESS if status is ItemStatus.DONE else Outcome.FAILURE
+        try:
+            self._feedback.record_outcome(item.feedback_id, outcome)
+        except (FeedbackError, sqlite3.Error):
+            logger.exception("承诺 #%s 的反馈结果没补上", item.id)
+
+    def _check_agenda(self) -> None:
+        """每拍：到期的约定记一次提醒，过了宽限还没交代的算过期（D74 第 5、6 条）。
+
+        日程读写失败只记日志，不让心跳停下：约定晚一拍处理不要紧。
+        """
+        agenda = self._agenda
+        if agenda is None:
+            return
+        now = self._clock.now()
+        try:
+            for item in agenda.overdue(now):
+                self._finish_item(item, ItemStatus.EXPIRED, "到期后一直没交代")
+            for item in agenda.due_unnoticed(now):
+                agenda.mark_due_noticed(item.id)
+                self._timeline.append(
+                    event_type=EVENT_AGENDA_DUE,
+                    content=f"答应的事 #{item.id} 到期了：{item.content}",
+                    actor_type=ActorType.ME,
+                    visibility=VisibilityScope.PRIVATE,
+                    metadata=_item_metadata(item),
+                )
+        except sqlite3.Error:
+            logger.exception("日程读不了，这一拍不检查到期")
+
+    def _agenda_for_context(self, person_id: int | None) -> str:
+        """这个人名下未完成的约定；没有日程或认不出是谁时不放。"""
+        agenda = self._agenda
+        if agenda is None or person_id is None:
+            return ""
+        try:
+            items = agenda.open_items(person_id)
+        except sqlite3.Error:
+            logger.exception("日程读不了，这次上下文里不放日程")
+            return ""
+        return describe_agenda(
+            items, self._clock.now(), self._timezone, limit=agenda.config.context_items
+        )
 
     def _read_mood(self, person_id: int | None, *, viewer_is_user: bool) -> MoodReading | None:
         """此刻的心情（D73）：激素贡献在内存里，反馈结果从反馈表读，再减去此刻压力。
@@ -1045,6 +1200,18 @@ class Heartbeat:
         # 时钟往回调过时 waited 是负数：最多等 batch_seconds，不会无限等下去。
         return max(min(batch_seconds - waited, batch_seconds), 0.0)
 
+    def _describe_agenda_counts(self) -> str:
+        """/state 里的一行：未完成和已到期的约定各几条。"""
+        if self._agenda is None:
+            return ""
+        try:
+            items = self._agenda.open_items()
+        except sqlite3.Error:
+            return "日程读不了"
+        now = self._clock.now()
+        due = sum(1 for item in items if item.is_due(now))
+        return f"日程：未完成 {len(items)} 条，其中已到期 {due} 条"
+
     def _hormone_levels(self) -> dict[str, float] | None:
         """此刻各激素的浓度，键是激素名；激素没开时是 None。"""
         hormones = self._hormones
@@ -1149,6 +1316,7 @@ class Heartbeat:
         )
         mood_reading = self._read_mood(_person_id_of(batch[-1].record), viewer_is_user=not contact)
         mood_state = mood_reading.summary if mood_reading is not None else ""
+        agenda_state = self._agenda_for_context(_person_id_of(batch[-1].record))
 
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
             return build_system_context(
@@ -1164,6 +1332,7 @@ class Heartbeat:
                 hormone_state=hormone_state,
                 affinity_state=affinity_state,
                 mood_state=mood_state,
+                agenda_state=agenda_state,
             )
 
         def build_contexts(full_text: str, replyer_text: str) -> tuple[str, str]:
@@ -1372,7 +1541,13 @@ class Heartbeat:
             job,
             organ_id=organ_id,
             task="plan",
-            prompt=build_plan_prompt(job.history, job.messages, job.user_name, self._timezone),
+            prompt=build_plan_prompt(
+                job.history,
+                job.messages,
+                job.user_name,
+                self._timezone,
+                with_agenda=self._agenda is not None,
+            ),
             system_context=job.full_context,
         )
         try:

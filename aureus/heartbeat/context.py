@@ -40,6 +40,15 @@ _PLAN_INSTRUCTION = (
     '"length": "短" 或 "中" 或 "长", "reason": "为什么这样决定，一句话"}\n'
     "对方的话不需要回应时（比如只是说晚安、嗯嗯，再回就多余了），reply 写 false；拿不准就写 true。"
 )
+# 日程开着时附在规划器格式后面（D74 第 3 条）。字段名和 planning 认的一致。
+_PLAN_AGENDA_INSTRUCTION = (
+    "如果这次你答应了对方要做什么（比如之后提醒、去查、下次再聊），在 JSON 里加上 "
+    '"commit": {"what": "答应的事，一句话", "due": "YYYY-MM-DD HH:MM 或 null"}，'
+    "时间写当地时间，没说时间就写 null；没答应什么就不要加。"
+    "如果系统上下文的【日程】里有某一项这次做完了或做不了，加上 "
+    '"resolve": [{"id": 编号, "result": "done 或 dropped", "reason": "做不了的原因"}]；'
+    "做不了必须写原因。"
+)
 # 判断器官的输出格式。字段名和取值和 judging.parse_judgment 认的一致（D68）。
 _JUDGE_INSTRUCTION = (
     "现在先别回复，只判断上面刚收到的消息里的情绪。只输出一个 JSON 对象，不要输出别的内容：\n"
@@ -116,6 +125,7 @@ def build_system_context(
     hormone_state: str = "",
     affinity_state: str = "",
     mood_state: str = "",
+    agenda_state: str = "",
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -134,6 +144,7 @@ def build_system_context(
             空字符串表示不放（D69 第 3 条）。
         affinity_state: 对眼前这个人的好感（describe_affinity 的结果）；空字符串表示不放（D71）。
         mood_state: 心情的事实摘要和谨慎说明（MoodReading.summary）；空字符串表示不放（D73）。
+        agenda_state: 这个人名下未完成的约定（describe_agenda 的结果）；空字符串表示不放（D74）。
 
     Returns:
         几段中文，段与段之间空一行。
@@ -186,6 +197,8 @@ def build_system_context(
         sections.append(affinity_state)
     if mood_state:
         sections.append(mood_state)
+    if agenda_state:
+        sections.append(agenda_state)
     return "\n\n".join(sections)
 
 
@@ -277,6 +290,8 @@ def build_plan_prompt(
     new_messages: Sequence[TimelineRecord],
     user_name: str,
     timezone: tzinfo | None = None,
+    *,
+    with_agenda: bool = False,
 ) -> str:
     """拼出规划器的提示词：同样的对话，最后要它只输出一个 JSON 格式的建议（D59）。
 
@@ -285,6 +300,7 @@ def build_plan_prompt(
         new_messages: 这次要回复的消息，从早到晚，至少一条。
         user_name: 怎么称呼用户。
         timezone: 显示用的时区；不给就用这台电脑设置的时区。
+        with_agenda: 日程开着时，告诉它可以顺带提出答应了什么、做完了哪项（D74）。
 
     Returns:
         提示词。
@@ -294,6 +310,8 @@ def build_plan_prompt(
     """
     parts = _dialogue_sections(history, new_messages, user_name, timezone)
     parts.append(_PLAN_INSTRUCTION)
+    if with_agenda:
+        parts.append(_PLAN_AGENDA_INSTRUCTION)
     return "\n\n".join(parts)
 
 

@@ -6,6 +6,7 @@
 from aureus.common.budget_calendar import BudgetCalendar, load_timezone
 from aureus.common.clock import AcceleratedClock, Clock, ManualClock, SystemClock
 from aureus.common.config import (
+    AgendaConfig,
     BodyConfig,
     ConfigError,
     EmpathyConfig,
@@ -29,6 +30,7 @@ from aureus.common.paths import AureusPaths, HomePathError, home_is_default, res
 
 __all__ = [
     "AcceleratedClock",
+    "AgendaConfig",
     "AureusPaths",
     "BodyConfig",
     "BudgetCalendar",

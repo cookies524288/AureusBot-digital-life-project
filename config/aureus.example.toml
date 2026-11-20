@@ -265,3 +265,18 @@ log_level = "INFO"
 # 心情低于 cautious_below 变谨慎，回到 recover_above 以上才恢复。前者要小于后者。
 # cautious_below = -0.3
 # recover_above = -0.15
+
+# 日程（设计见 docs/10-decisions.md 的 D74）：它答应过的事。规划器回复时顺带提出，代码校验后记下；
+# 到期后下次和那个人说话时提起；做完、放弃（要说原因）、过期都记进反馈。
+# 自己去推进日程、主动联系对方是另一个开关（2.8 的 [initiative]），默认关。下面的值都是默认值。
+[agenda]
+# 日程的开关。关掉后不记承诺、不提醒、不记兑现。
+# enabled = true
+# 每个人名下未完成的条目最多几条。
+# max_open_per_person = 20
+# 到期时间最远能定在几天后。
+# max_due_days = 90
+# 到期后再过几天还没交代，就算过期。
+# expire_grace_days = 3.0
+# 回复时上下文里最多列几条未完成的条目。
+# context_items = 5

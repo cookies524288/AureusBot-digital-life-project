@@ -48,7 +48,7 @@ def _judgment(intensity: float) -> str:
 class PlanOrgans(ScriptedOrgans):
     """规划器按预设依次给计划，用完后用默认的；其余照 ScriptedOrgans。"""
 
-    def __init__(self, judge: list[str | BaseException], plans: list[str]) -> None:
+    def __init__(self, judge: list[str | BaseException] | None, plans: list[str]) -> None:
         super().__init__(judge)
         self.plans = plans
 
