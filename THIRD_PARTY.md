@@ -5,13 +5,9 @@
 | 本项目的文件 | 来源 | 原许可证 | 我们改了什么 |
 |---|---|---|---|
 | `aureus/heartbeat/speech.py` | MaiBot `src/chat/utils/utils.py` 里的 `_split_into_sentence_segments`、`_merge_processed_segments_to_max_count`、`protect_kaomoji`、`recover_kaomoji`，https://github.com/Mai-with-u/MaiBot/blob/main/src/chat/utils/utils.py | GPL-3.0 | 去掉按概率合并的随机步骤，改成确定性的；只在句号、感叹号、问号、分号和换行处拆；条数超限时均匀合并而不是返回默认回复；去掉对配置、平台、日志和 LLM 断句的依赖，改成纯函数 |
+| `aureus/heartbeat/recall.py` 的 `format_recall` | MaiBot `src/maisaka/builtin_tool/query_memory.py` 里的 `_build_replyer_memory_reference`，https://github.com/Mai-with-u/MaiBot/blob/edf42446f123149c57fc79765dd5a8b004b8524c/src/maisaka/builtin_tool/query_memory.py | GPL-3.0 | 保留查询、命中数、编号行和空白归一；改用本项目的 MemoryHit、当地时间和人物称呼；补无命中说明和 900 字整条裁剪；不接入它的工具框架和记忆后端 |
 
 ## 许可证核对记录
-
-- 2.9 的 aureus/heartbeat/recall.py::format_recall 移植 MaiBot
-  src/maisaka/builtin_tool/query_memory.py::_build_replyer_memory_reference
-  （提交 edf42446f123149c57fc79765dd5a8b004b8524c，GPL-3.0）。保留查询、命中数、编号行和空白归一，
-  改用本项目的 MemoryHit、当地时间及人物称呼，补无命中说明和 900 字整条裁剪；不接入其工具框架与后端。
 
 - MaiBot：2026-11-18 读了仓库根目录的 `LICENSE`，是 GNU GPL 第 3 版。GPL-3.0 第 13 条允许把它覆盖的作品和 AGPL-3.0 的作品合并成一个整体，本项目整体采用 AGPL-3.0（D12），所以可以移植。
 - 该仓库根目录还有 `EULA.md` 和 `PRIVACY.md`，没有读过，没有核对它们对源码有没有额外限制。
