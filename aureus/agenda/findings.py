@@ -95,6 +95,15 @@ class FindingStore:
             ).fetchone()
         return _finding(row)
 
+    def get(self, finding_id: int) -> Finding | None:
+        """按编号取原文；不存在返回 None（D80 索引和日记材料）。"""
+        row = (
+            self._require_open()
+            .execute("SELECT * FROM findings WHERE id = ?", (finding_id,))
+            .fetchone()
+        )
+        return _finding(row) if row is not None else None
+
     def recent(self, limit: int) -> list[Finding]:
         """最新收获在前。"""
         return [

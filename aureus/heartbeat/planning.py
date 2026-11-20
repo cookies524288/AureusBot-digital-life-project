@@ -14,6 +14,10 @@ from typing import Any
 from aureus.common.limits import MAX_INTEREST_CHARS
 
 _MAX_INTEREST_REASON_CHARS = 100
+# D80 第 3 条：召回关键词最多 3 个，每个 2～20 字。
+MAX_RECALL_KEYWORDS = 3
+MIN_RECALL_KEYWORD_CHARS = 2
+MAX_RECALL_KEYWORD_CHARS = 20
 
 
 class ReplyLength(StrEnum):
@@ -113,6 +117,7 @@ class Plan:
     # 处理了哪几项约定（D74）；看不懂的项直接丢掉。
     resolutions: tuple[Resolution, ...] = ()
     interest: "InterestChange | None" = None
+    recall: tuple[str, ...] = ()
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -172,7 +177,22 @@ def parse_plan(text: str) -> Plan | None:
         commit=_parse_commit(data.get("commit")),
         resolutions=_parse_resolutions(data.get("resolve")),
         interest=_parse_interest(data.get("interest")),
+        recall=_parse_recall(data.get("recall")),
     )
+
+
+def _parse_recall(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return ()
+    keywords: list[str] = []
+    for item in value:
+        text = clean_text(item, len(item))
+        if (
+            MIN_RECALL_KEYWORD_CHARS <= len(text) <= MAX_RECALL_KEYWORD_CHARS
+            and text not in keywords
+        ):
+            keywords.append(text)
+    return tuple(keywords[:MAX_RECALL_KEYWORDS])
 
 
 @dataclass(frozen=True)

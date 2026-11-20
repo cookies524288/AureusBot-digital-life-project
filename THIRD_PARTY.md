@@ -8,5 +8,10 @@
 
 ## 许可证核对记录
 
+- 2.9 的 aureus/heartbeat/recall.py::format_recall 移植 MaiBot
+  src/maisaka/builtin_tool/query_memory.py::_build_replyer_memory_reference
+  （提交 edf42446f123149c57fc79765dd5a8b004b8524c，GPL-3.0）。保留查询、命中数、编号行和空白归一，
+  改用本项目的 MemoryHit、当地时间及人物称呼，补无命中说明和 900 字整条裁剪；不接入其工具框架与后端。
+
 - MaiBot：2026-11-18 读了仓库根目录的 `LICENSE`，是 GNU GPL 第 3 版。GPL-3.0 第 13 条允许把它覆盖的作品和 AGPL-3.0 的作品合并成一个整体，本项目整体采用 AGPL-3.0（D12），所以可以移植。
 - 该仓库根目录还有 `EULA.md` 和 `PRIVACY.md`，没有读过，没有核对它们对源码有没有额外限制。

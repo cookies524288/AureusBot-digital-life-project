@@ -16,6 +16,7 @@ from aureus.common import (
     EmpathyConfig,
     HeartbeatConfig,
     JudgeConfig,
+    MemoryConfig,
     PeopleConfig,
 )
 from aureus.heartbeat import exploration_runner, interest_changes
@@ -42,6 +43,7 @@ from aureus.heartbeat.planning import (
     ReplyLength,
     parse_plan,
 )
+from aureus.heartbeat.recall import format_recall
 from aureus.heartbeat.reply_strategy import ReplyStrategy, judge_allowed
 from aureus.hormones import (
     HormoneEffects,
@@ -51,6 +53,7 @@ from aureus.hormones import (
     make_triggers_from_judgment,
 )
 from aureus.identity import Identity, IdentityLayer
+from aureus.memory import MemoryHit, MemoryIndex
 from aureus.mood import MoodReading
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import (
@@ -123,6 +126,7 @@ class _ReplyJob:
     # 此刻激素对这次回复的影响；激素没开时是 None。
     effects: HormoneEffects | None = None
     with_interests: bool = False
+    history_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -153,6 +157,8 @@ class _ThoughtOutcome:
     forced_reply: bool = False
     # 主动联系独立解析，不能拿普通回复的兜底来替它决定开口（D76）。
     initiative_plan: InitiativePlan | None = None
+    recall_keywords: tuple[str, ...] = ()
+    recall_record_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -224,12 +230,16 @@ class ConversationFlow:
         affinity: AffinityBook | None,
         empathy: EmpathyConfig | None,
         agenda: AgendaStore | None,
+        memory: MemoryIndex | None = None,
+        memory_config: MemoryConfig | None = None,
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
         self._judge, self._hormones, self._affinity = judge, hormones, affinity
         self._empathy, self._agenda = empathy, agenda
         self._judge_missing_logged = False
+        self._memory = memory
+        self._memory_config = memory_config or MemoryConfig()
 
     def _conversation_job(
         self,
@@ -340,6 +350,7 @@ class ConversationFlow:
             viewer_is_user=not contact,
             build_contexts=build_contexts,
             with_interests=bool(interests_state),
+            history_ids=tuple(record.id for record in [*history, *messages]),
         )
         return self._apply_hormones(job, ())
 
@@ -526,6 +537,7 @@ class ConversationFlow:
                 self._timezone,
                 with_agenda=self._agenda is not None,
                 with_interests=job.with_interests,
+                with_recall=self._can_recall(),
             ),
             system_context=job.full_context,
         )
@@ -544,6 +556,13 @@ class ConversationFlow:
             logger.warning("规划器的建议看不懂，合并成一次调用照常回复")
         return plan
 
+    def _can_recall(self) -> bool:
+        return (
+            self._memory is not None
+            and self._memory_config.enabled
+            and self._memory_config.recall_enabled
+        )
+
     async def _reply(self, job: _ReplyJob, plan: Plan | None) -> _ThoughtOutcome:
         """调回复器。有规划就按规划的意图和长度写；没有就由它自己决定（合并的一次调用）。"""
         strategy = job.strategy
@@ -556,6 +575,21 @@ class ConversationFlow:
                 if plan.length is not None
                 else strategy.length_limit
             )
+        recall_text = ""
+        keywords: tuple[str, ...] = ()
+        hits: list[MemoryHit] = []
+        if plan is not None and plan.recall and self._can_recall() and self._memory is not None:
+            try:
+                hits = await asyncio.to_thread(
+                    self._memory.search,
+                    plan.recall,
+                    job.history_ids,
+                    self._memory_config.max_results,
+                )
+                recall_text = format_recall(plan.recall, hits, self._timezone)
+                keywords = plan.recall
+            except Exception:
+                logger.exception("记忆检索失败，这次回复不附记忆")
         request = _organ_request(
             job,
             organ_id=self._config.reply_organ,
@@ -567,6 +601,7 @@ class ConversationFlow:
                 self._timezone,
                 intent=intent,
                 length=length,
+                recall=recall_text,
             ),
             system_context=system_context,
         )
@@ -584,4 +619,9 @@ class ConversationFlow:
             )
         if not response.suggestion.strip():
             return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
-        return _ThoughtOutcome(response=response, plan=plan)
+        return _ThoughtOutcome(
+            response=response,
+            plan=plan,
+            recall_keywords=keywords,
+            recall_record_ids=tuple(hit.record_id for hit in hits),
+        )

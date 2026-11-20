@@ -270,6 +270,7 @@ def build_reply_prompt(
     *,
     intent: str = "",
     length: ReplyLength | None = None,
+    recall: str = "",
 ) -> str:
     """拼出回复用的提示词：之前的对话，加上刚收到、还没回复的消息。
 
@@ -280,6 +281,7 @@ def build_reply_prompt(
         timezone: 显示用的时区；不给就用这台电脑设置的时区。
         intent: 规划器想好的意思；空字符串表示没有规划（合并成一次调用）。
         length: 回复的长度要求；None 表示不限。
+        recall: 按关键词查到的内部参考块；空字符串表示没查记忆（D80）。
 
     Returns:
         提示词。
@@ -288,6 +290,8 @@ def build_reply_prompt(
         ValueError: 没有要回复的消息。
     """
     parts = _dialogue_sections(history, new_messages, user_name, timezone)
+    if recall:
+        parts.append(recall)
     if intent:
         parts.append(f"你已经想好要表达的意思：{_one_line(intent)}")
     if length is not None:
@@ -304,6 +308,7 @@ def build_plan_prompt(
     *,
     with_agenda: bool = False,
     with_interests: bool = False,
+    with_recall: bool = False,
 ) -> str:
     """拼出规划器的提示词：同样的对话，最后要它只输出一个 JSON 格式的建议（D59）。
 
@@ -314,6 +319,7 @@ def build_plan_prompt(
         timezone: 显示用的时区；不给就用这台电脑设置的时区。
         with_agenda: 日程开着时，告诉它可以顺带提出答应了什么、做完了哪项（D74）。
         with_interests: 兴趣开着且在用户私聊时，说明可选的兴趣建议字段（D79）。
+        with_recall: 记忆和召回都开着时，说明按需提供关键词（D80）。
 
     Returns:
         提示词。
@@ -331,6 +337,13 @@ def build_plan_prompt(
             f'"text": "新兴趣，1～{MAX_INTEREST_CHARS}字", '
             '"interest_id": 编号, "reason": "理由，1～100字"}。'
             "add 不填编号，remove 不填新文字；没有改动就不加。"
+        )
+    if with_recall:
+        # D80 第 3 条：移植 MaiBot 私聊的按需召回规则，关键词随规划返回。
+        parts.append(
+            '需要回忆以前的事时，JSON 可以加 "recall": ["关键词", ...]，最多 3 个，每个 2～20 字。'
+            "对方提到「之前」「上次」「最近」「还记得吗」「我说过」，"
+            "或者回复要靠以前的约定、共同经历、对方的长期偏好时才给；不需要就不写。"
         )
     return "\n\n".join(parts)
 

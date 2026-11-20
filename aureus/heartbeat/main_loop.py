@@ -35,6 +35,7 @@ from aureus.common import (
     HeartbeatConfig,
     InitiativeConfig,
     JudgeConfig,
+    MemoryConfig,
     PeopleConfig,
 )
 from aureus.core import CognitiveObserver, CognitiveState
@@ -81,6 +82,7 @@ from aureus.heartbeat.perception import (
     TrustLevel,
 )
 from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
+from aureus.heartbeat.recall import MemoryTracker
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
@@ -93,6 +95,7 @@ from aureus.hormones import (
     kind_enabled,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
+from aureus.memory import MemoryIndex
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
 from aureus.organs import CallPurpose
 from aureus.people import (
@@ -197,6 +200,8 @@ class Heartbeat:
         search: SearchProvider | None = None,
         reader: WebReader | None = None,
         has_exploration_organ: bool = True,
+        memory: MemoryIndex | None = None,
+        memory_config: MemoryConfig | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -235,6 +240,8 @@ class Heartbeat:
             search: 搜索服务；不给时不探索。
             reader: 只读网页工具；不给时按探索配置构造。
             has_exploration_organ: 总结器官是否已注册；运行时传入真实登记结果。
+            memory: 已打开的记忆索引；不给就不召回（D80）。
+            memory_config: 记忆索引和召回的开关及上限（D80）。
         """
         self._clock = clock
         self._timeline = timeline
@@ -277,7 +284,10 @@ class Heartbeat:
             affinity=affinity,
             empathy=empathy,
             agenda=agenda,
+            memory=memory,
+            memory_config=memory_config,
         )
+        self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         initiative_config = initiative or InitiativeConfig()
         if config.roleplay_mode:
             initiative_config = initiative_config.model_copy(update={"enabled": False})
@@ -743,6 +753,9 @@ class Heartbeat:
         }
         if outcome.plan is not None:
             metadata["plan"] = outcome.plan.to_metadata()
+        if outcome.recall_keywords:
+            metadata["recall_keywords"] = list(outcome.recall_keywords)
+            metadata["recall_record_ids"] = list(outcome.recall_record_ids)
         if outcome.effects is not None:
             metadata["hormones"] = outcome.effects.to_metadata()
             if outcome.forced_reply:

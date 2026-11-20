@@ -174,6 +174,12 @@ class PeopleDirectory:
         ).fetchone()
         return None if row is None else self._load(conn, int(row["person_id"]))
 
+    def get(self, person_id: int) -> Person | None:
+        """按人物编号取档案；不存在返回 None，供经历中的称呼查询（D80）。"""
+        conn = self._require_open()
+        row = conn.execute("SELECT id FROM people WHERE id = ?", (person_id,)).fetchone()
+        return self._load(conn, person_id) if row is not None else None
+
     def meet(self, platform: str, account_id: str) -> Person:
         """按账号找人；没见过的账号建一份新的联系人档案（新账号就是新的人）。"""
         conn = self._require_open()
