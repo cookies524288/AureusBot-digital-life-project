@@ -14,7 +14,10 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from aureus.actions.web import WebReader
 from aureus.agenda import AgendaStore
+from aureus.agenda.findings import FindingStore
+from aureus.agenda.interests import InterestStore
 from aureus.body import Body, BodySampleStore
 from aureus.channels import CHANNEL_NAME as TERMINAL_CHANNEL
 from aureus.channels import TERMINAL_USER_ID, WEB_CHANNEL_NAME, WEB_USER_ID
@@ -231,6 +234,19 @@ def open_core(
             )
             affinity.open()
             stack.callback(affinity.close)
+        interests = InterestStore(paths.database_file, the_clock, runtime.interests)
+        findings = FindingStore(paths.database_file, the_clock)
+        for store in (interests, findings):
+            store.open()
+            stack.callback(store.close)
+        try:
+            added, removed = interests.sync_seeds(identity.persona.interests)
+            logger.info("起始兴趣同步：加入 {} 条，结束 {} 条", added, removed)
+        except Exception:
+            logger.exception("起始兴趣同步失败，继续启动")
+        exploration = runtime.exploration
+        if roleplay:
+            exploration = exploration.model_copy(update={"enabled": False})
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -253,6 +269,12 @@ def open_core(
             agenda=agenda,
             initiative=None if roleplay else runtime.initiative,
             calendar=calendar,
+            interests=interests,
+            findings=findings,
+            exploration=exploration,
+            search=None,  # D79：当前唯一的搜索选项是 none。
+            reader=WebReader(exploration),
+            has_exploration_organ=bus.is_registered(exploration.organ),
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

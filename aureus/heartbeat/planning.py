@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+_MAX_INTEREST_TEXT_CHARS = 30
+_MAX_INTEREST_REASON_CHARS = 100
+
 
 class ReplyLength(StrEnum):
     """回复多长。值是写进提示词和时间线的中文。"""
@@ -224,10 +227,10 @@ def _parse_interest(value: object) -> InterestChange | None:
     except (ValueError, TypeError):
         return None
     text, reason, interest_id = value.get("text"), value.get("reason"), value.get("interest_id")
-    if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 100:
+    if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= _MAX_INTEREST_REASON_CHARS:
         return None
     if action is not InterestAction.REMOVE and (
-        not isinstance(text, str) or not 1 <= len(text.strip()) <= 30
+        not isinstance(text, str) or not 1 <= len(text.strip()) <= _MAX_INTEREST_TEXT_CHARS
     ):
         return None
     if action is not InterestAction.ADD and (type(interest_id) is not int or interest_id < 1):

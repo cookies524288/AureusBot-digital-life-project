@@ -3,11 +3,11 @@
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from datetime import date, datetime, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
 
 from aureus.actions.search import SearchProvider
 from aureus.actions.web import FetchFailure, WebPage, WebReader
-from aureus.agenda.findings import FindingStore
+from aureus.agenda.findings import Finding, FindingStore
 from aureus.agenda.interests import InterestStore
 from aureus.body import EnergyTier
 from aureus.common import BudgetCalendar, ExplorationConfig
@@ -17,6 +17,7 @@ from aureus.heartbeat.context import build_exploration_prompt, describe_interest
 from aureus.heartbeat.perception import Perception, TrustLevel
 from aureus.heartbeat.planning import InterestAction, InterestChange
 from aureus.organs import CallPurpose, OrganRequest, OrganResponse
+from aureus.people import PeopleDirectory
 from aureus.safety import PermissionChecker
 from aureus.safety.permissions import ACTION_READ_WEB, ACTION_WEB_SEARCH
 from aureus.timeline import (
@@ -30,6 +31,7 @@ from aureus.timeline import (
 logger = logging.getLogger(__name__)
 _RESTORE_LIMIT = 50
 _MAX_FETCHES = 2
+_CONTEXT_FINDINGS = 2
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,26 @@ class ExplorationTracker:
         self._day: date | None = None
         self._missing_logged: set[str] = set()
 
+    def finding_to_share(self, now: datetime) -> Finding | None:
+        """仅给已通过把关的主动联系附加资料；读取失败仍可按原原因联系。"""
+        if self.interests is None or not self.interests.config.enabled or self.findings is None:
+            return None
+        try:
+            return self.findings.oldest_unshared(
+                now - timedelta(days=self.config.share_within_days)
+            )
+        except Exception:
+            logger.exception("分享收获读不了，这次不附加")
+            return None
+
+    def mark_shared(self, finding_id: int, message_id: int, now: datetime) -> None:
+        """主动消息已落盘才标记；失败只记日志，以后可能再提一次。"""
+        try:
+            if self.findings is not None:
+                self.findings.mark_shared(finding_id, message_id, now)
+        except Exception:
+            logger.exception("收获分享标记失败，不补记")
+
     def restore(self, now: datetime) -> None:
         """只读最近开始的事实；读取失败允许下一拍再读。"""
         try:
@@ -101,50 +123,6 @@ class ExplorationTracker:
         if self._day != self.calendar.day_of(now):
             self.state = replace(self.state, explorations_today=0)
             self._day = self.calendar.day_of(now)
-
-    def prepare(
-        self,
-        now: datetime,
-        *,
-        tier: EnergyTier | None,
-        night: bool,
-        halted: bool,
-        busy: bool,
-        cautious: bool,
-    ) -> TimelineRecord | None:
-        """在拍里读取在用兴趣并把关；缺服务只记一次日志。"""
-        if not self.config.enabled or self.failed or not self._restored:
-            return None
-        try:
-            items = self.interests.active() if self.interests is not None else []
-            decision = rules.decide(
-                now=now,
-                config=self.config,
-                state=self.state,
-                interests=[rules.InterestStatus(i.id, self.last_explored.get(i.id)) for i in items],
-                effective_tier=tier,
-                night=night,
-                halted=halted,
-                busy=busy,
-                cautious=cautious,
-                has_search=self.search is not None,
-                has_organ=self.has_organ,
-            )
-            if (
-                decision.blocked_by in ("no_search", "no_organ")
-                and decision.blocked_by not in self._missing_logged
-            ):
-                self._missing_logged.add(decision.blocked_by)
-                logger.warning(
-                    "%s，不探索",
-                    "没配搜索服务" if decision.blocked_by == "no_search" else "没配总结器官",
-                )
-            return (
-                self.start(decision.interest_id, now) if decision.interest_id is not None else None
-            )
-        except Exception:
-            logger.exception("兴趣读不了，这一拍不探索")
-            return None
 
     def start(self, interest_id: int, now: datetime) -> TimelineRecord | None:
         """开始记录写成功后才占次数，之后失败也算一次。"""
@@ -200,8 +178,56 @@ class ExplorationTracker:
             logger.exception("探索结果写失败，本次运行停止探索")
 
 
+def prepare_exploration(
+    tracker: ExplorationTracker,
+    now: datetime,
+    *,
+    tier: EnergyTier | None,
+    night: bool,
+    halted: bool,
+    busy: bool,
+    cautious: bool,
+) -> TimelineRecord | None:
+    """在拍里读取在用兴趣并把关；缺服务只记一次日志。"""
+    if not tracker.config.enabled or tracker.failed or not tracker._restored:
+        return None
+    try:
+        items = tracker.interests.active() if tracker.interests is not None else []
+        decision = rules.decide(
+            now=now,
+            config=tracker.config,
+            state=tracker.state,
+            interests=[rules.InterestStatus(i.id, tracker.last_explored.get(i.id)) for i in items],
+            effective_tier=tier,
+            night=night,
+            halted=halted,
+            busy=busy,
+            cautious=cautious,
+            has_search=tracker.search is not None,
+            has_organ=tracker.has_organ,
+        )
+        if (
+            decision.blocked_by in ("no_search", "no_organ")
+            and decision.blocked_by not in tracker._missing_logged
+        ):
+            tracker._missing_logged.add(decision.blocked_by)
+            logger.warning(
+                "%s，不探索",
+                "没配搜索服务" if decision.blocked_by == "no_search" else "没配总结器官",
+            )
+        return (
+            tracker.start(decision.interest_id, now) if decision.interest_id is not None else None
+        )
+    except Exception:
+        logger.exception("兴趣读不了，这一拍不探索")
+        return None
+
+
 def interest_context(
-    tracker: ExplorationTracker, target: Perception, timezone: tzinfo | None
+    tracker: ExplorationTracker,
+    target: Perception,
+    timezone: tzinfo | None,
+    people: PeopleDirectory | None,
 ) -> str:
     """兴趣关着、群聊或非用户对话时完全不注入兴趣信息。"""
     if (
@@ -209,12 +235,16 @@ def interest_context(
         or not tracker.interests.config.enabled
         or target.trust is not TrustLevel.VERIFIED_USER
         or target.visibility is not VisibilityScope.USER_ONLY
+        or people is None
     ):
         return ""
     try:
+        person = people.find(target.channel, target.sender_id)
+        if person is None or not person.is_user:
+            return ""
         return describe_interests(
             tracker.interests.active(),
-            tracker.findings.recent(2) if tracker.findings is not None else [],
+            tracker.findings.recent(_CONTEXT_FINDINGS) if tracker.findings is not None else [],
             timezone,
         )
     except Exception:

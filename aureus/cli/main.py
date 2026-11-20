@@ -16,6 +16,7 @@ from aureus.cli.inspect_commands import (
     run_timeline_command,
     run_usage_command,
 )
+from aureus.cli.interests_command import run_interests_command
 from aureus.cli.keys_command import EXIT_FAILURE, ReadSecret, key_name_argument, run_keys_command
 from aureus.cli.monitor_command import DEFAULT_MONITOR_PORT, run_monitor_command
 from aureus.cli.persona_command import DEFAULT_PERSONA_LIMIT, run_persona_command
@@ -87,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"和 --all 一起用，最多显示几条，默认 {DEFAULT_AGENDA_LIMIT}",
     )
     agenda.add_argument("--cancel", type=positive_int, metavar="编号", help="取消这一条约定")
+    interests = commands.add_parser("interests", help="查看兴趣和最近收获")
+    interests.add_argument("--remove", type=positive_int, metavar="编号", help="结束这一条兴趣")
     monitor = commands.add_parser(
         "monitor", help="启动观察台：在浏览器里只读地看它的内部状态（只绑本机，要装 Streamlit）"
     )
@@ -181,6 +184,8 @@ def main(
         return run_persona_command(args, paths)
     if args.command == "agenda":
         return run_agenda_command(args, paths)
+    if args.command == "interests":
+        return run_interests_command(args, paths)
     if args.command == "monitor":
         return run_monitor_command(args, paths)
     if args.command == "halt":

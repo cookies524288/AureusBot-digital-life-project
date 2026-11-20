@@ -14,14 +14,15 @@ import pytest_asyncio
 from aureus.actions.search import SearchResult
 from aureus.actions.web import WebReader
 from aureus.common import BodyConfig, ExplorationConfig, HeartbeatConfig, InitiativeConfig
+from aureus.heartbeat import Perception, TrustLevel
 from aureus.heartbeat.exploration_runner import ExplorationTracker, explore
 from aureus.organs import CallAttempt, CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
 from aureus.safety.permissions import ACTION_READ_WEB, ACTION_WEB_SEARCH, PermissionLevel
 from aureus.timeline import ActorType, TimelineQuery, VisibilityScope
-from tests.heartbeat.test_initiative_flow import InitiativeOrgans, finish, submit
+from tests.heartbeat.test_initiative_flow import SKIP, InitiativeOrgans, finish, submit
 from tests.heartbeat.test_interests_flow import InterestEnv
-from tests.heartbeat.test_judging_flow import CALENDAR, NOW, Rig
+from tests.heartbeat.test_judging_flow import CALENDAR, CHANNEL, NOW, Rig
 
 pytestmark = pytest.mark.asyncio
 FINDING = "木星的卫星有冰下海洋。"
@@ -441,3 +442,176 @@ async def test_initiative_gets_the_slot_before_exploration(env: ExplorationEnv) 
     assert rig.heartbeat._thought is not None and rig.heartbeat._thought.initiative is not None
     assert not env.search.calls and not rig.records("exploration_started")
     await finish(rig)
+
+
+async def test_initiative_appends_oldest_recent_finding_and_marks_after_message(
+    env: ExplorationEnv,
+) -> None:
+    rig = env.exploring(config=ExplorationConfig(), initiative=InitiativeConfig(enabled=True))
+    tracker = rig.heartbeat._exploration
+    assert tracker.findings is not None
+    tracker.findings.add(1, "过期收获", "过期标题", "https://example.com/old")
+    env.clock.advance(timedelta(days=4))
+    finding = tracker.findings.add(1, FINDING, "木星资料", "https://example.com/final")
+    tracker.findings.add(1, "更新的收获", "新标题", "https://example.com/new")
+    await rig.exchange("你好")
+    env.summary.requests.clear()
+    env.clock.advance(timedelta(hours=20))
+    rig.heartbeat.beat()
+    assert tracker.findings.oldest_unshared(env.clock.now() - timedelta(days=3)) == finding
+    await finish(rig)
+    [considered] = rig.records("initiative_considered")
+    assert len(considered.metadata["reasons"]) == 2
+    assert considered.metadata["reasons"][-1] == f"前几天查到：{FINDING}（来自网页《木星资料》）"
+    assert all(FINDING in request.system_context for request in env.summary.requests)
+    saved = tracker.findings.recent(2)[1]
+    assert (
+        saved.shared_record_id == considered.metadata["message_id"]
+        and saved.shared_at == env.clock.now()
+    )
+    assert tracker.findings.recent(1)[0].shared_at is None
+
+
+@pytest.mark.parametrize("failure", ["skip", "plan", "reply", "disconnected", "message"])
+async def test_initiative_without_saved_message_does_not_mark_finding(
+    env: ExplorationEnv, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    rig = env.exploring(config=ExplorationConfig(), initiative=InitiativeConfig(enabled=True))
+    findings = rig.heartbeat._exploration.findings
+    assert findings is not None
+    findings.add(1, FINDING, "木星资料", "https://example.com")
+    await rig.exchange("你好")
+    if failure == "skip":
+        env.summary.plans = [SKIP]
+    elif failure == "plan":
+        env.summary.plans = [OrganCallError("planner", ["假规划失败"])]
+    elif failure == "reply":
+        env.summary.replies = [OSError("假回复失败")]
+    env.clock.advance(timedelta(hours=20))
+    rig.heartbeat.beat()
+    await rig.heartbeat.wait_for_thought()
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("假消息写入失败")
+
+    with monkeypatch.context() as patch:
+        if failure == "disconnected":
+            rig.heartbeat._sinks.clear()
+        elif failure == "message":
+            patch.setattr(rig.heartbeat._initiative, "record_message", broken)
+        rig.heartbeat.beat()
+    assert findings.recent(1)[0].shared_at is None
+    [considered] = rig.records("initiative_considered")
+    assert not considered.metadata["sent"] and "message_id" not in considered.metadata
+
+
+async def test_saved_message_marks_finding_even_if_channel_send_fails(env: ExplorationEnv) -> None:
+    rig = env.exploring(config=ExplorationConfig(), initiative=InitiativeConfig(enabled=True))
+    findings = rig.heartbeat._exploration.findings
+    assert findings is not None
+    findings.add(1, FINDING, "木星资料", "https://example.com")
+    await rig.exchange("你好")
+
+    def broken(_message):
+        raise OSError("假通道失败")
+
+    rig.heartbeat._sinks[CHANNEL] = broken
+    env.clock.advance(timedelta(hours=20))
+    rig.heartbeat.beat()
+    await finish(rig)
+    [considered] = rig.records("initiative_considered")
+    assert not considered.metadata["sent"]
+    assert findings.recent(1)[0].shared_record_id == considered.metadata["message_id"]
+
+
+@pytest.mark.parametrize("failure", ["read", "mark"])
+async def test_finding_io_failure_does_not_change_existing_initiative(
+    env: ExplorationEnv, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    rig = env.exploring(config=ExplorationConfig(), initiative=InitiativeConfig(enabled=True))
+    findings = rig.heartbeat._exploration.findings
+    assert findings is not None
+    findings.add(1, FINDING, "木星资料", "https://example.com")
+    await rig.exchange("你好")
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("假收获故障")
+
+    monkeypatch.setattr(findings, "oldest_unshared" if failure == "read" else "mark_shared", broken)
+    env.clock.advance(timedelta(hours=20))
+    rig.heartbeat.beat()
+    await finish(rig)
+    [considered] = rig.records("initiative_considered")
+    assert considered.metadata["sent"] and findings.recent(1)[0].shared_at is None
+
+
+async def test_finding_does_not_create_a_reason_to_start_contact(env: ExplorationEnv) -> None:
+    rig = env.exploring(config=ExplorationConfig(), initiative=InitiativeConfig(enabled=True))
+    findings = rig.heartbeat._exploration.findings
+    assert findings is not None
+    findings.add(1, FINDING, "木星资料", "https://example.com")
+    await rig.exchange("你好")
+    env.summary.requests.clear()
+    rig.heartbeat.beat()
+    assert not env.summary.requests and not rig.records("initiative_considered")
+    assert findings.recent(1)[0].shared_at is None
+
+
+@pytest.mark.parametrize(
+    ("trust", "visibility"),
+    [
+        (TrustLevel.VERIFIED_USER, VisibilityScope.USER_ONLY),
+        (TrustLevel.VERIFIED_USER, VisibilityScope.GROUP),
+        (TrustLevel.VERIFIED_CONTACT, VisibilityScope.USER_ONLY),
+    ],
+)
+async def test_recent_findings_only_enter_user_private_context(
+    env: ExplorationEnv, trust: TrustLevel, visibility: VisibilityScope
+) -> None:
+    rig = env.exploring(config=ExplorationConfig())
+    findings = rig.heartbeat._exploration.findings
+    assert findings is not None
+    for text in ("最早收获", "较新收获", FINDING):
+        findings.add(1, text, "木星资料", "https://example.com")
+    rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="local" if trust is TrustLevel.VERIFIED_USER else "other",
+            content="最近在看什么",
+            trust=trust,
+            visibility=visibility,
+        )
+    )
+    rig.heartbeat.beat()
+    await finish(rig)
+    assert env.summary.requests
+    for request in env.summary.requests:
+        private = trust is TrustLevel.VERIFIED_USER and visibility is VisibilityScope.USER_ONLY
+        assert (FINDING in request.system_context) is private
+        assert ("天文" in request.system_context) is private
+        assert ("较新收获" in request.system_context) is private
+        assert "最早收获" not in request.system_context
+
+
+async def test_contact_profile_cannot_receive_findings_with_user_trust(env: ExplorationEnv) -> None:
+    rig = env.exploring(config=ExplorationConfig())
+    env.people.meet(CHANNEL, "other")
+    findings = rig.heartbeat._exploration.findings
+    assert findings is not None
+    findings.add(1, FINDING, "木星资料", "https://example.com")
+    rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="other",
+            content="最近在看什么",
+            trust=TrustLevel.VERIFIED_USER,
+            visibility=VisibilityScope.USER_ONLY,
+        )
+    )
+    rig.heartbeat.beat()
+    await finish(rig)
+    assert env.summary.requests
+    assert all(
+        FINDING not in r.system_context and '"interest"' not in r.prompt
+        for r in env.summary.requests
+    )

@@ -156,9 +156,10 @@ class InitiativeTracker:
         target: Perception | None,
         send: Callable[[Perception, str], bool],
         failure: str,
-    ) -> None:
+    ) -> int | None:
         """收器官建议后先记消息、再发出；独立尝试反馈和考虑记录，不缓存失败材料。"""
         sent, feedback_id = False, None
+        message_id = None
         metadata = {**metadata, "plan": plan.to_metadata() if plan is not None else None}
         if plan is not None and plan.reach_out and target is None:
             failure = failure or "通道不在了"
@@ -181,6 +182,7 @@ class InitiativeTracker:
                     },
                 )
                 metadata["message_id"] = message.id
+                message_id = message.id
                 sent = send(target, message.content)
                 feedback_id = self.record_sent(message, message.timestamp, delivered=sent)
                 failure = "通道发送失败" if not sent else ("反馈预期没记上" if self.failed else "")
@@ -202,6 +204,8 @@ class InitiativeTracker:
                 "feedback_id": feedback_id,
             }
         )
+
+        return message_id
 
     def note_user_message(self, now: datetime) -> None:
         """用户开口立即清退避；有等待时按消息时刻判定，边界算窗口外。"""

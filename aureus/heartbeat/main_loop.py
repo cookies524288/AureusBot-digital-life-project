@@ -281,6 +281,7 @@ class _InitiativeJob:
     reasons: tuple[str, ...]
     social_need: float | None
     due_item_ids: tuple[int, ...]
+    finding_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1262,9 +1263,13 @@ class Heartbeat:
             )
             if not tracker.consider(decision) or target is None:
                 return
+            finding = self._exploration.finding_to_share(now)
+            reasons = decision.reasons
+            if finding is not None:
+                reasons += (f"前几天查到：{finding.text}（来自网页《{finding.page_title}》）",)
             note = (
                 f"【主动联系】这是你主动找{self._identity.user.name}，不是在回复。"
-                f"原因：{'；'.join(decision.reasons)}。被问起为什么找他，就照实说这些原因。"
+                f"原因：{'；'.join(reasons)}。被问起为什么找他，就照实说这些原因。"
             )
             agenda_state = (
                 describe_agenda(items, now, self._timezone, limit=self._agenda.config.context_items)
@@ -1280,9 +1285,10 @@ class Heartbeat:
                     mood_state=mood.summary if mood is not None else "",
                     agenda_state=agenda_state,
                 ),
-                reasons=decision.reasons,
+                reasons=reasons,
                 social_need=social.level if social is not None else None,
                 due_item_ids=tuple(item.id for item in due),
+                finding_id=finding.id if finding is not None else None,
             )
             tracker.start(now)
             task = asyncio.create_task(self._initiate(job), name="aureus-initiative")
@@ -1294,7 +1300,8 @@ class Heartbeat:
     def _maybe_start_exploration(self) -> None:
         """用户来信和主动联系之后才考虑探索，与它们共用一个任务槽（D79）。"""
         tracker, reading = self._exploration, self._reading
-        started = tracker.prepare(
+        started = exploration_runner.prepare_exploration(
+            tracker,
             self._clock.now(),
             tier=self._current_strategy().effective_tier,
             night=reading.sleep.night if reading is not None else False,
@@ -1379,7 +1386,7 @@ class Heartbeat:
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if target is not None and target.channel not in self._sinks:
             target = None
-        self._initiative.complete(
+        message_id = self._initiative.complete(
             {
                 "reasons": list(job.reasons),
                 "social_need": job.social_need,
@@ -1391,6 +1398,8 @@ class Heartbeat:
             self._deliver_reply,
             outcome.notice or (permission.reason if not permission.allowed else ""),
         )
+        if job.finding_id is not None and message_id is not None:
+            self._exploration.mark_shared(job.finding_id, message_id, self._clock.now())
 
     def _decline_unanswered(self, reason: str) -> None:
         """不允许调用器官时（急停中）：没回复的消息已经在时间线里，这里只通知，之后也不补回复。
@@ -1627,7 +1636,7 @@ class Heartbeat:
         if agenda_state is None:
             agenda_state = self._agenda_for_context(person_id)
         interests_state = exploration_runner.interest_context(
-            self._exploration, target, self._timezone
+            self._exploration, target, self._timezone, self._people
         )
 
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
