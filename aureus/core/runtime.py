@@ -238,6 +238,7 @@ def open_core(
             judge=runtime.judge,
             hormones=hormones,
             affinity=affinity,
+            empathy=runtime.empathy,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

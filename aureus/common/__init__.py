@@ -8,6 +8,7 @@ from aureus.common.clock import AcceleratedClock, Clock, ManualClock, SystemCloc
 from aureus.common.config import (
     BodyConfig,
     ConfigError,
+    EmpathyConfig,
     FeedbackConfig,
     HeartbeatConfig,
     HormonesConfig,
@@ -32,6 +33,7 @@ __all__ = [
     "BudgetCalendar",
     "Clock",
     "ConfigError",
+    "EmpathyConfig",
     "FeedbackConfig",
     "HeartbeatConfig",
     "HomePathError",

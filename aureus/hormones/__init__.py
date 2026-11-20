@@ -9,6 +9,7 @@ from .hormones import (
     HormoneTrigger,
     kind_enabled,
     level_at,
+    make_triggers_from_empathy,
     make_triggers_from_feedback,
     make_triggers_from_judgment,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "RetaliationMode",
     "kind_enabled",
     "level_at",
+    "make_triggers_from_empathy",
     "make_triggers_from_feedback",
     "make_triggers_from_judgment",
 ]

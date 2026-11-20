@@ -5,18 +5,28 @@
 
 import math
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from aureus.common import HormonesConfig
+from aureus.common import EmpathyConfig, HormonesConfig
 from aureus.common.clock import ensure_aware
 from aureus.timeline import VisibilityScope
 
 if TYPE_CHECKING:
-    from aureus.heartbeat.judging import TowardMe
+    from aureus.heartbeat.judging import OtherEmotion, TowardMe
+
+# 共情的原因文字里的动词；键是激素的值（判断器官报的情绪值和激素的值一致，09 号术语表）。
+_EMPATHY_VERBS = {
+    "anger": "生气",
+    "joy": "高兴",
+    "hurt": "难过",
+    "surprise": "惊讶",
+}
+# 对象写成这个词，表示情绪属于发消息的人本人（和 heartbeat.judging.SENDER_SUBJECT 一致）。
+_SENDER = "sender"
 
 
 class HormoneKind(StrEnum):
@@ -55,10 +65,24 @@ class HormoneTrigger:
     source_record_id: int
     # 来源记录的可见范围，用于回复别人时决定能不能写原因的细节（D69 第 3 条）。
     source_visibility: VisibilityScope
+    # 共情来的触发（D72）：替谁难过或生气，"sender" 表示替发消息的人，否则是消息里提到的称呼。
+    # None 表示是直接冲着它来的事或反馈。共情的怒气不触发回击（D72 第 4 条）。
+    empathy_for: str | None = None
+    # 共情时那个对象的好感（0 到 100），留痕用。
+    empathy_affinity: float | None = None
+
+    @property
+    def is_empathy(self) -> bool:
+        """是不是共情来的触发。"""
+        return self.empathy_for is not None
 
     def to_metadata(self) -> dict[str, object]:
         """写进时间线 metadata 的样子：可以序列化成 JSON，还原时能重建。"""
+        extra: dict[str, object] = {}
+        if self.empathy_for is not None:
+            extra = {"empathy_for": self.empathy_for, "empathy_affinity": self.empathy_affinity}
         return {
+            **extra,
             "kind": self.kind.value,
             "rise": self.rise,
             "triggered_at": self.triggered_at.isoformat(),
@@ -96,6 +120,16 @@ class HormoneTrigger:
             )
         ):
             return None
+        empathy_for = metadata.get("empathy_for")
+        affinity = metadata.get("empathy_affinity")
+        if empathy_for is not None and not isinstance(empathy_for, str):
+            return None
+        if affinity is not None and (
+            isinstance(affinity, bool)
+            or not isinstance(affinity, (int, float))
+            or not math.isfinite(affinity)
+        ):
+            return None
         try:
             moment = ensure_aware(datetime.fromisoformat(triggered_at))
         except ValueError:
@@ -108,6 +142,8 @@ class HormoneTrigger:
             reason=reason,
             source_record_id=source_record_id,
             source_visibility=visibility,
+            empathy_for=empathy_for,
+            empathy_affinity=None if affinity is None else float(affinity),
         )
 
 
@@ -145,7 +181,9 @@ def make_triggers_from_judgment(
     earlier_counts: Counter[HormoneKind] = Counter(
         trigger.kind
         for trigger in recent_triggers
-        if trigger.person_id == person_id and trigger.triggered_at >= window_start
+        if trigger.person_id == person_id
+        and not trigger.is_empathy
+        and trigger.triggered_at >= window_start
     )
     triggers: list[HormoneTrigger] = []
     for item in toward_me:
@@ -170,6 +208,77 @@ def make_triggers_from_judgment(
                 reason=reason,
                 source_record_id=source_record_id,
                 source_visibility=source_visibility,
+            )
+        )
+    return triggers
+
+
+def make_triggers_from_empathy(
+    others: Sequence["OtherEmotion"],
+    *,
+    person_id: int,
+    affinity_of: Callable[[str], float],
+    source_record_id: int,
+    source_visibility: VisibilityScope,
+    now: datetime,
+    config: HormonesConfig,
+    empathy: EmpathyConfig,
+    recent_triggers: Iterable[HormoneTrigger],
+) -> list[HormoneTrigger]:
+    """判断器官报的「别人的情绪」变成共情触发（D72）。
+
+    同种情绪上涨：上涨量 = 基础量 × 强度 × 把握 × 好感系数 × 刷屏递减，好感系数 =
+    下限 + (1 − 下限) × 好感 ÷ 100，单次不超过上限。把握不够的不算；
+    同一个人在窗口里反复触发同一种共情，第 n 次乘 repeat_decay 的 n−1 次方。
+
+    Args:
+        others: 判断结果里别人的情绪。
+        person_id: 发消息的人（刷屏递减按这个人数）。
+        affinity_of: 对象（"sender" 或消息里提到的称呼）当前的好感，0 到 100。
+        source_record_id: 判断记录在时间线里的序号。
+        source_visibility: 判断记录的可见范围。
+        now: 触发时刻（UTC）。
+        config: 激素配置（单次上限、递减、窗口、最低把握）。
+        empathy: 同理心配置（开关、基础量、好感系数下限）。
+        recent_triggers: 已有的触发。
+    """
+    if not config.enabled or not empathy.enabled:
+        return []
+    window_start = now - timedelta(seconds=config.repeat_window_seconds)
+    earlier: Counter[HormoneKind] = Counter(
+        trigger.kind
+        for trigger in recent_triggers
+        if trigger.person_id == person_id
+        and trigger.is_empathy
+        and trigger.triggered_at >= window_start
+    )
+    triggers: list[HormoneTrigger] = []
+    for item in others:
+        if item.confidence < config.min_confidence:
+            continue
+        kind = HormoneKind(item.emotion.value)
+        affinity = affinity_of(item.subject)
+        factor = empathy.affinity_floor + (1 - empathy.affinity_floor) * affinity / 100.0
+        decay = config.repeat_decay ** earlier[kind]
+        rise = min(
+            empathy.base_amount * item.intensity * item.confidence * factor * decay,
+            config.max_single_rise,
+        )
+        if rise <= 0.0:
+            continue
+        earlier[kind] += 1
+        who = "对方" if item.subject == _SENDER else item.subject
+        triggers.append(
+            HormoneTrigger(
+                kind=kind,
+                rise=rise,
+                triggered_at=now,
+                person_id=person_id,
+                reason=f"替{who}{_EMPATHY_VERBS[kind.value]}",
+                source_record_id=source_record_id,
+                source_visibility=source_visibility,
+                empathy_for=item.subject,
+                empathy_affinity=affinity,
             )
         )
     return triggers
@@ -261,6 +370,8 @@ def level_at(
     now: datetime,
     config: HormonesConfig,
     person_id: int | None = None,
+    *,
+    exclude_empathy: bool = False,
 ) -> float:
     """算某一刻某种激素的浓度。
 
@@ -273,6 +384,7 @@ def level_at(
         now: 算哪一刻的浓度（UTC），不在触发之前的触发不算。
         config: 配置（用到半衰期）。
         person_id: 只算针对哪个人的触发（None 表示算所有触发，不按人过滤）。
+        exclude_empathy: 不算共情来的触发（回击只看直接冲着它来的怒气，D72 第 4 条）。
 
     Returns:
         浓度 [0, 1]，这种激素被关掉时是 0。
@@ -286,6 +398,8 @@ def level_at(
         if trigger.kind != kind:
             continue
         if person_id is not None and trigger.person_id != person_id:
+            continue
+        if exclude_empathy and trigger.is_empathy:
             continue
         if trigger.triggered_at > now:
             # 触发时刻在 now 之后，不算。不假设触发已经排好序：重启时从时间线读回来的顺序不保证。

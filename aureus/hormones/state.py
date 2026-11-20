@@ -74,9 +74,18 @@ class Hormones:
         self.add(restored, now)
         return len(self._triggers)
 
-    def level(self, kind: HormoneKind, now: datetime, person_id: int | None = None) -> float:
+    def level(
+        self,
+        kind: HormoneKind,
+        now: datetime,
+        person_id: int | None = None,
+        *,
+        exclude_empathy: bool = False,
+    ) -> float:
         """某一刻某种激素的浓度；person_id 给了就只算针对这个人的触发。"""
-        return level_at(self._triggers, kind, now, self._config, person_id)
+        return level_at(
+            self._triggers, kind, now, self._config, person_id, exclude_empathy=exclude_empathy
+        )
 
     def _forget_faded(self, now: datetime) -> None:
         horizon = now - self.lookback()
@@ -128,7 +137,7 @@ class Hormones:
         """这个人的冲突计数；怒气已回落到平息线以下就当这场冲突结束，计数清掉。"""
         if person_id is None:
             return None
-        anger = self.level(HormoneKind.ANGER, now, person_id)
+        anger = self.level(HormoneKind.ANGER, now, person_id, exclude_empathy=True)
         if anger < self._config.calm_below:
             self._conflicts.pop(person_id, None)
             return Conflict()

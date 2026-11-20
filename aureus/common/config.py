@@ -335,6 +335,24 @@ class PeopleConfig(BaseModel):
     daily_fall_cap: float = Field(default=8.0, ge=0)
 
 
+class EmpathyConfig(BaseModel):
+    """同理心的配置（aureus.toml 的 [empathy]，设计见 docs/10-decisions.md 的 D72）。
+
+    单次上限、刷屏递减、窗口和最低把握复用 [hormones] 的，不另设（D72 第 3 条）。
+    下面的数值是随手挑的初值，没有实测依据。
+    """
+
+    # 严格类型，理由同 SafetyConfig：开关写成数字要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 共情的开关（D5）。关掉后判断器官照常调用，只是不产生共情触发（D72 第 1 条）。
+    enabled: bool = True
+    # 基础量：共情上涨量 = 基础量 × 强度 × 把握 × 好感系数。比直接被冒犯的基础量小。
+    base_amount: float = Field(default=0.3, gt=0, le=1)
+    # 好感系数 = 下限 + (1 − 下限) × 好感 ÷ 100；下限大于 0，对讨厌的人共情变弱但不会反过来。
+    affinity_floor: float = Field(default=0.2, ge=0, le=1)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -358,6 +376,7 @@ class RuntimeConfig(BaseModel):
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     hormones: HormonesConfig = Field(default_factory=HormonesConfig)
     people: PeopleConfig = Field(default_factory=PeopleConfig)
+    empathy: EmpathyConfig = Field(default_factory=EmpathyConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod

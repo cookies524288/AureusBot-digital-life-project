@@ -9,6 +9,7 @@ from aureus.common import (
     AureusPaths,
     BodyConfig,
     ConfigError,
+    EmpathyConfig,
     FeedbackConfig,
     HeartbeatConfig,
     HormonesConfig,
@@ -758,4 +759,47 @@ def test_people_example_values_equal_the_defaults(tmp_path: Path) -> None:
 def test_people_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[people]\n{field} = {text}\n")
+    assert field in error_message_of(paths)
+
+
+# ---------- [empathy] 同理心配置（D72） ----------
+
+EMPATHY_FIELDS = tuple(EmpathyConfig.model_fields)
+
+
+def test_empathy_defaults_follow_d72(tmp_path: Path) -> None:
+    empathy = load_runtime_config(AureusPaths(tmp_path)).empathy
+    assert empathy == EmpathyConfig()
+    assert (empathy.enabled, empathy.base_amount, empathy.affinity_floor) == (True, 0.3, 0.2)
+
+
+def test_empathy_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in EMPATHY_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "empathy")
+    assert sum(line.startswith(prefixes) for line in mine) == len(EMPATHY_FIELDS)
+    start = lines.index("[empathy]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "\n".join(lines))
+    assert load_runtime_config(paths).empathy == EmpathyConfig()
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("enabled", "1"),
+        ("base_amount", "0"),
+        ("base_amount", "1.5"),
+        ("affinity_floor", "-0.1"),
+        ("affinity_floor", "2"),
+        ("affinity_floor", '"0.2"'),
+    ],
+)
+def test_empathy_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[empathy]\n{field} = {text}\n")
     assert field in error_message_of(paths)

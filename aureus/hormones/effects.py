@@ -116,7 +116,7 @@ def compute_effects(
     """
     all_triggers = list(triggers)
     anger = (
-        level_at(all_triggers, HormoneKind.ANGER, now, config, person_id)
+        level_at(all_triggers, HormoneKind.ANGER, now, config, person_id, exclude_empathy=True)
         if person_id is not None
         else 0.0
     )

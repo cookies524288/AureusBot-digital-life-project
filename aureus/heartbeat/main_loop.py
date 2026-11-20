@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
-from aureus.common import Clock, HeartbeatConfig, JudgeConfig
+from aureus.common import Clock, EmpathyConfig, HeartbeatConfig, JudgeConfig, PeopleConfig
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
@@ -48,7 +48,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
-from aureus.heartbeat.judging import Judgment, TowardMeKind, parse_judgment
+from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, TowardMeKind, parse_judgment
 from aureus.heartbeat.perception import (
     MessageKind,
     MessageSink,
@@ -67,6 +67,7 @@ from aureus.hormones import (
     HormoneTrigger,
     RetaliationMode,
     kind_enabled,
+    make_triggers_from_empathy,
     make_triggers_from_judgment,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
@@ -119,6 +120,8 @@ _CANCEL_WAIT_SECONDS = 5.0
 # 重启时最多读多少条激素触发记录；超过半衰期 8 倍的会被 Hormones 丢掉，这里只防读得太多。
 _HORMONE_RESTORE_LIMIT = 1000
 # /state 里激素的显示名（09 号文档术语表）。
+# 好感账关着时，共情按陌生人的默认好感算（D72 第 2 条）。
+_DEFAULT_STRANGER_AFFINITY = PeopleConfig().stranger_affinity
 # 判断器官报的事怎么换成好感变化的原因（D71 第 1 条）。
 _AFFINITY_REASONS = {
     TowardMeKind.PRAISE: AffinityReason.PRAISE,
@@ -250,6 +253,7 @@ class Heartbeat:
         judge: JudgeConfig | None = None,
         hormones: Hormones | None = None,
         affinity: AffinityBook | None = None,
+        empathy: EmpathyConfig | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -275,6 +279,7 @@ class Heartbeat:
             hormones: 激素的内存状态，醒来时从时间线还原；不给就没有激素（D69）。
             affinity: 好感账，要已经打开；判断过的对话据此记好感变化，好感写进上下文（D71）。
                 不给就没有好感。
+            empathy: 同理心配置；不给或 enabled 为 False 就不共情（D72）。共情需要激素。
         """
         self._clock = clock
         self._timeline = timeline
@@ -301,6 +306,7 @@ class Heartbeat:
         self._judge_missing_logged = False  # 没配判断器官的日志只记一次
         self._hormones = hormones
         self._affinity = affinity
+        self._empathy = empathy
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
@@ -1267,17 +1273,41 @@ class Heartbeat:
         if hormones is None or person_id is None:
             return ()
         now = self._clock.now()
-        return tuple(
-            make_triggers_from_judgment(
-                judgment.toward_me,
+        direct = make_triggers_from_judgment(
+            judgment.toward_me,
+            person_id=person_id,
+            source_record_id=latest.id,
+            source_visibility=latest.visibility,
+            now=now,
+            config=hormones.config,
+            recent_triggers=hormones.triggers,
+        )
+        empathic: list[HormoneTrigger] = []
+        if self._empathy is not None:
+            empathic = make_triggers_from_empathy(
+                judgment.others,
                 person_id=person_id,
+                affinity_of=lambda subject: self._affinity_of(subject, person_id),
                 source_record_id=latest.id,
                 source_visibility=latest.visibility,
                 now=now,
                 config=hormones.config,
-                recent_triggers=hormones.triggers,
+                empathy=self._empathy,
+                # 同一批里先算出的直接触发也算进去，免得同一条消息重复数
+                recent_triggers=[*hormones.triggers, *direct],
             )
-        )
+        return (*direct, *empathic)
+
+    def _affinity_of(self, subject: str, sender_id: int) -> float:
+        """共情对象的好感（D72 第 2 条）。
+
+        发消息的人取他的好感；消息里提到的人或动物没有档案，好感账关着时，都按陌生人默认值。
+        """
+        if self._affinity is None:
+            return _DEFAULT_STRANGER_AFFINITY
+        if subject == SENDER_SUBJECT:
+            return self._affinity.current(sender_id)
+        return self._affinity.config.stranger_affinity
 
     async def _plan(self, job: _ReplyJob) -> Plan | None:
         """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""
