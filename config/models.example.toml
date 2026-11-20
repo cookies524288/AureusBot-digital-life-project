@@ -53,6 +53,6 @@ models = ["example-chat"]
 [organs.replyer]
 models = ["example-chat"]
 
-# 小探索的总结器官（D79）；配置真实搜索服务后再按需启用。
+# 总结器官用于小探索（D79），也用来写日记（D80）；按需启用。
 # [organs.summarizer]
 # models = ["example-chat"]

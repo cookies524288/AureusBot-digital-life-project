@@ -10,6 +10,7 @@ from aureus.common import (
     AureusPaths,
     BodyConfig,
     ConfigError,
+    DiaryConfig,
     EmpathyConfig,
     ExplorationConfig,
     FeedbackConfig,
@@ -18,6 +19,7 @@ from aureus.common import (
     InitiativeConfig,
     InterestsConfig,
     JudgeConfig,
+    MemoryConfig,
     MoodConfig,
     PeopleConfig,
     SafetyConfig,
@@ -47,6 +49,64 @@ def test_missing_config_file_gives_defaults(tmp_path: Path) -> None:
     config = load_runtime_config(AureusPaths(tmp_path))
     assert config.log_level == "INFO"
     assert config.config_version == CONFIG_FORMAT_VERSION
+
+
+@pytest.mark.parametrize(
+    "section, defaults", [("memory", MemoryConfig()), ("diary", DiaryConfig())]
+)
+def test_memory_diary_defaults_and_example(
+    tmp_path: Path, section: str, defaults: MemoryConfig | DiaryConfig
+) -> None:
+    paths = AureusPaths(tmp_path)
+    assert getattr(load_runtime_config(paths), section) == defaults
+    lines = Path("config/aureus.example.toml").read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, section)
+    prefixes = tuple(f"# {name} =" for name in type(defaults).model_fields)
+    assert sum(line.startswith(prefixes) for line in mine) == len(type(defaults).model_fields)
+    start = lines.index(f"[{section}]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    write_runtime_config(paths, NEWLINE.join(lines))
+    assert getattr(load_runtime_config(paths), section) == defaults
+
+
+@pytest.mark.parametrize(
+    "section, field, value",
+    [
+        ("memory", "enabled", "1"),
+        ("memory", "recall_enabled", '"true"'),
+        ("memory", "max_results", "0"),
+        ("memory", "max_results", "21"),
+        ("memory", "index_batch", "0"),
+        ("memory", "index_batch", "5001"),
+        ("memory", "index_batch", "true"),
+        ("memory", "unknown", "1"),
+        ("diary", "enabled", "1"),
+        ("diary", "organ", "1"),
+        ("diary", "write_after_hour", "-1"),
+        ("diary", "write_after_hour", "24"),
+        ("diary", "max_input_chars", "999"),
+        ("diary", "max_input_chars", "50001"),
+        ("diary", "max_chars", "99"),
+        ("diary", "max_chars", "10001"),
+        ("diary", "max_chars", '"1500"'),
+        ("diary", "unknown", "1"),
+    ],
+)
+def test_memory_diary_reject_invalid_values(
+    tmp_path: Path, section: str, field: str, value: str
+) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[{section}]\n{field} = {value}\n")
+    assert field in error_message_of(paths)
+
+
+def test_memory_and_diary_switches_are_independent(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[memory]\nenabled = false\nrecall_enabled = true\n")
+    config = load_runtime_config(paths)
+    assert not config.memory.enabled and config.memory.recall_enabled and config.diary.enabled
 
 
 def test_values_from_file_are_used_and_level_is_case_insensitive(tmp_path: Path) -> None:

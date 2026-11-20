@@ -321,3 +321,26 @@ log_level = "INFO"
 # max_page_bytes = 1048576
 # max_page_chars = 6000
 # share_within_days = 3.0
+
+# 记忆简易版（D80）：从时间线增量建全文索引，规划器按需提供关键词。
+[memory]
+# 关掉后不建索引、不查记忆；扮演模式下也可开启。
+# enabled = true
+# 只关召回仍继续建索引。
+# recall_enabled = true
+# 一次最多给回复器几条，1～20。
+# max_results = 5
+# 每拍最多处理几条新的时间线记录，1～5000。
+# index_batch = 200
+
+# 每日日记（D80）：失败当天不再试，不补写；与记忆开关相互独立。
+[diary]
+# enabled = true
+# 没注册这个器官时跳过，启动时只记一次日志。
+# organ = "summarizer"
+# 当地几点以后写，0～23；凌晨 4 点前仍属于前一天。
+# write_after_hour = 22
+# 材料超长时保留最新整条记录，1000～50000。
+# max_input_chars = 6000
+# 日记正文上限，100～10000。
+# max_chars = 1500

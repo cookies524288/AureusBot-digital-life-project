@@ -465,6 +465,29 @@ class ExplorationConfig(BaseModel):
     share_within_days: float = Field(default=3.0, gt=0)
 
 
+class MemoryConfig(BaseModel):
+    """增量记忆索引和按关键词召回的开关与上限（D80）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = True
+    recall_enabled: bool = True
+    max_results: int = Field(default=5, ge=1, le=20)
+    index_batch: int = Field(default=200, ge=1, le=5000)
+
+
+class DiaryConfig(BaseModel):
+    """每日日记的器官、当地写作时刻和长度限制（D80）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = True
+    organ: str = "summarizer"
+    write_after_hour: int = Field(default=22, ge=0, le=23)
+    max_input_chars: int = Field(default=6000, ge=1000, le=50000)
+    max_chars: int = Field(default=1500, ge=100, le=10000)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -494,6 +517,8 @@ class RuntimeConfig(BaseModel):
     initiative: InitiativeConfig = Field(default_factory=InitiativeConfig)
     interests: InterestsConfig = Field(default_factory=InterestsConfig)
     exploration: ExplorationConfig = Field(default_factory=ExplorationConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    diary: DiaryConfig = Field(default_factory=DiaryConfig)
 
     @model_validator(mode="after")
     def _check_exploration(self) -> Self:
