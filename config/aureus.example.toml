@@ -244,3 +244,24 @@ log_level = "INFO"
 # base_amount = 0.3
 # 好感系数 = 下限 + (1 - 下限) × 好感 / 100。下限在 0 到 1 之间。
 # affinity_floor = 0.2
+
+# 心情（设计见 docs/10-decisions.md 的 D73）：几小时到几天的基调，−1 到 1，基线 0。
+# 由激素（愉悦加，怒气和低落减）和反馈结果（成功加，失败减）累积，再减去此刻的压力。
+# 下面的值都是默认值，没有实测依据，跑起来之后按表现调整。
+[mood]
+# 心情的开关。关掉后不算心情、不写进上下文、不会变谨慎。
+# enabled = true
+# 每件事的影响按这个半衰期回落（秒），默认 6 小时。
+# half_life_seconds = 21600.0
+# 激素触发的权重：贡献 = 权重 × 上涨量。
+# hormone_weight = 0.5
+# 反馈结果：成功加多少、失败减多少。
+# success_amount = 0.05
+# failure_amount = 0.1
+# 每件事单次贡献的上限。
+# max_single_change = 0.2
+# 此刻压力往下拉多少（乘以压力，0 到 1）。
+# stress_weight = 0.3
+# 心情低于 cautious_below 变谨慎，回到 recover_above 以上才恢复。前者要小于后者。
+# cautious_below = -0.3
+# recover_above = -0.15

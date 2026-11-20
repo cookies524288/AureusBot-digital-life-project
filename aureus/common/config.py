@@ -353,6 +353,39 @@ class EmpathyConfig(BaseModel):
     affinity_floor: float = Field(default=0.2, ge=0, le=1)
 
 
+class MoodConfig(BaseModel):
+    """心情的配置（aureus.toml 的 [mood]，设计见 docs/10-decisions.md 的 D73）。
+
+    下面的数值是随手挑的初值，没有实测依据，跑起来之后按表现调整。
+    """
+
+    # 严格类型，理由同 SafetyConfig：开关写成数字、数值写成字符串要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 心情的开关（D5）。关掉后不算心情、不进上下文、不谨慎。
+    enabled: bool = True
+    # 每件事对心情的影响按这个半衰期回落（秒），默认 6 小时：心情是几小时到几天的基调。
+    half_life_seconds: float = Field(default=21600.0, gt=0)
+    # 激素触发换成心情：贡献 = 权重 × 上涨量；愉悦记正，怒气和低落记负，惊讶不计。
+    hormone_weight: float = Field(default=0.5, ge=0)
+    # 反馈结果：成功加、失败减；失败分量更重。
+    success_amount: float = Field(default=0.05, ge=0)
+    failure_amount: float = Field(default=0.1, ge=0)
+    # 每件事单次贡献的上限（绝对值）。
+    max_single_change: float = Field(default=0.2, gt=0, le=1)
+    # 此刻的压力往下拉多少：−权重 × 压力，不累积。
+    stress_weight: float = Field(default=0.3, ge=0, le=1)
+    # 低于 cautious_below 进入谨慎，回到 recover_above 以上才恢复（D73 第 5 条）。
+    cautious_below: float = Field(default=-0.3, ge=-1, le=1)
+    recover_above: float = Field(default=-0.15, ge=-1, le=1)
+
+    @model_validator(mode="after")
+    def _check_caution_levels(self) -> Self:
+        if not self.cautious_below < self.recover_above:
+            raise ValueError("要满足 cautious_below < recover_above")
+        return self
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -377,6 +410,7 @@ class RuntimeConfig(BaseModel):
     hormones: HormonesConfig = Field(default_factory=HormonesConfig)
     people: PeopleConfig = Field(default_factory=PeopleConfig)
     empathy: EmpathyConfig = Field(default_factory=EmpathyConfig)
+    mood: MoodConfig = Field(default_factory=MoodConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod

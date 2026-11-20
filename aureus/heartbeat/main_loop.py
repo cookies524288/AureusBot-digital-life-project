@@ -13,6 +13,7 @@
 import asyncio
 import contextlib
 import logging
+import sqlite3
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -24,7 +25,7 @@ from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import Clock, EmpathyConfig, HeartbeatConfig, JudgeConfig, PeopleConfig
 from aureus.core import CognitiveObserver, CognitiveState
-from aureus.feedback import FeedbackStore
+from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
     build_judge_context,
@@ -71,6 +72,7 @@ from aureus.hormones import (
     make_triggers_from_judgment,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
+from aureus.mood import FeedbackOutcome, Mood, MoodReading
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import (
     AffinityBook,
@@ -254,6 +256,7 @@ class Heartbeat:
         hormones: Hormones | None = None,
         affinity: AffinityBook | None = None,
         empathy: EmpathyConfig | None = None,
+        mood: Mood | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -280,6 +283,8 @@ class Heartbeat:
             affinity: 好感账，要已经打开；判断过的对话据此记好感变化，好感写进上下文（D71）。
                 不给就没有好感。
             empathy: 同理心配置；不给或 enabled 为 False 就不共情（D72）。共情需要激素。
+            mood: 心情；激素触发和反馈结果累积成心情，写进上下文，低时谨慎（D73）。
+                醒来时从时间线还原；不给就没有心情。心情的激素来源需要激素。
         """
         self._clock = clock
         self._timeline = timeline
@@ -307,6 +312,8 @@ class Heartbeat:
         self._hormones = hormones
         self._affinity = affinity
         self._empathy = empathy
+        self._mood = mood
+        self._feedback = feedback
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
@@ -431,6 +438,10 @@ class Heartbeat:
                 "激素："
                 + "，".join(f"{_HORMONE_NAMES[kind]} {level:.2f}" for kind, level in levels.items())
             )
+        mood = self._read_mood(None, viewer_is_user=True)
+        if mood is not None:
+            caution = "，谨慎中" if mood.cautious else ""
+            lines.append(f"心情 {mood.valence:+.2f}{caution}")
         if self._thought is not None:
             lines.append(f"正在想怎么回复 {len(self._thought.replying_to)} 条消息。")
         if self._halt_status.halted:
@@ -534,16 +545,21 @@ class Heartbeat:
 
     def _restore_hormones(self, now: datetime) -> None:
         """醒来时从时间线上的触发记录还原激素浓度；停机的时间照样算作消退（D69 第 5 条）。"""
-        if self._hormones is None:
+        if self._hormones is None and self._mood is None:
             return
         records = self._timeline.query(
             TimelineQuery(
                 event_type=EVENT_HORMONE_TRIGGERED, limit=_HORMONE_RESTORE_LIMIT, latest=True
             )
         )
-        restored = self._hormones.restore([record.metadata for record in records], now)
-        if restored:
-            logger.info("还原了 %s 条还没消退的激素触发", restored)
+        metadata = [record.metadata for record in records]
+        if self._hormones is not None:
+            restored = self._hormones.restore(metadata, now)
+            if restored:
+                logger.info("还原了 %s 条还没消退的激素触发", restored)
+        if self._mood is not None:
+            # 心情的半衰期比激素长得多，同一批记录里激素已经消退的，心情还记着（D73 第 3 条）。
+            self._mood.restore(metadata, now)
 
     def _record_identity_changes(self) -> None:
         """醒来时：用户在 identity.toml 里改过设定的话，记一条「用户修改了我的设定」（D62）。
@@ -798,6 +814,43 @@ class Heartbeat:
                 metadata=trigger.to_metadata(),
             )
         self._hormones.add(triggers, self._clock.now())
+        if self._mood is not None:
+            self._mood.add_triggers(triggers, self._clock.now())
+
+    def _read_mood(self, person_id: int | None, *, viewer_is_user: bool) -> MoodReading | None:
+        """此刻的心情（D73）：激素贡献在内存里，反馈结果从反馈表读，再减去此刻压力。
+
+        反馈表读不了时当作没有结果，不让心情这一步拖垮回复。
+        """
+        mood = self._mood
+        if mood is None:
+            return None
+        now = self._clock.now()
+        outcomes: list[FeedbackOutcome] = []
+        if self._feedback is not None:
+            try:
+                records = self._feedback.outcomes_since(now - mood.lookback())
+            except sqlite3.Error:
+                logger.exception("心情：反馈表读不了，这次不算反馈结果")
+                records = []
+            outcomes = [
+                FeedbackOutcome(
+                    at=record.outcome_at,
+                    succeeded=record.outcome is Outcome.SUCCESS,
+                    category=record.category,
+                )
+                for record in records
+                if record.outcome_at is not None
+            ]
+        reading = self._reading
+        stress = reading.stress.level if reading is not None and reading.stress.enabled else 0.0
+        return mood.read(
+            now,
+            outcomes,
+            stress_level=stress,
+            person_id=person_id,
+            viewer_is_user=viewer_is_user,
+        )
 
     def _record_declined(
         self,
@@ -1094,6 +1147,8 @@ class Heartbeat:
         affinity_state = self._affinity_for_context(
             _person_id_of(batch[-1].record), is_user=not contact
         )
+        mood_reading = self._read_mood(_person_id_of(batch[-1].record), viewer_is_user=not contact)
+        mood_state = mood_reading.summary if mood_reading is not None else ""
 
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
             return build_system_context(
@@ -1108,6 +1163,7 @@ class Heartbeat:
                 identity_changes_live=live_changes,
                 hormone_state=hormone_state,
                 affinity_state=affinity_state,
+                mood_state=mood_state,
             )
 
         def build_contexts(full_text: str, replyer_text: str) -> tuple[str, str]:

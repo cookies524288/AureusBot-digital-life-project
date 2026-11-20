@@ -254,6 +254,22 @@ class FeedbackStore:
         )
         return None if row is None else _record_of(row)
 
+    def outcomes_since(self, moment: datetime) -> list[FeedbackRecord]:
+        """从某个时刻起（含）补写了结果的记录，按结果时间先后；结果未知的不在里面。
+
+        给心情用（D73 第 2 条）：成功和失败按补写结果的时刻算。
+        """
+        rows = (
+            self._require_open()
+            .execute(
+                "SELECT * FROM feedback_records WHERE outcome != ? AND outcome_at >= ?"
+                " ORDER BY outcome_at, id",
+                (Outcome.UNKNOWN.value, _format_timestamp(moment)),
+            )
+            .fetchall()
+        )
+        return [_record_of(row) for row in rows]
+
     def confidence(self, category: str) -> Confidence:
         """某一类事情的自信：最近 window_size 次有结果的成功率。
 

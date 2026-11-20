@@ -14,6 +14,7 @@ from aureus.common import (
     HeartbeatConfig,
     HormonesConfig,
     JudgeConfig,
+    MoodConfig,
     PeopleConfig,
     SafetyConfig,
     TimeConfig,
@@ -628,6 +629,8 @@ def test_judge_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None
 
 # ---------- [hormones] 激素配置（D69） ----------
 
+NEWLINE = chr(10)  # 拼配置文本用的换行
+
 HORMONES_FIELDS = tuple(HormonesConfig.model_fields)
 
 
@@ -803,3 +806,56 @@ def test_empathy_rejects_bad_values(tmp_path: Path, field: str, text: str) -> No
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[empathy]\n{field} = {text}\n")
     assert field in error_message_of(paths)
+
+
+# ---------- [mood] 心情配置（D73） ----------
+
+MOOD_FIELDS = tuple(MoodConfig.model_fields)
+
+
+def test_mood_defaults_follow_d73(tmp_path: Path) -> None:
+    mood = load_runtime_config(AureusPaths(tmp_path)).mood
+    assert mood == MoodConfig()
+    assert mood.enabled is True
+    assert mood.half_life_seconds == 21600.0
+    assert (mood.cautious_below, mood.recover_above) == (-0.3, -0.15)
+
+
+def test_mood_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in MOOD_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "mood")
+    assert sum(line.startswith(prefixes) for line in mine) == len(MOOD_FIELDS)
+    start = lines.index("[mood]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, NEWLINE.join(lines))
+    assert load_runtime_config(paths).mood == MoodConfig()
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("enabled", "1"),
+        ("half_life_seconds", "0"),
+        ("hormone_weight", "-1"),
+        ("max_single_change", "0"),
+        ("max_single_change", "2"),
+        ("stress_weight", "1.5"),
+        ("cautious_below", "-2"),
+        ("recover_above", '"0"'),
+    ],
+)
+def test_mood_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[mood]{NEWLINE}{field} = {text}{NEWLINE}")
+    assert field in error_message_of(paths)
+
+
+def test_mood_caution_levels_must_be_ordered(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[mood]{NEWLINE}cautious_below = -0.1{NEWLINE}")
+    assert "cautious_below" in error_message_of(paths)

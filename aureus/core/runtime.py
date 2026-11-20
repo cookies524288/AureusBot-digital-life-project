@@ -35,6 +35,7 @@ from aureus.heartbeat import Heartbeat
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
+from aureus.mood import Mood
 from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
 from aureus.people import AffinityBook, PeopleDirectory, PeopleError
@@ -210,6 +211,8 @@ def open_core(
         # 激素（D69）：关掉开关或扮演模式（D65，对照组只有提示词）时不创建。
         hormones = Hormones(runtime.hormones) if runtime.hormones.enabled and not roleplay else None
         # 好感（D71）：扮演模式是对照组，和激素一样不创建；关掉时不记变化、不进上下文。
+        # 心情（D73）：扮演模式是对照组，不创建；关掉时不算心情、不进上下文。
+        mood = Mood(runtime.mood) if runtime.mood.enabled and not roleplay else None
         affinity: AffinityBook | None = None
         if runtime.people.affinity_enabled and not roleplay:
             affinity = AffinityBook(
@@ -239,6 +242,7 @@ def open_core(
             hormones=hormones,
             affinity=affinity,
             empathy=runtime.empathy,
+            mood=mood,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
