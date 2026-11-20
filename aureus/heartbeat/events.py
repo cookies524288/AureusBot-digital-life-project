@@ -31,3 +31,6 @@ EVENT_HORMONE_TRIGGERED = "hormone_triggered"
 EVENT_AGENDA_ADDED = "agenda_added"
 EVENT_AGENDA_DUE = "agenda_due"
 EVENT_AGENDA_CLOSED = "agenda_closed"
+# 主动联系（D76）：每次考虑和之后有没有得到回应，只有自己可见。
+EVENT_INITIATIVE_CONSIDERED = "initiative_considered"
+EVENT_INITIATIVE_RESULT = "initiative_result"

@@ -251,6 +251,8 @@ def open_core(
             empathy=runtime.empathy,
             mood=mood,
             agenda=agenda,
+            initiative=None if roleplay else runtime.initiative,
+            calendar=calendar,
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

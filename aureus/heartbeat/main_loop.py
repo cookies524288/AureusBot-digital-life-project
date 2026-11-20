@@ -17,18 +17,35 @@ import sqlite3
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from enum import Enum, auto
 from typing import Any, Protocol
 
 from aureus.agenda import AgendaItem, AgendaStore, ItemStatus, describe_agenda, parse_due
 from aureus.attention import Inbox, Priority
 from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
-from aureus.common import Clock, EmpathyConfig, HeartbeatConfig, JudgeConfig, PeopleConfig
+from aureus.common import (
+    BudgetCalendar,
+    Clock,
+    EmpathyConfig,
+    HeartbeatConfig,
+    InitiativeConfig,
+    JudgeConfig,
+    PeopleConfig,
+)
 from aureus.core import CognitiveObserver, CognitiveState
-from aureus.feedback import COMMITMENT_KEPT, PRIOR_CONFIDENCE, FeedbackError, FeedbackStore, Outcome
+from aureus.feedback import (
+    COMMITMENT_KEPT,
+    PRIOR_CONFIDENCE,
+    PROACTIVE_CONTACT,
+    FeedbackError,
+    FeedbackStore,
+    Outcome,
+)
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
+    build_initiative_plan_prompt,
+    build_initiative_reply_prompt,
     build_judge_context,
     build_judge_prompt,
     build_plan_prompt,
@@ -45,6 +62,8 @@ from aureus.heartbeat.events import (
     EVENT_EMERGENCY_STOP,
     EVENT_HORMONE_TRIGGERED,
     EVENT_IDENTITY_CHANGED,
+    EVENT_INITIATIVE_CONSIDERED,
+    EVENT_INITIATIVE_RESULT,
     EVENT_JUDGMENT,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
@@ -53,6 +72,8 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from aureus.heartbeat.initiative import InitiativeState, decide
+from aureus.heartbeat.initiative_history import read_initiative_history
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, TowardMeKind, parse_judgment
 from aureus.heartbeat.perception import (
     MessageKind,
@@ -61,7 +82,14 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
-from aureus.heartbeat.planning import Plan, ReplyLength, ResolutionResult, parse_plan
+from aureus.heartbeat.planning import (
+    InitiativePlan,
+    Plan,
+    ReplyLength,
+    ResolutionResult,
+    parse_initiative_plan,
+    parse_plan,
+)
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
@@ -245,6 +273,18 @@ class _ThoughtOutcome:
     effects: HormoneEffects | None = None
     # 规划器想不回，但这场冲突里已经不回过一次，代码要求这次必须回（D69 第 3 条）。
     forced_reply: bool = False
+    # 主动联系独立解析，不能拿普通回复的兜底来替它决定开口（D76）。
+    initiative_plan: InitiativePlan | None = None
+
+
+@dataclass(frozen=True)
+class _InitiativeJob:
+    """拍里准备的主动材料，后台只用这些快照调用器官（D76）。"""
+
+    conversation: _ReplyJob
+    reasons: tuple[str, ...]
+    social_need: float | None
+    due_item_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -254,6 +294,8 @@ class _Thought:
     task: asyncio.Task[_ThoughtOutcome]
     replying_to: Sequence[_Heard]
     strategy: ReplyStrategy
+    # 非空表示主动想法；仍与回复共用唯一任务槽（D34、D76）。
+    initiative: _InitiativeJob | None = None
 
 
 class Heartbeat:
@@ -284,6 +326,8 @@ class Heartbeat:
         empathy: EmpathyConfig | None = None,
         mood: Mood | None = None,
         agenda: AgendaStore | None = None,
+        initiative: InitiativeConfig | None = None,
+        calendar: BudgetCalendar | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -314,6 +358,8 @@ class Heartbeat:
                 醒来时从时间线还原；不给就没有心情。心情的激素来源需要激素。
             agenda: 日程，要已经打开；规划器答应的事记进去，到期提醒、兑现记进反馈（D74）。
                 不给就没有日程。
+            initiative: 主动联系的开关和退避参数；不给时关闭（D76）。
+            calendar: 每日次数的分界，与预算共用日历；不给时按 timezone 创建。
         """
         self._clock = clock
         self._timeline = timeline
@@ -346,6 +392,23 @@ class Heartbeat:
         self._mood = mood
         self._agenda = agenda
         self._feedback = feedback
+        self._initiative = initiative or InitiativeConfig()
+        if config.roleplay_mode:
+            self._initiative = self._initiative.model_copy(update={"enabled": False})
+        if self._initiative.enabled and not config.planning_enabled:
+            logger.warning("主动联系要用规划器，已关闭主动联系")
+            self._initiative = self._initiative.model_copy(update={"enabled": False})
+        self._calendar = calendar or BudgetCalendar(timezone)
+        self._initiative_state = InitiativeState()
+        self._initiative_day = self._calendar.day_of(clock.now())
+        self._initiative_considered_id: int | None = None
+        self._initiative_feedback_id: int | None = None
+        # 用户已开口但结果暂时没写进去时，保留当时的判定，重试不能把及时回应算成超时。
+        self._initiative_user_answer: bool | None = None
+        self._initiative_restored = False
+        self._initiative_blocked_by = ""
+        # 本拍有状态读写失败时，正常回复照旧兜底，主动联系则停止，免得拿旧读数打扰用户。
+        self._initiative_io_failed = False
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
@@ -574,6 +637,7 @@ class Heartbeat:
         self._record_identity_changes()
         self._restore_hormones(now)
         self._restore_last_conversation()
+        self._restore_initiative()
         self._downtime = downtime
         self._phase = _Phase.RUNNING
         logger.info("心跳醒来：%s", downtime.describe(self._timezone))
@@ -690,6 +754,7 @@ class Heartbeat:
         """
         if self._phase is not _Phase.RUNNING:
             raise RuntimeError("心跳没有在运行，不能跳")
+        self._initiative_io_failed = False
         self._watch_emergency_stop()
         self._collect_finished_thought()
         self._take_in_perceptions()
@@ -697,6 +762,7 @@ class Heartbeat:
         self._check_stress()
         self._check_agenda()
         self._maybe_start_thought()
+        self._maybe_start_initiative()
         self._broadcast_cognitive_state()
         self._record_body_sample()
 
@@ -778,6 +844,9 @@ class Heartbeat:
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
         outcome = thought.task.result()
+        if thought.initiative is not None:
+            self._collect_initiative(thought, outcome)
+            return
         target = thought.replying_to[-1].perception
         person_id = _person_id_of(thought.replying_to[-1].record)
         if outcome.judge is not None:
@@ -1009,6 +1078,7 @@ class Heartbeat:
                     metadata=_item_metadata(item),
                 )
         except sqlite3.Error:
+            self._initiative_io_failed = True
             logger.exception("日程读不了，这一拍不检查到期")
 
     def _agenda_for_context(self, person_id: int | None) -> str:
@@ -1019,6 +1089,7 @@ class Heartbeat:
         try:
             items = agenda.open_items(person_id)
         except sqlite3.Error:
+            self._initiative_io_failed = True
             logger.exception("日程读不了，这次上下文里不放日程")
             return ""
         return describe_agenda(
@@ -1039,6 +1110,7 @@ class Heartbeat:
             try:
                 records = self._feedback.outcomes_since(now - mood.lookback())
             except sqlite3.Error:
+                self._initiative_io_failed = True
                 logger.exception("心情：反馈表读不了，这次不算反馈结果")
                 records = []
             outcomes = [
@@ -1119,6 +1191,7 @@ class Heartbeat:
             self._unanswered.add(_Heard(perception, record), priority, _conversation_of(perception))
             if priority is Priority.USER:
                 self._last_user_contact = perception
+                self._note_initiative_answer()
 
     def _identify(self, perception: Perception) -> Person | None:
         """按（通道, 账号）认人；没有人物档案时返回 None。
@@ -1150,6 +1223,297 @@ class Heartbeat:
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task=task, replying_to=batch, strategy=job.strategy)
 
+    # ---------- 主动联系（D76） ----------
+
+    def _restore_initiative(self) -> None:
+        """恢复计数和等待；发送通道只认这次运行里用户的来信。"""
+        try:
+            history = read_initiative_history(self._timeline, self._calendar, self._clock.now())
+            self._initiative_state = history.state
+            self._initiative_considered_id = history.considered_id
+            self._initiative_feedback_id = history.feedback_id
+            self._initiative_day = self._calendar.day_of(self._clock.now())
+            self._initiative_restored = True
+        except Exception:
+            self._initiative_restored = False
+            self._initiative_io_failed = True
+            logger.exception("主动联系的历史读不了，这一拍不主动")
+
+    def _roll_initiative_day(self, now: datetime) -> None:
+        day = self._calendar.day_of(now)
+        if day != self._initiative_day:
+            self._initiative_state = replace(self._initiative_state, contacts_today=0)
+            self._initiative_day = day
+
+    def _settle_initiative_timeout(self) -> bool:
+        pending = self._initiative_state.pending_since
+        if pending is None:
+            return True
+        if self._initiative_user_answer is not None:
+            return self._finish_initiative(answered=self._initiative_user_answer)
+        window = timedelta(hours=self._initiative.answer_window_hours)
+        if self._clock.now() - pending >= window:
+            return self._finish_initiative(answered=False)
+        return True
+
+    def _note_initiative_answer(self) -> None:
+        """用户先开口就清退避；迟到的回应先如实结算窗口外的失败，再重置。"""
+        pending = self._initiative_state.pending_since
+        if pending is not None:
+            window = timedelta(hours=self._initiative.answer_window_hours)
+            if self._initiative_user_answer is None:
+                self._initiative_user_answer = self._clock.now() - pending < window
+            self._finish_initiative(answered=self._initiative_user_answer)
+        self._initiative_state = replace(self._initiative_state, unanswered_streak=0)
+
+    def _finish_initiative(self, *, answered: bool) -> bool:
+        """先补反馈、再留结果；重试时检查已有结果，避免重复记账。"""
+        try:
+            if self._feedback is not None and self._initiative_feedback_id is not None:
+                record = self._feedback.get(self._initiative_feedback_id)
+                if record is not None and record.outcome is not Outcome.UNKNOWN:
+                    answered = record.outcome is Outcome.SUCCESS
+                else:
+                    self._feedback.record_outcome(
+                        self._initiative_feedback_id,
+                        Outcome.SUCCESS if answered else Outcome.FAILURE,
+                    )
+            self._timeline.append(
+                event_type=EVENT_INITIATIVE_RESULT,
+                content="主动联系后用户回应了。" if answered else "主动联系后一直没有回应。",
+                actor_type=ActorType.ME,
+                visibility=VisibilityScope.PRIVATE,
+                metadata={"answered": answered, "considered_id": self._initiative_considered_id},
+            )
+        except Exception:
+            self._initiative_io_failed = True
+            logger.exception("主动联系的回应结果没记上，这一拍不主动")
+            return False
+        self._initiative_state = replace(
+            self._initiative_state,
+            pending_since=None,
+            unanswered_streak=0
+            if answered or self._initiative_user_answer is not None
+            else self._initiative_state.unanswered_streak + 1,
+        )
+        self._initiative_considered_id = None
+        self._initiative_feedback_id = None
+        self._initiative_user_answer = None
+        return True
+
+    def _maybe_start_initiative(self) -> None:
+        """用户消息先处理完，闲下来且每道关都通过时才考虑主动联系。"""
+        if not self._initiative_restored:
+            self._restore_initiative()
+        if not self._initiative_restored or not self._settle_initiative_timeout():
+            return
+        now = self._clock.now()
+        self._roll_initiative_day(now)
+        if not self._initiative.enabled or self._stop_requested or self._initiative_io_failed:
+            return
+        if not self._conversation_restored:
+            self._restore_last_conversation()
+            if not self._conversation_restored:
+                return
+        try:
+            target = self._last_user_contact
+            person = (
+                self._people.find(*_conversation_of(target))
+                if target is not None and self._people is not None
+                else None
+            )
+            person_id = person.id if person is not None else None
+            due = (
+                [item for item in self._agenda.open_items(person_id) if item.is_due(now)]
+                if self._agenda is not None and person_id is not None
+                else []
+            )
+            self._read_mood(person_id, viewer_is_user=True)
+            reading = self._reading
+            social = reading.social_need if reading is not None else None
+            decision = decide(
+                now=now,
+                config=self._initiative,
+                state=self._initiative_state,
+                social_need=social,
+                due_items=[f"#{item.id} {item.content}" for item in due],
+                effective_tier=self._current_strategy().effective_tier,
+                night=reading.sleep.night if reading is not None else False,
+                halted=self._halt_status.halted,
+                busy=self._thought is not None or bool(self._unanswered) or bool(self._pending),
+                cautious=self._mood.cautious if self._mood is not None else False,
+                has_channel=target is not None,
+            )
+            if decision.blocked_by != self._initiative_blocked_by:
+                self._initiative_blocked_by = decision.blocked_by
+                if decision.blocked_by:
+                    logger.debug("这一拍不主动：%s", decision.blocked_by)
+            if not decision.allowed or target is None or self._initiative_io_failed:
+                return
+            if self._feedback is not None:
+                # 先确认反馈可读，免得问完两个器官才发现不能如实记预期。
+                self._feedback.confidence(PROACTIVE_CONTACT)
+            note = (
+                f"【主动联系】这是你主动找{self._identity.user.name}，不是在回复。"
+                f"原因：{'；'.join(decision.reasons)}。被问起为什么找他，就照实说这些原因。"
+            )
+            job = _InitiativeJob(
+                conversation=self._conversation_job(target, (), person_id, initiative_note=note),
+                reasons=decision.reasons,
+                social_need=social.level if social is not None else None,
+                due_item_ids=tuple(item.id for item in due),
+            )
+            if self._initiative_io_failed:
+                return
+            self._initiative_state = replace(self._initiative_state, last_considered_at=now)
+            task = asyncio.create_task(self._initiate(job), name="aureus-initiative")
+            task.add_done_callback(self._on_thought_done)
+            self._thought = _Thought(task, (), job.conversation.strategy, initiative=job)
+        except Exception:
+            self._initiative_io_failed = True
+            logger.exception("主动联系的材料读不了，这一拍不主动")
+
+    async def _initiate(self, job: _InitiativeJob) -> _ThoughtOutcome:
+        """后台只问器官，不写状态；任何失败都朝不打扰的方向倒。"""
+        conversation = job.conversation
+        plan: InitiativePlan | None = None
+        try:
+            response = await self._organs.call(
+                self._organ_request(
+                    conversation,
+                    organ_id=self._config.plan_organ,
+                    task="initiative_plan",
+                    prompt=build_initiative_plan_prompt(
+                        conversation.history, conversation.user_name, job.reasons, self._timezone
+                    ),
+                    system_context=conversation.full_context,
+                    purpose=CallPurpose.OPTIONAL,
+                )
+            )
+            plan = parse_initiative_plan(response.suggestion)
+            if plan is None:
+                return _ThoughtOutcome(notice="规划器返回的内容看不懂")
+            if not plan.reach_out:
+                return _ThoughtOutcome(initiative_plan=plan, declined=True)
+            response = await self._organs.call(
+                self._organ_request(
+                    conversation,
+                    organ_id=self._config.reply_organ,
+                    task="initiative_reply",
+                    prompt=build_initiative_reply_prompt(
+                        conversation.history,
+                        conversation.user_name,
+                        self._timezone,
+                        plan.intent,
+                        length=conversation.strategy.length_limit,
+                    ),
+                    system_context=conversation.replyer_context,
+                    purpose=CallPurpose.OPTIONAL,
+                )
+            )
+            if not response.suggestion.strip():
+                return _ThoughtOutcome(initiative_plan=plan, notice="回复器返回空内容")
+            return _ThoughtOutcome(initiative_plan=plan, response=response)
+        except CallRejectedError as error:
+            return _ThoughtOutcome(initiative_plan=plan, notice=error.reason)
+        except Exception as error:
+            logger.exception("主动联系调用器官失败，这次不说")
+            return _ThoughtOutcome(
+                initiative_plan=plan, notice=f"器官调用失败：{type(error).__name__}"
+            )
+
+    def _send_initiative(
+        self, job: _InitiativeJob, response: OrganResponse
+    ) -> tuple[bool, int | None, str]:
+        """检查此刻权限和通道，发送后才计次数；记反馈失败也不能把已发说成没发。"""
+        permission = self._permissions.check(ACTION_REPLY_TO_USER)
+        if not permission.allowed:
+            return False, None, permission.reason
+        target = self._last_user_contact
+        if target is None or target.channel not in self._sinks:
+            return False, None, "通道不在了"
+        if self._initiative_io_failed:
+            return False, None, "本拍状态读写失败"
+        expected = PRIOR_CONFIDENCE
+        if self._feedback is not None:
+            value = self._feedback.confidence(PROACTIVE_CONTACT).value
+            expected = value if value is not None else PRIOR_CONFIDENCE
+        text = response.suggestion.strip()
+        message = self._timeline.append(
+            event_type=EVENT_MESSAGE,
+            content=text,
+            actor_type=ActorType.ME,
+            visibility=target.visibility,
+            metadata={
+                "initiative": True,
+                "reasons": list(job.reasons),
+                "to_user": True,
+                "channel": target.channel,
+                "organ_id": response.organ_id,
+            },
+        )
+        if not self._deliver_reply(target, text):
+            return False, None, "通道发送失败"
+        now = self._clock.now()
+        self._roll_initiative_day(now)
+        self._initiative_state = replace(
+            self._initiative_state,
+            contacts_today=self._initiative_state.contacts_today + 1,
+            pending_since=now,
+        )
+        try:
+            feedback_id = (
+                self._feedback.record_expectation(PROACTIVE_CONTACT, expected, source_id=message.id)
+                if self._feedback is not None
+                else None
+            )
+            return True, feedback_id, ""
+        except Exception:
+            self._initiative_io_failed = True
+            logger.exception("主动联系已发出，但反馈预期没记上")
+            return True, None, "反馈预期没记上"
+
+    def _collect_initiative(self, thought: _Thought, outcome: _ThoughtOutcome) -> None:
+        """先尝试发送，再记如实的考虑结果；失败不向用户发系统通知。"""
+        job = thought.initiative
+        assert job is not None
+        plan = outcome.initiative_plan
+        sent, feedback_id, failure = False, None, outcome.notice
+        decided = "skip" if plan is not None and not plan.reach_out and not failure else "failed"
+        if plan is not None and plan.reach_out and outcome.response is not None:
+            try:
+                sent, feedback_id, failure = self._send_initiative(job, outcome.response)
+                decided = "reach_out" if sent else "failed"
+            except Exception:
+                self._initiative_io_failed = True
+                logger.exception("主动联系没能发出，这一拍不再主动")
+                failure = "主动联系读写状态失败"
+        if sent:
+            self._initiative_feedback_id = feedback_id
+        try:
+            record = self._timeline.append(
+                event_type=EVENT_INITIATIVE_CONSIDERED,
+                content="考虑主动联系：" + "；".join(job.reasons),
+                actor_type=ActorType.ME,
+                visibility=VisibilityScope.PRIVATE,
+                metadata={
+                    "reasons": list(job.reasons),
+                    "social_need": job.social_need,
+                    "due_item_ids": list(job.due_item_ids),
+                    "decided": decided,
+                    "sent": sent,
+                    "plan": plan.to_metadata() if plan is not None else None,
+                    "failure": failure,
+                    "feedback_id": feedback_id,
+                },
+            )
+            if sent:
+                self._initiative_considered_id = record.id
+                self._initiative_feedback_id = feedback_id
+        except Exception:
+            self._initiative_io_failed = True
+            logger.exception("主动联系的考虑记录没写进去，这一拍不再主动")
+
     def _decline_unanswered(self, reason: str) -> None:
         """不允许调用器官时（急停中）：没回复的消息已经在时间线里，这里只通知，之后也不补回复。
 
@@ -1170,6 +1534,7 @@ class Heartbeat:
             self._reading = self._body.read(backlog, self._last_conversation_at)
         except Exception:
             # 为什么不抛：这里只是观察自己，读不到不该让心跳停下；真正的安全检查在网关里。
+            self._initiative_io_failed = True
             logger.exception("读不了身体信号，沿用上一次的读数")
 
     def _record_body_sample(self) -> None:
@@ -1331,9 +1696,21 @@ class Heartbeat:
 
     def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
         """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
+        return self._conversation_job(
+            batch[0].perception, [heard.record for heard in batch], _person_id_of(batch[-1].record)
+        )
+
+    def _conversation_job(
+        self,
+        target: Perception,
+        messages: Sequence[TimelineRecord],
+        person_id: int | None,
+        *,
+        initiative_note: str = "",
+    ) -> _ReplyJob:
+        """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
         strategy = self._current_strategy()
-        batch_ids = {heard.record.id for heard in batch}
-        target = batch[0].perception
+        batch_ids = {record.id for record in messages}
         contact = target.trust is not TrustLevel.VERIFIED_USER
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
         # 回复用户时只带同一可见范围的对话。回复别人时不按范围过滤（D61，用户决定）：
@@ -1364,12 +1741,10 @@ class Heartbeat:
         )
         self._live_identity_changes = []  # 只在刚改完的这一次回复里说
 
-        affinity_state = self._affinity_for_context(
-            _person_id_of(batch[-1].record), is_user=not contact
-        )
-        mood_reading = self._read_mood(_person_id_of(batch[-1].record), viewer_is_user=not contact)
+        affinity_state = self._affinity_for_context(person_id, is_user=not contact)
+        mood_reading = self._read_mood(person_id, viewer_is_user=not contact)
         mood_state = mood_reading.summary if mood_reading is not None else ""
-        agenda_state = self._agenda_for_context(_person_id_of(batch[-1].record))
+        agenda_state = self._agenda_for_context(person_id)
 
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
             return build_system_context(
@@ -1386,6 +1761,7 @@ class Heartbeat:
                 affinity_state=affinity_state,
                 mood_state=mood_state,
                 agenda_state=agenda_state,
+                initiative_note=initiative_note if not include_behavior_style else "",
             )
 
         def build_contexts(full_text: str, replyer_text: str) -> tuple[str, str]:
@@ -1399,14 +1775,14 @@ class Heartbeat:
         job = _ReplyJob(
             strategy=strategy,
             history=history,
-            messages=[heard.record for heard in batch],
+            messages=messages,
             user_name=self._identity.user.name,
             full_context=context(include_behavior_style=True),
             replyer_context=context(include_behavior_style=False),
             judge_context=build_judge_context(self._identity),
             judge_history=judge_history,
             base_strategy=strategy,
-            person_id=_person_id_of(batch[-1].record),
+            person_id=person_id,
             viewer_is_user=not contact,
             build_contexts=build_contexts,
         )
@@ -1661,14 +2037,21 @@ class Heartbeat:
         return _ThoughtOutcome(response=response, plan=plan)
 
     def _organ_request(
-        self, job: _ReplyJob, *, organ_id: str, task: str, prompt: str, system_context: str
+        self,
+        job: _ReplyJob,
+        *,
+        organ_id: str,
+        task: str,
+        prompt: str,
+        system_context: str,
+        purpose: CallPurpose = CallPurpose.USER_REPLY,
     ) -> OrganRequest:
-        """规划和回复共用的请求格式：都算回应用户，都按这次做法选从哪个模型开始。"""
+        """规划和回复共用的请求格式；主动联系显式传 OPTIONAL（D76）。"""
         return OrganRequest(
             organ_id=organ_id,
             prompt=prompt,
             context={"task": task, "in_reply_to": [record.id for record in job.messages]},
-            purpose=CallPurpose.USER_REPLY,
+            purpose=purpose,
             system_context=system_context,
             model_preference=job.strategy.model_preference,
         )
@@ -1712,6 +2095,11 @@ class Heartbeat:
             thought: 被取消的想法。
             halted: 是因为急停取消的；否则是关闭时等不到。
         """
+        if thought.initiative is not None:
+            self._collect_initiative(
+                thought, _ThoughtOutcome(notice="急停时取消" if halted else "关闭时取消")
+            )
+            return
         cause = "急停时" if halted else "关闭时等不到进行中的器官调用，只好"
         self._timeline.append(
             event_type=EVENT_ORGAN_CALL_ABANDONED,
