@@ -8,6 +8,7 @@
 导出会造成循环导入。要用时写 `from aureus.core.runtime import open_core`。
 """
 
+import sqlite3
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ from aureus.heartbeat import Heartbeat
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
+from aureus.memory import DiaryBook, MemoryIndex
 from aureus.mood import Mood
 from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
@@ -245,6 +247,15 @@ def open_core(
         except Exception:
             logger.exception("起始兴趣同步失败，继续启动")
         exploration = runtime.exploration
+        memory: MemoryIndex | None = None
+        if runtime.memory.enabled:
+            try:
+                memory = MemoryIndex(paths.database_file, timeline)
+                memory.open()
+                stack.callback(memory.close)
+            except sqlite3.Error:
+                memory = None
+                logger.exception("记忆索引打不开，本次运行关闭记忆")
         if roleplay:
             exploration = exploration.model_copy(update={"enabled": False})
         heartbeat = Heartbeat(
@@ -275,6 +286,11 @@ def open_core(
             search=None,  # D79：当前唯一的搜索选项是 none。
             reader=WebReader(exploration),
             has_exploration_organ=bus.is_registered(exploration.organ),
+            memory=memory,
+            memory_config=runtime.memory,
+            diary=DiaryBook(paths.diary_dir),
+            diary_config=runtime.diary,
+            has_diary_organ=bus.is_registered(runtime.diary.organ),
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

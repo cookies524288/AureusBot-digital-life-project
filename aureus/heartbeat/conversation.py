@@ -28,6 +28,7 @@ from aureus.heartbeat.context import (
     build_reply_prompt,
     build_system_context,
 )
+from aureus.heartbeat.diary_runner import DiaryOutcome
 from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
@@ -176,7 +177,11 @@ class _InitiativeJob:
 class _Thought:
     """进行中的想法：后台任务，和它要回复的消息、这次的做法。"""
 
-    task: asyncio.Task[_ThoughtOutcome] | asyncio.Task[exploration_runner.ExplorationOutcome]
+    task: (
+        asyncio.Task[_ThoughtOutcome]
+        | asyncio.Task[exploration_runner.ExplorationOutcome]
+        | asyncio.Task[DiaryOutcome]
+    )
     replying_to: Sequence[_Heard]
     strategy: ReplyStrategy
     # 非空表示主动想法；仍与回复共用唯一任务槽（D34、D76）。

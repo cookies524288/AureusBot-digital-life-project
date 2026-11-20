@@ -30,6 +30,7 @@ from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
 from aureus.common import (
     BudgetCalendar,
     Clock,
+    DiaryConfig,
     EmpathyConfig,
     ExplorationConfig,
     HeartbeatConfig,
@@ -56,6 +57,7 @@ from aureus.heartbeat.conversation import (
     _Thought,
     _ThoughtOutcome,
 )
+from aureus.heartbeat.diary_runner import DiaryOutcome, DiaryTracker, write_diary
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
@@ -95,7 +97,7 @@ from aureus.hormones import (
     kind_enabled,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
-from aureus.memory import MemoryIndex
+from aureus.memory import DiaryBook, MemoryIndex
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
 from aureus.organs import CallPurpose
 from aureus.people import (
@@ -202,6 +204,9 @@ class Heartbeat:
         has_exploration_organ: bool = True,
         memory: MemoryIndex | None = None,
         memory_config: MemoryConfig | None = None,
+        diary: DiaryBook | None = None,
+        diary_config: DiaryConfig | None = None,
+        has_diary_organ: bool = True,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -242,6 +247,9 @@ class Heartbeat:
             has_exploration_organ: 总结器官是否已注册；运行时传入真实登记结果。
             memory: 已打开的记忆索引；不给就不召回（D80）。
             memory_config: 记忆索引和召回的开关及上限（D80）。
+            diary: 日记文件写入接口；不给就不写日记（D80）。
+            diary_config: 日记器官、写作时刻和长度限制（D80）。
+            has_diary_organ: 总结器官是否已注册；缺少时只记一次日志（D68、D80）。
         """
         self._clock = clock
         self._timeline = timeline
@@ -288,6 +296,17 @@ class Heartbeat:
             memory_config=memory_config,
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
+        self._diary: DiaryTracker | None = None
+        if diary is not None:
+            self._diary = DiaryTracker(
+                timeline,
+                calendar or BudgetCalendar(timezone),
+                diary,
+                diary_config or DiaryConfig(),
+                people,
+                findings,
+                has_diary_organ,
+            )
         initiative_config = initiative or InitiativeConfig()
         if config.roleplay_mode:
             initiative_config = initiative_config.model_copy(update={"enabled": False})
@@ -538,6 +557,8 @@ class Heartbeat:
         self._restore_hormones(now)
         self._restore_last_conversation()
         self._initiative.restore(self._clock.now())
+        if self._diary is not None:
+            self._diary.restore(now)
         self._downtime = downtime
         self._phase = _Phase.RUNNING
         logger.info("心跳醒来：%s", downtime.describe(self._timezone))
@@ -627,12 +648,14 @@ class Heartbeat:
         # D76：先收下已到的来信，不能把发送前排队的消息算作发送后的回应。
         self._take_in_perceptions()
         self._collect_finished_thought()
+        self._memory.index_more()
         self._read_body()
         self._check_stress()
         self._agenda_hooks._check_agenda()
         self._maybe_start_thought()
         self._maybe_start_initiative()
         self._maybe_start_exploration()
+        self._maybe_start_diary()
         self._broadcast_cognitive_state()
         self._record_body_sample()
 
@@ -714,6 +737,10 @@ class Heartbeat:
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
         outcome = thought.task.result()
+        if isinstance(outcome, DiaryOutcome):
+            assert self._diary is not None
+            self._diary.finish(outcome)
+            return
         if isinstance(outcome, exploration_runner.ExplorationOutcome):
             self._exploration.finish(cast(TimelineRecord, thought.exploration), outcome)
             return
@@ -1100,6 +1127,25 @@ class Heartbeat:
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task, (), self._current_strategy(), exploration=started)
 
+    def _maybe_start_diary(self) -> None:
+        """其他任务之后才写日记，始终共用唯一任务槽（D80）。"""
+        if self._diary is None:
+            return
+        job = self._diary.prepare(
+            self._clock.now(),
+            self._identity,
+            tier=self._current_strategy().effective_tier,
+            halted=self._halt_status.halted,
+            busy=self._stop_requested
+            or self._thought is not None
+            or bool(self._unanswered)
+            or bool(self._pending),
+        )
+        if job is not None:
+            task = asyncio.create_task(write_diary(job, self._organs.call), name="aureus-diary")
+            task.add_done_callback(self._on_thought_done)
+            self._thought = _Thought(task, (), self._current_strategy())
+
     async def _initiate(self, job: _InitiativeJob) -> _ThoughtOutcome:
         """后台只问器官，不写状态；任何失败都朝不打扰的方向倒。"""
         conversation = job.conversation
@@ -1439,8 +1485,8 @@ class Heartbeat:
             thought: 被取消的想法。
             halted: 是因为急停取消的；否则是关闭时等不到。
         """
-        if thought.exploration is not None:
-            return  # 取消探索不写结果，也不补记（D79）。
+        if thought.exploration is not None or thought.task.get_name() == "aureus-diary":
+            return  # 取消探索或日记不写结果，也不补记（D79、D80）。
         if thought.initiative is not None:
             self._collect_initiative(
                 thought, _ThoughtOutcome(notice="急停时取消" if halted else "关闭时取消")
