@@ -290,6 +290,25 @@ log_level = "INFO"
 
 # 主动联系用户（D76）：社交需求偏高或答应的事到期时，先由代码把关，再让规划器决定。
 # 默认关闭；打开还需要 [heartbeat] planning_enabled = true。下面的值都是默认值。
+[interests]
+# 兴趣开关及自行改动限额（D79）；关着时仍同步用户的起始兴趣。
+# enabled = false
+# max_active = 10
+# max_changes_per_day = 3
+
+[exploration]
+# 小探索默认关闭；启用前须开启 interests。搜索暂只提供 none。
+# enabled = false
+# organ = "summarizer"
+# search_provider = "none"
+# max_per_day = 3
+# min_interval_hours = 4.0
+# max_results = 5
+# fetch_timeout_seconds = 10.0
+# max_page_bytes = 1048576
+# max_page_chars = 6000
+# share_within_days = 3.0
+
 [initiative]
 # 主动联系的开关；扮演模式下始终关闭。
 # enabled = false

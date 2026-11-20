@@ -438,6 +438,33 @@ class AgendaConfig(BaseModel):
     context_items: int = Field(default=5, ge=1)
 
 
+class InterestsConfig(BaseModel):
+    """兴趣的开关、容量和自行改动限额（D79）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = False
+    max_active: int = Field(default=10, ge=1, le=50)
+    max_changes_per_day: int = Field(default=3, ge=0)
+
+
+class ExplorationConfig(BaseModel):
+    """只读小探索的频率、网页限制和总结器官（D79）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = False
+    organ: str = "summarizer"
+    search_provider: Literal["none"] = "none"
+    max_per_day: int = Field(default=3, ge=1)
+    min_interval_hours: float = Field(default=4.0, gt=0)
+    max_results: int = Field(default=5, ge=1, le=10)
+    fetch_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    max_page_bytes: int = Field(default=1048576, ge=1024, le=10485760)
+    max_page_chars: int = Field(default=6000, ge=200, le=20000)
+    share_within_days: float = Field(default=3.0, gt=0)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -465,6 +492,14 @@ class RuntimeConfig(BaseModel):
     mood: MoodConfig = Field(default_factory=MoodConfig)
     agenda: AgendaConfig = Field(default_factory=AgendaConfig)
     initiative: InitiativeConfig = Field(default_factory=InitiativeConfig)
+    interests: InterestsConfig = Field(default_factory=InterestsConfig)
+    exploration: ExplorationConfig = Field(default_factory=ExplorationConfig)
+
+    @model_validator(mode="after")
+    def _check_exploration(self) -> Self:
+        if self.exploration.enabled and not self.interests.enabled:
+            raise ValueError("exploration 开启时 interests 也必须开启")
+        return self
 
     @field_validator("log_level", mode="before")
     @classmethod

@@ -11,10 +11,12 @@ from aureus.common import (
     BodyConfig,
     ConfigError,
     EmpathyConfig,
+    ExplorationConfig,
     FeedbackConfig,
     HeartbeatConfig,
     HormonesConfig,
     InitiativeConfig,
+    InterestsConfig,
     JudgeConfig,
     MoodConfig,
     PeopleConfig,
@@ -911,6 +913,49 @@ def test_agenda_rejects_bad_values(tmp_path: Path, field: str, text: str) -> Non
 # ---------- 社交需求和主动联系配置（D76） ----------
 
 INITIATIVE_FIELDS = tuple(InitiativeConfig.model_fields)
+
+
+@pytest.mark.parametrize(
+    ("section", "config"),
+    [("interests", InterestsConfig()), ("exploration", ExplorationConfig())],
+)
+def test_exploration_config_defaults_and_example(
+    tmp_path: Path, section: str, config: InterestsConfig | ExplorationConfig
+) -> None:
+    assert getattr(load_runtime_config(AureusPaths(tmp_path)), section) == config
+    assert config.enabled is False
+    lines = Path("config/aureus.example.toml").read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, section)
+    prefixes = tuple(f"# {name} =" for name in type(config).model_fields)
+    assert sum(line.startswith(prefixes) for line in mine) == len(type(config).model_fields)
+    start = lines.index(f"[{section}]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, NEWLINE.join(lines))
+    assert getattr(load_runtime_config(paths), section) == config
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[exploration]\nenabled = true\n",
+        '[exploration]\nsearch_provider = "real"\n',
+        "[interests]\nmax_active = 51\n",
+        "[interests]\nmax_changes_per_day = -1\n",
+        "[exploration]\nenabled = 1\n",
+        "[exploration]\nmax_results = 11\n",
+        "[exploration]\nfetch_timeout_seconds = 61\n",
+        "[exploration]\nmax_page_bytes = 1023\n",
+        "[exploration]\nmax_page_chars = 199\n",
+        "[exploration]\nshare_within_days = 0\n",
+    ],
+)
+def test_exploration_config_rejects_invalid_values(tmp_path: Path, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, text)
+    assert error_message_of(paths)
 
 
 def test_initiative_defaults_follow_d76(tmp_path: Path) -> None:

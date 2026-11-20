@@ -6,7 +6,7 @@
 设计参考：docs/03-subsystems.md
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Facts(BaseModel):
@@ -68,6 +68,15 @@ class Persona(BaseModel):
     behavior_style: str = Field(default="", description="行为风格：什么时候开口、怎么回应")
     expression_style: str = Field(default="", description="表达风格：语气、句子长短、口头禅")
     locks: PersonaLocks = Field(default_factory=PersonaLocks, description="各层的锁定状态")
+    interests: list[str] = Field(default_factory=list, description="起始兴趣（D79）")
+
+    @field_validator("interests")
+    @classmethod
+    def _check_interests(cls, values: list[str]) -> list[str]:
+        texts = list(dict.fromkeys(text.strip() for text in values))
+        if len(texts) > 20 or any(not 1 <= len(text) <= 30 for text in texts):
+            raise ValueError("interests 最多 20 条，每条去空白后须为 1～30 字")
+        return texts
 
 
 class Identity(BaseModel):
