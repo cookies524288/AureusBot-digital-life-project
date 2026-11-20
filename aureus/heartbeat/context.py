@@ -114,6 +114,7 @@ def build_system_context(
     identity_changes: Sequence[str] = (),
     identity_changes_live: Sequence[str] = (),
     hormone_state: str = "",
+    affinity_state: str = "",
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -130,6 +131,7 @@ def build_system_context(
             空的表示没改，或者开关关着。
         hormone_state: 激素的事实摘要和行为说明（HormoneEffects.context_text）；
             空字符串表示不放（D69 第 3 条）。
+        affinity_state: 对眼前这个人的好感（describe_affinity 的结果）；空字符串表示不放（D71）。
 
     Returns:
         几段中文，段与段之间空一行。
@@ -178,6 +180,8 @@ def build_system_context(
         sections.append(body_state)
     if hormone_state:
         sections.append(hormone_state)
+    if affinity_state:
+        sections.append(affinity_state)
     return "\n\n".join(sections)
 
 

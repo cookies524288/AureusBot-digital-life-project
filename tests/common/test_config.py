@@ -13,6 +13,7 @@ from aureus.common import (
     HeartbeatConfig,
     HormonesConfig,
     JudgeConfig,
+    PeopleConfig,
     SafetyConfig,
     TimeConfig,
     WebConfig,
@@ -712,3 +713,49 @@ def test_hormones_levels_must_be_ordered(tmp_path: Path, text: str) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[hormones]\n{text}\n")
     assert "calm_below" in error_message_of(paths)
+
+
+# ---------- [people] 好感配置（D71） ----------
+
+PEOPLE_FIELDS = tuple(PeopleConfig.model_fields)
+
+
+def test_people_defaults_follow_d71(tmp_path: Path) -> None:
+    people = load_runtime_config(AureusPaths(tmp_path)).people
+    assert people == PeopleConfig()
+    assert people.affinity_enabled is True
+    assert (people.user_initial_affinity, people.stranger_affinity) == (80.0, 30.0)
+    assert (people.daily_rise_cap, people.daily_fall_cap) == (5.0, 8.0)
+
+
+def test_people_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in PEOPLE_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "people")
+    assert sum(line.startswith(prefixes) for line in mine) == len(PEOPLE_FIELDS)
+    start = lines.index("[people]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "\n".join(lines))
+    assert load_runtime_config(paths).people == PeopleConfig()
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("affinity_enabled", "1"),
+        ("user_initial_affinity", "0"),
+        ("user_initial_affinity", "100"),
+        ("stranger_affinity", '"30"'),
+        ("praise_amount", "-1"),
+        ("daily_fall_cap", "-0.5"),
+        ("interaction_amount", "true"),
+    ],
+)
+def test_people_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[people]\n{field} = {text}\n")
+    assert field in error_message_of(paths)

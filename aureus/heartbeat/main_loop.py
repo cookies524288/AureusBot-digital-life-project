@@ -48,7 +48,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
-from aureus.heartbeat.judging import Judgment, parse_judgment
+from aureus.heartbeat.judging import Judgment, TowardMeKind, parse_judgment
 from aureus.heartbeat.perception import (
     MessageKind,
     MessageSink,
@@ -71,7 +71,14 @@ from aureus.hormones import (
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
-from aureus.people import PeopleDirectory, Person
+from aureus.people import (
+    AffinityBook,
+    AffinityEvent,
+    AffinityReason,
+    PeopleDirectory,
+    Person,
+    describe_affinity,
+)
 from aureus.safety import (
     ACTION_CALL_ORGAN,
     ACTION_REPLY_TO_USER,
@@ -112,6 +119,12 @@ _CANCEL_WAIT_SECONDS = 5.0
 # 重启时最多读多少条激素触发记录；超过半衰期 8 倍的会被 Hormones 丢掉，这里只防读得太多。
 _HORMONE_RESTORE_LIMIT = 1000
 # /state 里激素的显示名（09 号文档术语表）。
+# 判断器官报的事怎么换成好感变化的原因（D71 第 1 条）。
+_AFFINITY_REASONS = {
+    TowardMeKind.PRAISE: AffinityReason.PRAISE,
+    TowardMeKind.OFFENSE: AffinityReason.OFFENSE,
+    TowardMeKind.REJECTION: AffinityReason.REJECTION,
+}
 _HORMONE_NAMES = {"anger": "怒气", "joy": "愉悦", "hurt": "低落", "surprise": "惊讶"}
 
 
@@ -236,6 +249,7 @@ class Heartbeat:
         feedback: FeedbackStore | None = None,
         judge: JudgeConfig | None = None,
         hormones: Hormones | None = None,
+        affinity: AffinityBook | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -259,6 +273,8 @@ class Heartbeat:
             feedback: 反馈存储，要已经打开；认知状态里的信心读它（D67）。不给就显示没有数据。
             judge: 判断器官的配置；不给或 enabled 为 False 就不调用判断（D68）。
             hormones: 激素的内存状态，醒来时从时间线还原；不给就没有激素（D69）。
+            affinity: 好感账，要已经打开；判断过的对话据此记好感变化，好感写进上下文（D71）。
+                不给就没有好感。
         """
         self._clock = clock
         self._timeline = timeline
@@ -284,6 +300,7 @@ class Heartbeat:
         self._judge = judge
         self._judge_missing_logged = False  # 没配判断器官的日志只记一次
         self._hormones = hormones
+        self._affinity = affinity
         self._sinks: dict[str, MessageSink] = {}
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
@@ -661,10 +678,11 @@ class Heartbeat:
             return
         outcome = thought.task.result()
         target = thought.replying_to[-1].perception
-        if outcome.judge is not None:
-            self._record_judgment(thought, outcome.judge)
-            self._record_triggers(outcome.judge.triggers)
         person_id = _person_id_of(thought.replying_to[-1].record)
+        if outcome.judge is not None:
+            judgment_record = self._record_judgment(thought, outcome.judge)
+            self._record_triggers(outcome.judge.triggers)
+            self._record_affinity(person_id, outcome.judge.judgment, judgment_record)
         if outcome.declined and outcome.plan is not None:
             if self._hormones is not None:
                 self._hormones.note_decline(person_id, self._clock.now())
@@ -724,8 +742,8 @@ class Heartbeat:
         for part in parts or [text]:
             self._deliver(target, part, MessageKind.REPLY)
 
-    def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> None:
-        """把判断器官的结果记进时间线，只有自己可见；暂时没有别的地方用它（D68 第 7、8 条）。"""
+    def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> TimelineRecord:
+        """把判断器官的结果记进时间线，只有自己可见（D68 第 7、8 条）。"""
         metadata: dict[str, Any] = {
             "in_reply_to": [heard.record.id for heard in thought.replying_to]
         }
@@ -735,13 +753,31 @@ class Heartbeat:
         else:
             content = f"没判断出刚收到的消息里的情绪：{attempt.failure}"
             metadata["failure"] = attempt.failure
-        self._timeline.append(
+        return self._timeline.append(
             event_type=EVENT_JUDGMENT,
             content=content,
             actor_type=ActorType.ME,
             visibility=VisibilityScope.PRIVATE,
             metadata=metadata,
         )
+
+    def _record_affinity(
+        self, person_id: int | None, judgment: Judgment | None, source: TimelineRecord
+    ) -> None:
+        """按读懂了的判断记好感变化（D71 第 1、2 条）。判断失败、认不出是谁时不变。"""
+        if self._affinity is None or judgment is None or person_id is None:
+            return
+        events = [
+            AffinityEvent(_AFFINITY_REASONS[item.kind], item.intensity, item.confidence)
+            for item in judgment.toward_me
+        ]
+        self._affinity.record_judgment(person_id, events, source.id)
+
+    def _affinity_for_context(self, person_id: int | None, *, is_user: bool) -> str:
+        """对眼前这个人的好感，放进系统上下文；没有好感账或认不出是谁时不放。"""
+        if self._affinity is None or person_id is None:
+            return ""
+        return describe_affinity(self._affinity.current(person_id), is_user=is_user)
 
     def _record_triggers(self, triggers: Sequence[HormoneTrigger]) -> None:
         """激素触发写进状态和时间线（只有自己可见）；重启时靠这些记录还原浓度（D69 第 4、5 条）。"""
@@ -1049,6 +1085,10 @@ class Heartbeat:
         )
         self._live_identity_changes = []  # 只在刚改完的这一次回复里说
 
+        affinity_state = self._affinity_for_context(
+            _person_id_of(batch[-1].record), is_user=not contact
+        )
+
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
             return build_system_context(
                 self._identity,
@@ -1061,6 +1101,7 @@ class Heartbeat:
                 identity_changes=identity_changes,
                 identity_changes_live=live_changes,
                 hormone_state=hormone_state,
+                affinity_state=affinity_state,
             )
 
         def build_contexts(full_text: str, replyer_text: str) -> tuple[str, str]:

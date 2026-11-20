@@ -216,3 +216,21 @@ log_level = "INFO"
 # surprise_at = 0.5
 # 反馈里结果和预期把握差这么多，才算「差得很多」，触发惊讶。
 # surprise_gap = 0.5
+
+# 人际（好感的设计见 docs/10-decisions.md 的 D71）：好感满分 100，越高越难涨、越低越难跌，
+# 永远到不了 0 和 100。下面的值都是默认值，没有实测依据，跑起来之后按表现调整。
+[people]
+# 好感的开关。关掉后不记变化、不写进上下文。
+# affinity_enabled = true
+# 初值：用户和其他人。只在第一次用到时采用，之后改这里不会改已有的好感。要在 0 和 100 之间（不含两端）。
+# user_initial_affinity = 80.0
+# stranger_affinity = 30.0
+# 判断器官报的事：变化量 = 基础量 × 强度 × 把握，再按好感高低打折。
+# praise_amount = 3.0
+# offense_amount = 4.0
+# rejection_amount = 2.0
+# 每天第一次有判断过的对话时，按互动量涨这么多。
+# interaction_amount = 0.5
+# 每个人每天涨、跌各自的上限。
+# daily_rise_cap = 5.0
+# daily_fall_cap = 8.0

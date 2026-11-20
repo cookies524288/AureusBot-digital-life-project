@@ -309,6 +309,32 @@ class HormonesConfig(BaseModel):
         return self
 
 
+class PeopleConfig(BaseModel):
+    """人际的配置（aureus.toml 的 [people]，好感的设计见 docs/10-decisions.md 的 D71）。
+
+    各项基础量和上限都是随手挑的初值，没有实测依据，跑起来之后按表现调整。
+    """
+
+    # 严格类型，理由同 SafetyConfig：好感写成字符串、开关写成数字要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 好感的总开关（D5）；关掉后不记变化、不进上下文。
+    affinity_enabled: bool = True
+    # 好感满分 100。初值只在第一次用到时采用，之后改配置不会回头改已有的好感（D71 第 3 条）。
+    # 取不到 0 和 100：公式保证两端永远到不了，初值放在端点上就再也动不了了。
+    user_initial_affinity: float = Field(default=80.0, gt=0, lt=100)
+    stranger_affinity: float = Field(default=30.0, gt=0, lt=100)
+    # 判断器官报的事：基础变化量 = 基础量 × 强度 × 把握，再按好感的高低打折（D66 第 3 条）。
+    praise_amount: float = Field(default=3.0, ge=0)
+    offense_amount: float = Field(default=4.0, ge=0)
+    rejection_amount: float = Field(default=2.0, ge=0)
+    # 每个「一天」第一次有判断过的对话时，按互动量涨这么多（同样按好感打折）。
+    interaction_amount: float = Field(default=0.5, ge=0)
+    # 每个人每天涨、跌各自的上限，刷屏刷不动（D71 第 2 条）。
+    daily_rise_cap: float = Field(default=5.0, ge=0)
+    daily_fall_cap: float = Field(default=8.0, ge=0)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -331,6 +357,7 @@ class RuntimeConfig(BaseModel):
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     hormones: HormonesConfig = Field(default_factory=HormonesConfig)
+    people: PeopleConfig = Field(default_factory=PeopleConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod
