@@ -11,7 +11,12 @@ import pytest_asyncio
 
 from aureus.common import BodyConfig, InitiativeConfig
 from aureus.feedback import PROACTIVE_CONTACT, Confidence, Outcome
-from aureus.heartbeat import EVENT_INITIATIVE_CONSIDERED, EVENT_INITIATIVE_RESULT, OutgoingMessage
+from aureus.heartbeat import (
+    EVENT_INITIATIVE_CONSIDERED,
+    EVENT_INITIATIVE_RESULT,
+    EVENT_MESSAGE_DELIVERY,
+    OutgoingMessage,
+)
 from aureus.heartbeat.initiative_history import read_initiative_history
 from aureus.timeline import ActorType, TimelineRecord
 from tests.heartbeat.test_initiative_flow import Env, consider, finish, submit
@@ -132,8 +137,8 @@ async def test_missing_considered_record_does_not_bypass_daily_limit(
     assert restored.heartbeat._initiative_state.contacts_today == 1
     await restored.exchange("我在")
     [recovered] = restored.records(EVENT_INITIATIVE_CONSIDERED)
-    assert recovered.metadata["sent"] is None
-    assert "发送结果未留存" in recovered.metadata["failure"]
+    assert recovered.metadata["sent"] is True
+    assert "送达凭据" in recovered.metadata["failure"]
     env.clock.advance(timedelta(hours=4))
     restored.heartbeat.beat()
     await finish(restored)
@@ -239,3 +244,124 @@ async def test_full_restore_window_blocks_when_daily_count_is_uncertain(env: Env
     policy = InitiativeConfig(enabled=True, max_per_day=100)
     history = read_initiative_history(rig.timeline, CALENDAR, env.clock.now(), policy)
     assert history.state.contacts_today == policy.max_per_day
+
+
+async def test_failed_delivery_outside_considered_window_has_no_feedback(env: Env) -> None:
+    rig = env.build()
+    await rig.exchange("你好")
+
+    def broken(message: OutgoingMessage) -> None:
+        raise OSError("测试发送失败")
+
+    rig.heartbeat._sinks[CHANNEL] = broken
+    await consider(env, rig)
+    [failed] = rig.records(EVENT_INITIATIVE_CONSIDERED)
+    assert failed.metadata["sent"] is False
+    for _ in range(51):
+        env.clock.advance(timedelta(hours=3))
+        rig.timeline.append(
+            event_type=EVENT_INITIATIVE_CONSIDERED,
+            content="没有想说的",
+            actor_type=ActorType.ME,
+            metadata={"sent": False, "decided": "skip"},
+        )
+    await rig.heartbeat.shut_down()
+    restored = env.build()
+    restored.heartbeat.beat()
+    assert restored.heartbeat._initiative_state.pending_since is None
+    assert restored.heartbeat._initiative_state.contacts_today == 0
+    assert len(restored.records(EVENT_INITIATIVE_CONSIDERED)) == 52
+    assert not restored.records(EVENT_INITIATIVE_RESULT)
+    assert env.feedback.confidence(PROACTIVE_CONTACT).samples == 0
+    assert env.feedback.find_by_source(PROACTIVE_CONTACT, failed.metadata["message_id"]) is None
+
+
+async def test_message_commit_then_error_does_not_invent_contact_feedback(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig = env.build(policy=InitiativeConfig(enabled=True, max_per_day=1))
+    await rig.exchange("你好")
+    rig.sent.clear()
+    original_append = rig.timeline.append
+
+    def broken_append(**kwargs: Any) -> TimelineRecord:
+        record = original_append(**kwargs)
+        if kwargs.get("event_type") == "message" and kwargs.get("metadata", {}).get("initiative"):
+            raise sqlite3.OperationalError("测试消息已落盘但调用报错，尚未发送")
+        return record
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rig.timeline, "append", broken_append)
+        await consider(env, rig)
+    assert not rig.sent
+    assert env.feedback.confidence(PROACTIVE_CONTACT).samples == 0
+    await rig.heartbeat.shut_down()
+    env.clock.advance(timedelta(hours=6))
+    restored = env.build()
+    restored.heartbeat.beat()
+    [result] = restored.records(EVENT_INITIATIVE_RESULT)
+    assert result.metadata["delivery_confirmed"] is False
+    unknown = restored.records(EVENT_INITIATIVE_CONSIDERED)[-1]
+    assert unknown.metadata["decided"] == "unknown" and unknown.metadata["sent"] is None
+    assert env.feedback.confidence(PROACTIVE_CONTACT).samples == 0
+    assert not env.feedback.outcomes_since(NOW)
+
+
+@pytest.mark.parametrize("missing_expectation", [False, True])
+@pytest.mark.parametrize("answered", [False, True])
+async def test_missing_delivery_evidence_never_creates_feedback(
+    env: Env, monkeypatch: pytest.MonkeyPatch, missing_expectation: bool, answered: bool
+) -> None:
+    rig = env.build(policy=InitiativeConfig(enabled=True, max_per_day=1))
+    await rig.exchange("你好")
+    original_append = rig.timeline.append
+
+    def broken_append(**kwargs: Any) -> TimelineRecord:
+        if kwargs.get("event_type") in (EVENT_MESSAGE_DELIVERY, EVENT_INITIATIVE_CONSIDERED):
+            raise sqlite3.OperationalError("测试收据和考虑记录均未留存")
+        return original_append(**kwargs)
+
+    def broken_expectation(*args: Any, **kwargs: Any) -> int:
+        raise sqlite3.OperationalError("测试预期也未留存")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rig.timeline, "append", broken_append)
+        if missing_expectation:
+            patch.setattr(env.feedback, "record_expectation", broken_expectation)
+        await consider(env, rig)
+        await rig.heartbeat.shut_down()
+    restored = env.build(policy=InitiativeConfig(enabled=True, max_per_day=1))
+    env.clock.advance(timedelta(hours=1 if answered else 6))
+    if answered:
+        await restored.exchange("我在")
+    else:
+        restored.heartbeat.beat()
+    [result] = restored.records(EVENT_INITIATIVE_RESULT)
+    assert result.metadata["answered"] is answered
+    assert env.feedback.confidence(PROACTIVE_CONTACT).samples == int(not missing_expectation)
+    if missing_expectation:
+        assert result.metadata["delivery_confirmed"] is False
+        assert restored.records(EVENT_INITIATIVE_CONSIDERED)[0].metadata["decided"] == "unknown"
+
+
+async def test_answer_window_restores_the_actual_delivery_time(env: Env) -> None:
+    policy = InitiativeConfig(enabled=True, max_per_day=1)
+    rig = env.build(policy=policy)
+    await rig.exchange("你好")
+
+    def delivered(message: OutgoingMessage) -> None:
+        env.clock.advance(timedelta(seconds=30))
+        rig.sent.append(message)
+
+    rig.heartbeat._sinks[CHANNEL] = delivered
+    await consider(env, rig)
+    actual = env.clock.now()
+    assert rig.heartbeat._initiative_state.pending_since == actual
+    await rig.heartbeat.shut_down()
+    restored = env.build(policy=policy)
+    assert restored.heartbeat._initiative_state.pending_since == actual
+    env.clock.advance(timedelta(hours=6) - timedelta(seconds=15))
+    await restored.exchange("我在")
+    [result] = restored.records(EVENT_INITIATIVE_RESULT)
+    assert result.metadata["answered"] is True
+    assert env.feedback.confidence(PROACTIVE_CONTACT).samples == 1

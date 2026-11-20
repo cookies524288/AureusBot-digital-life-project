@@ -2,6 +2,8 @@
 
 # 一条对话消息：用户说的，或者它说的。
 EVENT_MESSAGE = "message"
+# 消息先落盘再发出；送达结果另留私密收据，不改写消息（D76、D77 评审 A）。
+EVENT_MESSAGE_DELIVERY = "message_delivery"
 # 醒来：metadata 里有停机时长（第 5 条）。
 EVENT_WOKE_UP = "woke_up"
 # 关闭：每次有序关闭都写，下次醒来据此算出准确的停机时长（第 5、6 条）。

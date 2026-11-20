@@ -1,14 +1,22 @@
 """有效对话的更新和重启恢复：必须确实向用户说出口（D76）。"""
 
+import sqlite3
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from aureus.heartbeat import MessageKind, OutgoingMessage, Perception, TrustLevel
+from aureus.heartbeat import (
+    EVENT_MESSAGE_DELIVERY,
+    MessageKind,
+    OutgoingMessage,
+    Perception,
+    TrustLevel,
+)
 from aureus.organs import OrganRequest, OrganResponse
-from aureus.timeline import ActorType, VisibilityScope
+from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 from tests.heartbeat.test_agenda_flow import Env
 from tests.heartbeat.test_judging_flow import CHANNEL, NOW, PLAN
 
@@ -157,3 +165,67 @@ async def test_legacy_user_reply_is_restored_but_initiative_is_not(env: Env) -> 
     )
     restored, _, _ = env.build([], agenda_enabled=False)
     assert restored.heartbeat._last_conversation_at == NOW
+
+
+@pytest.mark.parametrize("committed", [False, True])
+async def test_reply_message_record_failure_prevents_delivery(
+    env: Env, monkeypatch: pytest.MonkeyPatch, committed: bool
+) -> None:
+    rig, _, _ = env.build([PLAN], agenda_enabled=False)
+    original_append = rig.timeline.append
+
+    def broken_append(**kwargs: Any) -> TimelineRecord:
+        if kwargs.get("event_type") == "message" and kwargs.get("actor_type") is ActorType.ME:
+            if committed:
+                original_append(**kwargs)
+            raise sqlite3.OperationalError("测试回复落盘失败，尚不能发送")
+        return original_append(**kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rig.timeline, "append", broken_append)
+        with pytest.raises(sqlite3.OperationalError):
+            await rig.exchange("你好")
+    assert not any(message.kind is MessageKind.REPLY for message in rig.sent)
+    assert rig.heartbeat._last_conversation_at is None
+    await rig.heartbeat.shut_down()
+    restored, _, _ = env.build([], agenda_enabled=False)
+    assert restored.heartbeat._last_conversation_at is None
+
+
+async def test_missing_delivery_receipt_does_not_fake_effective_conversation(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig, _, _ = env.build([PLAN], agenda_enabled=False)
+    original_append = rig.timeline.append
+
+    def broken_append(**kwargs: Any) -> TimelineRecord:
+        if kwargs.get("event_type") == EVENT_MESSAGE_DELIVERY:
+            raise sqlite3.OperationalError("测试送达收据暂时写不了")
+        return original_append(**kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rig.timeline, "append", broken_append)
+        await rig.exchange("你好")
+    assert rig.replies() and rig.heartbeat._last_conversation_at == NOW
+    await rig.heartbeat.shut_down()
+    restored, _, _ = env.build([], agenda_enabled=False)
+    assert restored.heartbeat._last_conversation_at is None
+    restored.heartbeat.beat()
+    assert not restored.sent
+
+
+async def test_restart_uses_delivery_receipt_time(env: Env) -> None:
+    rig, _, _ = env.build([PLAN], agenda_enabled=False)
+
+    def delivered(message: OutgoingMessage) -> None:
+        env.clock.advance(timedelta(seconds=30))
+        rig.sent.append(message)
+
+    rig.heartbeat._sinks[CHANNEL] = delivered
+    await rig.exchange("你好")
+    actual = env.clock.now()
+    assert rig.heartbeat._last_conversation_at == actual
+    assert rig.records("message")[-1].timestamp < actual
+    await rig.heartbeat.shut_down()
+    restored, _, _ = env.build([], agenda_enabled=False)
+    assert restored.heartbeat._last_conversation_at == actual

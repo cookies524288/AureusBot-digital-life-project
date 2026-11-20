@@ -52,6 +52,7 @@ from aureus.heartbeat.context import (
     build_reply_prompt,
     build_system_context,
 )
+from aureus.heartbeat.delivery import read_delivery_receipt, read_message_delivery
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
     EVENT_AGENDA_ADDED,
@@ -66,6 +67,7 @@ from aureus.heartbeat.events import (
     EVENT_INITIATIVE_RESULT,
     EVENT_JUDGMENT,
     EVENT_MESSAGE,
+    EVENT_MESSAGE_DELIVERY,
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_REPLY_DECLINED,
     EVENT_SELF_CHECK,
@@ -405,6 +407,7 @@ class Heartbeat:
         self._initiative_feedback_id: int | None = None
         # 已落盘的发送材料及待补考虑记录；反馈或时间线暂时写不了时，不能丢掉原预期。
         self._initiative_message: TimelineRecord | None = None
+        self._initiative_confirmed = False
         self._initiative_consideration: dict[str, Any] | None = None
         # 用户已开口但结果暂时没写进去时，保留当时的判定，重试不能把及时回应算成超时。
         self._initiative_user_answer: bool | None = None
@@ -679,9 +682,15 @@ class Heartbeat:
             for record in reversed(records):
                 if record.metadata.get("initiative") is True:
                     continue
+                replied_at = record.timestamp
+                if record.metadata.get("delivery_pending") is True:
+                    receipt = read_delivery_receipt(self._timeline, record)
+                    if receipt is None or receipt.metadata.get("delivered") is not True:
+                        continue
+                    replied_at = receipt.timestamp
                 if "to_user" in record.metadata:
                     if record.metadata["to_user"] is True:
-                        self._last_conversation_at = record.timestamp
+                        self._last_conversation_at = replied_at
                         break
                     continue
                 # 老版本没有 to_user，只认它明确回复过的用户记录。
@@ -881,6 +890,7 @@ class Heartbeat:
             "in_reply_to": [heard.record.id for heard in thought.replying_to],
             "organ_id": outcome.response.organ_id,
             "strategy": thought.strategy.to_metadata(),
+            "delivery_pending": True,
         }
         if outcome.plan is not None:
             metadata["plan"] = outcome.plan.to_metadata()
@@ -891,11 +901,8 @@ class Heartbeat:
             if self._hormones is not None:
                 retaliated = outcome.effects.retaliation is RetaliationMode.ALLOWED
                 self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)
-        delivered = self._deliver_reply(target, text)
         if target.trust is TrustLevel.VERIFIED_USER:
-            metadata["to_user"] = delivered
-            if delivered:
-                self._last_conversation_at = self._clock.now()
+            metadata["to_user"] = True
         reply_record = self._timeline.append(
             event_type=EVENT_MESSAGE,
             content=text,
@@ -903,9 +910,32 @@ class Heartbeat:
             visibility=target.visibility,
             metadata=metadata,
         )
+        delivered = self._deliver_reply(target, text)
+        receipt = self._record_message_delivery(reply_record, delivered)
+        if delivered and target.trust is TrustLevel.VERIFIED_USER:
+            self._last_conversation_at = (
+                receipt.timestamp if receipt is not None else self._clock.now()
+            )
         if delivered and outcome.plan is not None and person_id is not None:
             # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
             self._apply_agenda(outcome.plan, person_id, reply_record)
+
+    def _record_message_delivery(
+        self, message: TimelineRecord, delivered: bool
+    ) -> TimelineRecord | None:
+        """消息先留痕、再发送、再追加实际结果；收据丢失时重启按未知处理，不重发。"""
+        try:
+            return self._timeline.append(
+                event_type=EVENT_MESSAGE_DELIVERY,
+                content="消息已发送。" if delivered else "消息发送失败。",
+                actor_type=ActorType.ME,
+                visibility=VisibilityScope.PRIVATE,
+                metadata={"message_id": message.id, "delivered": delivered},
+            )
+        except Exception:
+            self._initiative_io_failed = True
+            logger.exception("消息的送达收据没记上，不把未知结果当作已送达")
+            return None
 
     def _deliver_reply(self, target: Perception, text: str) -> bool:
         """把回复拆成几条短消息发出（D60）。
@@ -1233,12 +1263,13 @@ class Heartbeat:
         """恢复计数和等待；发送通道只认这次运行里用户的来信。"""
         try:
             history = read_initiative_history(
-                self._timeline, self._calendar, self._clock.now(), self._initiative
+                self._timeline, self._calendar, self._clock.now(), self._initiative, self._feedback
             )
             self._initiative_state = history.state
             self._initiative_considered_id = history.considered_id
             self._initiative_feedback_id = history.feedback_id
             self._initiative_message = history.message
+            self._initiative_confirmed = history.confirmed
             pending = history.state.pending_since
             self._initiative_user_answer = (
                 history.answer_at - pending < timedelta(hours=self._initiative.answer_window_hours)
@@ -1251,9 +1282,11 @@ class Heartbeat:
                     **snapshot,
                     "reasons": history.message.metadata.get("reasons", []),
                     "message_id": history.message.id,
-                    "sent": None,
-                    "decided": "failed",
-                    "failure": "发送结果未留存，保守计入限额并等待回应",
+                    "sent": True if history.confirmed else None,
+                    "decided": "reach_out" if history.confirmed else "unknown",
+                    "failure": "考虑记录丢失，按送达凭据恢复"
+                    if history.confirmed
+                    else "发送结果未留存，保守计入限额并等待回应",
                     "feedback_id": history.feedback_id,
                 }
             self._initiative_day = self._calendar.day_of(self._clock.now())
@@ -1319,7 +1352,8 @@ class Heartbeat:
                 existing = self._feedback.find_by_source(PROACTIVE_CONTACT, message.id)
                 if existing is not None:
                     self._initiative_feedback_id = existing.id
-                else:
+                    self._initiative_confirmed = True
+                elif self._initiative_confirmed:
                     expected = message.metadata.get("initiative_expected")
                     self._initiative_feedback_id = self._feedback.record_expectation(
                         PROACTIVE_CONTACT,
@@ -1380,18 +1414,23 @@ class Heartbeat:
                 )
             )
             if not existing:
+                metadata: dict[str, Any] = {
+                    "answered": answered,
+                    "considered_id": self._initiative_considered_id,
+                    "message_id": self._initiative_message.id
+                    if self._initiative_message is not None
+                    else None,
+                }
+                if not self._initiative_confirmed:
+                    metadata["delivery_confirmed"] = False
                 self._timeline.append(
                     event_type=EVENT_INITIATIVE_RESULT,
-                    content="主动联系后用户回应了。" if answered else "主动联系后一直没有回应。",
+                    content=("主动联系后用户回应了。" if answered else "主动联系后一直没有回应。")
+                    if self._initiative_confirmed
+                    else "发送结果未知的主动联系已结束等待。",
                     actor_type=ActorType.ME,
                     visibility=VisibilityScope.PRIVATE,
-                    metadata={
-                        "answered": answered,
-                        "considered_id": self._initiative_considered_id,
-                        "message_id": self._initiative_message.id
-                        if self._initiative_message is not None
-                        else None,
-                    },
+                    metadata=metadata,
                 )
         except Exception:
             self._initiative_io_failed = True
@@ -1407,6 +1446,7 @@ class Heartbeat:
         self._initiative_considered_id = None
         self._initiative_feedback_id = None
         self._initiative_message = None
+        self._initiative_confirmed = False
         self._initiative_user_answer = None
         return True
 
@@ -1563,19 +1603,23 @@ class Heartbeat:
                 "to_user": True,
                 "channel": target.channel,
                 "organ_id": response.organ_id,
+                "delivery_pending": True,
                 "initiative_expected": expected,
                 "initiative_consideration": dict(consideration),
             },
         )
         self._initiative_message = message
-        if not self._deliver_reply(target, text):
+        delivered = self._deliver_reply(target, text)
+        receipt = self._record_message_delivery(message, delivered)
+        if not delivered:
             return False, None, "通道发送失败"
+        self._initiative_confirmed = True
         now = self._clock.now()
         self._roll_initiative_day(now)
         self._initiative_state = replace(
             self._initiative_state,
             contacts_today=self._initiative_state.contacts_today + 1,
-            pending_since=message.timestamp,
+            pending_since=receipt.timestamp if receipt is not None else now,
         )
         try:
             feedback_id = (
@@ -1838,7 +1882,15 @@ class Heartbeat:
         )
         # 按序号排除这次要回复的消息，而不是只取“比它们早的”：想上一件事的时候来的消息，
         # 序号比上一次的回复还小，只取更早的就会漏掉它刚说过的话。
-        history = [record for record in recent if record.id not in batch_ids]
+        history = [
+            record
+            for record in recent
+            if record.id not in batch_ids
+            and (
+                record.metadata.get("delivery_pending") is not True
+                or read_message_delivery(self._timeline, record) is True
+            )
+        ]
         body_state = self._body_state_for_context(strategy)
         now = self._clock.now()
         downtime = self._downtime_for_context()

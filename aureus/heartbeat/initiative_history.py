@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from aureus.common import BudgetCalendar, InitiativeConfig
+from aureus.feedback import PROACTIVE_CONTACT, FeedbackStore
+from aureus.heartbeat.delivery import read_delivery_receipt, read_message_delivery
 from aureus.heartbeat.events import (
     EVENT_INITIATIVE_CONSIDERED,
     EVENT_INITIATIVE_RESULT,
@@ -26,6 +28,7 @@ class InitiativeHistory:
     feedback_id: int | None = None
     message: TimelineRecord | None = None
     answer_at: datetime | None = None
+    confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -42,7 +45,9 @@ class _Contact:
 
 
 def _read_contacts(
-    considered: Sequence[TimelineRecord], messages: Sequence[TimelineRecord]
+    timeline: TimelineDatabase,
+    considered: Sequence[TimelineRecord],
+    messages: Sequence[TimelineRecord],
 ) -> list[_Contact]:
     messages_by_id = {message.id: message for message in messages}
     linked: set[int] = set()
@@ -62,10 +67,30 @@ def _read_contacts(
             record.metadata.get("sent") is None and isinstance(message_id, int)
         ):
             contacts.append(_Contact(record, message, record.id))
-    contacts.extend(
-        _Contact(message, message, None) for message in messages if message.id not in linked
-    )
+    for message in messages:
+        if message.id in linked:
+            continue
+        # 消息和考虑窗口可能错位：先按来源精确找回，不能把已知发送失败当成未知。
+        matches = timeline.query(
+            TimelineQuery(
+                event_type=EVENT_INITIATIVE_CONSIDERED, metadata={"message_id": message.id}, limit=1
+            )
+        )
+        if matches:
+            record = matches[0]
+            if record.metadata.get("sent") is not False:
+                contacts.append(_Contact(record, message, record.id))
+        elif read_message_delivery(timeline, message) is not False:
+            contacts.append(_Contact(message, message, None))
     return sorted(contacts, key=lambda contact: contact.source.id)
+
+
+def _contact_time(timeline: TimelineDatabase, contact: _Contact) -> datetime:
+    if contact.message is not None:
+        receipt = read_delivery_receipt(timeline, contact.message)
+        if receipt is not None and receipt.metadata.get("delivered") is True:
+            return receipt.timestamp
+    return contact.source.timestamp
 
 
 def read_initiative_history(
@@ -73,6 +98,7 @@ def read_initiative_history(
     calendar: BudgetCalendar,
     now: datetime,
     config: InitiativeConfig,
+    feedback: FeedbackStore | None = None,
 ) -> InitiativeHistory:
     """合并消息和考虑记录，按来源去重；未落结果的联系即使已收到来信也继续恢复。"""
     considered = timeline.query(
@@ -94,7 +120,7 @@ def read_initiative_history(
         TimelineQuery(event_type=EVENT_MESSAGE, actor_type=ActorType.USER, latest=True, limit=1)
     )
     latest_user_id = users[-1].id if users else 0
-    contacts = _read_contacts(considered, messages)
+    contacts = _read_contacts(timeline, considered, messages)
     by_considered = {contact.considered_id: contact for contact in contacts}
     streak = 0
     for result in reversed(results):
@@ -118,7 +144,8 @@ def read_initiative_history(
         None,
     )
     day = calendar.day_of(now)
-    count = sum(calendar.day_of(contact.source.timestamp) == day for contact in contacts)
+    sent_at = {contact.source.id: _contact_time(timeline, contact) for contact in contacts}
+    count = sum(calendar.day_of(moment) == day for moment in sent_at.values())
     if any(
         len(records) == _RESTORE_LIMIT and calendar.day_of(records[0].timestamp) == day
         for records in (considered, messages)
@@ -128,12 +155,11 @@ def read_initiative_history(
     state = InitiativeState(
         contacts_today=count,
         last_considered_at=max(
-            [record.timestamp for record in considered]
-            + [contact.source.timestamp for contact in contacts],
+            [record.timestamp for record in considered] + list(sent_at.values()),
             default=None,
         ),
         unanswered_streak=streak,
-        pending_since=pending.source.timestamp if pending is not None else None,
+        pending_since=sent_at[pending.source.id] if pending is not None else None,
     )
     if pending is None:
         return InitiativeHistory(state)
@@ -145,10 +171,19 @@ def read_initiative_history(
     feedback_id = pending.record.metadata.get("feedback_id")
     if not isinstance(feedback_id, int) or isinstance(feedback_id, bool):
         feedback_id = None
+    confirmed = pending.record.metadata.get("sent") is True
+    if pending.message is not None:
+        confirmed = confirmed or read_message_delivery(timeline, pending.message) is True
+        if feedback is not None and feedback_id is None:
+            expectation = feedback.find_by_source(PROACTIVE_CONTACT, pending.message.id)
+            if expectation is not None:
+                feedback_id = expectation.id
+                confirmed = True
     return InitiativeHistory(
         state,
         pending.considered_id,
         feedback_id,
         pending.message,
         answers[0].timestamp if answers else None,
+        confirmed,
     )
