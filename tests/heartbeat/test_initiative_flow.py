@@ -317,7 +317,11 @@ async def test_user_answer_records_success_and_resets_waiting(env: Env) -> None:
     env.clock.advance(timedelta(hours=1))
     await rig.exchange("最近还好")
     [result] = rig.records(EVENT_INITIATIVE_RESULT)
-    assert result.metadata == {"answered": True, "considered_id": considered.id}
+    assert result.metadata == {
+        "answered": True,
+        "considered_id": considered.id,
+        "message_id": considered.metadata["message_id"],
+    }
     feedback = env.feedback.get(considered.metadata["feedback_id"])
     assert feedback is not None and feedback.outcome is Outcome.SUCCESS
     state = rig.heartbeat._initiative_state
@@ -334,7 +338,11 @@ async def test_answer_at_the_window_boundary_is_failure_but_resets_backoff(env: 
     env.organs.normal_plans = [DECLINE]
     await rig.exchange("回来了")
     [result] = rig.records(EVENT_INITIATIVE_RESULT)
-    assert result.metadata == {"answered": False, "considered_id": considered.id}
+    assert result.metadata == {
+        "answered": False,
+        "considered_id": considered.id,
+        "message_id": considered.metadata["message_id"],
+    }
     feedback = env.feedback.get(considered.metadata["feedback_id"])
     assert feedback is not None and feedback.outcome is Outcome.FAILURE
     assert rig.heartbeat._initiative_state.unanswered_streak == 0
@@ -478,7 +486,11 @@ async def test_restart_restores_pending_count_and_settles_timeout_without_channe
     assert state.unanswered_streak == 1 and state.pending_since is None
     assert not restored.heartbeat.is_thinking
     [result] = restored.records(EVENT_INITIATIVE_RESULT)
-    assert result.metadata == {"answered": False, "considered_id": considered.id}
+    assert result.metadata == {
+        "answered": False,
+        "considered_id": considered.id,
+        "message_id": considered.metadata["message_id"],
+    }
     feedback = env.feedback.get(considered.metadata["feedback_id"])
     assert feedback is not None and feedback.outcome is Outcome.FAILURE
 
@@ -709,7 +721,11 @@ async def test_answer_write_failure_keeps_the_original_result_for_retry(
     monkeypatch.setattr(env.feedback, "record_outcome", original_outcome)
     rig.heartbeat.beat()
     [result] = rig.records(EVENT_INITIATIVE_RESULT)
-    assert result.metadata == {"answered": True, "considered_id": considered.id}
+    assert result.metadata == {
+        "answered": True,
+        "considered_id": considered.id,
+        "message_id": considered.metadata["message_id"],
+    }
     feedback = env.feedback.get(considered.metadata["feedback_id"])
     assert feedback is not None and feedback.outcome is Outcome.SUCCESS
     assert rig.heartbeat._initiative_state.pending_since is None

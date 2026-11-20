@@ -146,6 +146,46 @@ def test_query_by_actor_type(database: TimelineDatabase):
     assert results[0].actor_type == ActorType.USER
 
 
+@pytest.mark.parametrize("value", [True, False, 1, 1.25, "true", None])
+def test_query_metadata_matches_scalar_type_and_value(
+    database: TimelineDatabase, value: str | int | float | bool | None
+) -> None:
+    candidates = [True, False, 1, 1.25, "true", None]
+    expected: list[int] = []
+    for candidate in candidates:
+        row = database.append("message", "记录", ActorType.ME, metadata={"flag": candidate})
+        if type(candidate) is type(value) and candidate == value:
+            expected.append(row.id)
+    database.append("message", "缺少这个字段", ActorType.ME)
+    rows = database.query(TimelineQuery(metadata={"flag": value}))
+    assert [row.id for row in rows] == expected
+
+
+def test_metadata_filter_precedes_latest_limit_and_combines_conditions(
+    database: TimelineDatabase,
+) -> None:
+    first = database.append(
+        "message", "主动", ActorType.ME, metadata={"initiative": True, "channel": "terminal"}
+    )
+    for _ in range(60):
+        database.append("message", "普通回复", ActorType.ME)
+    database.append("message", "用户", ActorType.USER, metadata={"initiative": True})
+    database.append("action", "其他事件", ActorType.ME, metadata={"initiative": True})
+    database.append(
+        "message", "其他通道", ActorType.ME, metadata={"initiative": True, "channel": "web"}
+    )
+    rows = database.query(
+        TimelineQuery(
+            actor_type=ActorType.ME,
+            event_type="message",
+            latest=True,
+            limit=1,
+            metadata={"initiative": True, "channel": "terminal"},
+        )
+    )
+    assert [row.id for row in rows] == [first.id]
+
+
 def test_query_since_id(database: TimelineDatabase):
     """测试从指定 ID 之后查询。"""
     for i in range(1, 6):

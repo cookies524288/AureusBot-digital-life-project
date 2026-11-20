@@ -77,3 +77,6 @@ class TimelineQuery(BaseModel):
     latest: bool = Field(
         default=False, description="只取符合条件的最新 limit 条（结果仍按序号升序）"
     )
+    metadata: dict[str, str | int | float | bool | None] = Field(
+        default_factory=dict, description="metadata 的顶层标量精确匹配，所有条件都要满足"
+    )

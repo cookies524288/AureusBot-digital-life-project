@@ -403,6 +403,9 @@ class Heartbeat:
         self._initiative_day = self._calendar.day_of(clock.now())
         self._initiative_considered_id: int | None = None
         self._initiative_feedback_id: int | None = None
+        # 已落盘的发送材料及待补考虑记录；反馈或时间线暂时写不了时，不能丢掉原预期。
+        self._initiative_message: TimelineRecord | None = None
+        self._initiative_consideration: dict[str, Any] | None = None
         # 用户已开口但结果暂时没写进去时，保留当时的判定，重试不能把及时回应算成超时。
         self._initiative_user_answer: bool | None = None
         self._initiative_restored = False
@@ -1229,10 +1232,30 @@ class Heartbeat:
     def _restore_initiative(self) -> None:
         """恢复计数和等待；发送通道只认这次运行里用户的来信。"""
         try:
-            history = read_initiative_history(self._timeline, self._calendar, self._clock.now())
+            history = read_initiative_history(
+                self._timeline, self._calendar, self._clock.now(), self._initiative
+            )
             self._initiative_state = history.state
             self._initiative_considered_id = history.considered_id
             self._initiative_feedback_id = history.feedback_id
+            self._initiative_message = history.message
+            pending = history.state.pending_since
+            self._initiative_user_answer = (
+                history.answer_at - pending < timedelta(hours=self._initiative.answer_window_hours)
+                if history.answer_at is not None and pending is not None
+                else None
+            )
+            if history.message is not None and history.considered_id is None:
+                snapshot = history.message.metadata.get("initiative_consideration", {})
+                self._initiative_consideration = {
+                    **snapshot,
+                    "reasons": history.message.metadata.get("reasons", []),
+                    "message_id": history.message.id,
+                    "sent": None,
+                    "decided": "failed",
+                    "failure": "发送结果未留存，保守计入限额并等待回应",
+                    "feedback_id": history.feedback_id,
+                }
             self._initiative_day = self._calendar.day_of(self._clock.now())
             self._initiative_restored = True
         except Exception:
@@ -1245,6 +1268,74 @@ class Heartbeat:
         if day != self._initiative_day:
             self._initiative_state = replace(self._initiative_state, contacts_today=0)
             self._initiative_day = day
+
+    def _record_initiative_considered(self, metadata: dict[str, Any]) -> bool:
+        """补留考虑结果；按来源检查写入结果，追加成功后抛错也不能重复记一次考虑。"""
+        try:
+            message_id = metadata.get("message_id")
+            existing = (
+                self._timeline.query(
+                    TimelineQuery(
+                        event_type=EVENT_INITIATIVE_CONSIDERED,
+                        metadata={"message_id": message_id},
+                        limit=1,
+                    )
+                )
+                if isinstance(message_id, int)
+                else []
+            )
+            record = (
+                existing[0]
+                if existing
+                else self._timeline.append(
+                    event_type=EVENT_INITIATIVE_CONSIDERED,
+                    content="考虑主动联系：" + "；".join(metadata["reasons"]),
+                    actor_type=ActorType.ME,
+                    visibility=VisibilityScope.PRIVATE,
+                    metadata=metadata,
+                )
+            )
+            if metadata.get("sent") is not False:
+                self._initiative_considered_id = record.id
+            self._initiative_consideration = None
+            return True
+        except Exception:
+            self._initiative_consideration = metadata
+            self._initiative_io_failed = True
+            logger.exception("主动联系的考虑记录没写进去，这一拍不再主动")
+            return False
+
+    def _ensure_initiative_records(self) -> bool:
+        """先找回或补记原预期，再补考虑记录；存储恢复后每次行动仍只有一份反馈。"""
+        try:
+            if (
+                self._initiative_state.pending_since is not None
+                and self._feedback is not None
+                and self._initiative_feedback_id is None
+            ):
+                message = self._initiative_message
+                if message is None:
+                    raise FeedbackError("主动联系缺少来源消息，不能臆造反馈预期")
+                existing = self._feedback.find_by_source(PROACTIVE_CONTACT, message.id)
+                if existing is not None:
+                    self._initiative_feedback_id = existing.id
+                else:
+                    expected = message.metadata.get("initiative_expected")
+                    self._initiative_feedback_id = self._feedback.record_expectation(
+                        PROACTIVE_CONTACT,
+                        expected,
+                        source_id=message.id,
+                        expected_at=message.timestamp,
+                    )
+            if self._initiative_consideration is not None:
+                metadata = dict(self._initiative_consideration)
+                metadata["feedback_id"] = self._initiative_feedback_id
+                return self._record_initiative_considered(metadata)
+            return True
+        except Exception:
+            self._initiative_io_failed = True
+            logger.exception("主动联系的原始记录还没补齐，这一拍不再主动")
+            return False
 
     def _settle_initiative_timeout(self) -> bool:
         pending = self._initiative_state.pending_since
@@ -1269,6 +1360,8 @@ class Heartbeat:
 
     def _finish_initiative(self, *, answered: bool) -> bool:
         """先补反馈、再留结果；重试时检查已有结果，避免重复记账。"""
+        if not self._ensure_initiative_records():
+            return False
         try:
             if self._feedback is not None and self._initiative_feedback_id is not None:
                 record = self._feedback.get(self._initiative_feedback_id)
@@ -1279,13 +1372,27 @@ class Heartbeat:
                         self._initiative_feedback_id,
                         Outcome.SUCCESS if answered else Outcome.FAILURE,
                     )
-            self._timeline.append(
-                event_type=EVENT_INITIATIVE_RESULT,
-                content="主动联系后用户回应了。" if answered else "主动联系后一直没有回应。",
-                actor_type=ActorType.ME,
-                visibility=VisibilityScope.PRIVATE,
-                metadata={"answered": answered, "considered_id": self._initiative_considered_id},
+            existing = self._timeline.query(
+                TimelineQuery(
+                    event_type=EVENT_INITIATIVE_RESULT,
+                    metadata={"considered_id": self._initiative_considered_id},
+                    limit=1,
+                )
             )
+            if not existing:
+                self._timeline.append(
+                    event_type=EVENT_INITIATIVE_RESULT,
+                    content="主动联系后用户回应了。" if answered else "主动联系后一直没有回应。",
+                    actor_type=ActorType.ME,
+                    visibility=VisibilityScope.PRIVATE,
+                    metadata={
+                        "answered": answered,
+                        "considered_id": self._initiative_considered_id,
+                        "message_id": self._initiative_message.id
+                        if self._initiative_message is not None
+                        else None,
+                    },
+                )
         except Exception:
             self._initiative_io_failed = True
             logger.exception("主动联系的回应结果没记上，这一拍不主动")
@@ -1299,6 +1406,7 @@ class Heartbeat:
         )
         self._initiative_considered_id = None
         self._initiative_feedback_id = None
+        self._initiative_message = None
         self._initiative_user_answer = None
         return True
 
@@ -1306,7 +1414,11 @@ class Heartbeat:
         """用户消息先处理完，闲下来且每道关都通过时才考虑主动联系。"""
         if not self._initiative_restored:
             self._restore_initiative()
-        if not self._initiative_restored or not self._settle_initiative_timeout():
+        if (
+            not self._initiative_restored
+            or not self._ensure_initiative_records()
+            or not self._settle_initiative_timeout()
+        ):
             return
         now = self._clock.now()
         self._roll_initiative_day(now)
@@ -1424,7 +1536,7 @@ class Heartbeat:
             )
 
     def _send_initiative(
-        self, job: _InitiativeJob, response: OrganResponse
+        self, job: _InitiativeJob, response: OrganResponse, consideration: dict[str, Any]
     ) -> tuple[bool, int | None, str]:
         """检查此刻权限和通道，发送后才计次数；记反馈失败也不能把已发说成没发。"""
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
@@ -1451,8 +1563,11 @@ class Heartbeat:
                 "to_user": True,
                 "channel": target.channel,
                 "organ_id": response.organ_id,
+                "initiative_expected": expected,
+                "initiative_consideration": dict(consideration),
             },
         )
+        self._initiative_message = message
         if not self._deliver_reply(target, text):
             return False, None, "通道发送失败"
         now = self._clock.now()
@@ -1460,11 +1575,13 @@ class Heartbeat:
         self._initiative_state = replace(
             self._initiative_state,
             contacts_today=self._initiative_state.contacts_today + 1,
-            pending_since=now,
+            pending_since=message.timestamp,
         )
         try:
             feedback_id = (
-                self._feedback.record_expectation(PROACTIVE_CONTACT, expected, source_id=message.id)
+                self._feedback.record_expectation(
+                    PROACTIVE_CONTACT, expected, source_id=message.id, expected_at=message.timestamp
+                )
                 if self._feedback is not None
                 else None
             )
@@ -1481,9 +1598,15 @@ class Heartbeat:
         plan = outcome.initiative_plan
         sent, feedback_id, failure = False, None, outcome.notice
         decided = "skip" if plan is not None and not plan.reach_out and not failure else "failed"
+        metadata: dict[str, Any] = {
+            "reasons": list(job.reasons),
+            "social_need": job.social_need,
+            "due_item_ids": list(job.due_item_ids),
+            "plan": plan.to_metadata() if plan is not None else None,
+        }
         if plan is not None and plan.reach_out and outcome.response is not None:
             try:
-                sent, feedback_id, failure = self._send_initiative(job, outcome.response)
+                sent, feedback_id, failure = self._send_initiative(job, outcome.response, metadata)
                 decided = "reach_out" if sent else "failed"
             except Exception:
                 self._initiative_io_failed = True
@@ -1491,29 +1614,18 @@ class Heartbeat:
                 failure = "主动联系读写状态失败"
         if sent:
             self._initiative_feedback_id = feedback_id
-        try:
-            record = self._timeline.append(
-                event_type=EVENT_INITIATIVE_CONSIDERED,
-                content="考虑主动联系：" + "；".join(job.reasons),
-                actor_type=ActorType.ME,
-                visibility=VisibilityScope.PRIVATE,
-                metadata={
-                    "reasons": list(job.reasons),
-                    "social_need": job.social_need,
-                    "due_item_ids": list(job.due_item_ids),
-                    "decided": decided,
-                    "sent": sent,
-                    "plan": plan.to_metadata() if plan is not None else None,
-                    "failure": failure,
-                    "feedback_id": feedback_id,
-                },
-            )
-            if sent:
-                self._initiative_considered_id = record.id
-                self._initiative_feedback_id = feedback_id
-        except Exception:
-            self._initiative_io_failed = True
-            logger.exception("主动联系的考虑记录没写进去，这一拍不再主动")
+        metadata.update(
+            decided=decided,
+            sent=sent,
+            failure=failure,
+            feedback_id=feedback_id,
+            message_id=self._initiative_message.id
+            if self._initiative_message is not None
+            else None,
+        )
+        if not sent:
+            self._initiative_message = None
+        self._record_initiative_considered(metadata)
 
     def _decline_unanswered(self, reason: str) -> None:
         """不允许调用器官时（急停中）：没回复的消息已经在时间线里，这里只通知，之后也不补回复。

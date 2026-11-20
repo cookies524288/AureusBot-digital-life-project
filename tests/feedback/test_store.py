@@ -201,6 +201,30 @@ def test_few_samples_are_pulled_toward_the_prior(tmp_path: Path) -> None:
     store.close()
 
 
+def test_deferred_expectation_keeps_the_durable_clock_snapshot(tmp_path: Path) -> None:
+    store, clock = make_store(tmp_path)
+    clock.advance(timedelta(hours=7))
+    record_id = store.record_expectation(PROACTIVE_CONTACT, 0.8, source_id=42, expected_at=NOW)
+    record = store.get(record_id)
+    assert record is not None and record.expected_at == NOW and record.expected == 0.8
+    assert record.outcome is Outcome.UNKNOWN and record.source_id == 42
+    store.close()
+
+
+def test_find_by_source_keeps_category_and_original_expectation(store: FeedbackStore) -> None:
+    assert store.find_by_source(PROACTIVE_CONTACT, 42) is None
+    first_id = store.record_expectation(PROACTIVE_CONTACT, 0.8, source_id=42)
+    store.record_expectation(CATEGORY, 0.3, source_id=42)
+    store.record_expectation(PROACTIVE_CONTACT, 0.1, source_id=43)
+    found = store.find_by_source(PROACTIVE_CONTACT, 42)
+    assert found is not None and found.id == first_id and found.outcome is Outcome.UNKNOWN
+    store.record_outcome(first_id, Outcome.SUCCESS)
+    found = store.find_by_source(PROACTIVE_CONTACT, 42)
+    assert found is not None and found.expected == 0.8 and found.outcome is Outcome.SUCCESS
+    with pytest.raises(FeedbackError):
+        store.find_by_source("不认识", 42)
+
+
 def test_enough_samples_use_the_raw_success_rate(tmp_path: Path) -> None:
     store, _ = make_store(tmp_path, min_samples=10)
     add_results(store, [Outcome.SUCCESS] * 3 + [Outcome.FAILURE] * 7)

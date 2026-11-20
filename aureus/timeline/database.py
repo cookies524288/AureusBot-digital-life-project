@@ -223,7 +223,7 @@ class TimelineDatabase:
             raise RuntimeError("Database is not open")
 
         conditions: list[str] = ["id > ?"]
-        params: list[str | int] = [query.since_id]
+        params: list[str | int | float | None] = [query.since_id]
 
         if query.event_type:
             conditions.append("event_type = ?")
@@ -240,6 +240,15 @@ class TimelineDatabase:
         if query.visibility is not None:
             conditions.append("visibility = ?")
             params.append(query.visibility.value)
+
+        for key, value in query.metadata.items():
+            # 用 JSON 的类型和值一起比，不能把 true、1 和字符串 "true" 当成同一事实。
+            conditions.append(
+                "EXISTS (SELECT 1 FROM json_each(timeline.metadata) AS actual,"
+                " json_each(?) AS wanted WHERE actual.key = wanted.key"
+                " AND actual.type = wanted.type AND actual.value IS wanted.value)"
+            )
+            params.append(_encode_metadata({key: value}))
 
         where_clause = " AND ".join(conditions)
         order = "DESC" if query.latest else "ASC"

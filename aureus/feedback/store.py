@@ -161,6 +161,10 @@ class FeedbackStore:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_records(category, id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_feedback_source"
+            " ON feedback_records(category, source_id)"
+        )
         # 预期、类别、时间、来源写入后一个字都不许改；结果只能从 unknown 变成
         # success 或 failure 一次，已经有结果的不许再改，也不许改回 unknown。
         conn.execute(
@@ -202,7 +206,12 @@ class FeedbackStore:
         conn.commit()
 
     def record_expectation(
-        self, category: str, expected: float | None, source_id: int | None = None
+        self,
+        category: str,
+        expected: float | None,
+        source_id: int | None = None,
+        *,
+        expected_at: datetime | None = None,
     ) -> int:
         """行动前记下预期，返回这条记录的编号。
 
@@ -210,6 +219,7 @@ class FeedbackStore:
             category: 类别，必须是代码认识的。
             expected: 预期把握 [0, 1]；None 表示没写预期就行动，记为冲动。
             source_id: 来源时间线记录的序号，没有就不填。
+            expected_at: 补记时使用行动前已落盘的时钟快照；不给则取当前时钟。
 
         Raises:
             FeedbackError: 类别不认识，或预期不在 [0, 1] 之间。
@@ -225,7 +235,7 @@ class FeedbackStore:
                 category,
                 expected,
                 Outcome.UNKNOWN.value,
-                _format_timestamp(self._clock.now()),
+                _format_timestamp(self._clock.now() if expected_at is None else expected_at),
                 source_id,
             ),
         )
@@ -258,6 +268,20 @@ class FeedbackStore:
         row = (
             self._require_open()
             .execute("SELECT * FROM feedback_records WHERE id = ?", (record_id,))
+            .fetchone()
+        )
+        return None if row is None else _record_of(row)
+
+    def find_by_source(self, category: str, source_id: int) -> FeedbackRecord | None:
+        """按类别和来源找回最早的预期，供写入结果不明时重试，避免重复记一次行动。"""
+        check_category(category)
+        row = (
+            self._require_open()
+            .execute(
+                "SELECT * FROM feedback_records WHERE category = ? AND source_id = ?"
+                " ORDER BY id LIMIT 1",
+                (category, source_id),
+            )
             .fetchone()
         )
         return None if row is None else _record_of(row)
