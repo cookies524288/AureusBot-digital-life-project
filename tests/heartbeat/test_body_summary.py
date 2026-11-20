@@ -1,6 +1,8 @@
 """身体状态摘要的测试：写出来的数字和原因必须和读数一致，关掉的信号不能说成正常。"""
 
-from aureus.body import BodyReading, EnergyReading, EnergyTier
+from dataclasses import replace
+
+from aureus.body import BodyReading, EnergyReading, EnergyTier, SocialNeedReading
 from aureus.body.signals import FatigueReading, SleepReading, StressReading
 from aureus.common import BodyConfig
 from aureus.heartbeat.body_summary import describe_body_state
@@ -90,3 +92,21 @@ def test_night_is_reported_with_the_configured_hours() -> None:
     )
     text = describe_body_state(reading, BodyConfig(night_start_hour=23, night_end_hour=6))
     assert "现在是夜间时段（当地 23 点到 6 点）" in text
+
+
+def test_social_need_summary_has_real_elapsed_time() -> None:
+    reading = replace(
+        CALM, social_need=SocialNeedReading(enabled=True, level=0.81, hours_since=20.0, high=True)
+    )
+    assert "社交需求 81%（偏高）：距上次和用户好好聊过 20.0 小时" in describe_body_state(
+        reading, CONFIG
+    )
+
+
+def test_social_need_summary_explains_never_having_talked() -> None:
+    reading = replace(CALM, social_need=SocialNeedReading(enabled=True, level=1.0, high=True))
+    assert "社交需求 100%（偏高）：还没和用户好好聊过" in describe_body_state(reading, CONFIG)
+
+
+def test_disabled_social_need_is_omitted_from_summary() -> None:
+    assert "社交需求" not in describe_body_state(CALM, CONFIG)

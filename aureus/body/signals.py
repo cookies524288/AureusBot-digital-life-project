@@ -7,6 +7,8 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
+from math import exp
 
 from aureus.common import BodyConfig
 
@@ -49,6 +51,32 @@ class SleepReading:
 
     enabled: bool
     night: bool = False
+
+
+@dataclass(frozen=True)
+class SocialNeedReading:
+    """社交需求：离上一次和用户有效对话过去了多久（D76）。"""
+
+    enabled: bool
+    level: float = 0.0
+    hours_since: float | None = None
+    high: bool = False
+
+
+def compute_social_need(
+    last_conversation_at: datetime | None, now: datetime, config: BodyConfig
+) -> SocialNeedReading:
+    """按有效对话的间隔计算社交需求，时钟倒退按刚聊过处理（D76）。"""
+    if not config.social_need_enabled:
+        return SocialNeedReading(enabled=False)
+    if last_conversation_at is None:
+        # 没有聊过就是最想聊的时候；主动联系默认关，打开后还得知道用户在哪个通道。
+        return SocialNeedReading(enabled=True, level=1.0, high=True)
+    hours_since = max(0.0, (now - last_conversation_at).total_seconds()) / 3600
+    level = 1 - exp(-hours_since / config.social_need_time_constant_hours)
+    return SocialNeedReading(
+        enabled=True, level=level, hours_since=hours_since, high=level >= config.social_need_high_at
+    )
 
 
 def compute_fatigue(calls_in_window: int, config: BodyConfig) -> FatigueReading:

@@ -1,21 +1,23 @@
 """身体 Body：读真实来源，算出身体信号（04 号文档，D56）。
 
-信号有精力、疲劳、压力、睡眠（社交需求在 Phase 2）。身体只读：账本和时钟是它的来源，
+信号有精力、疲劳、压力、睡眠、社交需求（D76）。身体只读：账本和时钟是它的来源，
 它不写任何状态。同时它是安全网关的「精力闸门」：每日额度花完后，可选的调用被拒绝，
 回应用户的不受影响。
 """
 
 import logging
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from aureus.body.energy import UNLIMITED_READING, EnergyReading, compute_energy
 from aureus.body.signals import (
     FatigueReading,
     SleepReading,
+    SocialNeedReading,
     StressReading,
     compute_fatigue,
     compute_sleep,
+    compute_social_need,
     compute_stress,
 )
 from aureus.common import BodyConfig, BudgetCalendar, Clock
@@ -33,6 +35,7 @@ class BodyReading:
     fatigue: FatigueReading
     stress: StressReading
     sleep: SleepReading
+    social_need: SocialNeedReading = field(default_factory=lambda: SocialNeedReading(enabled=False))
 
 
 class Body:
@@ -66,11 +69,12 @@ class Body:
         """身体配置（心跳按它决定要不要攒消息、夜里要不要放慢）。"""
         return self._config
 
-    def read(self, backlog: int = 0) -> BodyReading:
+    def read(self, backlog: int = 0, last_conversation_at: datetime | None = None) -> BodyReading:
         """读全部信号。
 
         Args:
             backlog: 收到了还没回复的消息数（压力的一项来源，只有心跳知道）。
+            last_conversation_at: 上一次和用户有效对话的时刻，由心跳提供（D76）。
 
         Raises:
             Exception: 账本读不了时原样抛出，理由同 read_energy。
@@ -80,6 +84,7 @@ class Body:
             fatigue=self.read_fatigue(),
             stress=self.read_stress(backlog),
             sleep=self.read_sleep(),
+            social_need=compute_social_need(last_conversation_at, self._clock.now(), self._config),
         )
 
     def read_fatigue(self) -> FatigueReading:

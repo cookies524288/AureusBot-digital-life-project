@@ -6,9 +6,11 @@ from .samples import BodySample, BodySampleStore, sample_from_reading, sample_of
 from .signals import (
     FatigueReading,
     SleepReading,
+    SocialNeedReading,
     StressReading,
     compute_fatigue,
     compute_sleep,
+    compute_social_need,
     compute_stress,
 )
 
@@ -22,11 +24,13 @@ __all__ = [
     "EnergyTier",
     "FatigueReading",
     "SleepReading",
+    "SocialNeedReading",
     "StressReading",
     "classify",
     "compute_energy",
     "compute_fatigue",
     "compute_sleep",
+    "compute_social_need",
     "compute_stress",
     "sample_from_reading",
     "sample_of",

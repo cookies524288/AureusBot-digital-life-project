@@ -55,6 +55,15 @@ def describe_body_state(reading: BodyReading, config: BodyConfig, reply_approach
             f"现在{'是' if sleep.night else '不是'}夜间时段"
             f"（当地 {config.night_start_hour} 点到 {config.night_end_hour} 点）"
         )
+    social = reading.social_need
+    if social.enabled:
+        level = "偏高" if social.high else "不高"
+        elapsed = (
+            "还没和用户好好聊过"
+            if social.hours_since is None
+            else f"距上次和用户好好聊过 {social.hours_since:.1f} 小时"
+        )
+        lines.append(f"社交需求 {social.level:.0%}（{level}）：{elapsed}")
     if reply_approach:
         lines.append(f"这次回复的做法：{reply_approach}")
     lines.append(_HONESTY_NOTE)
