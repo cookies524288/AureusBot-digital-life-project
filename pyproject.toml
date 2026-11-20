@@ -18,6 +18,7 @@ dependencies = [
     "cryptography>=50.0.2",
     "fastapi>=0.165.0",
     "filelock>=4.2.10",
+    "httpx>=0.28.1",
     "litellm>=1.109.1",
     "loguru>=0.8.0",
     "platformdirs>=4.14.5",
@@ -164,6 +165,7 @@ source_modules = [
     "aureus.organs",
     "aureus.channels",
     "aureus.safety",
+    "aureus.actions",
 ]
 forbidden_modules = ["aureus.web"]
 
@@ -185,8 +187,15 @@ source_modules = [
     "aureus.channels",
     "aureus.safety",
     "aureus.web",
+    "aureus.actions",
 ]
 forbidden_modules = ["aureus.monitor"]
+
+[[tool.importlinter.contracts]]
+name = "行动只返回资料：不依赖心跳、器官和时间线"
+type = "forbidden"
+source_modules = ["aureus.actions"]
+forbidden_modules = ["aureus.heartbeat", "aureus.organs", "aureus.timeline"]
 
 [dependency-groups]
 dev = [

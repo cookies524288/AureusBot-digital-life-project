@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 # 行动名。心跳和网关用这些常量，别处新增行动时也先在这里登记。
 ACTION_CALL_ORGAN = "call_organ"  # 调用器官（会联网、花 token）
 ACTION_REPLY_TO_USER = "reply_to_user"  # 回复用户的消息
+ACTION_WEB_SEARCH = "web_search"  # 只读搜索（D79）
+ACTION_READ_WEB = "read_web"  # 只读网页（D79）
 
 
 class PermissionLevel(IntEnum):
@@ -38,6 +40,8 @@ DEFAULT_ACTION_LEVELS: Mapping[str, PermissionLevel] = MappingProxyType(
         # 放在 L1 而不是 L0，是为了让急停能拦住它（急停只放行 L0）。
         ACTION_CALL_ORGAN: PermissionLevel.ROUTINE,
         ACTION_REPLY_TO_USER: PermissionLevel.ROUTINE,
+        ACTION_WEB_SEARCH: PermissionLevel.ROUTINE,
+        ACTION_READ_WEB: PermissionLevel.ROUTINE,
     }
 )
 
