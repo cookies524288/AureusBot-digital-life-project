@@ -162,6 +162,33 @@ def parse_plan(text: str) -> Plan | None:
     )
 
 
+@dataclass(frozen=True)
+class InitiativePlan:
+    """主动联系的建议；真实原因另外由代码提供（D76）。"""
+
+    reach_out: bool
+    intent: str
+    reason: str
+
+    def to_metadata(self) -> dict[str, Any]:
+        """写进考虑记录的规划器原意。"""
+        return {"reach_out": self.reach_out, "intent": self.intent, "reason": self.reason}
+
+
+def parse_initiative_plan(text: str) -> InitiativePlan | None:
+    """读懂主动建议；拿不准就不打扰，与用户已经开口时的兜底方向相反（D76）。"""
+    if len(text) > _MAX_PLAN_CHARS:
+        return None
+    data = first_json_object(text)
+    if data is None or not isinstance(data.get("reach_out"), bool):
+        return None
+    reach_out = data["reach_out"]
+    intent = clean_text(data.get("intent"), _MAX_INTENT_CHARS)
+    if reach_out and not intent:
+        return None
+    return InitiativePlan(reach_out, intent, clean_text(data.get("reason"), _MAX_REASON_CHARS))
+
+
 def _parse_commit(value: object) -> Commitment | None:
     """可选的 commit 字段；看不懂就当没有，不影响规划本身（D74 第 3 条）。"""
     if not isinstance(value, dict):

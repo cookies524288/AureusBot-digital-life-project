@@ -126,6 +126,7 @@ def build_system_context(
     affinity_state: str = "",
     mood_state: str = "",
     agenda_state: str = "",
+    initiative_note: str = "",
 ) -> str:
     """拼出放在系统提示词最前面的背景。
 
@@ -145,6 +146,7 @@ def build_system_context(
         affinity_state: 对眼前这个人的好感（describe_affinity 的结果）；空字符串表示不放（D71）。
         mood_state: 心情的事实摘要和谨慎说明（MoodReading.summary）；空字符串表示不放（D73）。
         agenda_state: 这个人名下未完成的约定（describe_agenda 的结果）；空字符串表示不放（D74）。
+        initiative_note: 主动联系的真实原因说明；空字符串表示不放（D76）。
 
     Returns:
         几段中文，段与段之间空一行。
@@ -199,6 +201,8 @@ def build_system_context(
         sections.append(mood_state)
     if agenda_state:
         sections.append(agenda_state)
+    if initiative_note:
+        sections.append(initiative_note)
     return "\n\n".join(sections)
 
 
@@ -313,6 +317,54 @@ def build_plan_prompt(
     if with_agenda:
         parts.append(_PLAN_AGENDA_INSTRUCTION)
     return "\n\n".join(parts)
+
+
+def _initiative_history(
+    history: Sequence[TimelineRecord], user_name: str, timezone: tzinfo | None
+) -> str:
+    if not history:
+        return "还没有聊过"
+    lines = "\n".join(_dialogue_line(record, user_name, timezone) for record in history)
+    return f"最近的对话（从早到晚）：\n{lines}"
+
+
+def build_initiative_plan_prompt(
+    history: Sequence[TimelineRecord],
+    user_name: str,
+    reasons: Sequence[str],
+    timezone: tzinfo | None = None,
+) -> str:
+    """无人发话时考虑要不要主动联系，只能用代码给出的真实原因（D76）。"""
+    return "\n\n".join(
+        [
+            _initiative_history(history, user_name, timezone),
+            f"现在没人找你。你在考虑要不要主动找{_one_line(user_name)}说话，真实的原因是：\n"
+            + "\n".join(_one_line(reason) for reason in reasons),
+            "只输出一个 JSON 对象，不要输出别的内容：\n"
+            '{"reach_out": true 或 false, "intent": "想说什么，一两句", '
+            '"reason": "为什么这样决定，一句话"}\n'
+            "没有真正想说的就写 false，不要硬找话题；不要编造原因以外的理由。",
+        ]
+    )
+
+
+def build_initiative_reply_prompt(
+    history: Sequence[TimelineRecord],
+    user_name: str,
+    timezone: tzinfo | None = None,
+    intent: str = "",
+    *,
+    length: ReplyLength | None = None,
+) -> str:
+    """主动开口的回复提示词，不伪造一条刚收到的用户消息（D76）。"""
+    return "\n\n".join(
+        [
+            _initiative_history(history, user_name, timezone),
+            f"你要主动开口，想表达的意思是：{_one_line(intent)}。",
+            f"长度：{(length or ReplyLength.SHORT).describe()}。",
+            _REPLY_INSTRUCTION,
+        ]
+    )
 
 
 def build_judge_prompt(
