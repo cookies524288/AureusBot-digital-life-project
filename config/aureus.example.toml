@@ -100,6 +100,13 @@ log_level = "INFO"
 # 回落到偏高线的一半以下才恢复。关掉后压力只自检，不降档。
 # stress_lowers_tier = true
 
+# 社交需求（D76）：距离上次和你好好聊过越久，越想聊；真正主动开口还要打开 [initiative]。
+# social_need_enabled = true
+# 上涨曲线的时间常数（小时），必须大于 0。
+# social_need_time_constant_hours = 12.0
+# 达到多少算偏高（大于 0、不超过 1）。
+# social_need_high_at = 0.7
+
 # 睡眠：夜间时段（当地时间，包含开始的钟点，不含结束的钟点；开始大于结束表示跨过午夜）。
 # 夜里定时拍放慢；有新消息时照样马上醒来。关掉后也不再告诉它每次停机停了多久。
 # sleep_enabled = true
@@ -280,3 +287,18 @@ log_level = "INFO"
 # expire_grace_days = 3.0
 # 回复时上下文里最多列几条未完成的条目。
 # context_items = 5
+
+# 主动联系用户（D76）：社交需求偏高或答应的事到期时，先由代码把关，再让规划器决定。
+# 默认关闭；打开还需要 [heartbeat] planning_enabled = true。下面的值都是默认值。
+[initiative]
+# 主动联系的开关；扮演模式下始终关闭。
+# enabled = false
+# 每天最多主动发出几次，谨慎时减半、至少一次。
+# max_per_day = 2
+# 两次考虑至少隔几小时，每连续一次没回应翻倍，到上限为止。
+# min_interval_hours = 3.0
+# max_interval_hours = 48.0
+# 发出后等回应几小时。
+# answer_window_hours = 6.0
+# 连续几次没回应后停止，直到你先开口。
+# give_up_after = 3

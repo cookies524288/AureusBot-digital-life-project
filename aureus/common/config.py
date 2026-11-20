@@ -136,6 +136,13 @@ class BodyConfig(BaseModel):
     # 关掉后压力只自检、不降档。
     stress_lowers_tier: bool = True
 
+    # 社交需求（D76）：距上次和用户有效对话越久，越想主动聊聊。
+    social_need_enabled: bool = True
+    # 上涨曲线的时间常数（小时），一个时间常数后约为 63%。
+    social_need_time_constant_hours: float = Field(default=12.0, gt=0)
+    # 达到这个比例，才可能成为主动联系的原因。
+    social_need_high_at: float = Field(default=0.7, gt=0, le=1)
+
     # 睡眠（D57）：夜间时段，当地时间；开始大于结束表示跨过午夜（比如 23 到 7）。
     sleep_enabled: bool = True
     night_start_hour: int = Field(default=1, ge=0, le=23)
@@ -161,6 +168,30 @@ class BodyConfig(BaseModel):
             raise ValueError(
                 "夜间时段的开始和结束不能是同一个钟点；不想要夜间时段就关掉 sleep_enabled"
             )
+        return self
+
+
+class InitiativeConfig(BaseModel):
+    """主动联系用户的配置（aureus.toml 的 [initiative]，设计见 D76）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 主动联系默认关闭，只有用户明确打开后才考虑。
+    enabled: bool = False
+    # 每个预算日最多主动发出几次；谨慎时减半，至少一次。
+    max_per_day: int = Field(default=2, ge=1)
+    # 每连续一次没回应，考虑间隔翻倍，最多到上限（小时）。
+    min_interval_hours: float = Field(default=3.0, gt=0)
+    max_interval_hours: float = Field(default=48.0, gt=0)
+    # 发出后等用户回应多久（小时）。
+    answer_window_hours: float = Field(default=6.0, gt=0)
+    # 连续几次没回应后停止，等用户先开口。
+    give_up_after: int = Field(default=3, ge=1)
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> Self:
+        if self.min_interval_hours > self.max_interval_hours:
+            raise ValueError("min_interval_hours 不能大于 max_interval_hours")
         return self
 
 
@@ -433,6 +464,7 @@ class RuntimeConfig(BaseModel):
     empathy: EmpathyConfig = Field(default_factory=EmpathyConfig)
     mood: MoodConfig = Field(default_factory=MoodConfig)
     agenda: AgendaConfig = Field(default_factory=AgendaConfig)
+    initiative: InitiativeConfig = Field(default_factory=InitiativeConfig)
 
     @field_validator("log_level", mode="before")
     @classmethod

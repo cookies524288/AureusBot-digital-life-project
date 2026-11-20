@@ -14,6 +14,7 @@ from aureus.common import (
     FeedbackConfig,
     HeartbeatConfig,
     HormonesConfig,
+    InitiativeConfig,
     JudgeConfig,
     MoodConfig,
     PeopleConfig,
@@ -904,4 +905,111 @@ def test_agenda_example_values_equal_the_defaults(tmp_path: Path) -> None:
 def test_agenda_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[agenda]{NEWLINE}{field} = {text}{NEWLINE}")
+    assert field in error_message_of(paths)
+
+
+# ---------- 社交需求和主动联系配置（D76） ----------
+
+INITIATIVE_FIELDS = tuple(InitiativeConfig.model_fields)
+
+
+def test_initiative_defaults_follow_d76(tmp_path: Path) -> None:
+    initiative = load_runtime_config(AureusPaths(tmp_path)).initiative
+    assert initiative == InitiativeConfig()
+    assert initiative.enabled is False
+    assert (initiative.max_per_day, initiative.give_up_after) == (2, 3)
+    assert (
+        initiative.min_interval_hours,
+        initiative.max_interval_hours,
+        initiative.answer_window_hours,
+    ) == (3.0, 48.0, 6.0)
+
+
+def test_initiative_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in INITIATIVE_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "initiative")
+    assert sum(line.startswith(prefixes) for line in mine) == len(INITIATIVE_FIELDS)
+    start = lines.index("[initiative]") + 1
+    for offset, line in enumerate(mine):
+        if line.startswith(prefixes):
+            lines[start + offset] = line.removeprefix("# ")
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, NEWLINE.join(lines))
+    assert load_runtime_config(paths).initiative == InitiativeConfig()
+
+
+def test_initiative_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[initiative]\nenabled = true\nmax_per_day = 4\nmin_interval_hours = 2\n"
+        "max_interval_hours = 24\nanswer_window_hours = 5\ngive_up_after = 2\n",
+    )
+    assert load_runtime_config(paths).initiative == InitiativeConfig(
+        enabled=True,
+        max_per_day=4,
+        min_interval_hours=2.0,
+        max_interval_hours=24.0,
+        answer_window_hours=5.0,
+        give_up_after=2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("enabled", "1"),
+        ("max_per_day", "0"),
+        ("max_per_day", "true"),
+        ("min_interval_hours", "0"),
+        ("max_interval_hours", "-1"),
+        ("answer_window_hours", "0"),
+        ("give_up_after", "0"),
+    ],
+)
+def test_initiative_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[initiative]\n{field} = {text}\n")
+    assert field in error_message_of(paths)
+
+
+def test_initiative_intervals_must_be_ordered(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[initiative]\nmin_interval_hours = 49\n")
+    assert "min_interval_hours" in error_message_of(paths)
+
+
+def test_body_social_need_defaults_follow_d76(tmp_path: Path) -> None:
+    body = load_runtime_config(AureusPaths(tmp_path)).body
+    assert body.social_need_enabled is True
+    assert (body.social_need_time_constant_hours, body.social_need_high_at) == (12.0, 0.7)
+
+
+def test_body_social_need_values_from_file_are_used(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[body]\nsocial_need_enabled = false\nsocial_need_time_constant_hours = 8\n"
+        "social_need_high_at = 0.8\n",
+    )
+    body = load_runtime_config(paths).body
+    assert body.social_need_enabled is False
+    assert (body.social_need_time_constant_hours, body.social_need_high_at) == (8.0, 0.8)
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("social_need_enabled", "1"),
+        ("social_need_time_constant_hours", "0"),
+        ("social_need_time_constant_hours", '"12"'),
+        ("social_need_high_at", "0"),
+        ("social_need_high_at", "1.1"),
+    ],
+)
+def test_body_social_need_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[body]\n{field} = {text}\n")
     assert field in error_message_of(paths)
