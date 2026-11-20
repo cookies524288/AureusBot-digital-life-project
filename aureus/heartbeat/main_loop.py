@@ -19,7 +19,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, tzinfo
 from enum import Enum, auto
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from aureus.actions.search import SearchProvider
 from aureus.actions.web import WebReader
@@ -40,7 +40,7 @@ from aureus.common import (
 )
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import COMMITMENT_KEPT, PRIOR_CONFIDENCE, FeedbackError, FeedbackStore, Outcome
-from aureus.heartbeat import exploration_runner
+from aureus.heartbeat import exploration_runner, interest_changes
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
     build_initiative_plan_prompt,
@@ -211,6 +211,7 @@ class _Heard:
 
     perception: Perception
     record: TimelineRecord
+    is_user: bool
 
 
 @dataclass(frozen=True)
@@ -407,18 +408,20 @@ class Heartbeat:
         if initiative_config.enabled and not config.planning_enabled:
             logger.warning("主动联系要用规划器，已关闭主动联系")
             initiative_config = initiative_config.model_copy(update={"enabled": False})
-        self._initiative = InitiativeTracker(
-            initiative_config, timeline, feedback, calendar or BudgetCalendar(timezone)
-        )
+        calendar = calendar or BudgetCalendar(timezone)
+        self._initiative = InitiativeTracker(initiative_config, timeline, feedback, calendar)
         self._sinks: dict[str, MessageSink] = {}
+        self._interests = None if config.roleplay_mode else interests
+        self._findings = findings
+        exploration = exploration or ExplorationConfig()
         self._exploration = exploration_runner.ExplorationTracker(
             timeline,
-            calendar or BudgetCalendar(timezone),
-            None if config.roleplay_mode else interests,
+            calendar,
+            self._interests,
             findings,
             exploration,
             search,
-            reader,
+            reader or WebReader(exploration),
             has_exploration_organ,
         )
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
@@ -826,8 +829,7 @@ class Heartbeat:
             return
         outcome = thought.task.result()
         if isinstance(outcome, exploration_runner.ExplorationOutcome):
-            if thought.exploration is not None:
-                self._exploration.finish(thought.exploration, outcome)
+            self._exploration.finish(cast(TimelineRecord, thought.exploration), outcome)
             return
         if thought.initiative is not None:
             self._collect_initiative(thought, outcome)
@@ -887,15 +889,15 @@ class Heartbeat:
         if delivered and outcome.plan is not None and person_id is not None:
             # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
             self._apply_agenda(outcome.plan, person_id, reply_record)
-            if outcome.plan.interest is not None:
-                person = self._identify(thought.replying_to[-1].perception)
-                if person is not None and person.is_user:
-                    exploration_runner.apply_interest(
-                        self._exploration,
-                        outcome.plan.interest,
-                        thought.replying_to[-1].record,
-                        self._clock.now(),
-                    )
+            if outcome.plan.interest is not None and thought.replying_to[-1].is_user:
+                interest_changes.apply_interest(
+                    self._interests,
+                    self._timeline,
+                    self._exploration.calendar,
+                    outcome.plan.interest,
+                    thought.replying_to[-1].record,
+                    self._clock.now(),
+                )
 
     def _deliver_reply(self, target: Perception, text: str) -> bool:
         """把回复拆成几条短消息发出（D60）。
@@ -1183,7 +1185,8 @@ class Heartbeat:
                     "收到来自 %s 上未确认身份的账号的消息：只记录，不回复", perception.channel
                 )
                 continue
-            self._unanswered.add(_Heard(perception, record), priority, _conversation_of(perception))
+            heard = _Heard(perception, record, person is not None and person.is_user)
+            self._unanswered.add(heard, priority, _conversation_of(perception))
             if priority is Priority.USER:
                 self._last_user_contact = perception
                 self._initiative.note_user_message(record.timestamp)
@@ -1281,6 +1284,7 @@ class Heartbeat:
                     target,
                     (),
                     person_id,
+                    viewer_is_user=person is not None and person.is_user,
                     initiative_note=note,
                     mood_state=mood.summary if mood is not None else "",
                     agenda_state=agenda_state,
@@ -1300,8 +1304,7 @@ class Heartbeat:
     def _maybe_start_exploration(self) -> None:
         """用户来信和主动联系之后才考虑探索，与它们共用一个任务槽（D79）。"""
         tracker, reading = self._exploration, self._reading
-        started = exploration_runner.prepare_exploration(
-            tracker,
+        started = tracker.prepare(
             self._clock.now(),
             tier=self._current_strategy().effective_tier,
             night=reading.sleep.night if reading is not None else False,
@@ -1583,7 +1586,10 @@ class Heartbeat:
     def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
         """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
         return self._conversation_job(
-            batch[0].perception, [heard.record for heard in batch], _person_id_of(batch[-1].record)
+            batch[0].perception,
+            [heard.record for heard in batch],
+            _person_id_of(batch[-1].record),
+            viewer_is_user=batch[-1].is_user,
         )
 
     def _conversation_job(
@@ -1592,6 +1598,7 @@ class Heartbeat:
         messages: Sequence[TimelineRecord],
         person_id: int | None,
         *,
+        viewer_is_user: bool,
         initiative_note: str = "",
         mood_state: str | None = None,
         agenda_state: str | None = None,
@@ -1635,8 +1642,12 @@ class Heartbeat:
             mood_state = mood_reading.summary if mood_reading is not None else ""
         if agenda_state is None:
             agenda_state = self._agenda_for_context(person_id)
-        interests_state = exploration_runner.interest_context(
-            self._exploration, target, self._timezone, self._people
+        interests_state = interest_changes.interest_context(
+            self._interests,
+            self._findings,
+            is_user=viewer_is_user,
+            visibility=target.visibility,
+            timezone=self._timezone,
         )
 
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:

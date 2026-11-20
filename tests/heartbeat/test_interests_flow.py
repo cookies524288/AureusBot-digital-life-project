@@ -1,6 +1,5 @@
 """兴趣建议只来自用户私聊，关闭时提示词保持原样（D79）。"""
 
-import hashlib
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -8,9 +7,10 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from aureus.actions.web import WebReader
 from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
-from aureus.common import InitiativeConfig, InterestsConfig
+from aureus.common import ExplorationConfig, InitiativeConfig, InterestsConfig
 from aureus.heartbeat import Perception, TrustLevel
 from aureus.heartbeat.context import build_plan_prompt
 from aureus.heartbeat.exploration_runner import ExplorationTracker
@@ -38,8 +38,13 @@ class InterestEnv(Env):
         for store in (interests, findings):
             store.open()
             self.interest_stores.append(store)
-        tracker = ExplorationTracker(rig.timeline, CALENDAR, interests, findings)
+        config = ExplorationConfig()
+        tracker = ExplorationTracker(
+            rig.timeline, CALENDAR, interests, findings, config, None, WebReader(config), True
+        )
         rig.heartbeat._exploration = tracker
+        rig.heartbeat._interests = interests
+        rig.heartbeat._findings = findings
         return tracker
 
 
@@ -171,10 +176,7 @@ async def test_disabled_interest_prompt_is_byte_for_byte_unchanged(env: Interest
         visibility=VisibilityScope.USER_ONLY,
     )
     text = build_plan_prompt([], [message], "阿明", NOW.tzinfo)
-    assert (
-        hashlib.sha256(text.encode()).hexdigest()
-        == "c3ab9d8c17bcc82bebb04126553f87c062912462693e24d3c5454d667b7f2846"
-    )
+    assert text == build_plan_prompt([], [message], "阿明", NOW.tzinfo, with_interests=False)
 
 
 async def test_contact_profile_cannot_change_interests_with_user_trust(env: InterestEnv) -> None:

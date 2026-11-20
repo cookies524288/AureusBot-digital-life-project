@@ -8,6 +8,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from aureus.common.limits import MAX_INTEREST_CHARS, MAX_SEED_INTERESTS
+
 
 class Facts(BaseModel):
     """身份事实：给程序用的结构化信息。只有用户能改。"""
@@ -74,8 +76,11 @@ class Persona(BaseModel):
     @classmethod
     def _check_interests(cls, values: list[str]) -> list[str]:
         texts = list(dict.fromkeys(text.strip() for text in values))
-        if len(texts) > 20 or any(not 1 <= len(text) <= 30 for text in texts):
-            raise ValueError("interests 最多 20 条，每条去空白后须为 1～30 字")
+        valid_lengths = all(1 <= len(text) <= MAX_INTEREST_CHARS for text in texts)
+        if len(texts) > MAX_SEED_INTERESTS or not valid_lengths:
+            raise ValueError(
+                f"interests 最多 {MAX_SEED_INTERESTS} 条，每条 1～{MAX_INTEREST_CHARS} 字"
+            )
         return texts
 
 

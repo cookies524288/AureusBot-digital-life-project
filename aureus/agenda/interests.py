@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from aureus.agenda.store import _parse, _stamp
+from aureus.agenda.store import parse, stamp
 from aureus.common import Clock, InterestsConfig
+from aureus.common.limits import MAX_INTEREST_CHARS
 from aureus.common.sqlite import open_connection
 
 logger = logging.getLogger(__name__)
-MAX_INTEREST_CHARS = 30
 
 
 @dataclass(frozen=True)
@@ -43,10 +43,10 @@ class InterestStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = open_connection(self._db_path)
         try:
-            conn.executescript("""
+            conn.executescript(f"""
                 CREATE TABLE IF NOT EXISTS interests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    text TEXT NOT NULL CHECK(length(text) BETWEEN 1 AND 30),
+                    text TEXT NOT NULL CHECK(length(text) BETWEEN 1 AND {MAX_INTEREST_CHARS}),
                     origin TEXT NOT NULL CHECK(origin IN ('seed', 'self')),
                     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'removed')),
                     created_at TEXT NOT NULL, ended_at TEXT, end_reason TEXT,
@@ -108,7 +108,7 @@ class InterestStore:
     def _insert(self, text: str, origin: str, source: int | None) -> Interest:
         cursor = self._require_open().execute(
             "INSERT INTO interests(text, origin, created_at, source_record_id) VALUES (?, ?, ?, ?)",
-            (text, origin, _stamp(self._clock.now()), source),
+            (text, origin, stamp(self._clock.now()), source),
         )
         assert cursor.lastrowid is not None
         item = self.get(cursor.lastrowid)
@@ -131,7 +131,7 @@ class InterestStore:
             changed = conn.execute(
                 "UPDATE interests SET status = 'removed', ended_at = ?, end_reason = ?,"
                 " replaced_by = ? WHERE id = ? AND status = 'active'",
-                (_stamp(self._clock.now()), reason, replaced_by, interest_id),
+                (stamp(self._clock.now()), reason, replaced_by, interest_id),
             )
         return self.get(interest_id) if changed.rowcount else None
 
@@ -142,13 +142,11 @@ class InterestStore:
             old = self.get(interest_id)
             if old is None or old.status != "active" or not self._can_add(text):
                 return None
-            if len(self.active()) > self.config.max_active:
-                return None
             new = self._insert(text, "self", source_record_id)
             conn.execute(
                 "UPDATE interests SET status = 'removed', ended_at = ?, end_reason = 'replaced',"
                 " replaced_by = ? WHERE id = ?",
-                (_stamp(self._clock.now()), new.id, interest_id),
+                (stamp(self._clock.now()), new.id, interest_id),
             )
             return new
 
@@ -177,5 +175,5 @@ class InterestStore:
 def _interest(row: sqlite3.Row) -> Interest:
     values = dict(row)
     values["created_at"] = datetime.fromisoformat(row["created_at"])
-    values["ended_at"] = _parse(row["ended_at"])
+    values["ended_at"] = parse(row["ended_at"])
     return Interest(**values)

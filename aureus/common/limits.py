@@ -1,0 +1,5 @@
+"""兴趣与收获的统一长度、数量上限（D79）。"""
+
+MAX_INTEREST_CHARS = 30
+MAX_SEED_INTERESTS = 20
+MAX_FINDING_CHARS = 200

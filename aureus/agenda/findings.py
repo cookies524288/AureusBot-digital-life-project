@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from aureus.agenda.store import _parse, _stamp
+from aureus.agenda.store import parse, stamp
 from aureus.common import Clock
+from aureus.common.limits import MAX_FINDING_CHARS
 from aureus.common.sqlite import open_connection
-
-MAX_FINDING_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -40,11 +39,11 @@ class FindingStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = open_connection(self._db_path)
         try:
-            conn.executescript("""
+            conn.executescript(f"""
                 CREATE TABLE IF NOT EXISTS findings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, interest_id INTEGER NOT NULL,
-                    text TEXT NOT NULL CHECK(length(text) BETWEEN 1 AND 200),
-                    page_title TEXT NOT NULL CHECK(length(page_title) <= 200),
+                    text TEXT NOT NULL CHECK(length(text) BETWEEN 1 AND {MAX_FINDING_CHARS}),
+                    page_title TEXT NOT NULL CHECK(length(page_title) <= {MAX_FINDING_CHARS}),
                     page_url TEXT NOT NULL, created_at TEXT NOT NULL,
                     shared_at TEXT, shared_record_id INTEGER,
                     CHECK((shared_at IS NULL) = (shared_record_id IS NULL))
@@ -88,7 +87,7 @@ class FindingStore:
                     text.strip(),
                     page_title[:MAX_FINDING_CHARS],
                     page_url,
-                    _stamp(self._clock.now()),
+                    stamp(self._clock.now()),
                 ),
             )
             row = conn.execute(
@@ -112,7 +111,7 @@ class FindingStore:
             .execute(
                 "SELECT * FROM findings WHERE created_at >= ? AND shared_at IS NULL"
                 " ORDER BY id LIMIT 1",
-                (_stamp(since),),
+                (stamp(since),),
             )
             .fetchone()
         )
@@ -124,7 +123,7 @@ class FindingStore:
             cursor = conn.execute(
                 "UPDATE findings SET shared_at = ?, shared_record_id = ?"
                 " WHERE id = ? AND shared_at IS NULL",
-                (_stamp(at), record_id, finding_id),
+                (stamp(at), record_id, finding_id),
             )
         return bool(cursor.rowcount)
 
@@ -132,5 +131,5 @@ class FindingStore:
 def _finding(row: sqlite3.Row) -> Finding:
     values = dict(row)
     values["created_at"] = datetime.fromisoformat(row["created_at"])
-    values["shared_at"] = _parse(row["shared_at"])
+    values["shared_at"] = parse(row["shared_at"])
     return Finding(**values)

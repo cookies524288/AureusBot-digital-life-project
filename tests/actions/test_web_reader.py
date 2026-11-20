@@ -1,6 +1,7 @@
 """逐跳地址检查、正文提取和资源限制；不连接真实网络（D79）。"""
 
 import asyncio
+import socket
 
 import httpx
 import pytest
@@ -164,6 +165,17 @@ async def test_total_timeout_includes_dns() -> None:
         ).read("https://example.com")
         is FetchFailure.TIMEOUT
     )
+
+
+async def test_dns_resolution_failure_is_bad_url_without_traceback(caplog) -> None:
+    async def resolve(host: str) -> list[str]:
+        raise socket.gaierror("测试域名解析失败")
+
+    assert (
+        await reader(lambda _: pytest.fail("不应连接"), resolve=resolve).read("https://example.com")
+        is FetchFailure.BAD_URL
+    )
+    assert not caplog.records
 
 
 async def test_oversize_page_stops_at_byte_limit() -> None:

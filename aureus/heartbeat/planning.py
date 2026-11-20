@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-_MAX_INTEREST_TEXT_CHARS = 30
+from aureus.common.limits import MAX_INTEREST_CHARS
+
 _MAX_INTEREST_REASON_CHARS = 100
 
 
@@ -230,7 +231,7 @@ def _parse_interest(value: object) -> InterestChange | None:
     if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= _MAX_INTEREST_REASON_CHARS:
         return None
     if action is not InterestAction.REMOVE and (
-        not isinstance(text, str) or not 1 <= len(text.strip()) <= _MAX_INTEREST_TEXT_CHARS
+        not isinstance(text, str) or not 1 <= len(text.strip()) <= MAX_INTEREST_CHARS
     ):
         return None
     if action is not InterestAction.ADD and (type(interest_id) is not int or interest_id < 1):

@@ -114,8 +114,10 @@ class ExplorationEnv(InterestEnv):
             settings,
             self.search,
             WebReader(settings, transport=httpx.MockTransport(handle), resolve=resolve),
+            True,
         )
         rig.heartbeat._exploration = tracker
+        rig.heartbeat._interests = tracker.interests
         assert base.interests is not None
         base.interests.add("天文", "seed")
         return rig
@@ -299,7 +301,14 @@ async def test_daily_limit_and_interval_and_restart_restore_each_interest(
     await finish(rig)
     assert [r.metadata["interest_id"] for r in rig.records("exploration_started")] == [1, 2]
     restored = ExplorationTracker(
-        rig.timeline, CALENDAR, tracker.interests, tracker.findings, tracker.config
+        rig.timeline,
+        CALENDAR,
+        tracker.interests,
+        tracker.findings,
+        tracker.config,
+        tracker.search,
+        tracker.reader,
+        tracker.has_organ,
     )
     restored.restore(env.clock.now())
     assert restored.state == tracker.state

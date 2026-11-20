@@ -202,8 +202,8 @@ class AgendaStore:
                 (
                     person_id,
                     text,
-                    _stamp(self._clock.now()),
-                    _stamp(due_at) if due_at is not None else None,
+                    stamp(self._clock.now()),
+                    stamp(due_at) if due_at is not None else None,
                     source_record_id,
                     feedback_id,
                 ),
@@ -263,7 +263,7 @@ class AgendaStore:
             cursor = conn.execute(
                 "UPDATE agenda_items SET status = ?, closed_at = ?, reason = ?"
                 " WHERE id = ? AND status = 'open'",
-                (status.value, _stamp(self._clock.now()), text, item_id),
+                (status.value, stamp(self._clock.now()), text, item_id),
             )
         if cursor.rowcount == 0:
             return None
@@ -277,7 +277,7 @@ class AgendaStore:
             .execute(
                 "SELECT * FROM agenda_items WHERE status = 'open' AND due_at IS NOT NULL"
                 " AND due_at <= ? ORDER BY due_at, id",
-                (_stamp(horizon),),
+                (stamp(horizon),),
             )
             .fetchall()
         )
@@ -290,18 +290,20 @@ class AgendaStore:
             .execute(
                 "SELECT * FROM agenda_items WHERE status = 'open' AND due_noticed = 0"
                 " AND due_at IS NOT NULL AND due_at <= ? ORDER BY due_at, id",
-                (_stamp(now),),
+                (stamp(now),),
             )
             .fetchall()
         )
         return [_item_of(row) for row in rows]
 
 
-def _stamp(moment: datetime) -> str:
+def stamp(moment: datetime) -> str:
+    """把带时区的时间转成统一精度的 UTC 字符串，供日程各表存储。"""
     return ensure_aware(moment).astimezone(UTC).isoformat(timespec=_TIMESTAMP_PRECISION)
 
 
-def _parse(text: str | None) -> datetime | None:
+def parse(text: str | None) -> datetime | None:
+    """还原日程表中的 ISO 时间字符串；空值保持为 None。"""
     return None if text is None else datetime.fromisoformat(text)
 
 
@@ -311,9 +313,9 @@ def _item_of(row: sqlite3.Row) -> AgendaItem:
         person_id=int(row["person_id"]),
         content=str(row["content"]),
         created_at=datetime.fromisoformat(row["created_at"]),
-        due_at=_parse(row["due_at"]),
+        due_at=parse(row["due_at"]),
         status=ItemStatus(row["status"]),
-        closed_at=_parse(row["closed_at"]),
+        closed_at=parse(row["closed_at"]),
         reason=str(row["reason"]),
         source_record_id=row["source_record_id"],
         feedback_id=row["feedback_id"],

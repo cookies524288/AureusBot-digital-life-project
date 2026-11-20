@@ -114,7 +114,7 @@ class WebReader:
                     ip = ip.ipv4_mapped
                 if not ip.is_global or ip.is_multicast or ip.is_reserved:
                     return FetchFailure.BLOCKED_ADDRESS
-        except ValueError:
+        except (ValueError, OSError):
             return FetchFailure.BAD_URL
         return None
 

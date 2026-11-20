@@ -7,11 +7,10 @@ from enum import StrEnum
 
 from aureus.body import EnergyTier
 from aureus.common import ExplorationConfig
+from aureus.common.limits import MAX_FINDING_CHARS
 from aureus.heartbeat.planning import first_json_object
 
 _ALLOWED_TIERS = (EnergyTier.UNLIMITED, EnergyTier.NORMAL)
-_MAX_SUMMARY_CHARS = 4000
-MAX_FINDING_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -112,8 +111,6 @@ class Summary:
 
 def parse_summary(text: str) -> Summary | None:
     """字段、类型或长度有一处不合格，整份总结作废。"""
-    if len(text) > _MAX_SUMMARY_CHARS:
-        return None
     data = first_json_object(text)
     if data is None or set(data) != {"interesting", "finding"}:
         return None

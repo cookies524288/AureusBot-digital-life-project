@@ -290,6 +290,19 @@ log_level = "INFO"
 
 # 主动联系用户（D76）：社交需求偏高或答应的事到期时，先由代码把关，再让规划器决定。
 # 默认关闭；打开还需要 [heartbeat] planning_enabled = true。下面的值都是默认值。
+[initiative]
+# 主动联系的开关；扮演模式下始终关闭。
+# enabled = false
+# 每天最多主动发出几次，谨慎时减半、至少一次。
+# max_per_day = 2
+# 两次考虑至少隔几小时，每连续一次没回应翻倍，到上限为止。
+# min_interval_hours = 3.0
+# max_interval_hours = 48.0
+# 发出后等回应几小时。
+# answer_window_hours = 6.0
+# 连续几次没回应后停止，直到你先开口。
+# give_up_after = 3
+
 [interests]
 # 兴趣开关及自行改动限额（D79）；关着时仍同步用户的起始兴趣。
 # enabled = false
@@ -308,16 +321,3 @@ log_level = "INFO"
 # max_page_bytes = 1048576
 # max_page_chars = 6000
 # share_within_days = 3.0
-
-[initiative]
-# 主动联系的开关；扮演模式下始终关闭。
-# enabled = false
-# 每天最多主动发出几次，谨慎时减半、至少一次。
-# max_per_day = 2
-# 两次考虑至少隔几小时，每连续一次没回应翻倍，到上限为止。
-# min_interval_hours = 3.0
-# max_interval_hours = 48.0
-# 发出后等回应几小时。
-# answer_window_hours = 6.0
-# 连续几次没回应后停止，直到你先开口。
-# give_up_after = 3

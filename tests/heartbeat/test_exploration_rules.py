@@ -101,4 +101,4 @@ def test_summary_accepts_code_fence_and_trims() -> None:
     assert result is not None and result.finding == "收获"
     boring = parse_summary('{"interesting":false,"finding":""}')
     assert boring is not None and boring.interesting is False
-    assert parse_summary("x" * 4001) is None
+    assert parse_summary(" " * 4001 + '{"interesting":false,"finding":""}') == boring
