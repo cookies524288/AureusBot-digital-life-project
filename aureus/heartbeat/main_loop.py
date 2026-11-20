@@ -1,6 +1,6 @@
 """心跳 heartbeat：常驻主循环（02 号文档第 3 节，03 号文档“心跳”一节，D41）。
 
-每一拍按顺序做：量身体 → 对结果（想法有结果了就说出来）→ 收感知（写进时间线）→
+每一拍按顺序做：收感知（写进时间线）→ 对结果（想法有结果了就说出来）→ 量身体 →
 定焦点、想一想（有没回复的消息就在后台调用器官）→ 广播认知状态。
 想一想的做法由精力档位定（D59）：正常档先调规划器、再调回复器，低档位合并成一次调用。
 急停中（D54）照常收感知、记时间线，但不调用器官、不回复，只发系统通知。
@@ -756,8 +756,9 @@ class Heartbeat:
             raise RuntimeError("心跳没有在运行，不能跳")
         self._initiative_io_failed = False
         self._watch_emergency_stop()
-        self._collect_finished_thought()
+        # D76：先收下已到的来信，不能把发送前排队的消息算作发送后的回应。
         self._take_in_perceptions()
+        self._collect_finished_thought()
         self._read_body()
         self._check_stress()
         self._check_agenda()
