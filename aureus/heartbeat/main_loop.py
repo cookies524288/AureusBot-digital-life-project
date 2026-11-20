@@ -15,15 +15,14 @@ import contextlib
 import logging
 import sqlite3
 from collections import deque
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Sequence
 from datetime import datetime, tzinfo
 from enum import Enum, auto
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from aureus.actions.search import SearchProvider
 from aureus.actions.web import WebReader
-from aureus.agenda import AgendaItem, AgendaStore, ItemStatus, describe_agenda, parse_due
+from aureus.agenda import AgendaStore, describe_agenda
 from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
 from aureus.attention import Inbox, Priority
@@ -39,23 +38,25 @@ from aureus.common import (
     PeopleConfig,
 )
 from aureus.core import CognitiveObserver, CognitiveState
-from aureus.feedback import COMMITMENT_KEPT, PRIOR_CONFIDENCE, FeedbackError, FeedbackStore, Outcome
+from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat import exploration_runner, interest_changes
-from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
-from aureus.heartbeat.context import (
-    build_initiative_plan_prompt,
-    build_initiative_reply_prompt,
-    build_judge_context,
-    build_judge_prompt,
-    build_plan_prompt,
-    build_reply_prompt,
-    build_system_context,
+from aureus.heartbeat.agenda_hooks import AgendaHooks
+from aureus.heartbeat.context import build_initiative_plan_prompt, build_initiative_reply_prompt
+from aureus.heartbeat.conversation import (
+    ConversationFlow,
+    OrganCaller,
+    _Heard,
+    _InitiativeJob,
+    _JudgeAttempt,
+    _organ_request,
+    _person_id_of,
+    _reply_job,
+    _ReplyJob,
+    _Thought,
+    _ThoughtOutcome,
 )
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
-    EVENT_AGENDA_ADDED,
-    EVENT_AGENDA_CLOSED,
-    EVENT_AGENDA_DUE,
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
     EVENT_EMERGENCY_STOP,
@@ -71,7 +72,7 @@ from aureus.heartbeat.events import (
 )
 from aureus.heartbeat.initiative import decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
-from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, TowardMeKind, parse_judgment
+from aureus.heartbeat.judging import Judgment, TowardMeKind
 from aureus.heartbeat.perception import (
     MessageKind,
     MessageSink,
@@ -79,15 +80,8 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
-from aureus.heartbeat.planning import (
-    InitiativePlan,
-    Plan,
-    ReplyLength,
-    ResolutionResult,
-    parse_initiative_plan,
-    parse_plan,
-)
-from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
+from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
+from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
 from aureus.hormones import (
@@ -97,12 +91,10 @@ from aureus.hormones import (
     HormoneTrigger,
     RetaliationMode,
     kind_enabled,
-    make_triggers_from_empathy,
-    make_triggers_from_judgment,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
-from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
+from aureus.organs import CallPurpose
 from aureus.people import (
     AffinityBook,
     AffinityEvent,
@@ -162,139 +154,11 @@ _AFFINITY_REASONS = {
 _HORMONE_NAMES = {"anger": "怒气", "joy": "愉悦", "hurt": "低落", "surprise": "惊讶"}
 
 
-class OrganCaller(Protocol):
-    """心跳调用器官用的对象。核心组装时传入安全网关 SafetyGateway，不传器官总线（D39、D41）。"""
-
-    async def call(self, request: OrganRequest) -> OrganResponse:
-        """经过安全检查后调用器官。"""
-        ...
-
-
-_STATUS_WORDS = {
-    ItemStatus.DONE: "做完了",
-    ItemStatus.DROPPED: "做不了",
-    ItemStatus.EXPIRED: "过期了",
-    ItemStatus.CANCELLED: "被用户取消了",
-}
-
-
-def _item_metadata(item: AgendaItem) -> dict[str, Any]:
-    """日程事件写进时间线的 metadata。"""
-    return {
-        "item_id": item.id,
-        "person_id": item.person_id,
-        "content": item.content,
-        "due_at": item.due_at.isoformat() if item.due_at is not None else None,
-        "status": item.status.value,
-        "reason": item.reason,
-    }
-
-
-def _person_id_of(record: TimelineRecord) -> int | None:
-    """这条消息是哪个人发的（人物 ID）；认不出是谁时是 None。"""
-    person_id = record.metadata.get("person_id")
-    if isinstance(person_id, int) and not isinstance(person_id, bool):
-        return person_id
-    return None
-
-
 class _Phase(Enum):
     NOT_STARTED = auto()
     RUNNING = auto()
     STOPPING = auto()
     STOPPED = auto()
-
-
-@dataclass(frozen=True)
-class _Heard:
-    """已经记进时间线、还没回复的一条消息。"""
-
-    perception: Perception
-    record: TimelineRecord
-    is_user: bool
-
-
-@dataclass(frozen=True)
-class _ReplyJob:
-    """一次回复要用的全部材料。在拍里组装好，后台任务只管按它调用器官，不读也不写状态。"""
-
-    strategy: ReplyStrategy
-    # 之前的对话和这次要回复的消息，都是已经记进时间线的记录，从早到晚。
-    history: Sequence[TimelineRecord]
-    messages: Sequence[TimelineRecord]
-    # 怎么称呼用户；后台任务不去读身份，免得它在中途变了。
-    user_name: str
-    # 规划器和合并成一次的调用看的背景：四层人设都在，由它们决定怎么回应。
-    full_context: str
-    # 规划之后的回复器看的背景：没有行为风格，什么时候开口、怎么回应已经由规划器定了。
-    replyer_context: str
-    # 判断器官看的背景：只有不变人格和可变人格（D68 第 6 条）。
-    judge_context: str
-    # 判断器官要带的之前的对话；已经按 [judge] context_messages 截好。
-    judge_history: Sequence[TimelineRecord]
-    # 激素影响之前的做法；激素的影响（降长度）每次都从它重新算，不叠加。
-    base_strategy: ReplyStrategy
-    # 回复的对象：认不出是谁时为 None；对象是不是用户。
-    person_id: int | None
-    viewer_is_user: bool
-    # 把激素的文字（规划器和合并调用用的、回复器用的）放进系统上下文，返回两份新的上下文。
-    build_contexts: Callable[[str, str], tuple[str, str]]
-    # 此刻激素对这次回复的影响；激素没开时是 None。
-    effects: HormoneEffects | None = None
-    with_interests: bool = False
-
-
-@dataclass(frozen=True)
-class _JudgeAttempt:
-    """一次判断的结果：读懂了就有 judgment，否则 failure 写没判断出来的原因（D68 第 8 条）。"""
-
-    judgment: Judgment | None = None
-    failure: str = ""
-    # 这次判断引起的激素触发（D69 第 2 条）；后台任务只算出来，由收结果的那一拍写进状态和时间线。
-    triggers: tuple[HormoneTrigger, ...] = ()
-
-
-@dataclass(frozen=True)
-class _ThoughtOutcome:
-    """一次想法的结果：器官的建议、规划器决定不回复、或者一条要告诉用户的系统通知。"""
-
-    response: OrganResponse | None = None
-    notice: str = ""
-    # 规划器读懂的建议；没规划、或者看不懂时是 None。
-    plan: Plan | None = None
-    # 规划器决定不回复：没有 response，也不是失败，不发失败通知。
-    declined: bool = False
-    # 判断器官的结果；没调用判断（开关关着、档位低、没配器官）时是 None。
-    judge: _JudgeAttempt | None = None
-    # 这次回复用的激素影响；收结果的那一拍用它记回击次数和不回次数。
-    effects: HormoneEffects | None = None
-    # 规划器想不回，但这场冲突里已经不回过一次，代码要求这次必须回（D69 第 3 条）。
-    forced_reply: bool = False
-    # 主动联系独立解析，不能拿普通回复的兜底来替它决定开口（D76）。
-    initiative_plan: InitiativePlan | None = None
-
-
-@dataclass(frozen=True)
-class _InitiativeJob:
-    """拍里准备的主动材料，后台只用这些快照调用器官（D76）。"""
-
-    conversation: _ReplyJob
-    reasons: tuple[str, ...]
-    social_need: float | None
-    due_item_ids: tuple[int, ...]
-    finding_id: int | None = None
-
-
-@dataclass(frozen=True)
-class _Thought:
-    """进行中的想法：后台任务，和它要回复的消息、这次的做法。"""
-
-    task: asyncio.Task[_ThoughtOutcome] | asyncio.Task[exploration_runner.ExplorationOutcome]
-    replying_to: Sequence[_Heard]
-    strategy: ReplyStrategy
-    # 非空表示主动想法；仍与回复共用唯一任务槽（D34、D76）。
-    initiative: _InitiativeJob | None = None
-    exploration: TimelineRecord | None = None
 
 
 class Heartbeat:
@@ -395,13 +259,25 @@ class Heartbeat:
         self._last_conversation_at: datetime | None = None  # 用户说了、它实际回了才更新（D76）
         self._observer = CognitiveObserver(clock, feedback)
         self._judge = judge
-        self._judge_missing_logged = False  # 没配判断器官的日志只记一次
         self._hormones = hormones
         self._affinity = affinity
         self._empathy = empathy
         self._mood = mood
         self._agenda = agenda
         self._feedback = feedback
+        self._agenda_hooks = AgendaHooks(agenda, timeline, clock, feedback, timezone)
+        self._conversation = ConversationFlow(
+            clock=clock,
+            timeline=timeline,
+            config=config,
+            call=lambda request: self._organs.call(request),
+            timezone=timezone,
+            judge=judge,
+            hormones=hormones,
+            affinity=affinity,
+            empathy=empathy,
+            agenda=agenda,
+        )
         initiative_config = initiative or InitiativeConfig()
         if config.roleplay_mode:
             initiative_config = initiative_config.model_copy(update={"enabled": False})
@@ -743,7 +619,7 @@ class Heartbeat:
         self._collect_finished_thought()
         self._read_body()
         self._check_stress()
-        self._check_agenda()
+        self._agenda_hooks._check_agenda()
         self._maybe_start_thought()
         self._maybe_start_initiative()
         self._maybe_start_exploration()
@@ -888,7 +764,7 @@ class Heartbeat:
             self._last_conversation_at = self._clock.now()
         if delivered and outcome.plan is not None and person_id is not None:
             # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
-            self._apply_agenda(outcome.plan, person_id, reply_record)
+            self._agenda_hooks._apply_agenda(outcome.plan, person_id, reply_record)
             if outcome.plan.interest is not None and thought.replying_to[-1].is_user:
                 interest_changes.apply_interest(
                     self._interests,
@@ -969,126 +845,6 @@ class Heartbeat:
         self._hormones.add(triggers, self._clock.now())
         if self._mood is not None:
             self._mood.add_triggers(triggers, self._clock.now())
-
-    def _apply_agenda(self, plan: Plan, person_id: int, source: TimelineRecord) -> None:
-        """按规划器的建议记下答应的事、结束做完或做不了的约定（D74 第 3、6 条）。
-
-        器官只提建议，代码校验后写入；写不进去只记日志，不影响已经说出口的回复。
-        """
-        agenda = self._agenda
-        if agenda is None:
-            return
-        try:
-            for resolution in plan.resolutions:
-                item = agenda.get(resolution.item_id)
-                if item is None or item.person_id != person_id:
-                    continue  # 只认这个人名下的条目
-                status = (
-                    ItemStatus.DONE
-                    if resolution.result is ResolutionResult.DONE
-                    else ItemStatus.DROPPED
-                )
-                self._finish_item(item, status, resolution.reason)
-            if plan.commit is not None:
-                self._add_item(person_id, plan.commit.what, plan.commit.due_text, source)
-        except sqlite3.Error:
-            logger.exception("日程写不进去，这次的约定没有记下")
-
-    def _add_item(
-        self, person_id: int, what: str, due_text: str | None, source: TimelineRecord
-    ) -> None:
-        agenda = self._agenda
-        assert agenda is not None
-        now = self._clock.now()
-        due = parse_due(due_text, now, self._timezone, agenda.config.max_due_days)
-        feedback_id = self._expect_commitment(source.id)
-        item = agenda.add(
-            person_id, what, due_at=due, source_record_id=source.id, feedback_id=feedback_id
-        )
-        if item is None:
-            logger.warning("这个人名下未完成的约定已满，新的没有记下")
-            return
-        self._timeline.append(
-            event_type=EVENT_AGENDA_ADDED,
-            content=f"记下了答应的事 #{item.id}：{item.content}",
-            actor_type=ActorType.ME,
-            visibility=VisibilityScope.PRIVATE,
-            metadata=_item_metadata(item),
-        )
-
-    def _expect_commitment(self, source_id: int) -> int | None:
-        """记一条承诺的反馈预期，把握取这一类当前的自信（没有数据时用先验，D74 第 6 条）。"""
-        feedback = self._feedback
-        if feedback is None:
-            return None
-        try:
-            confidence = feedback.confidence(COMMITMENT_KEPT).value
-            expected = PRIOR_CONFIDENCE if confidence is None else confidence
-            return feedback.record_expectation(COMMITMENT_KEPT, expected, source_id)
-        except (FeedbackError, sqlite3.Error):
-            logger.exception("承诺的反馈预期没记上")
-            return None
-
-    def _finish_item(self, item: AgendaItem, status: ItemStatus, reason: str) -> None:
-        """结束一条约定，记时间线；有反馈预期的补写结果（取消的不算成败）。"""
-        agenda = self._agenda
-        assert agenda is not None
-        finished = agenda.finish(item.id, status, reason)
-        if finished is None:
-            return
-        self._timeline.append(
-            event_type=EVENT_AGENDA_CLOSED,
-            content=f"约定 #{item.id}「{item.content}」{_STATUS_WORDS[status]}"
-            + (f"：{finished.reason}" if finished.reason else ""),
-            actor_type=ActorType.ME,
-            visibility=VisibilityScope.PRIVATE,
-            metadata=_item_metadata(finished),
-        )
-        if self._feedback is None or item.feedback_id is None or status is ItemStatus.CANCELLED:
-            return
-        outcome = Outcome.SUCCESS if status is ItemStatus.DONE else Outcome.FAILURE
-        try:
-            self._feedback.record_outcome(item.feedback_id, outcome)
-        except (FeedbackError, sqlite3.Error):
-            logger.exception("承诺 #%s 的反馈结果没补上", item.id)
-
-    def _check_agenda(self) -> None:
-        """每拍：到期的约定记一次提醒，过了宽限还没交代的算过期（D74 第 5、6 条）。
-
-        日程读写失败只记日志，不让心跳停下：约定晚一拍处理不要紧。
-        """
-        agenda = self._agenda
-        if agenda is None:
-            return
-        now = self._clock.now()
-        try:
-            for item in agenda.overdue(now):
-                self._finish_item(item, ItemStatus.EXPIRED, "到期后一直没交代")
-            for item in agenda.due_unnoticed(now):
-                agenda.mark_due_noticed(item.id)
-                self._timeline.append(
-                    event_type=EVENT_AGENDA_DUE,
-                    content=f"答应的事 #{item.id} 到期了：{item.content}",
-                    actor_type=ActorType.ME,
-                    visibility=VisibilityScope.PRIVATE,
-                    metadata=_item_metadata(item),
-                )
-        except sqlite3.Error:
-            logger.exception("日程读不了，这一拍不检查到期")
-
-    def _agenda_for_context(self, person_id: int | None) -> str:
-        """这个人名下未完成的约定；没有日程或认不出是谁时不放。"""
-        agenda = self._agenda
-        if agenda is None or person_id is None:
-            return ""
-        try:
-            items = agenda.open_items(person_id)
-        except sqlite3.Error:
-            logger.exception("日程读不了，这次上下文里不放日程")
-            return ""
-        return describe_agenda(
-            items, self._clock.now(), self._timezone, limit=agenda.config.context_items
-        )
 
     def _read_mood(
         self, person_id: int | None, *, viewer_is_user: bool, strict: bool = False
@@ -1217,7 +973,7 @@ class Heartbeat:
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
         job = self._reply_job(batch)
         self._unanswered.take_next()
-        task = asyncio.create_task(self._think(job), name="aureus-thought")
+        task = asyncio.create_task(self._conversation._think(job), name="aureus-thought")
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task=task, replying_to=batch, strategy=job.strategy)
 
@@ -1337,7 +1093,7 @@ class Heartbeat:
         plan: InitiativePlan | None = None
         try:
             response = await self._organs.call(
-                self._organ_request(
+                _organ_request(
                     conversation,
                     organ_id=self._config.plan_organ,
                     task="initiative_plan",
@@ -1354,7 +1110,7 @@ class Heartbeat:
             if not plan.reach_out:
                 return _ThoughtOutcome(initiative_plan=plan, declined=True)
             response = await self._organs.call(
-                self._organ_request(
+                _organ_request(
                     conversation,
                     organ_id=self._config.reply_organ,
                     task="initiative_reply",
@@ -1584,13 +1340,7 @@ class Heartbeat:
         return choose_strategy(tier, self._config, stress_high=self._stress_lowering)
 
     def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
-        """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
-        return self._conversation_job(
-            batch[0].perception,
-            [heard.record for heard in batch],
-            _person_id_of(batch[-1].record),
-            viewer_is_user=batch[-1].is_user,
-        )
+        return _reply_job(batch, self._conversation_job)
 
     def _conversation_job(
         self,
@@ -1603,142 +1353,31 @@ class Heartbeat:
         mood_state: str | None = None,
         agenda_state: str | None = None,
     ) -> _ReplyJob:
-        """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
-        strategy = self._current_strategy()
-        batch_ids = {record.id for record in messages}
-        contact = target.trust is not TrustLevel.VERIFIED_USER
-        contact_account = f"{target.channel}:{target.sender_id}" if contact else None
-        # 回复用户时只带同一可见范围的对话。回复别人时不按范围过滤（D61，用户决定）：
-        # 它的记忆是连续的一份，防套话靠系统上下文里的说明，由规划器和回复器各自判断。
-        recent = self._timeline.query(
-            TimelineQuery(
-                event_type=EVENT_MESSAGE,
-                visibility=None if contact else target.visibility,
-                latest=True,
-                limit=strategy.message_limit,
-            )
+        return self._conversation._conversation_job(
+            target,
+            messages,
+            person_id,
+            viewer_is_user=viewer_is_user,
+            initiative_note=initiative_note,
+            mood_state=mood_state,
+            agenda_state=agenda_state,
+            strategy=self._current_strategy(),
+            identity=self._identity,
+            body=self._body,
+            reading=self._reading,
+            downtime=self._downtime_for_context(),
+            identity_layers=self._identity_changes,
+            live_identity_changes=self._live_identity_changes,
+            interests=self._interests,
+            findings=self._findings,
+            affinity_for_context=lambda person_id: self._affinity_for_context(
+                person_id, is_user=target.trust is TrustLevel.VERIFIED_USER
+            ),
+            read_mood=lambda person_id: self._read_mood(
+                person_id, viewer_is_user=target.trust is TrustLevel.VERIFIED_USER
+            ),
+            agenda_for_context=self._agenda_hooks._agenda_for_context,
         )
-        # 按序号排除这次要回复的消息，而不是只取“比它们早的”：想上一件事的时候来的消息，
-        # 序号比上一次的回复还小，只取更早的就会漏掉它刚说过的话。
-        history = [record for record in recent if record.id not in batch_ids]
-        body_state = self._body_state_for_context(strategy)
-        now = self._clock.now()
-        downtime = self._downtime_for_context()
-        identity_changes = (
-            [layer.describe() for layer in self._identity_changes]
-            if self._config.identity_changes_in_prompt
-            else []
-        )
-        live_changes = (
-            [layer.describe() for layer in self._live_identity_changes]
-            if self._config.identity_changes_in_prompt
-            else []
-        )
-        self._live_identity_changes = []  # 只在刚改完的这一次回复里说
-
-        affinity_state = self._affinity_for_context(person_id, is_user=not contact)
-        if mood_state is None:
-            mood_reading = self._read_mood(person_id, viewer_is_user=not contact)
-            mood_state = mood_reading.summary if mood_reading is not None else ""
-        if agenda_state is None:
-            agenda_state = self._agenda_for_context(person_id)
-        interests_state = interest_changes.interest_context(
-            self._interests,
-            self._findings,
-            is_user=viewer_is_user,
-            visibility=target.visibility,
-            timezone=self._timezone,
-        )
-
-        def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
-            return build_system_context(
-                self._identity,
-                now,
-                downtime,
-                self._timezone,
-                body_state,
-                include_behavior_style=include_behavior_style,
-                contact_account=contact_account,
-                identity_changes=identity_changes,
-                identity_changes_live=live_changes,
-                hormone_state=hormone_state,
-                affinity_state=affinity_state,
-                mood_state=mood_state,
-                agenda_state=agenda_state,
-                interests_state=interests_state,
-                initiative_note=initiative_note if not include_behavior_style else "",
-            )
-
-        def build_contexts(full_text: str, replyer_text: str) -> tuple[str, str]:
-            return (
-                context(include_behavior_style=True, hormone_state=full_text),
-                context(include_behavior_style=False, hormone_state=replyer_text),
-            )
-
-        judge_count = self._judge.context_messages if self._judge is not None else 0
-        judge_history = list(history)[-judge_count:] if judge_count > 0 else []
-        job = _ReplyJob(
-            strategy=strategy,
-            history=history,
-            messages=messages,
-            user_name=self._identity.user.name,
-            full_context=context(include_behavior_style=True),
-            replyer_context=context(include_behavior_style=False),
-            judge_context=build_judge_context(self._identity),
-            judge_history=judge_history,
-            base_strategy=strategy,
-            person_id=person_id,
-            viewer_is_user=not contact,
-            build_contexts=build_contexts,
-            with_interests=bool(interests_state),
-        )
-        return self._apply_hormones(job, ())
-
-    def _apply_hormones(self, job: _ReplyJob, extra: Sequence[HormoneTrigger]) -> _ReplyJob:
-        """把激素的影响放进这次回复：摘要和行为说明进上下文，低落时回复长度降一档（D69 第 3 条）。
-
-        Args:
-            job: 回复要用的材料；每次都从 base_strategy 重新算，重复调用不会叠加。
-            extra: 刚算出、还没正式记下的触发。后台任务不写状态（D41），回复却要带上这次的情绪，
-                所以先拿它们临时算，正式写入在收结果的那一拍。
-        """
-        hormones = self._hormones
-        if hormones is None:
-            return job
-        effects = hormones.effects(
-            self._clock.now(),
-            person_id=job.person_id,
-            viewer_is_user=job.viewer_is_user,
-            extra=extra,
-        )
-        strategy = job.base_strategy
-        if effects.shorten_reply:
-            current = strategy.length_limit or ReplyLength.LONG
-            strategy = replace(strategy, length_limit=current.lowered())
-        full_context, replyer_context = job.build_contexts(
-            effects.context_text(plan_first=strategy.plan_first),
-            effects.context_text(plan_first=False),
-        )
-        return replace(
-            job,
-            strategy=strategy,
-            full_context=full_context,
-            replyer_context=replyer_context,
-            effects=effects,
-        )
-
-    def _body_state_for_context(self, strategy: ReplyStrategy) -> str:
-        """放进系统上下文的身体状态摘要；没有读数或开关关着时是空字符串。
-
-        扮演模式下换成固定的提示词，没有任何真实读数（D65）。
-        """
-        if self._config.roleplay_mode:
-            return ROLEPLAY_NOTE
-        if self._body is None or self._reading is None:
-            return ""
-        if not self._body.config.state_in_prompt_enabled:
-            return ""
-        return describe_body_state(self._reading, self._body.config, strategy.describe())
 
     def _downtime_for_context(self) -> Downtime | None:
         """放进系统上下文的停机情况。睡眠信号关掉后不告诉它睡了多久（04 号文档第 7 节）。"""
@@ -1747,221 +1386,6 @@ class Heartbeat:
         if self._body is not None and not self._body.config.sleep_enabled:
             return None
         return self._downtime
-
-    async def _think(self, job: _ReplyJob) -> _ThoughtOutcome:
-        """在后台调用器官：档位允许时先规划，再回复。
-
-        不写任何状态；除了被取消，任何情况都返回结果而不是抛异常。
-        规划器出任何问题（调用失败、建议看不懂）都不影响回复：改成合并的一次调用，
-        和没有规划器时一样，由回复器自己决定怎么回应（D59）。
-        """
-        attempt = await self._judge_emotion(job)
-        if attempt is not None and attempt.triggers:
-            job = self._apply_hormones(job, attempt.triggers)
-        plan: Plan | None = None
-        forced_reply = False
-        if job.strategy.plan_first:
-            try:
-                plan = await self._plan(job)
-            except CallRejectedError as rejection:
-                # 网关的拒绝（月度上限、失控拦截）对回复器同样成立，不必再试一次。
-                return _ThoughtOutcome(
-                    notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
-                )
-            if plan is not None and not plan.should_reply:
-                if job.effects is None or not job.effects.must_reply:
-                    return _ThoughtOutcome(
-                        plan=plan, declined=True, judge=attempt, effects=job.effects
-                    )
-                # 这场冲突里已经不回过一次：这次必须回，由回复器自己决定怎么回（D69 第 3 条）。
-                plan = None
-                forced_reply = True
-        outcome = await self._reply(job, plan)
-        return replace(outcome, judge=attempt, effects=job.effects, forced_reply=forced_reply)
-
-    async def _judge_emotion(self, job: _ReplyJob) -> _JudgeAttempt | None:
-        """先调判断器官（D68）。不调用时返回 None；调用了就一定返回结果，任何失败都不影响回复。
-
-        为什么都不抛：判断只是参考，它被网关拒绝不代表回复也会被拒（回复算「回应用户」）。
-        """
-        config = self._judge
-        if config is None or not config.enabled or not judge_allowed(job.strategy.effective_tier):
-            return None
-        request = OrganRequest(
-            organ_id=config.organ,
-            prompt=build_judge_prompt(
-                job.judge_history, job.messages, job.user_name, self._timezone
-            ),
-            context={"task": "judge", "in_reply_to": [record.id for record in job.messages]},
-            purpose=CallPurpose.OPTIONAL,
-            system_context=job.judge_context,
-            model_preference=job.strategy.model_preference,
-        )
-        try:
-            async with asyncio.timeout(config.timeout_seconds):
-                response = await self._organs.call(request)
-        except TimeoutError:
-            logger.warning(
-                "判断器官 %s 超过 %s 秒没有返回，跳过判断", config.organ, config.timeout_seconds
-            )
-            return _JudgeAttempt(failure="超时")
-        except CallRejectedError as rejection:
-            return _JudgeAttempt(failure=f"被安全网关拒绝：{rejection.reason}")
-        except OrganCallError as failure:
-            logger.warning("判断器官调用失败，跳过判断：%s", failure)
-            return _JudgeAttempt(failure="调用失败")
-        except ValueError:
-            # 器官没注册：用户没配这个器官，不算出错，只提醒一次（D68 第 7 条）。
-            if not self._judge_missing_logged:
-                self._judge_missing_logged = True
-                logger.warning("没有配判断器官 %s，跳过判断", config.organ)
-            return None
-        except Exception:
-            logger.exception("调用判断器官 %s 时出错，跳过判断", config.organ)
-            return _JudgeAttempt(failure="调用出错")
-        judgment = parse_judgment(response.suggestion)
-        if judgment is None:
-            logger.warning("判断器官的建议看不懂，跳过判断")
-            return _JudgeAttempt(failure="返回的内容看不懂")
-        return _JudgeAttempt(judgment=judgment, triggers=self._triggers_from(judgment, job))
-
-    def _triggers_from(self, judgment: Judgment, job: _ReplyJob) -> tuple[HormoneTrigger, ...]:
-        """判断结果变成激素触发（D69 第 2 条）。只算不写；认不出是谁发的就不触发。"""
-        hormones = self._hormones
-        latest = job.messages[-1]
-        person_id = job.person_id
-        if hormones is None or person_id is None:
-            return ()
-        now = self._clock.now()
-        direct = make_triggers_from_judgment(
-            judgment.toward_me,
-            person_id=person_id,
-            source_record_id=latest.id,
-            source_visibility=latest.visibility,
-            now=now,
-            config=hormones.config,
-            recent_triggers=hormones.triggers,
-        )
-        empathic: list[HormoneTrigger] = []
-        if self._empathy is not None:
-            empathic = make_triggers_from_empathy(
-                judgment.others,
-                person_id=person_id,
-                affinity_of=lambda subject: self._affinity_of(subject, person_id),
-                source_record_id=latest.id,
-                source_visibility=latest.visibility,
-                now=now,
-                config=hormones.config,
-                empathy=self._empathy,
-                # 同一批里先算出的直接触发也算进去，免得同一条消息重复数
-                recent_triggers=[*hormones.triggers, *direct],
-            )
-        return (*direct, *empathic)
-
-    def _affinity_of(self, subject: str, sender_id: int) -> float:
-        """共情对象的好感（D72 第 2 条）。
-
-        发消息的人取他的好感；消息里提到的人或动物没有档案，好感账关着时，都按陌生人默认值。
-        """
-        if self._affinity is None:
-            return _DEFAULT_STRANGER_AFFINITY
-        if subject == SENDER_SUBJECT:
-            return self._affinity.current(sender_id)
-        return self._affinity.config.stranger_affinity
-
-    async def _plan(self, job: _ReplyJob) -> Plan | None:
-        """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""
-        organ_id = self._config.plan_organ
-        request = self._organ_request(
-            job,
-            organ_id=organ_id,
-            task="plan",
-            prompt=build_plan_prompt(
-                job.history,
-                job.messages,
-                job.user_name,
-                self._timezone,
-                with_agenda=self._agenda is not None,
-                with_interests=job.with_interests,
-            ),
-            system_context=job.full_context,
-        )
-        try:
-            response = await self._organs.call(request)
-        except CallRejectedError:
-            raise
-        except OrganCallError as failure:
-            logger.warning("规划器调用失败，合并成一次调用照常回复：%s", failure)
-            return None
-        except Exception:
-            logger.exception("调用规划器 %s 时出错，合并成一次调用照常回复", organ_id)
-            return None
-        plan = parse_plan(response.suggestion)
-        if plan is None:
-            logger.warning("规划器的建议看不懂，合并成一次调用照常回复")
-        return plan
-
-    async def _reply(self, job: _ReplyJob, plan: Plan | None) -> _ThoughtOutcome:
-        """调回复器。有规划就按规划的意图和长度写；没有就由它自己决定（合并的一次调用）。"""
-        strategy = job.strategy
-        if plan is None:
-            system_context, intent, length = job.full_context, "", strategy.length_limit
-        else:
-            system_context, intent = job.replyer_context, plan.intent
-            length = (
-                plan.length.capped_at(strategy.length_limit)
-                if plan.length is not None
-                else strategy.length_limit
-            )
-        request = self._organ_request(
-            job,
-            organ_id=self._config.reply_organ,
-            task="reply",
-            prompt=build_reply_prompt(
-                job.history,
-                job.messages,
-                job.user_name,
-                self._timezone,
-                intent=intent,
-                length=length,
-            ),
-            system_context=system_context,
-        )
-        try:
-            response = await self._organs.call(request)
-        except CallRejectedError as rejection:
-            return _ThoughtOutcome(notice=f"没能调用模型，这次没有回复：{rejection.reason}")
-        except OrganCallError as failure:
-            return _ThoughtOutcome(notice=f"模型调用失败，这次没有回复。{failure}")
-        except Exception as error:
-            # 为什么捕获所有异常：后台任务里的异常没人接住，用户只会看到它一直不说话。
-            logger.exception("调用器官 %s 时出错", request.organ_id)
-            return _ThoughtOutcome(
-                notice=f"调用模型时出错（{type(error).__name__}），这次没有回复，详情见日志。"
-            )
-        if not response.suggestion.strip():
-            return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
-        return _ThoughtOutcome(response=response, plan=plan)
-
-    def _organ_request(
-        self,
-        job: _ReplyJob,
-        *,
-        organ_id: str,
-        task: str,
-        prompt: str,
-        system_context: str,
-        purpose: CallPurpose = CallPurpose.USER_REPLY,
-    ) -> OrganRequest:
-        """规划和回复共用的请求格式；主动联系显式传 OPTIONAL（D76）。"""
-        return OrganRequest(
-            organ_id=organ_id,
-            prompt=prompt,
-            context={"task": task, "in_reply_to": [record.id for record in job.messages]},
-            purpose=purpose,
-            system_context=system_context,
-            model_preference=job.strategy.model_preference,
-        )
 
     def _on_thought_done(self, _task: asyncio.Task[Any]) -> None:
         # 想法有结果了：立即跳一拍去处理，不等下一个定时拍。
