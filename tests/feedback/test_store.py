@@ -201,16 +201,6 @@ def test_few_samples_are_pulled_toward_the_prior(tmp_path: Path) -> None:
     store.close()
 
 
-def test_deferred_expectation_keeps_the_durable_clock_snapshot(tmp_path: Path) -> None:
-    store, clock = make_store(tmp_path)
-    clock.advance(timedelta(hours=7))
-    record_id = store.record_expectation(PROACTIVE_CONTACT, 0.8, source_id=42, expected_at=NOW)
-    record = store.get(record_id)
-    assert record is not None and record.expected_at == NOW and record.expected == 0.8
-    assert record.outcome is Outcome.UNKNOWN and record.source_id == 42
-    store.close()
-
-
 def test_find_by_source_keeps_category_and_original_expectation(store: FeedbackStore) -> None:
     assert store.find_by_source(PROACTIVE_CONTACT, 42) is None
     first_id = store.record_expectation(PROACTIVE_CONTACT, 0.8, source_id=42)

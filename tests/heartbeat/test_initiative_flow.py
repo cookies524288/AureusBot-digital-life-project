@@ -232,7 +232,7 @@ async def test_skip_counts_as_consideration_and_waits_three_hours(env: Env) -> N
     await consider(env, rig)
     [record] = rig.records(EVENT_INITIATIVE_CONSIDERED)
     assert record.metadata["decided"] == "skip" and record.metadata["sent"] is False
-    assert rig.heartbeat._initiative_state.contacts_today == 0
+    assert rig.heartbeat._initiative.state.contacts_today == 0
     assert len(rig.replies()) == 1
     env.clock.advance(timedelta(hours=3) - timedelta(seconds=1))
     rig.heartbeat.beat()
@@ -288,14 +288,14 @@ async def test_backoff_doubles_then_gives_up_until_user_speaks(env: Env) -> None
     assert first is not None and first.outcome is Outcome.FAILURE
     env.clock.advance(timedelta(hours=6))
     rig.heartbeat.beat()
-    assert rig.heartbeat._initiative_state.unanswered_streak == 2
+    assert rig.heartbeat._initiative.state.unanswered_streak == 2
     assert not rig.heartbeat.is_thinking
     await consider(env, rig, 6)
     considered = rig.records(EVENT_INITIATIVE_CONSIDERED)
     assert considered[2].timestamp - considered[1].timestamp == timedelta(hours=12)
     env.clock.advance(timedelta(hours=6))
     rig.heartbeat.beat()
-    assert rig.heartbeat._initiative_state.unanswered_streak == 3
+    assert rig.heartbeat._initiative.state.unanswered_streak == 3
     env.clock.advance(timedelta(days=100))
     rig.heartbeat.beat()
     assert not rig.heartbeat.is_thinking
@@ -304,7 +304,7 @@ async def test_backoff_doubles_then_gives_up_until_user_speaks(env: Env) -> None
         False
     ] * 3
     await rig.exchange("我回来了")
-    assert rig.heartbeat._initiative_state.unanswered_streak == 0
+    assert rig.heartbeat._initiative.state.unanswered_streak == 0
     await consider(env, rig, 3)
     assert len(rig.records(EVENT_INITIATIVE_CONSIDERED)) == 4
 
@@ -319,12 +319,11 @@ async def test_user_answer_records_success_and_resets_waiting(env: Env) -> None:
     [result] = rig.records(EVENT_INITIATIVE_RESULT)
     assert result.metadata == {
         "answered": True,
-        "considered_id": considered.id,
         "message_id": considered.metadata["message_id"],
     }
     feedback = env.feedback.get(considered.metadata["feedback_id"])
     assert feedback is not None and feedback.outcome is Outcome.SUCCESS
-    state = rig.heartbeat._initiative_state
+    state = rig.heartbeat._initiative.state
     assert state.unanswered_streak == 0 and state.pending_since is None
     assert rig.heartbeat._last_conversation_at == env.clock.now()
 
@@ -340,13 +339,12 @@ async def test_answer_at_the_window_boundary_is_failure_but_resets_backoff(env: 
     [result] = rig.records(EVENT_INITIATIVE_RESULT)
     assert result.metadata == {
         "answered": False,
-        "considered_id": considered.id,
         "message_id": considered.metadata["message_id"],
     }
     feedback = env.feedback.get(considered.metadata["feedback_id"])
     assert feedback is not None and feedback.outcome is Outcome.FAILURE
-    assert rig.heartbeat._initiative_state.unanswered_streak == 0
-    assert rig.heartbeat._initiative_state.pending_since is None
+    assert rig.heartbeat._initiative.state.unanswered_streak == 0
+    assert rig.heartbeat._initiative.state.pending_since is None
     assert rig.heartbeat._last_conversation_at == NOW
 
 
@@ -354,12 +352,12 @@ async def test_contact_messages_do_not_settle_the_users_pending_contact(env: Env
     rig = env.build()
     await rig.exchange("你好")
     await consider(env, rig)
-    pending = rig.heartbeat._initiative_state.pending_since
+    pending = rig.heartbeat._initiative.state.pending_since
     env.clock.advance(timedelta(hours=1))
     submit(rig, trust=TrustLevel.VERIFIED_CONTACT)
     rig.heartbeat.beat()
     await finish(rig)
-    assert rig.heartbeat._initiative_state.pending_since == pending
+    assert rig.heartbeat._initiative.state.pending_since == pending
     assert not rig.records(EVENT_INITIATIVE_RESULT)
     assert rig.heartbeat._last_conversation_at == NOW
 
@@ -477,18 +475,17 @@ async def test_restart_restores_pending_count_and_settles_timeout_without_channe
     await rig.heartbeat.shut_down()
     env.clock.advance(timedelta(hours=7))
     restored = env.build()
-    state = restored.heartbeat._initiative_state
+    state = restored.heartbeat._initiative.state
     assert state.contacts_today == 1 and state.pending_since == considered.timestamp
     assert restored.heartbeat._last_conversation_at == NOW
     assert restored.heartbeat._last_user_contact is None
     restored.heartbeat.beat()
-    state = restored.heartbeat._initiative_state
+    state = restored.heartbeat._initiative.state
     assert state.unanswered_streak == 1 and state.pending_since is None
     assert not restored.heartbeat.is_thinking
     [result] = restored.records(EVENT_INITIATIVE_RESULT)
     assert result.metadata == {
         "answered": False,
-        "considered_id": considered.id,
         "message_id": considered.metadata["message_id"],
     }
     feedback = env.feedback.get(considered.metadata["feedback_id"])
@@ -503,7 +500,7 @@ async def test_restart_keeps_the_daily_limit_even_after_user_returns(env: Env) -
     await consider(env, rig, 1)
     await rig.heartbeat.shut_down()
     restored = env.build(policy=policy, body=body)
-    assert restored.heartbeat._initiative_state.contacts_today == 1
+    assert restored.heartbeat._initiative.state.contacts_today == 1
     await restored.exchange("我在")
     env.clock.advance(timedelta(hours=4))
     restored.heartbeat.beat()
@@ -521,11 +518,11 @@ async def test_restart_restores_consecutive_failures_and_latest_consideration(en
     rig.heartbeat.beat()
     await rig.heartbeat.shut_down()
     restored = env.build(policy=policy)
-    state = restored.heartbeat._initiative_state
+    state = restored.heartbeat._initiative.state
     assert state.unanswered_streak == 2 and state.pending_since is None
     assert state.last_considered_at == restored.records(EVENT_INITIATIVE_CONSIDERED)[-1].timestamp
     await restored.exchange("回来了")
-    assert restored.heartbeat._initiative_state.unanswered_streak == 0
+    assert restored.heartbeat._initiative.state.unanswered_streak == 0
 
 
 async def test_latest_user_channel_is_used(env: Env) -> None:
@@ -542,7 +539,7 @@ async def test_latest_user_channel_is_used(env: Env) -> None:
 
 
 @pytest.mark.parametrize("failure", ["disconnected", "sink", "halt"])
-async def test_send_failures_do_not_count_as_contacts(env: Env, failure: str) -> None:
+async def test_send_failure_counts_only_if_a_message_was_recorded(env: Env, failure: str) -> None:
     rig = env.build()
     await rig.exchange("你好")
     rig.sent.clear()
@@ -564,8 +561,8 @@ async def test_send_failures_do_not_count_as_contacts(env: Env, failure: str) ->
     assert record.metadata["sent"] is False and record.metadata["decided"] == "failed"
     if failure == "disconnected":
         assert record.metadata["failure"] == "通道不在了"
-    assert rig.heartbeat._initiative_state.contacts_today == 0
-    assert rig.heartbeat._initiative_state.pending_since is None
+    assert rig.heartbeat._initiative.state.contacts_today == int(failure == "sink")
+    assert (rig.heartbeat._initiative.state.pending_since is not None) is (failure == "sink")
     assert not rig.sent and rig.heartbeat._last_conversation_at == NOW
 
 
@@ -616,7 +613,7 @@ async def test_agenda_read_failure_does_not_stop_the_heartbeat(
 async def test_unavailable_state_blocks_initiative_for_this_beat(
     env: Env, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
-    rig = env.build()
+    rig = env.build(mood=Mood(MoodConfig()) if source == "feedback" else None)
     await rig.exchange("你好")
     env.organs.requests.clear()
 
@@ -627,7 +624,7 @@ async def test_unavailable_state_blocks_initiative_for_this_beat(
         if source == "body":
             patch.setattr(rig.heartbeat._body, "read", broken)
         elif source == "feedback":
-            patch.setattr(env.feedback, "confidence", broken)
+            patch.setattr(env.feedback, "outcomes_since", broken)
         else:
             patch.setattr(rig.timeline, "query", broken)
         env.clock.advance(timedelta(hours=20))
@@ -638,95 +635,3 @@ async def test_unavailable_state_blocks_initiative_for_this_beat(
     assert rig.heartbeat.is_thinking
     await finish(rig)
     assert rig.records(EVENT_INITIATIVE_CONSIDERED)[-1].metadata["sent"] is True
-
-
-async def test_message_record_failure_prevents_delivery(
-    env: Env, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rig = env.build()
-    await rig.exchange("你好")
-    rig.sent.clear()
-    env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
-    await rig.heartbeat.wait_for_thought()
-    original = rig.timeline.append
-
-    def broken(**kwargs):
-        if kwargs.get("event_type") == "message":
-            raise sqlite3.OperationalError("测试故障")
-        return original(**kwargs)
-
-    monkeypatch.setattr(rig.timeline, "append", broken)
-    rig.heartbeat.beat()
-    [record] = rig.records(EVENT_INITIATIVE_CONSIDERED)
-    assert record.metadata["decided"] == "failed" and not record.metadata["sent"]
-    assert not rig.sent and rig.heartbeat._initiative_state.contacts_today == 0
-    assert rig.heartbeat._initiative_state.pending_since is None
-
-
-async def test_timeout_write_failure_is_retried_without_duplicate_feedback(
-    env: Env, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rig = env.build(policy=InitiativeConfig(enabled=True, max_per_day=1))
-    await rig.exchange("你好")
-    await consider(env, rig)
-    original = rig.timeline.append
-
-    def broken(**kwargs):
-        if kwargs.get("event_type") == EVENT_INITIATIVE_RESULT:
-            raise sqlite3.OperationalError("测试故障")
-        return original(**kwargs)
-
-    monkeypatch.setattr(rig.timeline, "append", broken)
-    env.clock.advance(timedelta(hours=6))
-    rig.heartbeat.beat()
-    assert rig.heartbeat._initiative_state.pending_since is not None
-    assert not rig.heartbeat.is_thinking
-    monkeypatch.setattr(rig.timeline, "append", original)
-    rig.heartbeat.beat()
-    [result] = rig.records(EVENT_INITIATIVE_RESULT)
-    assert result.metadata["answered"] is False
-    assert rig.heartbeat._initiative_state.unanswered_streak == 1
-
-
-@pytest.mark.parametrize("failure", ["feedback", "timeline"])
-async def test_answer_write_failure_keeps_the_original_result_for_retry(
-    env: Env, monkeypatch: pytest.MonkeyPatch, failure: str
-) -> None:
-    rig = env.build()
-    await rig.exchange("你好")
-    await consider(env, rig)
-    [considered] = rig.records(EVENT_INITIATIVE_CONSIDERED)
-    original_append = rig.timeline.append
-    original_outcome = env.feedback.record_outcome
-
-    def broken_append(**kwargs):
-        if kwargs.get("event_type") == EVENT_INITIATIVE_RESULT:
-            raise sqlite3.OperationalError("测试故障")
-        return original_append(**kwargs)
-
-    def broken_outcome(*args, **kwargs):
-        raise sqlite3.OperationalError("测试故障")
-
-    if failure == "feedback":
-        monkeypatch.setattr(env.feedback, "record_outcome", broken_outcome)
-    else:
-        monkeypatch.setattr(rig.timeline, "append", broken_append)
-    env.clock.advance(timedelta(hours=1))
-    await rig.exchange("我在")
-    assert not rig.records(EVENT_INITIATIVE_RESULT)
-    assert rig.heartbeat._initiative_state.unanswered_streak == 0
-    env.clock.advance(timedelta(hours=6))
-    monkeypatch.setattr(rig.timeline, "append", original_append)
-    monkeypatch.setattr(env.feedback, "record_outcome", original_outcome)
-    rig.heartbeat.beat()
-    [result] = rig.records(EVENT_INITIATIVE_RESULT)
-    assert result.metadata == {
-        "answered": True,
-        "considered_id": considered.id,
-        "message_id": considered.metadata["message_id"],
-    }
-    feedback = env.feedback.get(considered.metadata["feedback_id"])
-    assert feedback is not None and feedback.outcome is Outcome.SUCCESS
-    assert rig.heartbeat._initiative_state.pending_since is None
-    assert rig.heartbeat._initiative_state.unanswered_streak == 0

@@ -106,6 +106,13 @@ def test_append_with_metadata(database: TimelineDatabase):
     assert record.metadata == metadata
 
 
+def test_get_record_by_id(database: TimelineDatabase) -> None:
+    first = database.append("message", "第一条", ActorType.USER, metadata={"channel": "fake"})
+    database.append("message", "第二条", ActorType.ME)
+    assert database.get(first.id) == first
+    assert database.get(first.id + 10) is None
+
+
 def test_query_all_records(database: TimelineDatabase):
     """测试查询所有记录。"""
     database.append("message", "First", ActorType.ME)

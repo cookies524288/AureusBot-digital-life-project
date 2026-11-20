@@ -543,10 +543,8 @@ async def test_shutdown_waits_for_a_thought_that_finishes_in_time(harness: Harne
     await shutting
 
     assert harness.sent[-1].content == "晚安。"
-    *_, reply, receipt, shut = harness.all_records()
+    *_, reply, shut = harness.all_records()
     assert (reply.event_type, reply.content) == (EVENT_MESSAGE, "晚安。")
-    assert receipt.event_type == "message_delivery"
-    assert receipt.metadata == {"message_id": reply.id, "delivered": True}
     assert shut.event_type == EVENT_SHUT_DOWN
 
 

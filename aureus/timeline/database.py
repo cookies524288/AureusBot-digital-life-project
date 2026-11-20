@@ -274,6 +274,24 @@ class TimelineDatabase:
             for row in rows
         ]
 
+    def get(self, record_id: int) -> TimelineRecord | None:
+        """按序号取一条记录；没有则返回 None，数据库未打开时抛出 RuntimeError。"""
+        if self._conn is None:
+            raise RuntimeError("Database is not open")
+        row = self._conn.execute("SELECT * FROM timeline WHERE id = ?", (record_id,)).fetchone()
+        if row is None:
+            return None
+        return TimelineRecord(
+            id=row["id"],
+            timestamp=datetime.fromisoformat(row["timestamp"]),
+            actor_type=ActorType(row["actor_type"]),
+            actor_id=row["actor_id"],
+            event_type=row["event_type"],
+            content=row["content"],
+            visibility=VisibilityScope(row["visibility"]),
+            metadata=_decode_metadata(row["metadata"]),
+        )
+
     def get_latest_id(self) -> int:
         """获取当前最大的记录 ID。
 

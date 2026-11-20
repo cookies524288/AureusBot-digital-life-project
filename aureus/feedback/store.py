@@ -210,8 +210,6 @@ class FeedbackStore:
         category: str,
         expected: float | None,
         source_id: int | None = None,
-        *,
-        expected_at: datetime | None = None,
     ) -> int:
         """行动前记下预期，返回这条记录的编号。
 
@@ -219,7 +217,6 @@ class FeedbackStore:
             category: 类别，必须是代码认识的。
             expected: 预期把握 [0, 1]；None 表示没写预期就行动，记为冲动。
             source_id: 来源时间线记录的序号，没有就不填。
-            expected_at: 补记时使用行动前已落盘的时钟快照；不给则取当前时钟。
 
         Raises:
             FeedbackError: 类别不认识，或预期不在 [0, 1] 之间。
@@ -235,7 +232,7 @@ class FeedbackStore:
                 category,
                 expected,
                 Outcome.UNKNOWN.value,
-                _format_timestamp(self._clock.now() if expected_at is None else expected_at),
+                _format_timestamp(self._clock.now()),
                 source_id,
             ),
         )
@@ -273,7 +270,7 @@ class FeedbackStore:
         return None if row is None else _record_of(row)
 
     def find_by_source(self, category: str, source_id: int) -> FeedbackRecord | None:
-        """按类别和来源找回最早的预期，供写入结果不明时重试，避免重复记一次行动。"""
+        """按类别和来源取已有的预期，供主动联系结算结果；没有则不补建（D78）。"""
         check_category(category)
         row = (
             self._require_open()
