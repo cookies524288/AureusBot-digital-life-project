@@ -278,6 +278,7 @@ class Heartbeat:
         self._live_identity_changes: list[IdentityLayer] = []  # 运行中刚改的，只说一次
         self._reading: BodyReading | None = None  # 最近一次读到的身体信号
         self._stress_alarmed = False  # 这一轮压力偏高的自检通知发过了
+        self._stress_lowering = False  # 压力偏高，回复做法降一档中（D70），回落有滞后
         self._last_user_contact: Perception | None = None  # 自检通知发往的地方
         self._observer = CognitiveObserver(clock, feedback)
         self._judge = judge
@@ -905,6 +906,11 @@ class Heartbeat:
         rearm_below = self._body.config.stress_high_at * _STRESS_REARM_FRACTION
         if not stress.enabled or stress.level < rearm_below:
             self._stress_alarmed = False
+            self._stress_lowering = False
+        elif stress.high and self._body.config.stress_lowers_tier:
+            self._stress_lowering = True
+        if not self._body.config.stress_lowers_tier:
+            self._stress_lowering = False
         if not stress.high or self._stress_alarmed:
             return
         self._stress_alarmed = True
@@ -1001,9 +1007,12 @@ class Heartbeat:
     # ---------- 想法（后台任务） ----------
 
     def _current_strategy(self) -> ReplyStrategy:
-        """按此刻的精力档位选这次回复的做法；没有身体读数时按正常档（D59）。"""
+        """按此刻的精力档位选这次回复的做法；没有身体读数时按正常档（D59）。
+
+        压力偏高时降一档（D70）。
+        """
         tier = self._reading.energy.tier if self._reading is not None else None
-        return choose_strategy(tier, self._config)
+        return choose_strategy(tier, self._config, stress_high=self._stress_lowering)
 
     def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
         """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
@@ -1169,7 +1178,7 @@ class Heartbeat:
         为什么都不抛：判断只是参考，它被网关拒绝不代表回复也会被拒（回复算「回应用户」）。
         """
         config = self._judge
-        if config is None or not config.enabled or not judge_allowed(job.strategy.tier):
+        if config is None or not config.enabled or not judge_allowed(job.strategy.effective_tier):
             return None
         request = OrganRequest(
             organ_id=config.organ,

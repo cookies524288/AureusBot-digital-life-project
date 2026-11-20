@@ -132,6 +132,9 @@ class BodyConfig(BaseModel):
     stress_backlog_full: int = Field(default=5, ge=1)
     # 压力达到这个比例算「偏高」，会发一次自检通知。
     stress_high_at: float = Field(default=0.6, gt=0, le=1)
+    # 压力偏高时回复做法比精力档位低一档（D70）；回落到偏高线一半以下才恢复。
+    # 关掉后压力只自检、不降档。
+    stress_lowers_tier: bool = True
 
     # 睡眠（D57）：夜间时段，当地时间；开始大于结束表示跨过午夜（比如 23 到 7）。
     sleep_enabled: bool = True

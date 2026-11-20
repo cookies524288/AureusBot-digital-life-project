@@ -275,6 +275,60 @@ async def test_self_check_is_recorded_even_with_nobody_to_tell(
     assert rig.notices() == []
 
 
+# ---------- 压力：回复做法降一档（D70） ----------
+
+
+def last_strategy(rig: Rig) -> dict[str, Any]:
+    replies = [r for r in rig.records(EVENT_MESSAGE) if r.actor_type.value == "me"]
+    return replies[-1].metadata["strategy"]
+
+
+async def test_high_stress_lowers_the_reply_approach_by_one_tier(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    rig = make_rig(made, tmp_path)
+    rig.record_calls(12, succeeded=False)  # 压力 60%，偏高
+    rig.say("你好")
+    rig.heartbeat.beat()
+    await rig.settle()
+
+    strategy = last_strategy(rig)
+    assert strategy["energy_tier"] == "不限"  # 精力读数没变，不会让人以为钱不够
+    assert strategy["stress_lowered"] is True
+    assert strategy["model_preference"] == "便宜一档"  # 按节省档做
+    assert "压力偏高" in rig.organs.requests[-1].system_context
+
+
+async def test_lowered_tier_recovers_only_after_stress_eases_below_half(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    rig = make_rig(made, tmp_path)
+    rig.record_calls(12, succeeded=False)
+    rig.heartbeat.beat()
+    rig.record_calls(5)  # 最近 20 次里还有 7 次失败：35%，低于偏高线但高于一半（30%）
+    rig.say("在吗")
+    rig.heartbeat.beat()
+    await rig.settle()
+    assert last_strategy(rig)["stress_lowered"] is True
+
+    rig.record_calls(20)  # 全成功，压力 0
+    rig.say("还在吗")
+    rig.heartbeat.beat()
+    await rig.settle()
+    assert last_strategy(rig)["stress_lowered"] is False
+
+
+async def test_stress_lowering_can_be_switched_off(made: list[Rig], tmp_path: Path) -> None:
+    rig = make_rig(made, tmp_path, stress_lowers_tier=False)
+    rig.record_calls(12, succeeded=False)
+    rig.say("你好")
+    rig.heartbeat.beat()
+    await rig.settle()
+
+    assert last_strategy(rig)["stress_lowered"] is False
+    assert len(rig.records(EVENT_SELF_CHECK)) == 1  # 自检照常
+
+
 # ---------- 睡眠：夜里放慢、停机时长 ----------
 
 

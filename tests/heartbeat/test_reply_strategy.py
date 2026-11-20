@@ -87,6 +87,7 @@ def test_metadata_is_plain_json() -> None:
         "model_preference": "便宜一档",
         "message_limit": 10,
         "length_limit": "中",
+        "stress_lowered": False,
     }
     json.dumps(metadata, ensure_ascii=False)
     assert choose_strategy(None, HeartbeatConfig()).to_metadata()["energy_tier"] is None
@@ -116,3 +117,43 @@ def test_every_tier_has_an_explicit_judge_decision() -> None:
         EnergyTier.NORMAL,
         EnergyTier.SAVING,
     }
+
+
+@pytest.mark.parametrize(
+    ("tier", "effective"),
+    [
+        (None, EnergyTier.SAVING),
+        (EnergyTier.UNLIMITED, EnergyTier.SAVING),
+        (EnergyTier.NORMAL, EnergyTier.SAVING),
+        (EnergyTier.SAVING, EnergyTier.LOW),
+        (EnergyTier.LOW, EnergyTier.LOW),
+        (EnergyTier.OVERDRAFT, EnergyTier.OVERDRAFT),
+    ],
+)
+def test_stress_lowers_by_one_tier_but_never_into_overdraft(
+    tier: EnergyTier | None, effective: EnergyTier
+) -> None:
+    config = HeartbeatConfig()
+    stressed = choose_strategy(tier, config, stress_high=True)
+    expected = choose_strategy(effective, config)
+    assert stressed.tier is tier  # 记的仍是精力档位本身
+    assert stressed.effective_tier is effective
+    assert stressed.plan_first == expected.plan_first
+    assert stressed.model_preference == expected.model_preference
+    assert stressed.length_limit == expected.length_limit
+    assert stressed.stress_lowered == (effective is not tier)
+
+
+def test_stress_lowering_is_explained_and_recorded() -> None:
+    stressed = choose_strategy(EnergyTier.NORMAL, HeartbeatConfig(), stress_high=True)
+    assert "压力偏高" in stressed.describe()
+    assert stressed.to_metadata()["stress_lowered"] is True
+    assert (
+        choose_strategy(EnergyTier.NORMAL, HeartbeatConfig()).to_metadata()["stress_lowered"]
+        is False
+    )
+
+
+def test_judge_follows_the_effective_tier() -> None:
+    stressed = choose_strategy(EnergyTier.SAVING, HeartbeatConfig(), stress_high=True)
+    assert not judge_allowed(stressed.effective_tier)  # 降到低电量就不判断

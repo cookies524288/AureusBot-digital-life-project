@@ -7,7 +7,7 @@
 这里只做选择，不读写任何状态。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from aureus.body import EnergyTier
 from aureus.common import HeartbeatConfig
@@ -39,6 +39,13 @@ class ReplyStrategy:
     message_limit: int
     # 回复最长多长；None 表示不限，由规划器或模型自己定。
     length_limit: ReplyLength | None
+    # 因为压力偏高，做法比精力档位低了一档（D70）；tier 仍是精力档位本身。
+    stress_lowered: bool = False
+
+    @property
+    def effective_tier(self) -> EnergyTier | None:
+        """实际按哪一档做：压力降档时比精力档位低一档（D70），判断器官按它决定调不调。"""
+        return lowered_tier(self.tier) if self.stress_lowered else self.tier
 
     def describe(self) -> str:
         """一句话说明这次怎么回，放进系统上下文，让它被问起时能如实说。"""
@@ -52,6 +59,8 @@ class ReplyStrategy:
         ]
         if self.length_limit is not None:
             parts.append(f"回复控制在{self.length_limit.describe()}")
+        if self.stress_lowered:
+            parts.append("因为压力偏高，比精力档位低了一档（不是钱不够）")
         return "，".join(parts)
 
     def _model_choice(self) -> str:
@@ -69,20 +78,40 @@ class ReplyStrategy:
             "model_preference": self.model_preference.value,
             "message_limit": self.message_limit,
             "length_limit": self.length_limit.value if self.length_limit is not None else None,
+            "stress_lowered": self.stress_lowered,
         }
 
 
-def choose_strategy(tier: EnergyTier | None, config: HeartbeatConfig) -> ReplyStrategy:
+def lowered_tier(tier: EnergyTier | None) -> EnergyTier | None:
+    """压力偏高时的有效档位：降一档，最低到低电量（D70）。
+
+    透支保护只能由预算触发，所以低电量不再往下降；没有读数（None）按正常档，降成节省。
+    """
+    if tier is None or tier in (EnergyTier.NORMAL, EnergyTier.UNLIMITED):
+        return EnergyTier.SAVING
+    if tier is EnergyTier.SAVING:
+        return EnergyTier.LOW
+    return tier
+
+
+def choose_strategy(
+    tier: EnergyTier | None, config: HeartbeatConfig, *, stress_high: bool = False
+) -> ReplyStrategy:
     """按精力档位选这次回复的做法。
 
     Args:
         tier: 此刻的精力档位；None（没有身体、还没读到）按正常档处理。
         config: 心跳配置：规划器开关和各档带多少条对话。各档的条数不会超过
             recent_message_limit。
+        stress_high: 压力偏高且要降档（D70）。降档后 tier 仍记精力档位本身，另标 stress_lowered。
 
     Returns:
         这次回复的做法。
     """
+    if stress_high:
+        effective = lowered_tier(tier)
+        lowered = replace(choose_strategy(effective, config), tier=tier)
+        return replace(lowered, stress_lowered=effective != tier)
     full = config.recent_message_limit
     if tier is None or tier in (EnergyTier.NORMAL, EnergyTier.UNLIMITED):
         return ReplyStrategy(
