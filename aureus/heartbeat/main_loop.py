@@ -21,6 +21,8 @@ from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, Protocol
 
+from aureus.actions.search import SearchProvider
+from aureus.actions.web import WebReader
 from aureus.agenda import AgendaItem, AgendaStore, ItemStatus, describe_agenda, parse_due
 from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
@@ -30,6 +32,7 @@ from aureus.common import (
     BudgetCalendar,
     Clock,
     EmpathyConfig,
+    ExplorationConfig,
     HeartbeatConfig,
     InitiativeConfig,
     JudgeConfig,
@@ -37,6 +40,7 @@ from aureus.common import (
 )
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import COMMITMENT_KEPT, PRIOR_CONFIDENCE, FeedbackError, FeedbackStore, Outcome
+from aureus.heartbeat import exploration_runner
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
 from aureus.heartbeat.context import (
     build_initiative_plan_prompt,
@@ -65,7 +69,6 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
-from aureus.heartbeat.exploration_runner import ExplorationTracker
 from aureus.heartbeat.initiative import decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, TowardMeKind, parse_judgment
@@ -284,11 +287,12 @@ class _InitiativeJob:
 class _Thought:
     """进行中的想法：后台任务，和它要回复的消息、这次的做法。"""
 
-    task: asyncio.Task[_ThoughtOutcome]
+    task: asyncio.Task[_ThoughtOutcome] | asyncio.Task[exploration_runner.ExplorationOutcome]
     replying_to: Sequence[_Heard]
     strategy: ReplyStrategy
     # 非空表示主动想法；仍与回复共用唯一任务槽（D34、D76）。
     initiative: _InitiativeJob | None = None
+    exploration: TimelineRecord | None = None
 
 
 class Heartbeat:
@@ -323,6 +327,10 @@ class Heartbeat:
         calendar: BudgetCalendar | None = None,
         interests: InterestStore | None = None,
         findings: FindingStore | None = None,
+        exploration: ExplorationConfig | None = None,
+        search: SearchProvider | None = None,
+        reader: WebReader | None = None,
+        has_exploration_organ: bool = True,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -357,6 +365,10 @@ class Heartbeat:
             calendar: 每日次数的分界，与预算共用日历；不给时按 timezone 创建。
             interests: 兴趣存储，开关开启时允许用户私聊提出修改（D79）。
             findings: 私密收获存储（D79）。
+            exploration: 探索配置（D79）；不给时关闭。
+            search: 搜索服务；不给时不探索。
+            reader: 只读网页工具；不给时按探索配置构造。
+            has_exploration_organ: 总结器官是否已注册；运行时传入真实登记结果。
         """
         self._clock = clock
         self._timeline = timeline
@@ -398,11 +410,15 @@ class Heartbeat:
             initiative_config, timeline, feedback, calendar or BudgetCalendar(timezone)
         )
         self._sinks: dict[str, MessageSink] = {}
-        self._exploration = ExplorationTracker(
+        self._exploration = exploration_runner.ExplorationTracker(
             timeline,
             calendar or BudgetCalendar(timezone),
             None if config.roleplay_mode else interests,
             findings,
+            exploration,
+            search,
+            reader,
+            has_exploration_organ,
         )
         self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
@@ -716,6 +732,7 @@ class Heartbeat:
         if self._phase is not _Phase.RUNNING:
             raise RuntimeError("心跳没有在运行，不能跳")
         self._initiative.begin_beat(self._clock.now())
+        self._exploration.begin_beat(self._clock.now())
         self._watch_emergency_stop()
         # D76：先收下已到的来信，不能把发送前排队的消息算作发送后的回应。
         self._take_in_perceptions()
@@ -725,6 +742,7 @@ class Heartbeat:
         self._check_agenda()
         self._maybe_start_thought()
         self._maybe_start_initiative()
+        self._maybe_start_exploration()
         self._broadcast_cognitive_state()
         self._record_body_sample()
 
@@ -806,6 +824,10 @@ class Heartbeat:
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
         outcome = thought.task.result()
+        if isinstance(outcome, exploration_runner.ExplorationOutcome):
+            if thought.exploration is not None:
+                self._exploration.finish(thought.exploration, outcome)
+            return
         if thought.initiative is not None:
             self._collect_initiative(thought, outcome)
             return
@@ -864,9 +886,15 @@ class Heartbeat:
         if delivered and outcome.plan is not None and person_id is not None:
             # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
             self._apply_agenda(outcome.plan, person_id, reply_record)
-            self._exploration.apply_interest(
-                outcome.plan.interest, thought.replying_to[-1].record, self._clock.now()
-            )
+            if outcome.plan.interest is not None:
+                person = self._identify(thought.replying_to[-1].perception)
+                if person is not None and person.is_user:
+                    exploration_runner.apply_interest(
+                        self._exploration,
+                        outcome.plan.interest,
+                        thought.replying_to[-1].record,
+                        self._clock.now(),
+                    )
 
     def _deliver_reply(self, target: Perception, text: str) -> bool:
         """把回复拆成几条短消息发出（D60）。
@@ -1263,6 +1291,36 @@ class Heartbeat:
         except Exception:
             logger.exception("主动联系的材料读不了，这一拍不主动")
 
+    def _maybe_start_exploration(self) -> None:
+        """用户来信和主动联系之后才考虑探索，与它们共用一个任务槽（D79）。"""
+        tracker, reading = self._exploration, self._reading
+        started = tracker.prepare(
+            self._clock.now(),
+            tier=self._current_strategy().effective_tier,
+            night=reading.sleep.night if reading is not None else False,
+            halted=self._halt_status.halted,
+            busy=self._stop_requested
+            or self._thought is not None
+            or bool(self._unanswered)
+            or bool(self._pending),
+            cautious=self._mood.cautious if self._mood is not None else False,
+        )
+        if started is None or tracker.search is None:
+            return
+        task = asyncio.create_task(
+            exploration_runner.explore(
+                tracker.config,
+                tracker.search,
+                tracker.reader,
+                self._organs.call,
+                self._permissions,
+                started.metadata["query"],
+            ),
+            name="aureus-exploration",
+        )
+        task.add_done_callback(self._on_thought_done)
+        self._thought = _Thought(task, (), self._current_strategy(), exploration=started)
+
     async def _initiate(self, job: _InitiativeJob) -> _ThoughtOutcome:
         """后台只问器官，不写状态；任何失败都朝不打扰的方向倒。"""
         conversation = job.conversation
@@ -1568,7 +1626,9 @@ class Heartbeat:
             mood_state = mood_reading.summary if mood_reading is not None else ""
         if agenda_state is None:
             agenda_state = self._agenda_for_context(person_id)
-        interests_state = self._exploration.context(target, self._timezone)
+        interests_state = exploration_runner.interest_context(
+            self._exploration, target, self._timezone
+        )
 
         def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
             return build_system_context(
@@ -1883,7 +1943,7 @@ class Heartbeat:
             model_preference=job.strategy.model_preference,
         )
 
-    def _on_thought_done(self, _task: asyncio.Task[_ThoughtOutcome]) -> None:
+    def _on_thought_done(self, _task: asyncio.Task[Any]) -> None:
         # 想法有结果了：立即跳一拍去处理，不等下一个定时拍。
         self._wake.set()
 
@@ -1922,6 +1982,8 @@ class Heartbeat:
             thought: 被取消的想法。
             halted: 是因为急停取消的；否则是关闭时等不到。
         """
+        if thought.exploration is not None:
+            return  # 取消探索不写结果，也不补记（D79）。
         if thought.initiative is not None:
             self._collect_initiative(
                 thought, _ThoughtOutcome(notice="急停时取消" if halted else "关闭时取消")

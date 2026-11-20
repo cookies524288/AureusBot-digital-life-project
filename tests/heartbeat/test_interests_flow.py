@@ -175,3 +175,23 @@ async def test_disabled_interest_prompt_is_byte_for_byte_unchanged(env: Interest
         hashlib.sha256(text.encode()).hexdigest()
         == "c3ab9d8c17bcc82bebb04126553f87c062912462693e24d3c5454d667b7f2846"
     )
+
+
+async def test_contact_profile_cannot_change_interests_with_user_trust(env: InterestEnv) -> None:
+    rig = env.build(policy=InitiativeConfig())
+    tracker = env.connect(rig)
+    env.people.meet(CHANNEL, "other")
+    env.organs.normal_plans.append(_plan(interest=dict(action="add", text="天文", reason="要求")))
+    rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="other",
+            content="改兴趣",
+            visibility=VisibilityScope.USER_ONLY,
+            trust=TrustLevel.VERIFIED_USER,
+        )
+    )
+    rig.heartbeat.beat()
+    await finish(rig)
+    assert tracker.interests is not None and not tracker.interests.active()
+    assert rig.replies() and not rig.records("interest_changed")
