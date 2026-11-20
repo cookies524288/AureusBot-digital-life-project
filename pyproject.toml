@@ -159,6 +159,7 @@ source_modules = [
     "aureus.identity",
     "aureus.body",
     "aureus.timeline",
+    "aureus.memory",
     "aureus.people",
     "aureus.heartbeat",
     "aureus.attention",
@@ -180,6 +181,7 @@ source_modules = [
     "aureus.identity",
     "aureus.body",
     "aureus.timeline",
+    "aureus.memory",
     "aureus.people",
     "aureus.heartbeat",
     "aureus.attention",
@@ -196,6 +198,12 @@ name = "行动只返回资料：不依赖心跳、器官和时间线"
 type = "forbidden"
 source_modules = ["aureus.actions"]
 forbidden_modules = ["aureus.heartbeat", "aureus.organs", "aureus.timeline"]
+
+[[tool.importlinter.contracts]]
+name = "记忆只管索引和检索"
+type = "forbidden"
+source_modules = ["aureus.memory"]
+forbidden_modules = ["aureus.heartbeat", "aureus.agenda", "aureus.people", "aureus.organs"]
 
 [dependency-groups]
 dev = [

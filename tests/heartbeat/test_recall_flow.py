@@ -1,7 +1,7 @@
 """关键词召回从真实索引到回复提示词和留痕的离线流程（D80）。"""
 
 import json
-from collections.abc import AsyncIterator, Collection, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Sequence
 from datetime import timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,7 +16,7 @@ from aureus.heartbeat.context import build_initiative_plan_prompt
 from aureus.heartbeat.planning import parse_plan
 from aureus.heartbeat.recall import MemoryTracker, format_recall, memory_entry
 from aureus.identity import Identity
-from aureus.memory import MemoryHit, MemoryIndex
+from aureus.memory import MemoryEntry, MemoryHit, MemoryIndex
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, PermissionChecker
@@ -319,6 +319,26 @@ async def test_memory_entry_event_selection_labels_and_web_source(env: MemoryEnv
         )
         if entry is not None:
             assert entry.actor_label == ("日记" if kind == "diary_written" else "我")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled, recall_enabled", [(False, True), (True, False)])
+async def test_heartbeat_indexes_only_when_enabled(
+    env: MemoryEnv, monkeypatch: pytest.MonkeyPatch, enabled: bool, recall_enabled: bool
+) -> None:
+    calls: list[int] = []
+    original = env.index.index_more
+
+    def counted(limit: int, describe: Callable[[TimelineRecord], MemoryEntry | None]) -> int:
+        calls.append(limit)
+        return original(limit, describe)
+
+    monkeypatch.setattr(env.index, "index_more", counted)
+    rig = env.build(MemoryConfig(enabled=enabled, recall_enabled=recall_enabled, index_batch=7))
+    env.timeline.append("message", "记住木卫二", ActorType.USER)
+    rig.beat()
+    assert calls == ([7] if enabled else [])
+    assert bool(env.index.search(["木卫二"], (), 5)) is enabled
 
 
 @pytest.mark.asyncio
