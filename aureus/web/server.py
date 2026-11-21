@@ -184,13 +184,14 @@ def create_app(
     app = FastAPI(title="AureusBot", docs_url=None, redoc_url=None, openapi_url=None)
     max_age = config.session_days * SECONDS_PER_DAY
 
-    def require_session(request: Request) -> str:
+    # 同步依赖会被 FastAPI 放进工作线程，不能和事件循环并发使用同一个 SQLite 连接。
+    async def require_session(request: Request) -> str:
         token = request.cookies.get(SESSION_COOKIE, "")
         if not sessions.touch(token):
             raise HTTPException(401, detail="请先登录。")
         return token
 
-    def require_ready(token: Annotated[str, Depends(require_session)]) -> str:
+    async def require_ready(token: Annotated[str, Depends(require_session)]) -> str:
         if auth.password_is_default:
             raise HTTPException(403, detail="请先修改默认口令。")
         return token

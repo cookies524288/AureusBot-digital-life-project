@@ -7,7 +7,7 @@
 
 import math
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import date
 from typing import Annotated, Any
 
@@ -149,7 +149,7 @@ def _http_error(error: Exception) -> HTTPException:
 
 
 def register_settings_routes(
-    app: FastAPI, service: SettingsService, require_ready: Callable[..., str]
+    app: FastAPI, service: SettingsService, require_ready: Callable[..., Awaitable[str]]
 ) -> None:
     """把设置页的三个接口挂到应用上；都要求已登录且不在默认口令状态。"""
     errors = (

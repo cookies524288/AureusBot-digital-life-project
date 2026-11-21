@@ -1,6 +1,6 @@
 """网页时间线和总览：只读核心状态，复用回复上下文查询（D84）。"""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Annotated, Any, Protocol
 
@@ -47,7 +47,7 @@ def register_timeline_routes(
     heartbeat: HeartbeatView,
     clock: Clock,
     visibility: VisibilityScope,
-    require_ready: Callable[..., str],
+    require_ready: Callable[..., Awaitable[str]],
     restart_required: Callable[[], bool] | None = None,
 ) -> None:
     """注册时间线和总览；核心时钟、用户可见范围和登录依赖由组装方传入。"""

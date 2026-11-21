@@ -1,0 +1,165 @@
+"""直接执行网页脚本，核对登录判断和异步重连；Node 只用于测试，不参与构建。"""
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+HARNESS = r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const nodes = new Map();
+function element() {
+  const classes = new Set();
+  return {
+    nodeType: 1, dataset: {}, style: {}, value: '', textContent: '',
+    classList: {
+      add: name => classes.add(name), remove: name => classes.delete(name),
+      contains: name => classes.has(name),
+      toggle(name, force) {
+        const enabled = force === undefined ? !classes.has(name) : force;
+        if (enabled) classes.add(name); else classes.delete(name);
+        return enabled;
+      },
+    },
+    append() {}, setAttribute() {}, addEventListener() {}, focus() {}, remove() {},
+  };
+}
+const timers = [], sockets = [];
+const reply = (status, data) => ({
+  ok: status >= 200 && status < 300, status,
+  json: async () => data, headers: { get: () => null },
+});
+const context = vm.createContext({
+  assert, timers, sockets, reply, URLSearchParams,
+  document: {
+    getElementById(id) {
+      if (!nodes.has(id)) nodes.set(id, element());
+      return nodes.get(id);
+    },
+    querySelectorAll: () => [], createElement: element,
+    createTextNode: text => ({ nodeType: 3, textContent: text }),
+    documentElement: { dataset: {} },
+  },
+  window: { addEventListener() {} },
+  localStorage: { getItem: () => null },
+  location: { protocol: 'http:', host: 'localhost', hash: '' },
+  history: { replaceState() {} },
+  setTimeout: callback => timers.push(callback), setInterval() {},
+  fetch: async () => reply(401, { detail: '请先登录。' }),
+  WebSocket: class { constructor() { sockets.push(this); } close() {} },
+});
+async function main() {
+  vm.runInContext(input.html.match(/<script>([\s\S]*?)<\/script>/)[1], context);
+  await new Promise(resolve => setImmediate(resolve));
+  await vm.runInContext('(async () => {' + input.test + '})()', context);
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+
+
+def run_page_script(code: str) -> None:
+    """用模拟 DOM、请求和定时器执行真实页面；没有 Node 的环境明确跳过。"""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("网页脚本行为测试需要 Node，不影响运行或打包")
+    html = (ROOT / "aureus/web/static/index.html").read_text(encoding="utf-8")
+    result = subprocess.run(
+        [node, "-e", HARNESS],
+        input=json.dumps({"html": html, "test": code}),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("probe", ["valid", "offline"])
+def test_wrong_password_does_not_log_out_a_valid_session(probe: str) -> None:
+    run_page_script(
+        "const probe = " + json.dumps(probe) + ";"
+        r"""
+        state.loggedIn = true;
+        $('app').classList.remove('hidden');
+        const requests = [];
+        fetch = async path => {
+          requests.push(path);
+          if (path === '/api/password') return reply(401, { detail: '口令不对。' });
+          if (probe === 'offline') throw new TypeError('offline');
+          return reply(200, { must_change_password: false });
+        };
+        const res = await api('/api/password', 'POST', {});
+        assert.equal(res.status, 401);
+        assert.equal(errorText(res), '口令不对。');
+        assert.equal(state.loggedIn, true);
+        assert.equal($('app').classList.contains('hidden'), false);
+        assert.deepEqual(requests, ['/api/password', '/api/status']);
+        """
+    )
+
+
+def test_an_expired_session_returns_to_login_and_closes_the_socket() -> None:
+    run_page_script(
+        r"""
+        state.loggedIn = true;
+        openSocket();
+        fetch = async () => reply(401, { detail: '请先登录。' });
+        await api('/api/history');
+        assert.equal(state.loggedIn, false);
+        assert.equal(socket, null);
+        assert.equal(socketWanted, false);
+        assert.equal($('login').classList.contains('hidden'), false);
+        assert.equal($('login-error').textContent, '登录已失效，请重新登录。');
+        """
+    )
+
+
+def test_logging_out_during_reconnect_does_not_open_a_socket() -> None:
+    run_page_script(
+        r"""
+        state.loggedIn = true;
+        socketWanted = true;
+        let resolveStatus;
+        fetch = () => new Promise(resolve => { resolveStatus = resolve; });
+        reconnectLater();
+        const pending = timers.pop()();
+        showAuth('login');
+        resolveStatus(reply(200, { must_change_password: false }));
+        await pending;
+        assert.equal(sockets.length, 0);
+        assert.equal(socketWanted, false);
+        """
+    )
+
+
+def test_a_valid_session_can_reconnect() -> None:
+    run_page_script(
+        r"""
+        state.loggedIn = true;
+        socketWanted = true;
+        fetch = async () => reply(200, { must_change_password: false });
+        reconnectLater();
+        await timers.pop()();
+        assert.equal(sockets.length, 1);
+        assert.equal(socketWanted, true);
+        """
+    )
+
+
+def test_the_default_password_only_opens_the_password_change_view() -> None:
+    run_page_script(
+        r"""
+        fetch = async () => reply(200, { must_change_password: true });
+        await enter();
+        assert.equal(state.loggedIn, false);
+        assert.equal($('app').classList.contains('hidden'), true);
+        assert.equal($('change').classList.contains('hidden'), false);
+        assert.equal(sockets.length, 0);
+        """
+    )

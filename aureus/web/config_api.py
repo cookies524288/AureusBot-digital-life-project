@@ -3,7 +3,7 @@
 import asyncio
 import math
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from typing import Annotated, Any
 
@@ -92,7 +92,10 @@ def _runtime_changes(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def register_config_routes(
-    app: FastAPI, service: ConfigService, auth: WebAuth, require_ready: Callable[..., str]
+    app: FastAPI,
+    service: ConfigService,
+    auth: WebAuth,
+    require_ready: Callable[..., Awaitable[str]],
 ) -> None:
     """注册配置接口；统一要求已登录且已修改默认口令。"""
 

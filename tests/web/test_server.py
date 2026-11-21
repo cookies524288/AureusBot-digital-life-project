@@ -4,11 +4,14 @@
 不是回环地址，所以要测「本机」的路径时，把客户端的来源地址指定成 127.0.0.1。
 """
 
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import get_ident
 from typing import Any
 
+import httpx
 import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
@@ -165,6 +168,48 @@ def test_a_long_password_is_refused_before_hashing(rig: Rig) -> None:
 def test_unknown_fields_in_the_login_body_are_refused(rig: Rig) -> None:
     response = rig.client().post("/api/login", json={"password": "admin", "extra": 1})
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/api/status", "/api/history"])
+async def test_login_dependencies_stay_on_the_request_thread(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    set_password(rig)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=rig.app), base_url="http://testserver"
+    ) as client:
+        assert (await client.post("/api/login", json={"password": GOOD})).status_code == 200
+        threads: list[int] = []
+        original_touch = rig.sessions.touch
+        original_is_default = rig.passwords.is_default
+
+        def touch(token: str) -> bool:
+            threads.append(get_ident())
+            return original_touch(token)
+
+        def is_default() -> bool:
+            threads.append(get_ident())
+            return original_is_default()
+
+        monkeypatch.setattr(rig.sessions, "touch", touch)
+        monkeypatch.setattr(rig.passwords, "is_default", is_default)
+        assert (await client.get(path)).status_code == 200
+        assert threads == [get_ident(), get_ident()]
+
+
+@pytest.mark.asyncio
+async def test_parallel_requests_keep_the_session_valid(rig: Rig) -> None:
+    set_password(rig)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=rig.app), base_url="http://testserver"
+    ) as client:
+        assert (await client.post("/api/login", json={"password": GOOD})).status_code == 200
+        responses = await asyncio.gather(
+            *(client.get(path) for path in ["/api/status", "/api/history"] * 50)
+        )
+        assert all(response.status_code == 200 for response in responses)
+        assert (await client.get("/api/status")).status_code == 200
 
 
 # ---------- 默认口令状态：只能改口令 ----------

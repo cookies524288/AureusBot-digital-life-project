@@ -498,7 +498,11 @@ async function api(path, method, body) {
   try { r = await fetch(path, opt); } catch (e) { return { ok: false, status: 0, data: null }; }
   let data = null;
   try { data = await r.json(); } catch (e) { /* 没有正文也可以 */ }
-  if (r.status === 401 && state.loggedIn) { showAuth('login', '登录已失效，请重新登录。'); }
+  if (r.status === 401 && state.loggedIn) {
+    // 改口令时旧口令不对也会返回 401，先确认会话是否真的失效。
+    if (path === '/api/status') showAuth('login', '登录已失效，请重新登录。');
+    else await api('/api/status');
+  }
   return { ok: r.ok, status: r.status, data, retryAfter: r.headers.get('Retry-After') };
 }
 
@@ -725,6 +729,7 @@ function reconnectLater() {
   setTimeout(async () => {
     if (!socketWanted || !state.loggedIn || socket) return;
     const res = await api('/api/status');
+    if (!socketWanted || !state.loggedIn || socket) return;
     if (res.ok) openSocket();
     else if (res.status === 0) reconnectLater();
   }, 3000);
