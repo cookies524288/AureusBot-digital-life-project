@@ -5,7 +5,8 @@ uvicorn 默认会接管 Ctrl+C 和终止信号，还会重设日志配置：这�
 """
 
 import contextlib
-from collections.abc import Generator
+import socket
+from collections.abc import Callable, Generator
 
 import uvicorn
 from fastapi import FastAPI
@@ -43,9 +44,17 @@ def check_can_start(config: WebConfig, *, password_is_default: bool) -> None:
 class _EmbeddedServer(uvicorn.Server):
     """不接管进程信号的 uvicorn 服务：信号由 aureus chat 统一处理。"""
 
+    on_started: Callable[[], None] | None = None
+
     @contextlib.contextmanager
     def capture_signals(self) -> Generator[None, None, None]:
         yield
+
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        """开始监听后再通知调用方，避免把占用端口的服务当成本次启动的网页。"""
+        await super().startup(sockets=sockets)
+        if self.started and self.on_started is not None:
+            self.on_started()
 
 
 class WebServer:
@@ -69,18 +78,22 @@ class WebServer:
         """已经开始监听了吗。"""
         return self._server.started
 
-    async def run(self) -> None:
+    async def run(self, *, on_started: Callable[[], None] | None = None) -> None:
         """开始服务，直到 request_stop 被调用。
+
+        Args:
+            on_started: 成功监听后调用的可选函数。
 
         Raises:
             WebServerError: 端口被占用等原因，没能开始监听。
         """
+        self._server.on_started = on_started
         try:
             await self._server.serve()
         except SystemExit as error:
             # uvicorn 绑定端口失败时直接退出进程，这里换成一个能被接住的错误。
             raise WebServerError(
-                f"网页服务没能在端口 {self._port} 上启动，可能被别的程序占用了；"
+                f"网页服务没能在端口 {self._port} 上启动，可能被别的程序占用或被系统保留；"
                 "可以在 aureus.toml 的 [web] 里改 port。"
             ) from error
 

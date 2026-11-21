@@ -9,12 +9,12 @@ import sys
 from collections.abc import Callable
 
 from aureus.channels import CHANNEL_NAME, TerminalChannel
-from aureus.common import AureusPaths, ConfigError, SystemClock
+from aureus.common import AureusPaths, ConfigError, SystemClock, WebConfig
 from aureus.common.vault import VaultError
 from aureus.core.runtime import Core, open_core
 from aureus.identity.service import IdentityError
 from aureus.web.assemble import open_web
-from aureus.web.runner import WebServer, WebServerError
+from aureus.web.runner import LOOPBACK_HOST, WebServer, WebServerError
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -23,10 +23,15 @@ ReadLine = Callable[[], str]
 WriteLine = Callable[[str], None]
 
 
-async def _serve_web(web: WebServer, write_line: WriteLine) -> None:
+async def _serve_web(web: WebServer, config: WebConfig, write_line: WriteLine) -> None:
     """跑网页服务；没能启动（比如端口被占用）只提示一行，不影响终端和心跳（D63）。"""
+
+    def show_address() -> None:
+        where = "本机地址，已开放局域网访问" if config.allow_remote else "本机可以打开"
+        write_line(f"网页：http://{LOOPBACK_HOST}:{config.port}（{where}）")
+
     try:
-        await web.run()
+        await web.run(on_started=show_address)
     except WebServerError as error:
         write_line(f"网页没有开启：{error}")
 
@@ -45,10 +50,9 @@ async def _chat(
         write_line(f"它醒来了。{heartbeat.downtime.describe()}")
     serving: asyncio.Task[None] | None = None
     if web is not None:
-        web_config = core.settings.runtime.web
-        serving = asyncio.create_task(_serve_web(web, write_line), name="aureus-web")
-        where = "局域网内" if web_config.allow_remote else "本机"
-        write_line(f"网页：http://127.0.0.1:{web_config.port}（{where}可以打开）")
+        serving = asyncio.create_task(
+            _serve_web(web, core.settings.runtime.web, write_line), name="aureus-web"
+        )
     terminal.start()
     try:
         await beating

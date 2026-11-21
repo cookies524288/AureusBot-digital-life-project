@@ -1,6 +1,8 @@
 """chat 命令的测试：假器官、临时数据根目录、假的键盘输入，不调用模型。"""
 
 import argparse
+import asyncio
+import errno
 import textwrap
 import threading
 from collections.abc import Callable, Iterator
@@ -95,6 +97,25 @@ def test_chat_replies_and_records_everything(paths: AureusPaths) -> None:
     assert [record.actor_type for record in messages] == [ActorType.USER, ActorType.ME]
     assert messages[0].content == "你好呀"
     assert records[-1].event_type == EVENT_SHUT_DOWN
+
+
+def test_occupied_web_port_is_not_advertised_and_terminal_still_replies(
+    paths: AureusPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths.runtime_config_file.write_text(
+        "[heartbeat]\ntick_interval_seconds = 1.0\n[web]\nport = 18780\n", encoding="utf-8"
+    )
+
+    async def refuse_bind(_loop: asyncio.BaseEventLoop, *_args: object, **kwargs: object) -> None:
+        assert kwargs["port"] == 18780
+        raise OSError(errno.EADDRINUSE, "测试端口已被占用")
+
+    monkeypatch.setattr(asyncio.BaseEventLoop, "create_server", refuse_bind)
+    output = run_chat(paths, ["你好呀", "/quit"])
+    error = next(line for line in output if line.startswith("网页没有开启："))
+    assert "端口 18780" in error
+    assert not any(line.startswith("网页：http://") for line in output)
+    assert any(line.startswith("测试豆：") for line in output)
 
 
 def test_end_of_input_shuts_down_cleanly(paths: AureusPaths) -> None:
