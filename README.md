@@ -28,7 +28,7 @@ uv run aureus --home ./aureus_home chat --fake  # 用假器官试运行：不调
 uv run aureus lab list                         # 列出可离线运行的实验
 ```
 
-用户数据和程序分开存放。正式使用时，建议把数据根目录放在项目之外，并用环境变量 `AUREUS_HOME` 指定，见 [docs/14-user-data.md](docs/14-user-data.md)。接入真实模型见 [docs/15-model-management.md](docs/15-model-management.md)。
+源码运行默认把用户数据放在项目根目录的 `aureus_home/`，移动整个项目即可一起带走；升级时保留这个文件夹。需要另存到其他位置时，可用 `--home` 或环境变量 `AUREUS_HOME` 指定，见 [docs/14-user-data.md](docs/14-user-data.md)。网页默认地址为 `http://127.0.0.1:28976`。接入真实模型见 [docs/15-model-management.md](docs/15-model-management.md)。
 
 提交代码前，用 `uv run python scripts/check.py` 一次跑完格式、类型、架构和测试检查。
 

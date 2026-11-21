@@ -15,7 +15,7 @@ from aureus.web.runner import (
 
 def test_it_listens_on_this_machine_only_by_default() -> None:
     assert listen_host(WebConfig()) == LOOPBACK_HOST
-    assert WebConfig().port == 8767
+    assert WebConfig().port == 28976
 
 
 def test_allow_remote_listens_on_every_interface() -> None:

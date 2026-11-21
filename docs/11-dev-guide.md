@@ -99,7 +99,7 @@ AureusBot Project/
 ├── tests/                  测试，按子系统分目录
 ├── scripts/                开发用的小脚本，比如一条命令跑完检查
 ├── config/                 配置模板（用户的个人设定不进 git）
-├── data/                   它的"家"（不进 git）
+├── aureus_home/            用户配置和运行数据（不进 git，源码运行的默认数据根目录）
 └── docs/                   设计文档
 ```
 

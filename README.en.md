@@ -25,7 +25,7 @@ uv run aureus --home ./aureus_home init         # create the data root
 uv run aureus --home ./aureus_home chat --fake  # trial run with a fake organ: no model calls, no cost
 ```
 
-User data is stored apart from the program. For real use, keep the data root outside the project and point to it with the `AUREUS_HOME` environment variable (see [docs/14-user-data.md](docs/14-user-data.md)). To connect real models, see [docs/15-model-management.md](docs/15-model-management.md). Before committing code, run `uv run python scripts/check.py` to check formatting, types, architecture, and tests in one go.
+Source checkouts store user data in the project-root `aureus_home/` folder by default. Keep this folder when updating; moving the project also moves its data. Use `--home` or `AUREUS_HOME` to choose another location (see [docs/14-user-data.md](docs/14-user-data.md)). The web interface defaults to `http://127.0.0.1:28976`. To connect real models, see [docs/15-model-management.md](docs/15-model-management.md). Before committing code, run `uv run python scripts/check.py` to check formatting, types, architecture, and tests in one go.
 
 The design documents are in Chinese only.
 

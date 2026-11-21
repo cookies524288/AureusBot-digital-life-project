@@ -349,6 +349,19 @@
 
 **首次出现**：Phase 0 终端；Phase 1 网页；Phase 3 QQ。
 
+**网页管理接口**（路线图 2.12b，D84）：全部要求登录并改掉默认口令；首页 HTML 不含数据。
+
+| 接口 | 用途 |
+|---|---|
+| `GET /api/overview` | 当前心跳状态、精力、任务及是否需要重启 |
+| `GET /api/timeline` | 按时间、事件类型和序号翻页；上下文分隔线复用实际回复的最近对话查询，无摘要字段 |
+| `GET /api/models`、`PUT /api/models` | 模型、器官和思考等级；敏感服务商改动需口令 |
+| `GET /api/keys` | 密钥库状态与密钥名，从不返回原文 |
+| `PUT /api/keys`、`POST /api/keys/remove` | 本机确认口令后录入或删除密钥；后台线程写库，不能阻塞心跳 |
+| `GET /api/config`、`PUT /api/config` | 读取 schema 和运行配置，按字段校验、保留注释后原子保存；safety/web 改动需口令 |
+
+模型和运行配置只写文件，重启生效；`restart_required` 来自本进程成功的网页写入。配置版本和网页 enabled/allow_remote/port 只读。已知限制：本机密钥限制假设局域网直接连接、没有反向代理；整份模型配置提交可能覆盖页面打开后的手工修改。接口字段见 [任务 2.12](tasks/2.12.md)。
+
 ---
 
 ## 安全 `safety`

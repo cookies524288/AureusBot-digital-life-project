@@ -22,7 +22,7 @@ from aureus.common.paths import AureusPaths
 CONFIG_FORMAT_VERSION = 1
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
-DEFAULT_WEB_PORT = 8767
+DEFAULT_WEB_PORT = 28976
 
 
 class ConfigError(Exception):
