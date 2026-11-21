@@ -63,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--event-type", metavar="事件类型", help="只看这种事件，比如 message、woke_up"
     )
     commands.add_parser("usage", help="查看本月的模型用量和费用（只读）")
-    persona = commands.add_parser("persona", help="查看身份和人设的历史版本（只读）")
+    persona = commands.add_parser("persona", help="查看人设版本；--revert 编号恢复三层之一")
     persona.add_argument(
         "--layer",
         choices=[layer.value for layer in IdentityLayer],
@@ -73,11 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
     persona.add_argument(
         "--limit",
         type=positive_int,
-        default=DEFAULT_PERSONA_LIMIT,
+        default=None,
         metavar="个数",
         help=f"最多显示几个版本，默认 {DEFAULT_PERSONA_LIMIT}",
     )
     persona.add_argument("--full", action="store_true", help="显示完整内容，不截断")
+    persona.add_argument(
+        "--revert", type=positive_int, metavar="版本号", help="恢复到旧版本，运行中请用网页"
+    )
     agenda = commands.add_parser("agenda", help="查看它答应过的事；--cancel 编号 取消一条")
     agenda.add_argument("--all", action="store_true", help="也列出已经结束的")
     agenda.add_argument(
@@ -160,7 +163,14 @@ def main(
     Returns:
         退出码：0 成功，1 失败。参数写错时由 argparse 直接以 2 退出。
     """
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if (
+        args.command == "persona"
+        and args.revert is not None
+        and (args.layer is not None or args.limit is not None or args.full)
+    ):
+        parser.error("--revert 不能和 --layer、--limit、--full 一起使用")
     try:
         paths = _resolve_paths(args.home, environ)
     except HomePathError as error:

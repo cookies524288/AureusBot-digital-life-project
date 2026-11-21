@@ -5,6 +5,7 @@ import json
 import sqlite3
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -22,7 +23,7 @@ from aureus.identity import (
 )
 from aureus.organs import CallPurpose, OrganRequest, OrganResponse
 from aureus.safety import EmergencyStop, PermissionChecker
-from aureus.timeline import ActorType, TimelineQuery, VisibilityScope
+from aureus.timeline import ActorType, TimelineQuery, TimelineRecord, VisibilityScope
 from tests.heartbeat.test_diary_flow import DiaryEnv, DiaryOrgans
 from tests.web.test_settings import ORIGINAL
 
@@ -267,7 +268,7 @@ async def test_failed_write_keeps_identity_and_does_not_retry(
     if fail_at == "timeline":
         original = env.timeline.append
 
-        def broken(*args, **kwargs):
+        def broken(*args: Any, **kwargs: Any) -> TimelineRecord:
             if args and args[0] == "persona_changed":
                 raise sqlite3.OperationalError("假写失败")
             return original(*args, **kwargs)
@@ -275,7 +276,7 @@ async def test_failed_write_keeps_identity_and_does_not_retry(
         monkeypatch.setattr(env.timeline, "append", broken)
     else:
 
-        def fail_version(*_args):
+        def fail_version(*_args: object) -> None:
             raise sqlite3.OperationalError("假版本写失败")
 
         monkeypatch.setattr(env.history, "record_self_change", fail_version)
@@ -344,7 +345,7 @@ async def test_restore_read_failure_counts_today(
         diary_config=DiaryConfig(enabled=False),
     )
 
-    def broken(_query: TimelineQuery):
+    def broken(_query: TimelineQuery) -> list[TimelineRecord]:
         raise sqlite3.OperationalError("假读取失败")
 
     monkeypatch.setattr(env.timeline, "query", broken)

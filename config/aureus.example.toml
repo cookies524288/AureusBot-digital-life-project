@@ -344,3 +344,19 @@ log_level = "INFO"
 # max_input_chars = 6000
 # 日记正文上限，100～10000。
 # max_chars = 1500
+
+[persona_growth]
+# 人设成长（D81）：日记后回顾和用户的经历，小幅改三层之一；会改自己，默认关闭。
+# enabled = false
+# 没注册这个器官时跳过，只记一次日志。
+# organ = "summarizer"
+# 材料上限，1000～50000。
+# max_input_chars = 6000
+# 同一层两次自己改至少隔几天，1～365。
+# layer_cooldown_days = 7
+# 新旧文字相似度下限，0.3～0.99。
+# min_similarity = 0.7
+# 原来是空的层，新内容最多几个字，20～1000。
+# max_chars_from_empty = 200
+# 改完后一层最多几个字（用户原文更长时以原文为准），100～5000。
+# max_layer_chars = 1000
