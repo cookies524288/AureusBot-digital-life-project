@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Annotated, Any
@@ -10,14 +11,19 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from tomlkit.exceptions import TOMLKitError
 
 from aureus.common import ConfigError
-from aureus.organs import validate_models_config
+from aureus.common.vault import VaultError
+from aureus.organs import API_KEY_ENV_PATTERN, validate_models_config
 
-from .auth import LoginLockedError, LoginRejectedError, WebAuth
+from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
 from .config_files import ConfigService, models_require_password
+
+# 无实测依据：远超常见密钥长度，只为挡住超大的录入请求（D84）。
+MAX_KEY_CHARS = 4096
+LOCAL_KEYS_ONLY = "密钥只能在本机的网页上录入。其他设备请到本机的网页，或用 aureus keys set。"
 
 
 @contextmanager
-def _translate_errors() -> Iterator[None]:
+def _translate_errors(service: ConfigService) -> Iterator[None]:
     try:
         yield
     except LoginLockedError as error:
@@ -27,6 +33,8 @@ def _translate_errors() -> Iterator[None]:
         raise HTTPException(403, detail="口令不对。") from None
     except ConfigError as error:
         raise HTTPException(422, detail=str(error)) from None
+    except VaultError as error:
+        raise HTTPException(422, detail=service.describe_vault_error(error)) from None
     except (UnicodeDecodeError, TOMLKitError):
         raise HTTPException(422, detail="配置文件不是合法的 TOML。") from None
     except OSError:
@@ -51,6 +59,21 @@ def _confirm(auth: WebAuth, body: dict[str, Any], request: Request) -> None:
     )
 
 
+def _require_local(request: Request) -> None:
+    if not is_loopback(request.client.host if request.client else ""):
+        # 必须在确认口令之前，局域网来源不能借密钥接口尝试口令或耗尽限流。
+        raise HTTPException(403, detail=LOCAL_KEYS_ONLY)
+
+
+def _key_name(body: dict[str, Any]) -> str:
+    name = body.get("name")
+    if not isinstance(name, str) or not re.fullmatch(API_KEY_ENV_PATTERN, name):
+        raise HTTPException(
+            422, detail="密钥名要以 AUREUS_KEY_ 开头，只能用大写字母、数字和下划线。"
+        )
+    return name
+
+
 def register_config_routes(
     app: FastAPI, service: ConfigService, auth: WebAuth, require_ready: Callable[..., str]
 ) -> None:
@@ -58,14 +81,14 @@ def register_config_routes(
 
     @app.get("/api/models")
     async def view_models(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
-        with _translate_errors():
+        with _translate_errors(service):
             return await asyncio.to_thread(service.view_models)
 
     @app.put("/api/models")
     async def edit_models(
         request: Request, _token: Annotated[str, Depends(require_ready)]
     ) -> dict[str, bool]:
-        with _translate_errors():
+        with _translate_errors(service):
             body = await _body(request)
             raw = body.get("config")
             if not isinstance(raw, dict):
@@ -78,4 +101,44 @@ def register_config_routes(
                     _confirm(auth, body, request)
                 if current != submitted or list(current.organs) != list(submitted.organs):
                     await asyncio.to_thread(service.write_models, submitted)
+            return {"ok": True, "restart_required": service.restart_required}
+
+    @app.get("/api/keys")
+    async def view_keys(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
+        with _translate_errors(service):
+            return await asyncio.to_thread(service.view_keys)
+
+    @app.put("/api/keys")
+    async def edit_key(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, bool]:
+        _require_local(request)
+        with _translate_errors(service):
+            body = await _body(request)
+            _confirm(auth, body, request)
+            name = _key_name(body)
+            value = body.get("value")
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value.strip()) > MAX_KEY_CHARS
+            ):
+                raise HTTPException(422, detail=f"密钥不能为空，且最多 {MAX_KEY_CHARS} 个字。")
+            async with service.write_lock:
+                await asyncio.to_thread(service.write_key, name, value.strip())
+            return {"ok": True, "restart_required": service.restart_required}
+
+    @app.post("/api/keys/remove")
+    async def remove_key(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, bool]:
+        _require_local(request)
+        with _translate_errors(service):
+            body = await _body(request)
+            _confirm(auth, body, request)
+            name = _key_name(body)
+            async with service.write_lock:
+                removed = await asyncio.to_thread(service.remove_key, name)
+            if not removed:
+                raise HTTPException(404, detail="没有这个密钥。")
             return {"ok": True, "restart_required": service.restart_required}

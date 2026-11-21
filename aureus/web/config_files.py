@@ -1,6 +1,7 @@
 """网页配置文件服务：校验后写文件，记录重启提示，不改运行中的核心（D84）。"""
 
 import asyncio
+import logging
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
@@ -20,6 +21,8 @@ from aureus.organs import (
     ReasoningLevel,
     validate_models_config,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _read_toml(path: Path, source: str) -> tuple[bool, dict[str, Any]]:
@@ -135,3 +138,27 @@ class ConfigService:
             lambda raw: validate_models_config(raw, "提交的模型配置"),
         )
         self.restart_required = True
+
+    def view_keys(self) -> dict[str, Any]:
+        """只列密钥库状态和名字；打不开时不当成空库。"""
+        if not self.paths.vault_file.exists():
+            return {"vault": "none", "names": []}
+        try:
+            names = self._vault.names()
+        except VaultError:
+            return {"vault": "unreadable", "names": []}
+        return {"vault": "ok", "names": names}
+
+    def write_key(self, name: str, value: str) -> None:
+        """录入密钥；首次创建、文件锁和加密均复用 SecretVault，不记录原文。"""
+        self._vault.set(name, value)
+        self.restart_required = True
+        logger.info("网页录入密钥：%s", name)
+
+    def remove_key(self, name: str) -> bool:
+        """删除一个密钥；名字不存在时不写文件、不设置重启提示。"""
+        removed = self._vault.remove(name)
+        if removed:
+            self.restart_required = True
+            logger.info("网页删除密钥：%s", name)
+        return removed
