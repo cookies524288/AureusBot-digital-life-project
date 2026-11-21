@@ -13,6 +13,7 @@ from aureus.core.runtime import Core
 from aureus.identity import IdentityEditor
 
 from .auth import LoginLimiter, PasswordStore, WebAuth
+from .config_files import ConfigService
 from .runner import WebServer, check_can_start
 from .server import create_app
 from .session import SessionStore
@@ -64,6 +65,7 @@ def open_web(core: Core, clock: Clock) -> Iterator[WebServer | None]:
             settings=settings,
             heartbeat=core.heartbeat,
             clock=clock,
+            config_files=ConfigService(core.paths),
         )
         yield WebServer(app, config)
     finally:

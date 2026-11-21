@@ -13,8 +13,11 @@ from .interface import (
 )
 from .llm_adapter import LLMOrgan, count_prompt_tokens
 from .model_config import (
+    ModelKind,
     ModelRoute,
     ModelsConfig,
+    OrganStrategy,
+    ProviderProtocol,
     ReasoningLevel,
     load_models_config,
     validate_models_config,
@@ -28,6 +31,7 @@ __all__ = [
     "FakeReplyer",
     "KeyResolver",
     "LLMOrgan",
+    "ModelKind",
     "ModelPreference",
     "ModelRoute",
     "ModelsConfig",
@@ -36,6 +40,8 @@ __all__ = [
     "OrganCallError",
     "OrganRequest",
     "OrganResponse",
+    "OrganStrategy",
+    "ProviderProtocol",
     "ReasoningLevel",
     "count_prompt_tokens",
     "load_models_config",

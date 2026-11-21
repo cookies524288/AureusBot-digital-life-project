@@ -39,6 +39,8 @@ from .auth import (
     PasswordPolicyError,
     WebAuth,
 )
+from .config_api import register_config_routes
+from .config_files import ConfigService
 from .session import SessionStore
 from .settings import SettingsService
 from .settings_api import register_settings_routes
@@ -175,6 +177,7 @@ def create_app(
     settings: SettingsService | None = None,
     heartbeat: HeartbeatView | None = None,
     clock: Clock | None = None,
+    config_files: ConfigService | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -293,7 +296,11 @@ def create_app(
             clock=clock,
             visibility=channel.user_visibility,
             require_ready=require_ready,
+            restart_required=lambda: config_files.restart_required if config_files else False,
         )
+
+    if config_files is not None:
+        register_config_routes(app, config_files, auth, require_ready)
 
     # ---------- 网页本身 ----------
 
