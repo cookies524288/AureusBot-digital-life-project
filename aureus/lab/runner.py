@@ -37,6 +37,15 @@ async def run_experiment(
         Exception: 实验执行或结果写入失败时原样抛出，运行目录保留供检查。
     """
     run_dir = create_run_directory(experiments_dir, experiment.name, clock.now())
+    try:
+        return await _run_in_directory(experiment, seed, run_dir)
+    except Exception as error:
+        # 让命令能报告已创建的目录，异常的类型和正文照原样传回。
+        error.add_note(f"运行目录：{run_dir}")
+        raise
+
+
+async def _run_in_directory(experiment: Experiment, seed: int, run_dir: Path) -> RunReport:
     write_config(run_dir, experiment, seed, importlib.metadata.version("aureus"))
     aureus_logger = logging.getLogger("aureus")
     previous_level = aureus_logger.level
@@ -50,7 +59,7 @@ async def run_experiment(
     charts_drawn = matplotlib_installed()
     if charts_drawn:
         draw_charts(run_dir, result.charts)
-    pruned = prune_runs(experiments_dir / experiment.name)
+    pruned = prune_runs(run_dir.parent)
     return RunReport(
         run_dir=run_dir,
         metrics=dict(result.metrics),

@@ -25,6 +25,7 @@ uv sync                                         # 安装依赖
 uv run aureus --home ./aureus_home init         # 建好数据根目录
 # 把 config/identity.example.toml 复制到 aureus_home/config/identity.toml，再按自己的想法填写
 uv run aureus --home ./aureus_home chat --fake  # 用假器官试运行：不调用模型、不花钱
+uv run aureus lab list                         # 列出可离线运行的实验
 ```
 
 用户数据和程序分开存放。正式使用时，建议把数据根目录放在项目之外，并用环境变量 `AUREUS_HOME` 指定，见 [docs/14-user-data.md](docs/14-user-data.md)。接入真实模型见 [docs/15-model-management.md](docs/15-model-management.md)。
