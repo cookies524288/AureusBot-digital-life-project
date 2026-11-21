@@ -68,11 +68,21 @@ from aureus.timeline import (
     TimelineDatabase,
     TimelineQuery,
     TimelineRecord,
+    VisibilityScope,
 )
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_STRANGER_AFFINITY = PeopleConfig().stranger_affinity
+
+
+def recent_dialogue(
+    timeline: TimelineDatabase, *, visibility: VisibilityScope | None, limit: int
+) -> Sequence[TimelineRecord]:
+    """取回复上下文中的最近对话，按序号升序返回；网页分隔线也用这份查询（D84）。"""
+    return timeline.query(
+        TimelineQuery(event_type=EVENT_MESSAGE, visibility=visibility, latest=True, limit=limit)
+    )
 
 
 class OrganCaller(Protocol):
@@ -277,13 +287,10 @@ class ConversationFlow:
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
         # 回复用户时只带同一可见范围的对话。回复别人时不按范围过滤（D61，用户决定）：
         # 它的记忆是连续的一份，防套话靠系统上下文里的说明，由规划器和回复器各自判断。
-        recent = self._timeline.query(
-            TimelineQuery(
-                event_type=EVENT_MESSAGE,
-                visibility=None if contact else target.visibility,
-                latest=True,
-                limit=strategy.message_limit,
-            )
+        recent = recent_dialogue(
+            self._timeline,
+            visibility=None if contact else target.visibility,
+            limit=strategy.message_limit,
         )
         # 按序号排除这次要回复的消息，而不是只取“比它们早的”：想上一件事的时候来的消息，
         # 序号比上一次的回复还小，只取更早的就会漏掉它刚说过的话。

@@ -69,6 +69,8 @@ class TimelineQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     since_id: int = Field(default=0, description="从哪条记录 ID 之后开始查询")
+    before_id: int | None = Field(default=None, description="只返回序号小于它的记录")
+    since_time: datetime | None = Field(default=None, description="只返回不早于此刻的记录")
     limit: int = Field(default=100, description="最多返回多少条记录")
     event_type: str = Field(default="", description="按事件类型过滤（留空表示不过滤）")
     actor_type: ActorType | None = Field(default=None, description="按执行者类型过滤")

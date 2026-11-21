@@ -158,6 +158,27 @@ def make_rig(
     return rig
 
 
+@pytest.mark.parametrize(
+    ("used_today", "expected"), [(0, 18), (70_000, 8), (90_000, 3), (100_000, 3)]
+)
+async def test_context_message_limit_follows_the_current_energy_tier(
+    made: list[Rig], tmp_path: Path, used_today: int, expected: int
+) -> None:
+    rig = make_rig(
+        made,
+        tmp_path,
+        used_today=used_today,
+        recent_message_limit=18,
+        saving_message_limit=8,
+        low_message_limit=3,
+    )
+    assert rig.heartbeat.context_message_limit() == 18  # 第一拍之前还没有身体读数。
+    rig.heartbeat.beat()
+    count = rig.timeline.count_records()
+    assert rig.heartbeat.context_message_limit() == expected
+    assert rig.timeline.count_records() == count
+
+
 async def test_normal_tier_plans_then_replies_with_the_planned_intent(
     made: list[Rig], tmp_path: Path
 ) -> None:

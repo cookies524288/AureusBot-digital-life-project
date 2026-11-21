@@ -490,6 +490,10 @@ class Heartbeat:
             lines.append(f"这次醒来：{self._downtime.describe(self._timezone)}")
         return "\n".join(lines)
 
+    def context_message_limit(self) -> int:
+        """此刻回复会带多少条最近对话，与实际回复共用档位和压力降档规则（D84）。"""
+        return self._current_strategy().message_limit
+
     def _describe_signals(self) -> list[str]:
         """疲劳、压力、夜间的一行读数；关掉的信号注明已关闭。"""
         reading = self._reading

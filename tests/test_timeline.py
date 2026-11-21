@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from aureus.common import AcceleratedClock, SystemClock
+from aureus.common import AcceleratedClock, ManualClock, SystemClock
 from aureus.timeline import (
     ActorType,
     TimelineDatabase,
@@ -204,6 +204,37 @@ def test_query_since_id(database: TimelineDatabase):
     assert len(results) == 3
     assert results[0].id == 3
     assert results[-1].id == 5
+
+
+@pytest.mark.parametrize("latest", [False, True])
+@pytest.mark.parametrize(
+    ("before_id", "since_hour", "expected"),
+    [(4, None, [1, 2, 3]), (None, 2, [3, 4, 5]), (5, 1, [2, 3, 4])],
+)
+def test_query_time_and_id_bounds_combine_before_limit(
+    tmp_path: Path, latest: bool, before_id: int | None, since_hour: int | None, expected: list[int]
+) -> None:
+    start = datetime(2026, 11, 21, tzinfo=UTC)
+    clock = ManualClock(start)
+    database = TimelineDatabase(tmp_path / "bounded.db", clock)
+    database.open()
+    try:
+        for number in range(5):
+            database.append("message", str(number), ActorType.USER)
+            clock.advance(timedelta(hours=1))
+        # 故意传非 UTC 时区；含等于边界的那条，不能按原始字符串直接比。
+        since = (
+            None
+            if since_hour is None
+            else (start + timedelta(hours=since_hour)).astimezone(timezone(timedelta(hours=8)))
+        )
+        records = database.query(
+            TimelineQuery(before_id=before_id, since_time=since, latest=latest, limit=2)
+        )
+        assert [record.id for record in records] == (expected[-2:] if latest else expected[:2])
+        assert len(database.query(TimelineQuery())) == 5
+    finally:
+        database.close()
 
 
 def test_query_limit(database: TimelineDatabase):

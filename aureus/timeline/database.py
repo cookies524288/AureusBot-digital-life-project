@@ -225,6 +225,14 @@ class TimelineDatabase:
         conditions: list[str] = ["id > ?"]
         params: list[str | int | float | None] = [query.since_id]
 
+        if query.before_id is not None:
+            conditions.append("id < ?")
+            params.append(query.before_id)
+
+        if query.since_time is not None:
+            conditions.append("timestamp >= ?")
+            params.append(ensure_aware(query.since_time).isoformat())
+
         if query.event_type:
             conditions.append("event_type = ?")
             params.append(query.event_type)

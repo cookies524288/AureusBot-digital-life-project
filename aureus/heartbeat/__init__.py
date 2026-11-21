@@ -3,6 +3,7 @@
 通道依赖本包，本包不依赖通道。本包只拿到一个能调用器官的对象（核心组装时传安全网关）。
 """
 
+from .conversation import recent_dialogue
 from .downtime import Downtime, assess_downtime
 from .events import (
     EVENT_AGENDA_ADDED,
@@ -91,4 +92,5 @@ __all__ = [
     "judge_allowed",
     "parse_judgment",
     "parse_plan",
+    "recent_dialogue",
 ]
