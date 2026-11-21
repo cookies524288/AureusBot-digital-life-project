@@ -127,7 +127,7 @@ type = "layers"
 # 上层之间用冒号隔开：这条规则不管它们彼此的依赖，那些规则等子系统建好后再逐条加。
 layers = [
     """\
-    (aureus.cli) : (aureus.core) : (aureus.identity) : (aureus.body) : (aureus.hormones) : \
+    (aureus.cli) : (aureus.lab) : (aureus.core) : (aureus.identity) : (aureus.body) : (aureus.hormones) : \
     (aureus.mood) : (aureus.timeline) : (aureus.memory) : (aureus.people) : \
     (aureus.heartbeat) : (aureus.attention) : (aureus.agenda) : (aureus.organs) : \
     (aureus.actions) : (aureus.feedback) : (aureus.channels) : (aureus.safety)\
@@ -192,6 +192,33 @@ source_modules = [
     "aureus.actions",
 ]
 forbidden_modules = ["aureus.monitor"]
+
+[[tool.importlinter.contracts]]
+name = "实验台在最上层：别的子系统不依赖它"
+type = "forbidden"
+# 只有 cli 负责组装实验台命令；其他子系统可以使用实验台依赖的模块，但不能反向依赖实验台（D82）。
+source_modules = [
+    "aureus.common",
+    "aureus.core",
+    "aureus.identity",
+    "aureus.body",
+    "aureus.hormones",
+    "aureus.mood",
+    "aureus.timeline",
+    "aureus.memory",
+    "aureus.people",
+    "aureus.heartbeat",
+    "aureus.attention",
+    "aureus.agenda",
+    "aureus.organs",
+    "aureus.actions",
+    "aureus.feedback",
+    "aureus.channels",
+    "aureus.safety",
+    "aureus.monitor",
+    "aureus.web",
+]
+forbidden_modules = ["aureus.lab"]
 
 [[tool.importlinter.contracts]]
 name = "行动只返回资料：不依赖心跳、器官和时间线"
