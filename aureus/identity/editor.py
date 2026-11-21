@@ -9,8 +9,6 @@
 是否允许改、要不要再输口令，由调用方（网页服务）决定；这里只管改。
 """
 
-import os
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +17,9 @@ from typing import Any
 import tomlkit
 from pydantic import ValidationError
 from tomlkit.exceptions import TOMLKitError
+from tomlkit.toml_document import TOMLDocument
+
+from aureus.common import apply_toml_edit
 
 from .history import IdentityHistory, IdentityLayer
 from .models import Facts, Identity, PersonaLocks, User
@@ -78,20 +79,36 @@ class IdentityEditor:
             IdentityValidationError: 改完的身份不符合规范；文件保持原样。
             sqlite3.Error: 文件已经写好，但版本历史没写进去；下次启动会补记。
         """
-        document = self._read_document()
+        validated: list[Identity] = []
+
+        def update(document: TOMLDocument) -> None:
+            try:
+                _apply_to_document(document, edit)
+            except (TOMLKitError, TypeError, ValueError) as error:
+                raise IdentityEditError("这次修改里有写不进 TOML 的内容，没有改动。") from error
+
+        def validate(raw: dict[str, Any]) -> None:
+            try:
+                identity = Identity.model_validate(raw)
+            except ValidationError as error:
+                raise IdentityValidationError(error) from error
+            if not identity.persona.immutable.strip():
+                raise IdentityEditError("不变人格不能是空的。")
+            validated.append(identity)
+
         try:
-            _apply_to_document(document, edit)
-        except (TOMLKitError, TypeError, ValueError) as error:
-            # 值写不成 TOML（比如 None）：当作这次请求不合法，文件还没动过。
-            raise IdentityEditError("这次修改里有写不进 TOML 的内容，没有改动。") from error
-        try:
-            new_identity = Identity.model_validate(document.unwrap())
-        except ValidationError as error:
-            raise IdentityValidationError(error) from error
-        if not new_identity.persona.immutable.strip():
-            raise IdentityEditError("不变人格不能是空的。")
+            # 身份文件必须已存在；模型和运行配置才支持从空文档创建。
+            self._path.stat()
+        except OSError as error:
+            raise IdentityEditError(f"读不了 {self._path}：{error}") from error
         before = self._latest_version_id()
-        self._write(tomlkit.dumps(document))
+        try:
+            apply_toml_edit(self._path, update, validate)
+        except OSError as error:
+            raise IdentityEditError(f"读不了或写不进 {self._path}：{error}") from error
+        except (UnicodeDecodeError, TOMLKitError) as error:
+            raise IdentityEditError(f"{self._path} 不是合法的 TOML，没有改动。") from error
+        [new_identity] = validated
         effective = self._history.sync_from_file(new_identity, edited=edit.text.keys())
         changes = self._history.user_changes_after(before)
         layers = tuple(dict.fromkeys(change.layer for change in changes))
@@ -101,31 +118,6 @@ class IdentityEditor:
     def _latest_version_id(self) -> int:
         latest = self._history.versions(None, limit=1)
         return latest[0].id if latest else 0
-
-    def _read_document(self) -> Any:
-        try:
-            text = self._path.read_bytes().decode("utf-8")
-            return tomlkit.parse(text)
-        except OSError as error:
-            raise IdentityEditError(f"读不了 {self._path}：{error}") from error
-        except (UnicodeDecodeError, TOMLKitError) as error:
-            raise IdentityEditError(f"{self._path} 不是合法的 TOML，没有改动。") from error
-
-    def _write(self, text: str) -> None:
-        """先写临时文件再替换：不会留下写了一半的 identity.toml。"""
-        directory = self._path.parent
-        descriptor, temp_name = tempfile.mkstemp(dir=directory, prefix=".identity-", suffix=".tmp")
-        try:
-            # 按字节写：不让 Windows 把换行悄悄换成别的样子，保持文件原有的排版。
-            with os.fdopen(descriptor, "wb") as file:
-                file.write(text.encode("utf-8"))
-            os.replace(temp_name, self._path)
-        except OSError as error:
-            Path(temp_name).unlink(missing_ok=True)
-            raise IdentityEditError(f"写不进 {self._path}：{error}") from error
-        except BaseException:
-            Path(temp_name).unlink(missing_ok=True)
-            raise
 
 
 def _table(document: Any, name: str) -> Any:

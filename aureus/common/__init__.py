@@ -33,6 +33,7 @@ from aureus.common.config import (
 )
 from aureus.common.logging_setup import configure_logging, shutdown_logging
 from aureus.common.paths import AureusPaths, HomePathError, home_is_default, resolve_home
+from aureus.common.toml_edit import apply_toml_edit
 
 __all__ = [
     "AcceleratedClock",
@@ -64,6 +65,7 @@ __all__ = [
     "SystemClock",
     "TimeConfig",
     "WebConfig",
+    "apply_toml_edit",
     "configure_logging",
     "home_is_default",
     "load_runtime_config",
