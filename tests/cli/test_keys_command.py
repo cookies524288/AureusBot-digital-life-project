@@ -148,6 +148,20 @@ def test_migrate_does_not_overwrite_and_is_repeatable(tmp_path: Path, capsys: Ca
     assert vault.load() == expected
 
 
+def test_migrate_does_not_overwrite_a_renamed_legacy_key(tmp_path: Path, capsys: Capture) -> None:
+    vault = open_vault(tmp_path)
+    vault.set(NAME, OTHER_SECRET)
+    entry_id = vault.load_entries()[0].id
+    assert vault.rename(entry_id, "新名字")
+    write_dotenv(tmp_path, f"{NAME}={SECRET}")
+    assert run(tmp_path, "keys", "migrate") == 0
+    assert "不覆盖" in capsys.readouterr().out
+    assert vault.load() == {"新名字": OTHER_SECRET}
+    assert run(tmp_path, "keys", "migrate") == 0
+    assert "已搬进密钥库：" not in capsys.readouterr().out
+    assert vault.load() == {"新名字": OTHER_SECRET}
+
+
 def test_migrate_without_dotenv_says_so(tmp_path: Path, capsys: Capture) -> None:
     assert run(tmp_path, "keys", "migrate") == 0
     assert "没有找到" in capsys.readouterr().out

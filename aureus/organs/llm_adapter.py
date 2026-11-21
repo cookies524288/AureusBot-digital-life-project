@@ -382,11 +382,19 @@ class LLMOrgan:
         }
         if provider.base_url is not None:
             kwargs["api_base"] = provider.base_url
-        if provider.api_key_env is not None:
-            key = self._key_resolver.get(provider.api_key_env)
+        if provider.api_key_ref is not None or provider.api_key_env is not None:
+            key = (
+                self._key_resolver.get_vault(provider.api_key_ref)
+                if provider.api_key_ref is not None
+                else self._key_resolver.get(provider.api_key_env or "")
+            )
             if key is None:
                 # 调用前就拒绝，不发出空请求（见 15 号文档第 4 节）。
-                raise _RouteFailureError(f"密钥缺失（{provider.api_key_env} 没有填写）")
+                raise _RouteFailureError(
+                    "引用的 API key 不存在或类型不匹配"
+                    if provider.api_key_ref is not None
+                    else f"密钥缺失（{provider.api_key_env} 没有填写）"
+                )
             kwargs["api_key"] = key.get_secret_value()
         if route.temperature is not None:
             kwargs["temperature"] = route.temperature

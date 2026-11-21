@@ -14,6 +14,7 @@ from aureus.common.vault import (
     PROTECTION_NONE,
     VAULT_FORMAT_VERSION,
     SecretVault,
+    VaultEntry,
     VaultError,
     generate_master_key,
     load_master_key,
@@ -262,14 +263,14 @@ def test_concurrent_writes_do_not_lose_an_entry(
 ) -> None:
     # 审查 H5：两个 keys set 同时「读—改—写」，没有锁时后写的会覆盖先写的。
     # 把读放慢，让两个线程一定会交错；有锁时两条都在。
-    real_load = SecretVault.load
+    real_load = SecretVault.load_entries
 
-    def slow_load(self: SecretVault) -> dict[str, str]:
+    def slow_load(self: SecretVault) -> list[VaultEntry]:
         loaded = real_load(self)
         time.sleep(0.2)
         return loaded
 
-    monkeypatch.setattr(SecretVault, "load", slow_load)
+    monkeypatch.setattr(SecretVault, "load_entries", slow_load)
     other = SecretVault(vault_file, key_file)  # 另一个进程里的 keys 命令会是另一个对象
     threads = [
         threading.Thread(target=secret_vault.set, args=(FAKE_NAME, FAKE_SECRET)),

@@ -31,7 +31,14 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ConfigRig]:
 
 
 @pytest.mark.parametrize(
-    ("method", "path"), [("get", "/api/keys"), ("put", "/api/keys"), ("post", "/api/keys/remove")]
+    ("method", "path"),
+    [
+        ("get", "/api/keys"),
+        ("put", "/api/keys"),
+        ("post", "/api/keys"),
+        ("post", "/api/keys/rename"),
+        ("post", "/api/keys/remove"),
+    ],
 )
 def test_keys_require_login_and_a_changed_password(tmp_path: Path, method: str, path: str) -> None:
     rig = ConfigRig(tmp_path, password_set=False)
@@ -43,7 +50,15 @@ def test_keys_require_login_and_a_changed_password(tmp_path: Path, method: str, 
         rig.close()
 
 
-@pytest.mark.parametrize(("method", "path"), [("put", "/api/keys"), ("post", "/api/keys/remove")])
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("put", "/api/keys"),
+        ("post", "/api/keys"),
+        ("post", "/api/keys/rename"),
+        ("post", "/api/keys/remove"),
+    ],
+)
 def test_remote_sources_are_rejected_before_password_checks(
     rig: ConfigRig, monkeypatch: pytest.MonkeyPatch, method: str, path: str
 ) -> None:
@@ -111,17 +126,22 @@ def test_first_write_creates_vault_lists_only_names_and_updates_model_status_imm
 ) -> None:
     caplog.set_level(logging.INFO)
     rig.paths.models_config_file.write_bytes(ORIGINAL.encode("utf-8"))
-    assert rig.client.get("/api/keys").json() == {"vault": "none", "names": []}
+    assert rig.client.get("/api/keys").json() == {"vault": "none", "names": [], "entries": []}
     assert rig.client.get("/api/models").json()["key_status"] == {NAME: False}
     response = rig.client.put(
         "/api/keys", json={"name": NAME, "value": f" {VALUE} \n", "password": GOOD}
     )
-    assert response.json() == {"ok": True, "restart_required": True}
+    assert response.json() == {"ok": True, "restart_required": False}
     assert rig.paths.master_key_file.exists()
     assert rig.paths.vault_file.exists()
     assert SecretVault(rig.paths.vault_file, rig.paths.master_key_file).load() == {NAME: VALUE}
     listed = rig.client.get("/api/keys")
-    assert listed.json() == {"vault": "ok", "names": [NAME]}
+    entries = SecretVault(rig.paths.vault_file, rig.paths.master_key_file).load_entries()
+    assert listed.json() == {
+        "vault": "ok",
+        "names": [NAME],
+        "entries": [{"id": entries[0].id, "name": NAME, "kind": "api_key"}],
+    }
     models = rig.client.get("/api/models")
     assert models.json()["key_status"] == {NAME: True}
     assert VALUE not in response.text + listed.text + models.text + caplog.text
@@ -144,7 +164,7 @@ def test_unreadable_vault_is_reported_and_never_recreated(
         raw["format_version"] = 999
         rig.paths.vault_file.write_text(json.dumps(raw), encoding="utf-8")
     before = rig.paths.vault_file.read_bytes()
-    assert rig.client.get("/api/keys").json() == {"vault": "unreadable", "names": []}
+    assert rig.client.get("/api/keys").json() == {"vault": "unreadable", "names": [], "entries": []}
     for method, path in (("put", "/api/keys"), ("post", "/api/keys/remove")):
         response = rig.client.request(
             method, path, json={"name": NAME, "value": VALUE, "password": GOOD}
@@ -166,8 +186,8 @@ def test_remove_missing_key_returns_404_without_setting_restart_required(rig: Co
 def test_remove_key_only_returns_success_and_names_disappear(rig: ConfigRig) -> None:
     SecretVault(rig.paths.vault_file, rig.paths.master_key_file).set(NAME, VALUE)
     response = rig.client.post("/api/keys/remove", json={"name": NAME, "password": GOOD})
-    assert response.json() == {"ok": True, "restart_required": True}
-    assert rig.client.get("/api/keys").json() == {"vault": "ok", "names": []}
+    assert response.json() == {"ok": True, "restart_required": False}
+    assert rig.client.get("/api/keys").json() == {"vault": "ok", "names": [], "entries": []}
     assert VALUE not in response.text
 
 

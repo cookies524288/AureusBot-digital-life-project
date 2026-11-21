@@ -4,7 +4,7 @@
 文件按大小滚动、保留一段时间。
 
 密钥不能出现在日志里：消息和异常追踪里出现的已知密钥值，写出之前统一替换成占位符。
-注意这只挡「启动时已知的密钥原文」：被改写过的（URL 编码、截断、拆开拼接）挡不住，
+注意这只挡「已知的密钥原文」：被改写过的（URL 编码、截断、拆开拼接）挡不住，
 所以写日志的代码仍然不应该主动输出密钥，这层过滤是兜底，不是许可（审查 M1）。
 日志行的时间戳由 loguru 自己取（真实时间），不走时钟对象：日志用来对照真实世界，
 时间线里的时间才走时钟（见 D26）。
@@ -20,6 +20,7 @@ import sys
 import traceback
 from collections.abc import Callable, Iterable
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -105,6 +106,21 @@ def _build_redactor(secrets: Iterable[str]) -> Callable[[str], str]:
     return redact
 
 
+# 来源是启动解锁和网页录入，只影响日志隐藏；shutdown_logging 清空。
+# 删除后仍保留旧值，避免进行中的模型请求把旧密钥写进日志（D87）。
+_hidden_secrets: set[str] = set()
+_redact = _build_redactor(())
+_redactor_lock = Lock()
+
+
+def hide_secrets(secrets: Iterable[str]) -> None:
+    """追加本进程日志要隐藏的原文，不重建日志输出。"""
+    global _redact
+    with _redactor_lock:
+        _hidden_secrets.update(secret for secret in secrets if secret)
+        _redact = _build_redactor(_hidden_secrets)
+
+
 def _build_patcher(redact: Callable[[str], str]) -> Callable[["Record"], None]:
     def patch(record: "Record") -> None:
         message = record["message"]
@@ -145,7 +161,10 @@ def configure_logging(
         to_console: 是否同时输出到终端。
     """
     logger.remove()
-    logger.configure(patcher=_build_patcher(_build_redactor(secrets)))
+    with _redactor_lock:
+        _hidden_secrets.clear()
+    hide_secrets(secrets)
+    logger.configure(patcher=_build_patcher(lambda text: _redact(text)))
     if to_console:
         logger.add(
             sys.stderr,
@@ -175,7 +194,11 @@ def configure_logging(
 
 def shutdown_logging() -> None:
     """关闭所有日志输出（排队的日志会先写完），撤销标准库日志的转接和密钥过滤。"""
+    global _redact
     # 先撤转接再关 loguru：不让标准库的日志再往一个正在关闭的 loguru 里送。
     _remove_stdlib_bridge()
     logger.remove()
     logger.configure(patcher=_noop_patch)
+    with _redactor_lock:
+        _hidden_secrets.clear()
+        _redact = _build_redactor(())

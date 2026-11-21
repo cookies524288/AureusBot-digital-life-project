@@ -47,7 +47,7 @@ def key_name_argument(text: str) -> str:
 
 def _set_key(vault: SecretVault, name: str, read_secret: ReadSecret) -> int:
     # 先读一遍密钥库再提示输入：库打不开时在用户敲密钥之前就报错，不让人白输一遍。
-    existed = name in vault.names()
+    existed = any(name in (entry.name, entry.legacy_name) for entry in vault.load_entries())
     secret = read_secret(f"请输入 {name} 的密钥（输入时不显示）：")
     if not secret.strip():
         print("错误：没有输入密钥，什么都没有改。", file=sys.stderr)
@@ -87,7 +87,12 @@ def _migrate_from_dotenv(vault: SecretVault, env_file: Path) -> int:
     if not entries:
         print(f"{env_file} 里没有已填写的 {KEY_NAME_PREFIX} 开头的密钥，没有需要搬的密钥。")
         return EXIT_OK
-    existing = vault.load()
+    existing = {
+        name
+        for entry in vault.load_entries()
+        for name in (entry.name, entry.legacy_name)
+        if name is not None
+    }
     moved: dict[str, str] = {}
     for name in sorted(entries):
         if not re.fullmatch(API_KEY_ENV_PATTERN, name):

@@ -17,6 +17,7 @@ from aureus.common import (
     apply_toml_edit,
     validate_runtime_config,
 )
+from aureus.common.logging_setup import hide_secrets
 from aureus.common.vault import SecretVault, VaultError
 from aureus.organs import (
     BUILTIN_ORGANS,
@@ -97,19 +98,24 @@ def models_require_password(current: ModelsConfig, submitted: ModelsConfig) -> b
     for provider in submitted.providers:
         old = previous.get(provider.name)
         if old is None:
-            if provider.api_key_env is not None:
+            if provider.api_key_env is not None or provider.api_key_ref is not None:
                 return True
-        elif (old.base_url, old.api_key_env) != (provider.base_url, provider.api_key_env):
+        elif (old.base_url, old.api_key_env, old.api_key_ref) != (
+            provider.base_url,
+            provider.api_key_env,
+            provider.api_key_ref,
+        ):
             return True
     return False
 
 
 class ConfigService:
-    """只碰文件的配置服务；所有文件方法由接口放进线程，不接触 SQLite 或心跳。"""
+    """配置文件与密钥快照；文件方法放进线程，不接触 SQLite 或心跳。"""
 
     def __init__(self, paths: AureusPaths) -> None:
         self.paths = paths
         self._vault = SecretVault(paths.vault_file, paths.master_key_file)
+        self.key_resolver: KeyResolver | None = None
         # 来源是本进程成功的网页写入，只影响重启提示；进程重启清零（D84）。
         self.restart_required = False
         # to_thread 会让出执行权；串行处理网页写入，避免两个请求互相覆盖。
@@ -124,6 +130,7 @@ class ConfigService:
         """模型配置、由 Literal 得到的选项和当前密钥状态，不返回密钥原文。"""
         exists, config = self.read_models()
         names = [p.api_key_env for p in config.providers if p.api_key_env is not None]
+        refs = [p.api_key_ref for p in config.providers if p.api_key_ref is not None]
         return {
             "exists": exists,
             "config": config.model_dump(mode="json"),
@@ -133,18 +140,22 @@ class ConfigService:
                 "strategies": list(get_args(OrganStrategy)),
                 "reasoning_levels": list(get_args(ReasoningLevel)),
             },
-            "key_status": self.key_status(names),
+            "key_status": self.key_status(names, refs),
+            "key_entries": self.view_keys()["entries"],
             "builtin_organs": list(BUILTIN_ORGANS),
             "warnings": config.warnings(),
         }
 
-    def key_status(self, names: Iterable[str]) -> dict[str, bool]:
+    def key_status(self, names: Iterable[str], refs: Iterable[str] = ()) -> dict[str, bool]:
         """按环境变量、现读密钥库、现读 .env 的顺序，只返回是否有非空密钥。"""
         try:
             resolver = KeyResolver(self.paths.env_file, vault=self._vault)
         except VaultError as error:
             raise ConfigError(self.describe_vault_error(error)) from None
-        return {name: resolver.get(name) is not None for name in names}
+        return {
+            **{name: resolver.get(name) is not None for name in names},
+            **{ref: resolver.get_vault(ref) is not None for ref in refs},
+        }
 
     def describe_vault_error(self, error: VaultError) -> str:
         """保留密钥库错误的原因，去掉本机路径。"""
@@ -165,24 +176,58 @@ class ConfigService:
     def view_keys(self) -> dict[str, Any]:
         """只列密钥库状态和名字；打不开时不当成空库。"""
         if not self.paths.vault_file.exists():
-            return {"vault": "none", "names": []}
+            return {"vault": "none", "names": [], "entries": []}
         try:
-            names = self._vault.names()
+            entries = self._vault.load_entries()
         except VaultError:
-            return {"vault": "unreadable", "names": []}
-        return {"vault": "ok", "names": names}
+            return {"vault": "unreadable", "names": [], "entries": []}
+        entries.sort(key=lambda entry: entry.name)
+        return {
+            "vault": "ok",
+            "names": [e.name for e in entries],
+            "entries": [{"id": e.id, "name": e.name, "kind": e.kind} for e in entries],
+        }
+
+    def _keys_changed(self) -> None:
+        entries, master_key = self._vault.load_entries(), self._vault.master_key()
+        hide_secrets(e.value.get_secret_value() for e in entries)
+        if master_key is not None:
+            hide_secrets([master_key.decode("ascii")])
+        if self.key_resolver is not None:
+            self.key_resolver.replace_vault(entries, master_key)
+        else:
+            self.restart_required = True
+
+    def create_key(self, name: str, kind: str, value: str) -> str:
+        """新建类型化记录；不允许覆盖已有名称。"""
+        hide_secrets([value, value.strip()])
+        entry = self._vault.create(name, kind, value)
+        self._keys_changed()
+        logger.info("网页新建密钥")
+        return entry.id
+
+    def rename_key(self, entry_id: str, name: str) -> bool:
+        """修改名称后同步内存，引用的 id 不变。"""
+        renamed = self._vault.rename(entry_id, name)
+        if renamed:
+            self._keys_changed()
+            logger.info("网页修改密钥名称")
+        return renamed
 
     def write_key(self, name: str, value: str) -> None:
         """录入密钥；首次创建、文件锁和加密均复用 SecretVault，不记录原文。"""
+        hide_secrets([value, value.strip()])
         self._vault.set(name, value)
-        self.restart_required = True
+        self._keys_changed()
         logger.info("网页录入密钥：%s", name)
 
-    def remove_key(self, name: str) -> bool:
+    def remove_key(self, name: str, *, by_id: bool = False) -> bool:
         """删除一个密钥；名字不存在时不写文件、不设置重启提示。"""
-        removed = self._vault.remove(name)
+        # 先加入过滤，再删除，进行中的请求仍可能持有原文。
+        hide_secrets(self._vault.load().values())
+        removed = self._vault.remove_entry(name) if by_id else self._vault.remove(name)
         if removed:
-            self.restart_required = True
+            self._keys_changed()
             logger.info("网页删除密钥：%s", name)
         return removed
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from aureus.common.config import ConfigError
 from aureus.common.paths import AureusPaths
+from aureus.common.vault import ENTRY_ID_PATTERN
 
 # 当前软件认识的模型配置格式版本。以后改了格式就加一，并写迁移说明。
 MODELS_CONFIG_FORMAT_VERSION = 1
@@ -52,8 +53,16 @@ class ProviderConfig(BaseModel):
     base_url: str | None = None
     # 密钥所在的环境变量名，不是密钥本身。不写表示这个服务商不需要密钥（比如本地模型）。
     api_key_env: str | None = Field(default=None, pattern=API_KEY_ENV_PATTERN)
+    # 网页按名称选择；保存稳定 id，改名不影响引用（D87）。
+    api_key_ref: str | None = Field(default=None, pattern=ENTRY_ID_PATTERN)
     timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, gt=0)
     max_retry: int = Field(default=DEFAULT_MAX_RETRY, ge=0)
+
+    @model_validator(mode="after")
+    def _one_key_source(self) -> Self:
+        if self.api_key_env is not None and self.api_key_ref is not None:
+            raise ValueError("服务商只能选择一个密钥来源。")
+        return self
 
 
 class ModelConfig(BaseModel):

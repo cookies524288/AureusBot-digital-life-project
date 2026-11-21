@@ -26,6 +26,11 @@ class ModelRuntime:
         self.available_organs: frozenset[str] = frozenset(bus.list_organs())
         self.on_reload: Callable[[frozenset[str]], None] | None = None
 
+    @property
+    def key_resolver(self) -> KeyResolver:
+        """所有运行中器官共用的内存解析器，供网页刷新密钥快照。"""
+        return self._resolver
+
     def prepare(self, config: ModelsConfig) -> PreparedModels:
         """只构造、不应用；可在线程中执行，失败时文件和原器官都不改变。"""
         organs: list[Organ] = []

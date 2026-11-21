@@ -15,7 +15,7 @@ from dotenv import dotenv_values
 from loguru import logger
 from pydantic import SecretStr
 
-from aureus.common.vault import SecretVault
+from aureus.common.vault import SecretVault, VaultEntry
 
 # 密钥名必须以这个开头：不会和别的程序的环境变量混在一起，
 # 也能挡住“把密钥本身粘贴进配置文件”的失误（见 model_config.py）。
@@ -52,6 +52,8 @@ class MappingSource:
 
     def get(self, name: str) -> str | None:
         """取一个密钥原文；没有、或者只有空白时返回 None。"""
+        if self._only_key_names and not name.startswith(KEY_NAME_PREFIX):
+            return None
         return _clean(self._values.get(name))
 
     def names(self) -> list[str]:
@@ -90,17 +92,37 @@ class KeyResolver:
         }
         self._dotenv = MappingSource(file_values, only_key_names=True)
         live_environment = os.environ if environ is None else environ
-        sources: list[KeySource] = [MappingSource(live_environment, only_key_names=True)]
+        self._environment = MappingSource(live_environment, only_key_names=True)
         # 主密钥本身也要从日志里隐藏；它不是某一条密钥，所以单独记着。
         self._extra_hidden: list[str] = []
+        self._vault_entries: tuple[VaultEntry, ...] = ()
+        self._sources: tuple[KeySource, ...] = (self._environment, self._dotenv)
         if vault is not None:
             # 启动时解锁一次，之后只用内存里的副本：不在每次调用时读文件、做解密。
-            sources.append(MappingSource(vault.load()))
-            master_key = vault.master_key()
-            if master_key is not None:
-                self._extra_hidden.append(master_key.decode("ascii"))
-        sources.append(self._dotenv)
-        self._sources = tuple(sources)
+            self.replace_vault(vault.load_entries(), vault.master_key())
+
+    def replace_vault(self, entries: Iterable[VaultEntry], master_key: bytes | None) -> None:
+        """网页成功写入后的内存快照；调用时不读文件（D87）。"""
+        snapshot = tuple(entries)
+        values = {
+            name: entry.value.get_secret_value()
+            for entry in snapshot
+            if entry.kind == "api_key"
+            for name in (entry.name, entry.legacy_name)
+            if name is not None
+        }
+        self._sources = (self._environment, MappingSource(values), self._dotenv)
+        self._vault_entries = snapshot
+        if master_key is not None and master_key.decode("ascii") not in self._extra_hidden:
+            self._extra_hidden.append(master_key.decode("ascii"))
+
+    def get_vault(self, entry_id: str) -> SecretStr | None:
+        """只解析库内 API key 的稳定引用，不回退到环境变量或其他类型。"""
+        entry = next((e for e in self._vault_entries if e.id == entry_id), None)
+        if entry is None or entry.kind != "api_key":
+            return None
+        value = _clean(entry.value.get_secret_value())
+        return SecretStr(value) if value is not None else None
 
     def get(self, env_name: str) -> SecretStr | None:
         """取一个密钥。
@@ -144,6 +166,7 @@ class KeyResolver:
             if (value := source.get(name)) is not None
         }
         values.update(self._extra_hidden)
+        values.update(entry.value.get_secret_value() for entry in self._vault_entries)
         return sorted(values)
 
     def plaintext_key_names(self) -> list[str]:

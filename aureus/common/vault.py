@@ -2,7 +2,7 @@
 
 设计见 docs/15-model-management.md 第 7 节（D36）。两个文件都在数据根目录下：
 - secrets.key：主密钥，第一次录入密钥时随机生成，用户不用记；
-- secrets.vault：加密的密钥库，里面是 {密钥名: 密钥}，连名字也是密文。
+- secrets.vault：加密的类型化密钥库，名称、类型和原文都在密文中。
 
 这里只管文件和加解密：不认识器官，也不决定读取顺序（那是 organs/api_keys.py 的事）。
 加密用 cryptography 的 Fernet（带完整性校验），不自己拼算法；主密钥不对或文件被改过，
@@ -15,15 +15,22 @@ import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from cryptography.fernet import Fernet, InvalidToken
 from filelock import FileLock, Timeout
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 # 当前软件认识的文件格式版本。文件比软件新（降级）时拒绝读取，不硬读，
 # 做法同 docs/14-user-data.md 第 3 节。
 KEY_FILE_FORMAT_VERSION = 1
-VAULT_FORMAT_VERSION = 1
+VAULT_FORMAT_VERSION = 2
+SecretKind = Literal["password", "api_key", "other"]
+SECRET_KINDS = ("password", "api_key", "other")
+ENTRY_ID_PATTERN = r"^[0-9a-f]{32}$"
+MAX_SECRET_NAME_CHARS = 128
+MAX_SECRET_CHARS = 4096
 
 # 主密钥的保护方式。现在只有 none（不加密码）；字段先留着，以后给主密钥
 # 加密码保护时，密钥库不用重新加密（15 号文档 7.9）。
@@ -35,6 +42,31 @@ VAULT_LOCK_TIMEOUT_SECONDS = 10.0
 
 class VaultError(Exception):
     """密钥库或主密钥文件有问题。消息是中文，只写文件和原因，不带文件内容。"""
+
+
+class VaultEntry(BaseModel):
+    """仅进程内部使用的记录；原文的 repr 和默认序列化都被遮盖。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: str = Field(pattern=ENTRY_ID_PATTERN)
+    name: str = Field(min_length=1)
+    kind: SecretKind
+    value: SecretStr
+    # v1 / CLI 环境变量配置的兼容名，改显示名称时不改它。
+    legacy_name: str | None = None
+
+
+def _entry_name(name: str) -> str:
+    has_control = any(ord(c) < 32 or ord(c) == 127 for c in name)
+    name = name.strip()
+    if not name or len(name) > MAX_SECRET_NAME_CHARS or has_control:
+        raise VaultError(f"密钥名称要有 1–{MAX_SECRET_NAME_CHARS} 个字，不能包含控制字符。")
+    return name
+
+
+def _require_available(entries: list[VaultEntry], name: str, entry_id: str | None = None) -> None:
+    if any(e.id != entry_id and name in (e.name, e.legacy_name) for e in entries):
+        raise VaultError("这个密钥名称已存在。")
 
 
 def _write_atomically(path: Path, text: str) -> None:
@@ -122,7 +154,7 @@ def _write_master_key(path: Path, key: bytes) -> None:
 
 
 class SecretVault:
-    """加密的密钥库：读写 {密钥名: 密钥}。
+    """加密的密钥库：稳定引用与可修改的名称分开保存（D87）。
 
     每次读写都重新读文件、重新加解密：密钥只有几条，Fernet 很快，
     这样别的程序（比如 keys 命令）改了文件之后，这里不会读到旧内容。
@@ -142,7 +174,7 @@ class SecretVault:
             "请把 secrets.key 找回来；实在找不回，删掉 secrets.vault 后重新录入密钥。"
         )
 
-    def _decrypt(self, key: bytes) -> dict[str, str]:
+    def _decrypt(self, key: bytes) -> list[VaultEntry]:
         raw = _read_json_object(self._vault_file, "密钥库")
         _check_format_version(raw, VAULT_FORMAT_VERSION, "密钥库", self._vault_file)
         token = raw.get("token")
@@ -155,20 +187,50 @@ class SecretVault:
             raise VaultError(
                 f"密钥库 {self._vault_file} 解不开：主密钥不对，或者文件被改动过。"
             ) from None
-        if not isinstance(payload, dict) or not all(
-            isinstance(name, str) and isinstance(value, str) for name, value in payload.items()
-        ):
-            raise VaultError(f"密钥库 {self._vault_file} 解开后的内容格式不对。")
-        return dict(payload)
+        try:
+            if raw["format_version"] == 1:
+                if not isinstance(payload, dict) or not all(
+                    isinstance(name, str) and isinstance(value, str)
+                    for name, value in payload.items()
+                ):
+                    raise ValueError
+                return [
+                    VaultEntry(
+                        id=uuid5(NAMESPACE_URL, "aureus-vault:" + name).hex,
+                        name=name,
+                        kind="api_key",
+                        value=SecretStr(value),
+                        legacy_name=name,
+                    )
+                    for name, value in payload.items()
+                ]
+            if not isinstance(payload, list):
+                raise ValueError
+            entries = [VaultEntry.model_validate(item) for item in payload]
+            if len({e.id for e in entries}) != len(entries):
+                raise ValueError
+            for entry in entries:
+                _require_available(entries, entry.name, entry.id)
+                if entry.legacy_name is not None:
+                    _require_available(entries, entry.legacy_name, entry.id)
+            return entries
+        except (ValueError, ValidationError, VaultError):
+            raise VaultError(f"密钥库 {self._vault_file} 解开后的内容格式不对。") from None
 
-    def _save(self, secrets: Mapping[str, str]) -> None:
+    def _save(self, entries: list[VaultEntry]) -> None:
         # 调用方都先 load 过：有密钥库却没有可用主密钥时，load 早就报错了，
         # 所以走到这里时只会是“第一次写”或者“主密钥完好”，不会覆盖掉打不开的旧库。
         key = load_master_key(self._key_file)
         if key is None:
             key = generate_master_key()
             _write_master_key(self._key_file, key)
-        payload = json.dumps(dict(secrets), ensure_ascii=False).encode("utf-8")
+        payload = json.dumps(
+            [
+                {**entry.model_dump(exclude={"value"}), "value": entry.value.get_secret_value()}
+                for entry in entries
+            ],
+            ensure_ascii=False,
+        ).encode("utf-8")
         body = {
             "format_version": VAULT_FORMAT_VERSION,
             "token": Fernet(key).encrypt(payload).decode("ascii"),
@@ -196,8 +258,12 @@ class SecretVault:
             VaultError: 密钥库存在但打不开（没有主密钥、主密钥不对、文件被改动、版本太新……）。
                 不会当成“没有”处理，免得悄悄用上别处的旧明文。
         """
+        return {entry.name: entry.value.get_secret_value() for entry in self.load_entries()}
+
+    def load_entries(self) -> list[VaultEntry]:
+        """解锁全部记录，仅供本进程解析与写入；旧版读取不修改磁盘。"""
         if not self._vault_file.exists():
-            return {}
+            return []
         key = load_master_key(self._key_file)
         if key is None:
             raise self._missing_key_error()
@@ -222,9 +288,73 @@ class SecretVault:
         if not name.strip() or not cleaned:
             raise ValueError("密钥名和密钥都不能为空。")
         with self._locked_for_writing():
-            secrets = self.load()
-            secrets[name] = cleaned
-            self._save(secrets)
+            entries = self.load_entries()
+            old = next((e for e in entries if name in (e.name, e.legacy_name)), None)
+            if old is not None and old.kind != "api_key":
+                raise VaultError("这个名称属于其他类型的密钥。")
+            entry = (
+                old.model_copy(update={"value": SecretStr(cleaned)})
+                if old is not None
+                else VaultEntry(
+                    id=uuid4().hex,
+                    name=name,
+                    kind="api_key",
+                    value=SecretStr(cleaned),
+                    legacy_name=name,
+                )
+            )
+            self._save([e for e in entries if e.id != entry.id] + [entry])
+
+    def create(self, name: str, kind: str, value: str) -> VaultEntry:
+        """新建记录，名称重复时拒绝覆盖；非 API key 原样保留空白。"""
+        name = _entry_name(name)
+        if kind not in SECRET_KINDS:
+            raise VaultError("请选择密码、API key 或其他类型。")
+        value = value.strip() if kind == "api_key" else value
+        if not value or len(value) > MAX_SECRET_CHARS:
+            raise VaultError(f"密钥不能为空，且最多 {MAX_SECRET_CHARS} 个字。")
+        entry = VaultEntry.model_validate(
+            {
+                "id": uuid4().hex,
+                "name": name,
+                "kind": kind,
+                "value": value,
+                "legacy_name": name if name.startswith("AUREUS_KEY_") else None,
+            }
+        )
+        with self._locked_for_writing():
+            entries = self.load_entries()
+            _require_available(entries, name)
+            self._save([*entries, entry])
+        return entry
+
+    def rename(self, entry_id: str, name: str) -> bool:
+        """只改名称，稳定 id、兼容名、类型与原文不变。"""
+        name = _entry_name(name)
+        with self._locked_for_writing():
+            entries = self.load_entries()
+            old = next((e for e in entries if e.id == entry_id), None)
+            if old is None:
+                return False
+            _require_available(entries, name, entry_id)
+            if old.name != name:
+                self._save(
+                    [
+                        e.model_copy(update={"name": name}) if e.id == entry_id else e
+                        for e in entries
+                    ]
+                )
+        return True
+
+    def remove_entry(self, entry_id: str) -> bool:
+        """按稳定 id 删除；没有该记录时不写文件。"""
+        with self._locked_for_writing():
+            entries = self.load_entries()
+            kept = [e for e in entries if e.id != entry_id]
+            if len(kept) == len(entries):
+                return False
+            self._save(kept)
+        return True
 
     def remove(self, name: str) -> bool:
         """删掉一条密钥。
@@ -239,11 +369,11 @@ class SecretVault:
             VaultError: 密钥库打不开。
         """
         with self._locked_for_writing():
-            secrets = self.load()
-            if name not in secrets:
+            entries = self.load_entries()
+            kept = [e for e in entries if name not in (e.name, e.legacy_name)]
+            if len(kept) == len(entries):
                 return False
-            del secrets[name]
-            self._save(secrets)
+            self._save(kept)
         return True
 
     @contextmanager

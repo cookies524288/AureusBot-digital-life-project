@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from tomlkit.exceptions import TOMLKitError
 
 from aureus.common import ConfigError
-from aureus.common.vault import VaultError
+from aureus.common.vault import ENTRY_ID_PATTERN, MAX_SECRET_CHARS, VaultError
 from aureus.core.model_runtime import ModelRuntime
 from aureus.organs import API_KEY_ENV_PATTERN, BUILTIN_ORGANS, validate_models_config
 
@@ -25,7 +25,7 @@ from .config_files import (
 )
 
 # 无实测依据：远超常见密钥长度，只为挡住超大的录入请求（D84）。
-MAX_KEY_CHARS = 4096
+MAX_KEY_CHARS = MAX_SECRET_CHARS
 LOCAL_KEYS_ONLY = "密钥只能在本机的网页上录入。其他设备请到本机的网页，或用 aureus keys set。"
 
 
@@ -81,6 +81,13 @@ def _key_name(body: dict[str, Any]) -> str:
     return name
 
 
+def _entry_id(body: dict[str, Any]) -> str:
+    value = body.get("id")
+    if not isinstance(value, str) or not re.fullmatch(ENTRY_ID_PATTERN, value):
+        raise HTTPException(422, detail="密钥引用格式不对。")
+    return value
+
+
 def _runtime_changes(body: dict[str, Any]) -> dict[str, Any]:
     changes = body.get("changes")
     if not isinstance(changes, dict):
@@ -100,6 +107,8 @@ def register_config_routes(
     model_runtime: ModelRuntime | None = None,
 ) -> None:
     """注册配置接口；统一要求已登录且已修改默认密码。"""
+    if model_runtime is not None:
+        service.key_resolver = model_runtime.key_resolver
 
     @app.get("/api/models")
     async def view_models(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
@@ -164,6 +173,40 @@ def register_config_routes(
                 await asyncio.to_thread(service.write_key, name, value.strip())
             return {"ok": True, "restart_required": service.restart_required}
 
+    @app.post("/api/keys")
+    async def create_key(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, Any]:
+        _require_local(request)
+        with _translate_errors(service):
+            body = await _body(request)
+            _confirm(auth, body, request)
+            name, kind, value = body.get("name"), body.get("kind"), body.get("value")
+            if not isinstance(name, str) or not isinstance(kind, str):
+                raise HTTPException(422, detail="请填写密钥名称并选择类型。")
+            if not isinstance(value, str) or not value or len(value) > MAX_KEY_CHARS:
+                raise HTTPException(422, detail=f"密钥不能为空，且最多 {MAX_KEY_CHARS} 个字。")
+            async with service.write_lock:
+                entry_id = await asyncio.to_thread(service.create_key, name, kind, value)
+            return {"ok": True, "id": entry_id, "restart_required": service.restart_required}
+
+    @app.post("/api/keys/rename")
+    async def rename_key(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, bool]:
+        _require_local(request)
+        with _translate_errors(service):
+            body = await _body(request)
+            _confirm(auth, body, request)
+            entry_id, name = _entry_id(body), body.get("name")
+            if not isinstance(name, str):
+                raise HTTPException(422, detail="请填写密钥名称。")
+            async with service.write_lock:
+                renamed = await asyncio.to_thread(service.rename_key, entry_id, name)
+            if not renamed:
+                raise HTTPException(404, detail="没有这个密钥。")
+            return {"ok": True, "restart_required": service.restart_required}
+
     @app.get("/api/config")
     async def view_config(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
         with _translate_errors(service):
@@ -198,9 +241,10 @@ def register_config_routes(
         with _translate_errors(service):
             body = await _body(request)
             _confirm(auth, body, request)
-            name = _key_name(body)
+            by_id = "id" in body
+            name = _entry_id(body) if by_id else _key_name(body)
             async with service.write_lock:
-                removed = await asyncio.to_thread(service.remove_key, name)
+                removed = await asyncio.to_thread(service.remove_key, name, by_id=by_id)
             if not removed:
                 raise HTTPException(404, detail="没有这个密钥。")
             return {"ok": True, "restart_required": service.restart_required}
