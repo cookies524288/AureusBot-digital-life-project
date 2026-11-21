@@ -170,6 +170,23 @@ def test_deleting_the_file_resets_to_the_default(
 # ---------- 登录限流 ----------
 
 
+def test_default_limit_allows_six_failures_then_locks_for_thirty_seconds(
+    clock: ManualClock,
+) -> None:
+    limiter = LoginLimiter(WebConfig(), clock)
+    for _ in range(6):
+        limiter.record_failure(LOCAL)
+        assert limiter.locked_for(LOCAL) is None
+    limiter.record_failure(LOCAL)
+    assert limiter.locked_for(LOCAL) == timedelta(seconds=30)
+    clock.advance(timedelta(seconds=29))
+    assert limiter.locked_for(LOCAL) == timedelta(seconds=1)
+    clock.advance(timedelta(seconds=1))
+    assert limiter.locked_for(LOCAL) is None
+    limiter.record_failure(LOCAL)
+    assert limiter.locked_for(LOCAL) is None
+
+
 def test_limiter_locks_after_enough_failures(config: WebConfig, clock: ManualClock) -> None:
     limiter = LoginLimiter(config, clock)
     for _ in range(2):

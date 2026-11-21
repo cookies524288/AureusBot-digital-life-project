@@ -249,9 +249,9 @@ class WebConfig(BaseModel):
     # 登录状态的有效天数，从最后一次活动算起，每次请求续期（D63 第 7 条）。
     session_days: int = Field(default=7, ge=1)
     # 登录失败限流（按 IP）：窗口内失败这么多次，就在锁定期内拒绝这个 IP 的登录（D63 第 7 条）。
-    login_max_failures: int = Field(default=5, ge=1)
+    login_max_failures: int = Field(default=7, ge=1)
     login_window_seconds: int = Field(default=300, ge=1)
-    login_lockout_seconds: int = Field(default=900, ge=1)
+    login_lockout_seconds: int = Field(default=30, ge=1)
 
 
 class FeedbackConfig(BaseModel):

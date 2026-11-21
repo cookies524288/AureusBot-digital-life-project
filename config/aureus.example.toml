@@ -155,11 +155,11 @@ log_level = "INFO"
 # 登录状态有效几天，从最后一次活动算起，每次使用都会续期。每台设备各自计时。
 # session_days = 7
 # 登录失败限流（按来源 IP）：窗口内失败这么多次，就在锁定期内拒绝这个 IP 再登录。
-# login_max_failures = 5
+# login_max_failures = 7
 # 统计失败次数的窗口（秒）。
 # login_window_seconds = 300
 # 锁定多久（秒）。
-# login_lockout_seconds = 900
+# login_lockout_seconds = 30
 
 # 反馈（设计见 docs/10-decisions.md 的 D67）：做事前记下预期，做完记结果，
 # 用真实成功率算「自信」；它说「有几成把握」时，数字来自这里。下面的值都是默认值。

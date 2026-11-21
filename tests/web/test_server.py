@@ -5,7 +5,7 @@
 """
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,9 +31,9 @@ class FakeHeartbeat:
 
 
 class Rig:
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, config: WebConfig | None = None) -> None:
         self.clock = ManualClock(START)
-        self.config = WebConfig(login_max_failures=3)
+        self.config = config or WebConfig(login_max_failures=3)
         self.passwords = PasswordStore(tmp_path / "web_password.argon2", FAST_HASHER)
         self.sessions = SessionStore(tmp_path / "aureus.db", self.clock, self.config.session_days)
         self.sessions.open()
@@ -135,6 +135,27 @@ def test_too_many_failures_give_429_with_retry_after(rig: Rig) -> None:
     locked = login(client, GOOD)
     assert locked.status_code == 429
     assert int(locked.headers["retry-after"]) >= 1
+
+
+def test_default_login_limit_uses_seven_failures_and_a_thirty_second_retry(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, WebConfig())
+    try:
+        set_password(rig)
+        client = rig.client()
+        for _ in range(6):
+            assert login(client, "wrong").status_code == 401
+        assert login(client, GOOD).status_code == 200  # 六次失败仍能用正确口令登录。
+        for _ in range(7):
+            assert login(client, "wrong").status_code == 401
+        locked = login(client, GOOD)
+        assert locked.status_code == 429
+        assert locked.headers["retry-after"] == "30"
+        rig.clock.advance(timedelta(seconds=29))
+        assert login(client, GOOD).headers["retry-after"] == "1"
+        rig.clock.advance(timedelta(seconds=1))
+        assert login(client, GOOD).status_code == 200
+    finally:
+        rig.close()
 
 
 def test_a_long_password_is_refused_before_hashing(rig: Rig) -> None:
