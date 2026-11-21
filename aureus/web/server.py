@@ -1,7 +1,7 @@
-"""网页服务端：登录、改口令、历史对话、WebSocket、设置页和首页（路线图 1.10，D63）。
+"""网页服务端：登录、改密码、历史对话、WebSocket、设置页和首页（路线图 1.10，D63）。
 
-只做翻译和登录检查：消息交给 WebChannel，口令和登录状态交给 WebAuth。没登录什么都看不到；
-还在用默认口令时，登录后只能进改口令接口（D63 第 6 条）。接口都是 async def：它们要和心跳
+只做翻译和登录检查：消息交给 WebChannel，密码和登录状态交给 WebAuth。没登录什么都看不到；
+还在用默认密码时，登录后只能进改密码接口（D63 第 6 条）。接口都是 async def：它们要和心跳
 在同一个线程里用同一个 SQLite 连接，放进线程池就变成多个线程同时用一个连接。
 cookie 设成 HttpOnly 加 SameSite=Strict，别的网站发来的请求带不上它；局域网里是明文 HTTP，
 所以不加 Secure（D53 第 5 条）。
@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
 from aureus.common import Clock, WebConfig
+from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.timeline import TimelineDatabase, TimelineQuery
 
@@ -56,7 +57,7 @@ MAX_HISTORY_LIMIT = 200
 WS_POLICY_VIOLATION = 1008
 # 每个连着的网页最多攒多少条待推送的消息；网页收得太慢就丢掉新消息并记日志，不拖住心跳。
 OUTBOX_LIMIT = 256
-# 连着期间，隔多久核对一次登录是否还有效（退出所有设备、改口令后要把已连上的踢掉）。
+# 连着期间，隔多久核对一次登录是否还有效（退出所有设备、改密码后要把已连上的踢掉）。
 SESSION_RECHECK_SECONDS = 30.0
 # 网页本身是随代码放在 static 目录里的一个静态文件，登录页、聊天页和设置页都在里面；
 # 页面不含任何数据，数据都走要登录的接口。路径从本文件派生，不写死（D38）。
@@ -64,7 +65,7 @@ INDEX_PAGE = Path(__file__).parent / "static" / "index.html"
 
 
 class LoginRequest(BaseModel):
-    """登录请求。口令长度有上限，超长的请求在算哈希之前就被拒绝。"""
+    """登录请求。密码长度有上限，超长的请求在算哈希之前就被拒绝。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -72,7 +73,7 @@ class LoginRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    """改口令请求。"""
+    """改密码请求。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -86,7 +87,7 @@ def _remote_address(request: Request) -> str:
 
 
 def _http_error(error: Exception) -> HTTPException:
-    """把登录和口令的错误换成 HTTP 错误；消息都是中文，不回显口令。"""
+    """把登录和密码的错误换成 HTTP 错误；消息都是中文，不回显密码。"""
     if isinstance(error, LoginLockedError):
         seconds = max(1, math.ceil(error.retry_after.total_seconds()))
         return HTTPException(429, detail=str(error), headers={"Retry-After": str(seconds)})
@@ -178,6 +179,7 @@ def create_app(
     heartbeat: HeartbeatView | None = None,
     clock: Clock | None = None,
     config_files: ConfigService | None = None,
+    model_runtime: ModelRuntime | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -193,10 +195,10 @@ def create_app(
 
     async def require_ready(token: Annotated[str, Depends(require_session)]) -> str:
         if auth.password_is_default:
-            raise HTTPException(403, detail="请先修改默认口令。")
+            raise HTTPException(403, detail="请先修改默认密码。")
         return token
 
-    # ---------- 登录、退出、改口令 ----------
+    # ---------- 登录、退出、改密码 ----------
 
     @app.post("/api/login")
     async def login(body: LoginRequest, request: Request, response: Response) -> dict[str, bool]:
@@ -237,7 +239,7 @@ def create_app(
             auth.change_password(body.old_password, body.new_password, _remote_address(request))
         except (LoginLockedError, LoginRejectedError, PasswordPolicyError) as error:
             raise _http_error(error) from None
-        # 改口令会让所有设备的登录失效，包括这一台：清掉 cookie，让页面回到登录。
+        # 改密码会让所有设备的登录失效，包括这一台：清掉 cookie，让页面回到登录。
         response.delete_cookie(SESSION_COOKIE, path="/")
         return {"ok": True}
 
@@ -268,7 +270,7 @@ def create_app(
     @app.websocket("/ws")
     async def websocket(socket: WebSocket) -> None:
         token = socket.cookies.get(SESSION_COOKIE, "")
-        # 来源不对、没登录、还在用默认口令：握手阶段就拒绝，和 HTTP 接口的规则一致。
+        # 来源不对、没登录、还在用默认密码：握手阶段就拒绝，和 HTTP 接口的规则一致。
         if not _same_origin(socket) or not sessions.touch(token) or auth.password_is_default:
             await socket.close(code=WS_POLICY_VIOLATION)
             return
@@ -301,7 +303,7 @@ def create_app(
         )
 
     if config_files is not None:
-        register_config_routes(app, config_files, auth, require_ready)
+        register_config_routes(app, config_files, auth, require_ready, model_runtime)
 
     # ---------- 网页本身 ----------
 

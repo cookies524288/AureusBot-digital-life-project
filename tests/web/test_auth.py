@@ -1,4 +1,4 @@
-"""网页口令、登录限流和登录流程的测试（D63 第 6、7 条）。"""
+"""网页密码、登录限流和登录流程的测试（D63 第 6、7 条）。"""
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -64,7 +64,7 @@ def auth(
     return WebAuth(passwords, sessions, LoginLimiter(config, clock))
 
 
-# ---------- 口令规则 ----------
+# ---------- 密码规则 ----------
 
 
 @pytest.mark.parametrize("bad", ["", "short", "1234567", "admin", "ADMIN", "  admin  "])
@@ -101,7 +101,7 @@ def test_non_loopback_and_unparseable_addresses(address: str) -> None:
     assert is_loopback(address) is False  # 认不出来的地址当作不是本机
 
 
-# ---------- 口令文件 ----------
+# ---------- 密码文件 ----------
 
 
 def test_without_a_file_the_default_password_works(passwords: PasswordStore) -> None:
@@ -120,7 +120,7 @@ def test_set_password_stores_only_a_hash(passwords: PasswordStore, password_file
     assert passwords.is_default() is False
     assert passwords.verify(GOOD) is True
     assert passwords.verify("wrong password") is False
-    assert passwords.verify("admin") is False  # 设过口令后默认口令失效
+    assert passwords.verify("admin") is False  # 设过密码后默认密码失效
 
 
 def test_set_password_leaves_no_temp_files(passwords: PasswordStore, password_file: Path) -> None:
@@ -145,7 +145,7 @@ def test_a_broken_file_never_lets_anyone_in(
 ) -> None:
     password_file.parent.mkdir(parents=True)
     password_file.write_text(content, encoding="utf-8")
-    assert passwords.is_default() is False  # 文件坏了不能退回默认口令
+    assert passwords.is_default() is False  # 文件坏了不能退回默认密码
     assert passwords.verify("admin") is False
     assert passwords.verify(GOOD) is False
 
@@ -314,7 +314,7 @@ def test_confirm_password_checks_and_counts_failures(auth: WebAuth) -> None:
         auth.confirm_password(GOOD, LAN)
 
 
-# ---------- 改口令 ----------
+# ---------- 改密码 ----------
 
 
 def test_changing_the_password_logs_every_device_out(auth: WebAuth, sessions: SessionStore) -> None:
@@ -323,7 +323,7 @@ def test_changing_the_password_logs_every_device_out(auth: WebAuth, sessions: Se
     auth.change_password("admin", GOOD, LOCAL)
     assert sessions.touch(phone) is False
     assert sessions.touch(laptop) is False
-    assert auth.login(GOOD, LOCAL).token  # 新口令能登录
+    assert auth.login(GOOD, LOCAL).token  # 新密码能登录
     with pytest.raises(LoginRejectedError):
         auth.login("admin", LOCAL)  # 旧的不行
 

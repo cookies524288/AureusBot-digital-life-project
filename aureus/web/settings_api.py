@@ -2,7 +2,7 @@
 
 只做翻译：把请求变成 IdentityEdit 交给 SettingsService，把错误换成 HTTP 错误。
 接口都是 async def：和心跳在同一个线程里用同一个 SQLite 连接。
-口令确认失败返回 403 而不是 401：401 会让页面以为登录过期、跳回登录页。
+密码确认失败返回 403 而不是 401：401 会让页面以为登录过期、跳回登录页。
 """
 
 import math
@@ -97,7 +97,7 @@ class LocksRequest(_Strict):
 
 
 class EditRequest(_Strict):
-    """一次修改：没写的部分保持原样。改身份事实和不变人格时要带上当前口令。"""
+    """一次修改：没写的部分保持原样。改身份事实和不变人格时要带上当前密码。"""
 
     text: TextRequest = Field(default_factory=TextRequest)
     facts: FactsRequest | None = None
@@ -142,7 +142,7 @@ def _http_error(error: Exception) -> HTTPException:
         seconds = max(1, math.ceil(error.retry_after.total_seconds()))
         return HTTPException(429, detail=str(error), headers={"Retry-After": str(seconds)})
     if isinstance(error, LoginRejectedError):
-        return HTTPException(403, detail="口令不对。")
+        return HTTPException(403, detail="密码不对。")
     if isinstance(error, sqlite3.Error):
         return HTTPException(500, detail="设定已经写进文件，但版本历史没有记上，下次启动时会补记。")
     return HTTPException(422, detail=str(error))
@@ -151,7 +151,7 @@ def _http_error(error: Exception) -> HTTPException:
 def register_settings_routes(
     app: FastAPI, service: SettingsService, require_ready: Callable[..., Awaitable[str]]
 ) -> None:
-    """把设置页的三个接口挂到应用上；都要求已登录且不在默认口令状态。"""
+    """把设置页的三个接口挂到应用上；都要求已登录且不在默认密码状态。"""
     errors = (
         LoginLockedError,
         LoginRejectedError,

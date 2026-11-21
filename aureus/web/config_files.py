@@ -1,4 +1,4 @@
-"""网页配置文件服务：校验后写文件，记录重启提示，不改运行中的核心（D84）。"""
+"""网页配置文件服务：校验后原子写回；运行设置和密钥保留重启提示（D84、D86）。"""
 
 import asyncio
 import logging
@@ -19,6 +19,7 @@ from aureus.common import (
 )
 from aureus.common.vault import SecretVault, VaultError
 from aureus.organs import (
+    BUILTIN_ORGANS,
     KeyResolver,
     ModelKind,
     ModelsConfig,
@@ -91,7 +92,7 @@ def _edit_models(document: TOMLDocument, submitted: ModelsConfig) -> None:
 
 
 def models_require_password(current: ModelsConfig, submitted: ModelsConfig) -> bool:
-    """已有服务商改地址或密钥引用、新增带密钥的服务商时，要重新确认口令。"""
+    """已有服务商改地址或密钥引用、新增带密钥的服务商时，要重新确认密码。"""
     previous = {provider.name: provider for provider in current.providers}
     for provider in submitted.providers:
         old = previous.get(provider.name)
@@ -133,6 +134,8 @@ class ConfigService:
                 "reasoning_levels": list(get_args(ReasoningLevel)),
             },
             "key_status": self.key_status(names),
+            "builtin_organs": list(BUILTIN_ORGANS),
+            "warnings": config.warnings(),
         }
 
     def key_status(self, names: Iterable[str]) -> dict[str, bool]:
@@ -152,13 +155,12 @@ class ConfigService:
         )
 
     def write_models(self, config: ModelsConfig) -> None:
-        """按文件当前内容写回模型配置；失败抛出异常，重启标志保持原值。"""
+        """按文件当前内容写回模型配置；由接口热重载，不设置重启标志（D86）。"""
         apply_toml_edit(
             self.paths.models_config_file,
             lambda document: _edit_models(document, config),
             lambda raw: validate_models_config(raw, "提交的模型配置"),
         )
-        self.restart_required = True
 
     def view_keys(self) -> dict[str, Any]:
         """只列密钥库状态和名字；打不开时不当成空库。"""
@@ -190,7 +192,7 @@ class ConfigService:
         return exists, validate_runtime_config(raw, "aureus.toml")
 
     def view_runtime(self) -> dict[str, Any]:
-        """提供当前文件配置、自动生成的 schema、只读项和需口令的节。"""
+        """提供当前文件配置、自动生成的 schema、只读项和需密码的节。"""
         exists, config = self.read_runtime()
         return {
             "exists": exists,

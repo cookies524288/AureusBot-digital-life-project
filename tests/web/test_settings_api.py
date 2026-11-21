@@ -1,5 +1,5 @@
-# 设置页接口的测试：登录要求、口令确认、保存（路线图 1.10，D63 第 1、2、4 条）。
-# 身份写回、版本历史和口令都是真的，心跳是假的，不开真实端口。
+# 设置页接口的测试：登录要求、密码确认、保存（路线图 1.10，D63 第 1、2、4 条）。
+# 身份写回、版本历史和密码都是真的，心跳是假的，不开真实端口。
 
 import tomllib
 from collections.abc import Iterator, Sequence
@@ -200,7 +200,7 @@ def test_the_baseline_is_saved_with_the_right_password(rig: Rig) -> None:
     assert data["facts"]["alias_names"] == ["蓝蓝"]
     assert data["user"]["accounts"] == [{"platform": "qq", "id": "10000"}]
     assert data["persona"]["immutable"].strip() == "新底线。"
-    assert GOOD not in rig.file_text()  # 口令只用来核对，不写进任何文件
+    assert GOOD not in rig.file_text()  # 密码只用来核对，不写进任何文件
     assert rig.heartbeat.identity.facts.name == "小蓝"
 
 

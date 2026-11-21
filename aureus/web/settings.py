@@ -1,6 +1,6 @@
 """网页设置页的服务层：看设定、改设定、回退版本（路线图 1.10，D63 第 1、2、4、5 条）。
 
-不碰 HTTP：接口层把请求变成 IdentityEdit 交给这里。顺序是先核对口令（改身份事实和
+不碰 HTTP：接口层把请求变成 IdentityEdit 交给这里。顺序是先核对密码（改身份事实和
 不变人格要再输一次），再写回 identity.toml 并记版本（IdentityEditor），最后让心跳换上
 新设定、记时间线（Heartbeat.apply_identity_edit）。前两步任何一步失败，心跳都不动。
 """
@@ -90,10 +90,10 @@ class SettingsService:
     def apply(
         self, edit: IdentityEdit, *, password: str | None, remote_addr: str
     ) -> IdentityEditResult:
-        """做一次修改。改身份事实和不变人格时，password 必须是当前口令。
+        """做一次修改。改身份事实和不变人格时，password 必须是当前密码。
 
         Raises:
-            LoginLockedError、LoginRejectedError: 需要口令而口令没通过（计入登录失败限流）。
+            LoginLockedError、LoginRejectedError: 需要密码而密码没通过（计入登录失败限流）。
             IdentityEditError、IdentityValidationError: 修改不合法，文件和心跳都没动。
         """
         if edit.requires_password():
@@ -112,7 +112,7 @@ class SettingsService:
     ) -> IdentityEditResult:
         """回退到这一层最近几个版本里的一个：存成一个新版本，历史不删（D62、D63 第 5 条）。
 
-        只开放不用输口令的三层：底线层的回退和改它一样，要走 apply 并输口令。
+        只开放不用输密码的三层：底线层的回退和改它一样，要走 apply 并输密码。
 
         Raises:
             IdentityEditError: 这一层不能这样回退，或者这个版本不在最近几个里。

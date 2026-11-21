@@ -13,10 +13,11 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const nodes = new Map();
-function element() {
+function element(tag = 'div') {
   const classes = new Set();
   return {
-    nodeType: 1, dataset: {}, style: {}, value: '', textContent: '',
+    nodeType: 1, tagName: tag.toUpperCase(), dataset: {}, style: {}, value: '', textContent: '',
+    children: [], listeners: {}, attributes: {},
     classList: {
       add: name => classes.add(name), remove: name => classes.delete(name),
       contains: name => classes.has(name),
@@ -26,7 +27,16 @@ function element() {
         return enabled;
       },
     },
-    append() {}, setAttribute() {}, addEventListener() {}, focus() {}, remove() {},
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
+    setAttribute(key, value) {
+      this.attributes[key] = value;
+      if (key === 'id') nodes.set(value, this);
+    },
+    addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
+    removeEventListener() {}, focus() {}, remove() { this.removed = true; },
+    querySelectorAll() { return []; },
+    showModal() { this.open = true; }, close() { this.open = false; },
   };
 }
 const timers = [], sockets = [];
@@ -49,7 +59,11 @@ const context = vm.createContext({
   localStorage: { getItem: () => null },
   location: { protocol: 'http:', host: 'localhost', hash: '' },
   history: { replaceState() {} },
-  setTimeout: callback => timers.push(callback), setInterval() {},
+  setTimeout: callback => { timers.push(callback); return callback; },
+  clearTimeout: callback => {
+    const i = timers.indexOf(callback); if (i >= 0) timers.splice(i, 1);
+  },
+  setInterval() {},
   fetch: async () => reply(401, { detail: '请先登录。' }),
   WebSocket: class { constructor() { sockets.push(this); } close() {} },
 });
@@ -90,13 +104,13 @@ def test_wrong_password_does_not_log_out_a_valid_session(probe: str) -> None:
         const requests = [];
         fetch = async path => {
           requests.push(path);
-          if (path === '/api/password') return reply(401, { detail: '口令不对。' });
+          if (path === '/api/password') return reply(401, { detail: '密码不对。' });
           if (probe === 'offline') throw new TypeError('offline');
           return reply(200, { must_change_password: false });
         };
         const res = await api('/api/password', 'POST', {});
         assert.equal(res.status, 401);
-        assert.equal(errorText(res), '口令不对。');
+        assert.equal(errorText(res), '密码不对。');
         assert.equal(state.loggedIn, true);
         assert.equal($('app').classList.contains('hidden'), false);
         assert.deepEqual(requests, ['/api/password', '/api/status']);

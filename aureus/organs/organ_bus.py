@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from aureus.organs.interface import Organ, OrganRequest, OrganResponse
@@ -31,6 +32,13 @@ class OrganBus:
         if organ_id not in self._organs:
             raise ValueError(f"器官 {organ_id} 未注册")
         del self._organs[organ_id]
+
+    def replace_all(self, organs: Sequence[Organ]) -> None:
+        """一次替换登记表；进行中的 send 已持有原器官，后续调用用新器官。"""
+        updated = {organ.organ_id: organ for organ in organs}
+        if len(updated) != len(organs):
+            raise ValueError("器官名字重复")
+        self._organs = updated
 
     async def send(self, request: OrganRequest) -> OrganResponse:
         """发送请求到指定器官

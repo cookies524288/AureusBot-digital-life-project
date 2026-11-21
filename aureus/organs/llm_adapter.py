@@ -229,13 +229,14 @@ class LLMOrgan:
         sleep: SleepFunction | None = None,
     ) -> None:
         llm_routes = tuple(route for route in routes if route.model.kind == "llm")
-        if not llm_routes:
+        if routes and not llm_routes:
             # 启动时就报错，而不是等到第一次调用才发现这个器官无模型可用。
             raise ConfigError(f'器官 {organ_id} 没有可调用的对话模型（需要 kind = "llm" 的模型）。')
         self.organ_id = organ_id
         self._routes = llm_routes
         self._key_resolver = key_resolver
-        self._completion = completion or _load_litellm_completion()
+        # 非空真实器官在 prepare 工作线程加载，不能把首次导入留到事件循环。
+        self._completion = completion or (_load_litellm_completion() if llm_routes else None)
         self._token_counter = token_counter or count_prompt_tokens
         self._sleep = sleep or asyncio.sleep
 
@@ -282,6 +283,8 @@ class LLMOrgan:
         Raises:
             OrganCallError: 所有模型都调用失败。它的 attempts 里同样带着每一次请求。
         """
+        if not self._routes:
+            raise OrganCallError(self.organ_id, ["未配置可用的模型"], [])
         messages = [
             {"role": "system", "content": _system_message(request)},
             {"role": "user", "content": request.prompt},
@@ -418,7 +421,9 @@ class LLMOrgan:
     ) -> tuple[str, CallAttempt]:
         """真正发出一次请求。失败的这一次先记进 attempts，再抛出。"""
         try:
-            response = await self._completion(**kwargs)
+            completion = self._completion
+            assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
+            response = await completion(**kwargs)
         except Exception as error:
             reason = _failure_reason(error)
             if _rejected_before_processing(error):

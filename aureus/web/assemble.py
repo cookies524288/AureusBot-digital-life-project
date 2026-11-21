@@ -1,4 +1,4 @@
-"""把网页服务组装起来：登录状态、口令、设置页、网页通道、服务器（路线图 1.10，D63 第 8 条）。
+"""把网页服务组装起来：登录状态、密码、设置页、网页通道、服务器（路线图 1.10，D63 第 8 条）。
 
 网页服务和心跳在同一个进程、同一个事件循环里。这里只负责接线，由 aureus chat 在核心组装好之后调用；
 核心和别的子系统都不 import 本包（import-linter 检查）。
@@ -35,7 +35,7 @@ def open_web(core: Core, clock: Clock) -> Iterator[WebServer | None]:
         网页服务，或者 None。
 
     Raises:
-        ConfigError: 局域网开放而口令还是默认的 admin（D63 第 6 条）。
+        ConfigError: 局域网开放而密码还是默认的 admin（D63 第 6 条）。
     """
     config = core.settings.runtime.web
     if not config.enabled:
@@ -66,6 +66,7 @@ def open_web(core: Core, clock: Clock) -> Iterator[WebServer | None]:
             heartbeat=core.heartbeat,
             clock=clock,
             config_files=ConfigService(core.paths),
+            model_runtime=core.models,
         )
         yield WebServer(app, config)
     finally:

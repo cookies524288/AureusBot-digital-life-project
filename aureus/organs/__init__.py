@@ -14,6 +14,7 @@ from .interface import (
 from .llm_adapter import LLMOrgan, count_prompt_tokens
 from .model_config import (
     API_KEY_ENV_PATTERN,
+    BUILTIN_ORGANS,
     ModelKind,
     ModelRoute,
     ModelsConfig,
@@ -27,6 +28,7 @@ from .organ_bus import OrganBus
 
 __all__ = [
     "API_KEY_ENV_PATTERN",
+    "BUILTIN_ORGANS",
     "CallAttempt",
     "CallPurpose",
     "FakePlanner",

@@ -8,6 +8,7 @@ import pytest
 from aureus.common import ManualClock
 from aureus.common.logging_setup import LOG_FILE_NAME
 from aureus.core import runtime
+from aureus.core.model_runtime import ModelRuntime
 from aureus.organs import OrganBus, OrganRequest
 from aureus.timeline import ActorType, TimelineQuery, VisibilityScope
 from tests.heartbeat.test_judging_flow import NOW
@@ -31,7 +32,13 @@ async def test_runtime_growth_default_and_roleplay_gates(
     requests: list[OrganRequest] = []
     bus = OrganBus()
     bus.register(FixedOrgan("summarizer", requests))
-    monkeypatch.setattr(runtime, "_build_organ_bus", lambda *_args, **_kwargs: bus)
+    monkeypatch.setattr(
+        runtime,
+        "_build_organ_bus",
+        lambda _paths, _heartbeat, resolver, **_kwargs: ModelRuntime(
+            bus, resolver, fake_organs=False
+        ),
+    )
     clock = ManualClock(NOW)
     with runtime.open_core(paths, clock=clock, to_console=False) as core:
         core.heartbeat.wake_up()

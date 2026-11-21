@@ -28,15 +28,15 @@ def listen_host(config: WebConfig) -> str:
 
 
 def check_can_start(config: WebConfig, *, password_is_default: bool) -> None:
-    """启动前的检查：局域网开放而口令还是默认的 admin 时拒绝启动（D63 第 6 条）。
+    """启动前的检查：局域网开放而密码还是默认的 admin 时拒绝启动（D63 第 6 条）。
 
     Raises:
         ConfigError: 不能这样启动；消息里写明怎么办。
     """
     if config.allow_remote and password_is_default:
         raise ConfigError(
-            "aureus.toml 的 [web] allow_remote 打开了，但网页口令还是默认的 admin，"
-            "局域网里的人都知道它。请先把 allow_remote 改回 false，在本机打开网页修改口令，"
+            "aureus.toml 的 [web] allow_remote 打开了，但网页密码还是默认的 admin，"
+            "局域网里的人都知道它。请先把 allow_remote 改回 false，在本机打开网页修改密码，"
             "再重新打开 allow_remote。"
         )
 

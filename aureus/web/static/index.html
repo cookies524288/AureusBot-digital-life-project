@@ -13,7 +13,7 @@
 --accent:#b58900;--accent-strong:#8f6c00;--accent-soft:#f6ebc6;--on-accent:#fdf6e3;
 --danger:#dc322f;--danger-soft:#fae0d3;--ok:#728300;--ok-soft:#eef0c6;--warn:#cb4b16;--warn-soft:#fbe3cb;
 --shadow:0 1px 2px rgba(88,110,117,.06),0 2px 10px rgba(88,110,117,.06);
---radius:10px;--radius-sm:7px;--nav-w:56px;--nav-open:200px;--bar-h:56px;
+--radius:16px;--radius-sm:11px;--nav-w:56px;--nav-open:224px;--bar-h:56px;
 --ease:cubic-bezier(.2,.8,.2,1);--dur:.24s;
 --font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
 --mono:ui-monospace,'Cascadia Mono',Consolas,monospace;
@@ -46,15 +46,18 @@ nav.side{position:absolute;z-index:30;top:0;bottom:0;left:0;width:var(--nav-w);d
 /* 用 :has(:focus-visible) 而不是 :focus-within：鼠标点过按钮后按钮一直有焦点，用后者栏会卡在展开状态 */
 nav.side:hover,nav.side:has(:focus-visible){width:var(--nav-open);border-right-color:var(--border);box-shadow:8px 0 28px rgba(88,110,117,.14)}
 .brand{display:flex;align-items:center;gap:12px;flex:none;height:40px;padding:0 6px;margin-bottom:8px;font-weight:700;font-size:16px;letter-spacing:.3px;white-space:nowrap}
-.brand-mark{flex:none;width:28px;height:28px;border-radius:8px;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:15px;font-weight:800}
+.brand-mark{flex:none;width:28px;height:28px;object-fit:contain;display:block}
+:root[data-theme='dark'] .brand-mark{filter:invert(1)}
 .ico{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .nav-icon{flex:none;width:20px;height:20px;transition:transform var(--dur) var(--ease)}
 /* 文字平时藏着，展开时同时滑出（同一栏的标签一起出现，不错开）；收回时不延迟，一起淡出 */
 .nav-label{opacity:0;transform:translateX(-8px);transition:opacity .16s ease,transform var(--dur) var(--ease)}
 nav.side:hover .nav-label,nav.side:has(:focus-visible) .nav-label{opacity:1;transform:none;transition-delay:40ms}
-.nav-group{position:relative;flex:none;display:flex;align-items:center;height:22px;margin:8px 0 2px;padding:0 10px;font-size:12px;color:var(--text-2);letter-spacing:.5px;white-space:nowrap}
-.nav-group::before{content:'';position:absolute;left:12px;right:12px;top:50%;height:1px;background:var(--border);transition:opacity .16s}
-nav.side:hover .nav-group::before,nav.side:has(:focus-visible) .nav-group::before{opacity:0}
+.nav-group{position:relative;flex:none;display:flex;align-items:center;justify-content:center;height:34px;margin:10px 0 6px;padding:0 10px;font-size:12px;color:var(--text-2);letter-spacing:.5px;white-space:nowrap}
+.nav-group::before,.nav-group::after{content:'';position:absolute;left:12px;right:12px;height:1px;background:var(--border);transition:opacity .16s}
+.nav-group::before{top:50%}.nav-group::after{bottom:0;opacity:0}
+nav.side:hover .nav-group::before,nav.side:has(:focus-visible) .nav-group::before{top:0}
+nav.side:hover .nav-group::after,nav.side:has(:focus-visible) .nav-group::after{opacity:1}
 .nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:0;border-radius:var(--radius-sm);background:none;color:var(--text-2);text-align:left;cursor:pointer;transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
 .nav-item:hover{background:var(--surface-2);color:var(--text)}
 .nav-item.active{background:var(--accent-soft);color:var(--accent-strong);font-weight:600}
@@ -67,7 +70,7 @@ nav.side .nav-item.active::before{transform:scaleY(1)}
 #pages{position:relative;grid-column:2;min-width:0;min-height:0;overflow:hidden;margin:8px 8px 8px 0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 /* 左侧图标栏悬停展开时会盖住页面最左边一段：内容两侧各留出同样宽的空白并居中，展开时就不会挡住文字 */
 :root{--gutter:calc(var(--nav-open) - var(--nav-w) + 8px)}
-section.page{display:none;height:100%;overflow-y:auto;padding:28px var(--gutter) 40px}
+section.page{display:none;height:100%;overflow-y:auto;padding:28px calc(var(--gutter) - 24px) 40px calc(var(--gutter) + 24px)}
 section.page.active{display:flex;flex-direction:column;animation:fade-in .2s ease}
 @keyframes fade-in{from{opacity:0}to{opacity:1}}
 @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -150,16 +153,18 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 /* 提示条：保存结果、重启提示、后端还没做好 */
 #toasts{position:fixed;z-index:50;left:50%;bottom:calc(76px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;width:min(92vw,420px);pointer-events:none}
 @media (min-width:821px){#toasts{bottom:28px}}
-.toast{pointer-events:auto;padding:10px 16px;border-radius:var(--radius-sm);background:var(--text);color:var(--bg);box-shadow:var(--shadow);font-size:14px;animation:toast-in .2s ease-out}
+.toast{pointer-events:auto;padding:10px 16px;border-radius:var(--radius-sm);background:var(--text);color:var(--bg);box-shadow:var(--shadow);font-size:14px;animation:toast-in .34s var(--ease) both;transform-origin:right bottom}
 .toast.error{background:var(--danger);color:#fff}
 .toast.ok{background:var(--ok);color:#fff}
-@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.toast.leaving{pointer-events:none;opacity:0;animation:toast-out .22s ease-in both}
+@keyframes toast-in{0%{opacity:0;transform:translate(18px,12px) scale(.94)}70%{opacity:1;transform:translateY(-2px) scale(1.01)}100%{opacity:1;transform:none}}
+@keyframes toast-out{from{opacity:1;transform:none}to{opacity:0;transform:translate(10px,6px) scale(.97)}}
 .banner{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--warn);font-size:14px}
 .banner.danger{background:var(--danger-soft);color:var(--danger)}
 .banner.info{background:var(--accent-soft);color:var(--accent-strong)}
 .empty{padding:28px 16px;text-align:center;color:var(--text-2);border:1px dashed var(--border);border-radius:var(--radius)}
 
-/* 登录页和改口令页：居中的一张卡片 */
+/* 登录页和改密码页：居中的一张卡片 */
 .auth{min-height:100%;display:grid;place-items:center;padding:24px}
 .auth-card{width:min(100%,380px);display:flex;flex-direction:column;gap:14px}
 .auth-card h1{font-size:22px;display:flex;align-items:center;gap:10px}
@@ -184,6 +189,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 @media (max-width:820px){.hero{padding:18px}.hero-energy{margin-left:0;flex-basis:100%}}
 .meter>i{background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,white));transition:width .7s var(--ease)}
 .orb{position:relative;flex:none;width:56px;height:56px;border-radius:50%;background:radial-gradient(circle at 35% 30%,color-mix(in srgb,var(--accent) 45%,white),var(--accent) 58%,var(--accent-strong));box-shadow:0 4px 16px rgba(181,137,0,.32);animation:breathe 4s ease-in-out infinite}
+.hero .orb{margin-left:24px}
 .orb::after{content:'';position:absolute;inset:-8px;border-radius:50%;border:2px solid var(--accent);opacity:0;animation:ripple 4s ease-out infinite}
 .orb.busy,.orb.busy::after{animation-duration:1.3s}
 @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
@@ -202,13 +208,13 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .chat-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 24px;border-bottom:1px solid var(--border);background:var(--surface)}
 .chat-log{flex:1;min-height:0;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:10px}
 .msg{display:flex;flex-direction:column;max-width:min(78%,640px);gap:2px}
-.msg .bubble{padding:9px 14px;border-radius:16px;white-space:pre-wrap;word-break:break-word}
+.msg .bubble{padding:9px 14px;border-radius:20px;white-space:pre-wrap;word-break:break-word}
 .msg .meta{font-size:11px;color:var(--text-2);padding:0 6px}
 .msg.user{align-self:flex-end;align-items:flex-end}
-.msg.user .bubble{background:var(--accent);color:var(--on-accent);border-bottom-right-radius:4px}
+.msg.user .bubble{background:var(--accent);color:var(--on-accent);border-bottom-right-radius:8px}
 .msg.me{align-self:flex-start}
-.msg.me .bubble{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:4px}
-.msg.person .bubble,.msg.system .bubble{background:var(--surface-2);border-bottom-left-radius:4px}
+.msg.me .bubble{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:8px}
+.msg.person .bubble,.msg.system .bubble{background:var(--surface-2);border-bottom-left-radius:8px}
 .msg.notice{align-self:center;max-width:90%;align-items:center}
 .msg.notice .bubble{background:none;border:1px dashed var(--warn);color:var(--warn);font-size:13px;border-radius:var(--radius-sm)}
 .chat-day{align-self:center;font-size:12px;color:var(--text-2);padding:4px 0}
@@ -216,6 +222,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .composer textarea{min-height:44px;max-height:160px;resize:none;border-radius:22px;padding:10px 18px}
 .composer .btn{flex:none;height:44px;border-radius:22px;padding:0 20px}
 .chat-log .empty{margin:auto;border:0;background:none}
+@media (min-width:821px){.chat-head,.chat-log,.composer{padding-left:calc(var(--gutter) + 24px);padding-right:calc(var(--gutter) - 24px)}}
 @media (max-width:820px){.chat-head,.chat-log,.composer{padding-left:14px;padding-right:14px}.msg{max-width:88%}}
 
 /* ---------- 时间线 ---------- */
@@ -282,6 +289,62 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .panel-body{padding:16px 18px}
 .big{display:flex;align-items:center;gap:10px;font-size:30px;font-weight:700;line-height:1.3}
 .panel .tl-list{margin-left:0}
+
+/* D86：统一圆角、提前展开区域、模型库与器官抽屉；颜色沿用现有变量。 */
+.nav-trigger{position:absolute;left:0;top:0;bottom:0;width:var(--nav-open);z-index:29}
+nav.side .nav-item{display:grid;grid-template-columns:20px minmax(0,1fr) 20px;text-align:center}
+nav.side .nav-label{text-align:center}
+.cfg-tabs .nav-item{position:relative;justify-content:center;text-align:center}
+.cfg-tabs .count{position:absolute;right:10px}
+@media(min-width:821px){
+#app:has(.nav-trigger:hover) nav.side{width:var(--nav-open);border-right-color:var(--border);box-shadow:8px 0 28px rgba(88,110,117,.14)}
+#app:has(.nav-trigger:hover) nav.side .nav-label{opacity:1;transform:none;transition-delay:0s}
+#app:has(.nav-trigger:hover) .nav-group::before{top:0}
+#app:has(.nav-trigger:hover) .nav-group::after{opacity:1}
+}
+#toasts{right:18px;left:auto;top:auto;margin:0;padding:0;border:0;background:transparent;overflow:visible;transform:none;align-items:stretch;width:min(94vw,460px);z-index:80}
+.toast,.toast.error,.toast.ok{border-radius:var(--radius-sm);background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--danger-soft) 70%,transparent) 14%,color-mix(in srgb,var(--danger-soft) 70%,transparent) 86%,transparent);color:var(--text);box-shadow:none;text-align:center;padding:12px 28px;overflow-wrap:anywhere}
+.toast.error{color:var(--danger)}
+#ps-mutable{height:calc(7.5lh + 27px)}
+#ps-behavior_style,#ps-expression_style{height:calc(12.5lh + 45px)}
+.danger-text{color:var(--danger)}
+.model-library{display:grid;grid-template-columns:176px minmax(0,1fr);gap:20px;align-items:start}
+.model-vendors{position:sticky;top:0;display:flex;flex-direction:column;gap:12px;min-width:0}
+.provider-list{display:flex;flex-direction:column;gap:5px;border:1px solid var(--border);border-radius:var(--radius);padding:7px;background:var(--surface)}
+.provider-row{border:0;border-radius:var(--radius-sm);padding:10px;color:var(--text-2);background:transparent;cursor:pointer;text-align:center;overflow-wrap:anywhere}
+.provider-row.active{color:var(--accent-strong);background:var(--accent-soft);font-weight:600}
+.provider-row:hover{background:var(--surface-2)}
+.model-main{min-width:0;display:flex;flex-direction:column;gap:14px}
+.model-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.model-toolbar input{flex:1;min-width:150px}
+.model-toolbar select{width:auto;max-width:100%}
+.model-table-wrap{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.model-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px}
+.model-table th,.model-table td{padding:12px 9px;border-bottom:1px solid var(--border);text-align:left;overflow-wrap:anywhere;vertical-align:middle}
+.model-table th{background:var(--surface-2);font-weight:600}
+.model-table th:first-child{width:25%}.model-table th:last-child{width:130px}
+.model-table td .row{gap:6px;flex-wrap:nowrap}
+.model-table tr:last-child td{border-bottom:0}
+.model-id{font-size:12px;overflow-wrap:anywhere;line-height:1.5;margin-top:3px}
+.model-cards{display:none;gap:12px}.model-compact{display:flex;flex-direction:column;gap:10px}
+.organ-tile{text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:12px;color:var(--text);transition:border-color .16s,transform .16s}
+.organ-tile:hover{border-color:var(--accent);transform:translateY(-2px)}
+.organ-tile h3{flex:1}.organ-summary{font-family:var(--mono);overflow-wrap:anywhere;font-size:13px}
+dialog{color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:20px;box-shadow:0 16px 64px rgba(0,0,0,.16);padding:0;max-height:calc(100dvh - 32px)}
+dialog::backdrop{background:rgba(0,20,25,.28);backdrop-filter:blur(2px)}
+.editor-dialog{width:min(580px,calc(100vw - 32px))}
+.editor-dialog.drawer{position:fixed;inset:16px 16px 16px auto;margin:0;height:calc(100dvh - 32px);width:min(520px,calc(100vw - 32px))}
+.dialog-shell{display:flex;flex-direction:column;max-height:calc(100dvh - 34px)}
+.drawer .dialog-shell{height:100%}
+.dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid var(--border)}
+.dialog-head h3{font-size:17px}.dialog-body{padding:20px 22px;overflow-y:auto;min-height:0;flex:1}
+.dialog-foot{display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 22px;border-top:1px solid var(--border)}
+.dialog-body .hint{font-size:12px;color:var(--text-2)}
+.confirm-dialog{width:min(400px,calc(100vw - 32px))}.confirm-dialog p{padding:26px 24px;font-size:16px}
+.key-editor{border-top:1px solid var(--border);padding-top:18px}
+@media(max-width:1100px){.model-library{grid-template-columns:1fr}.model-vendors{position:static}.provider-list{flex-direction:row;flex-wrap:wrap}.provider-row{flex:1 1 100px}.model-price,.model-owners{display:none}}
+@media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
+
 </style>
 </head>
 <body>
@@ -297,15 +360,18 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/><path d="M15 8l4 4-4 4M19 12H9"/></symbol>
 <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3L10 14M21 3l-7 18-4-8-8-4z"/></symbol>
 <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/></symbol>
+<symbol id="aureus-logo" viewBox="0 0 1254 1254">
+<path fill="#000" fill-rule="evenodd" d="M934.53 1023.58C934.08 1022.07 933.03 1018.58 932.20 1015.83C929.77 1007.79 924.17 991.52 921.24 983.99C916.33 971.37 913.92 965.59 909.66 956.17C909.33 955.43 908.46 953.48 907.73 951.83C905.06 945.81 895.47 926.21 894.67 925.17C894.54 924.98 893.70 923.48 892.83 921.83C891.95 920.18 890.67 917.86 889.99 916.67C889.30 915.48 888.41 913.90 888.00 913.17C882.26 902.85 870.25 885.38 861.88 875.17C848.65 859.02 834.01 845.10 820.89 836.22C819.10 835.00 817.57 834.00 817.49 834.00C817.42 834.00 816.72 833.59 815.93 833.08C813.83 831.74 813.32 831.44 811.72 830.60C810.92 830.19 809.84 829.35 809.30 828.75C806.85 825.95 808.93 824.10 817.50 821.48C826.75 818.64 843.78 811.01 852.17 805.95C852.72 805.61 853.47 805.19 853.83 805.00C854.20 804.81 854.90 804.40 855.39 804.08C855.88 803.76 857.00 803.06 857.89 802.53C859.27 801.69 861.72 800.05 865.82 797.19C866.37 796.81 868.54 795.16 870.66 793.53C881.14 785.42 889.31 777.25 896.65 767.50C905.32 755.98 911.88 743.86 915.94 731.83C917.65 726.78 920.00 718.47 920.00 717.50C920.00 716.90 919.42 716.50 916.75 715.25C907.31 710.85 892.29 705.02 881.33 701.51C863.30 695.74 847.70 692.31 827.50 689.68C823.28 689.13 819.33 688.53 818.72 688.35C817.17 687.90 814.61 686.21 813.79 685.09C811.10 681.42 812.37 676.09 816.45 673.90C817.75 673.21 818.25 673.17 824.83 673.17C828.68 673.17 833.48 673.36 835.50 673.60C845.61 674.80 848.01 675.13 854.33 676.20C858.09 676.83 862.26 677.58 863.60 677.85C866.16 678.37 881.11 682.12 882.83 682.67C883.38 682.85 885.41 683.46 887.33 684.03C898.42 687.30 912.92 692.68 921.83 696.84C922.61 697.20 922.92 697.21 923.24 696.90C923.83 696.31 924.45 685.05 924.19 679.67C923.72 669.83 921.47 654.94 920.28 653.84C919.80 653.39 915.61 652.72 906.67 651.67C888.46 649.52 883.25 649.21 865.17 649.20C849.76 649.18 836.98 649.74 830.00 650.72C828.62 650.91 825.32 651.09 822.67 651.12C818.29 651.16 817.71 651.10 816.48 650.44C814.46 649.36 813.14 647.83 812.51 645.82C811.38 642.23 813.27 638.67 817.20 636.99C818.38 636.48 823.19 635.61 827.50 635.12C828.23 635.03 830.56 634.75 832.67 634.49C838.31 633.79 848.28 633.08 858.67 632.64C866.40 632.31 869.73 632.34 880.00 632.80C886.69 633.10 893.37 633.48 894.83 633.65C896.30 633.81 900.12 634.19 903.33 634.49C906.54 634.79 910.41 635.18 911.93 635.36C913.44 635.55 914.83 635.60 915.01 635.49C915.19 635.38 915.24 634.89 915.12 634.40C914.80 633.08 912.35 625.73 909.82 618.50C908.60 615.02 906.96 610.29 906.16 608.00C902.80 598.31 898.04 585.23 896.16 580.50C895.28 578.30 894.37 575.90 894.13 575.17C893.34 572.69 890.69 565.61 889.52 562.83C889.29 562.28 888.90 561.31 888.66 560.67C887.00 556.24 884.82 551.39 884.22 550.77C883.82 550.37 881.93 549.09 880.00 547.91C878.07 546.74 875.08 544.91 873.33 543.83C868.73 541.00 855.07 534.26 848.33 531.50C838.69 527.54 834.89 526.06 829.62 524.21C807.49 516.44 790.27 511.57 768.17 506.82C765.23 506.18 760.43 505.15 757.50 504.52C733.71 499.40 698.39 494.57 672.04 492.82C623.18 489.59 579.25 491.59 532.67 499.17C524.85 500.44 509.79 503.20 507.89 503.70C507.19 503.89 503.82 504.61 500.39 505.32C487.06 508.06 454.19 516.22 442.17 519.78C439.97 520.43 436.07 521.57 433.50 522.33C429.40 523.53 423.99 525.34 416.17 528.12C400.80 533.58 385.45 540.89 373.50 548.45C370.17 550.55 369.21 551.54 368.73 553.31C368.55 553.96 367.96 555.70 367.42 557.17C365.23 563.05 363.65 567.20 363.34 567.83C363.17 568.20 362.33 570.45 361.48 572.83C360.63 575.22 359.56 578.07 359.11 579.17C357.92 582.07 351.46 599.26 350.10 603.17C349.46 605.00 348.56 607.40 348.09 608.50C347.31 610.35 343.84 619.78 342.82 622.83C342.57 623.57 341.90 625.44 341.32 627.00C339.39 632.22 338.31 635.70 338.52 636.04C338.64 636.23 339.45 636.30 340.45 636.19C355.09 634.66 358.72 634.37 367.74 633.95C377.90 633.49 400.27 633.78 409.00 634.48C422.64 635.58 433.79 636.96 436.47 637.88C440.00 639.08 442.19 642.89 441.38 646.39C440.86 648.64 439.84 649.95 437.62 651.18C435.89 652.14 435.70 652.17 431.67 652.12C429.38 652.10 425.85 651.91 423.83 651.70C421.82 651.49 417.69 651.17 414.67 650.99C411.64 650.81 406.39 650.50 403.00 650.29C395.88 649.87 372.70 650.08 365.33 650.64C358.10 651.19 349.99 651.96 345.50 652.52C340.60 653.13 334.08 654.01 333.13 654.19C332.33 654.34 331.95 655.16 331.20 658.33C328.75 668.60 327.34 679.78 327.34 688.88C327.33 692.77 327.43 693.66 327.86 694.02C328.25 694.35 328.54 694.37 328.96 694.10C329.48 693.78 333.73 692.06 339.50 689.84C365.77 679.72 393.02 673.68 420.00 671.99C423.03 671.81 426.70 671.56 428.17 671.45C431.32 671.21 435.38 671.79 436.87 672.70C441.42 675.46 442.41 680.99 439.01 684.59C437.11 686.60 432.83 688.00 428.54 688.00C427.01 688.00 413.35 689.69 408.17 690.52C404.11 691.17 392.94 693.27 391.33 693.69C390.69 693.85 388.39 694.38 386.22 694.85C384.05 695.32 380.52 696.20 378.38 696.80C376.25 697.41 372.78 698.39 370.67 698.98C366.68 700.10 349.27 706.21 344.33 708.22C342.78 708.85 338.91 710.51 335.75 711.91C330.35 714.29 330.00 714.49 330.00 715.34C330.00 717.94 332.46 727.36 335.10 734.83C340.26 749.47 347.21 761.85 357.26 774.30C367.06 786.44 378.78 796.45 394.00 805.68C400.80 809.80 411.85 815.32 419.33 818.33C420.34 818.74 422.22 819.49 423.50 820.01C424.78 820.53 426.73 821.26 427.83 821.63C428.93 822.00 430.66 822.62 431.67 823.00C434.52 824.08 439.82 825.81 447.00 828.01C451.26 829.31 452.53 830.35 452.21 832.29C451.98 833.70 451.27 834.32 448.33 835.71C441.90 838.74 438.77 840.35 435.05 842.56C432.79 843.90 430.89 845.00 430.82 845.00C430.60 845.00 424.42 849.19 421.67 851.21C420.11 852.36 417.86 854.01 416.67 854.89C412.70 857.81 404.91 864.44 399.84 869.22C379.84 888.06 359.06 915.81 345.07 942.33C344.25 943.89 342.84 946.47 341.94 948.06C340.29 950.99 336.47 958.77 332.66 967.00C325.97 981.43 317.39 1004.39 312.99 1019.67C312.38 1021.77 311.83 1023.56 311.78 1023.63C311.72 1023.71 310.66 1023.32 309.41 1022.77C306.93 1021.67 303.87 1019.59 299.00 1015.68C297.26 1014.29 295.05 1012.58 294.10 1011.89C293.15 1011.20 291.75 1009.90 291.00 1009.00C290.24 1008.09 288.30 1006.41 286.68 1005.26C280.15 1000.62 278.45 999.33 277.24 998.09L275.98 996.79L277.18 992.98C280.41 982.64 285.46 968.40 288.76 960.33C294.02 947.44 296.79 941.26 302.41 929.90C306.53 921.56 313.34 909.03 316.81 903.43C317.74 901.93 319.77 898.63 321.33 896.10C332.88 877.29 348.65 856.94 363.25 842.00C369.11 836.00 369.56 835.46 369.09 834.92C368.81 834.61 366.15 832.72 363.19 830.72C353.91 824.48 345.89 817.84 338.60 810.37C328.88 800.41 324.89 795.43 317.76 784.33C311.24 774.19 306.37 764.39 301.26 751.17C300.17 748.34 300.15 748.34 296.80 750.87C291.24 755.07 268.36 770.00 267.50 770.00C267.41 770.00 266.33 770.63 265.09 771.39C263.31 772.49 255.07 776.59 251.17 778.33C245.19 781.00 235.77 784.20 229.66 785.65C213.13 789.57 192.12 789.12 176.04 784.49C170.48 782.89 165.45 781.19 162.50 779.90C151.47 775.10 141.55 768.26 133.33 759.79C122.77 748.91 116.15 737.30 111.70 721.83C108.12 709.38 107.76 695.09 110.70 681.67C113.82 667.39 119.46 655.97 131.02 640.50C134.76 635.50 143.31 624.74 146.79 620.66C148.10 619.12 151.60 614.88 157.07 608.20C170.04 592.34 177.15 583.43 186.94 570.73C189.82 567.00 193.48 562.28 195.08 560.23C196.68 558.18 200.72 552.90 204.05 548.50C207.39 544.10 210.96 539.45 212.00 538.17C213.03 536.88 215.93 533.13 218.45 529.83C223.82 522.79 225.62 520.44 231.51 512.83C242.24 498.96 245.71 494.53 249.31 490.05C251.43 487.42 253.36 484.99 253.60 484.67C254.12 483.95 254.21 482.66 254.67 468.33C255.13 453.77 255.94 433.97 256.35 426.83C256.53 423.72 256.83 418.54 257.00 415.33C257.18 412.12 257.40 408.90 257.49 408.17C257.58 407.43 257.81 404.21 258.00 401.00C258.18 397.79 258.48 393.82 258.66 392.17C258.84 390.52 259.30 386.17 259.67 382.50C261.18 367.84 263.56 354.00 266.63 342.00C268.36 335.22 268.86 333.60 271.63 325.60C275.88 313.35 284.70 297.60 293.45 286.62C297.18 281.94 306.57 272.34 311.17 268.51C324.90 257.06 339.37 248.06 357.67 239.60C359.22 238.88 361.10 238.01 361.83 237.67C365.84 235.80 367.70 235.00 368.01 235.00C368.19 235.00 368.60 234.85 368.92 234.67C369.71 234.21 380.81 229.75 383.00 229.00C383.46 228.84 384.66 228.40 385.67 228.01C388.32 226.98 393.00 225.34 394.17 225.02C394.72 224.87 395.54 224.59 396.00 224.40C396.74 224.09 398.75 223.43 409.00 220.16C411.55 219.35 413.49 218.79 416.50 218.00C418.41 217.50 423.51 216.01 424.67 215.62C425.31 215.40 426.28 215.12 426.83 214.99C427.38 214.85 429.03 214.41 430.50 214.00C431.97 213.59 433.69 213.14 434.33 213.00C434.97 212.86 437.90 212.13 440.83 211.38C443.77 210.64 447.22 209.78 448.50 209.49C449.78 209.19 451.73 208.74 452.83 208.49C453.93 208.23 456.93 207.56 459.50 207.00C462.07 206.43 465.14 205.76 466.33 205.49C471.57 204.34 480.76 202.49 486.17 201.51C487.82 201.21 490.29 200.76 491.67 200.50C495.99 199.71 504.81 198.23 509.33 197.53C519.98 195.88 524.49 195.29 539.50 193.53C554.63 191.76 569.99 190.43 586.00 189.52C630.74 186.96 676.68 188.68 727.00 194.81C733.46 195.60 739.14 196.36 739.67 196.51C739.94 196.58 742.83 197.03 746.09 197.49C751.83 198.31 753.38 198.56 761.17 199.99C763.18 200.36 765.43 200.75 766.17 200.86C766.90 200.97 768.62 201.27 770.00 201.53C775.16 202.53 777.90 203.07 780.00 203.52C784.69 204.51 786.95 204.97 789.67 205.52C792.40 206.07 796.23 206.95 804.92 209.02C814.58 211.33 817.59 212.07 819.00 212.49C819.82 212.73 823.05 213.64 826.17 214.50C836.78 217.44 852.42 222.32 859.17 224.80C859.90 225.07 862.38 225.96 864.67 226.78C866.96 227.61 869.66 228.60 870.67 228.99C871.68 229.38 873.02 229.90 873.67 230.14C881.69 233.16 889.18 236.50 899.33 241.58C910.90 247.35 915.23 249.83 924.16 255.77C942.25 267.80 954.91 279.91 965.37 295.20C973.79 307.51 980.03 320.95 984.34 336.00C984.73 337.38 985.18 338.88 985.35 339.33C986.11 341.47 988.42 352.97 989.49 360.00C989.79 361.93 990.17 364.40 990.34 365.50C992.19 377.23 994.14 401.12 995.00 422.50C995.69 439.76 996.60 464.93 996.84 473.33C997.15 484.25 996.96 483.44 999.96 487.05C1007.99 496.76 1027.40 521.40 1038.12 535.50C1050.24 551.44 1052.09 553.86 1058.18 561.83C1068.98 575.97 1071.06 578.67 1075.24 583.83C1081.69 591.82 1084.30 595.02 1086.30 597.37C1087.33 598.58 1089.67 601.42 1091.50 603.67C1093.33 605.93 1095.88 609.00 1097.17 610.50C1103.04 617.35 1116.16 633.50 1120.71 639.50C1122.98 642.49 1129.70 652.46 1131.50 655.50C1137.29 665.30 1140.61 674.43 1142.54 685.83C1143.43 691.02 1143.43 706.08 1142.55 711.67C1141.37 719.17 1139.54 725.84 1136.69 733.00C1134.30 738.98 1128.54 748.57 1123.87 754.32C1117.09 762.65 1107.27 771.05 1098.33 776.14C1095.90 777.52 1087.46 781.65 1085.67 782.33C1085.02 782.57 1084.05 782.96 1083.50 783.20C1082.26 783.74 1079.83 784.62 1078.50 785.00C1077.95 785.16 1076.25 785.67 1074.71 786.14C1065.83 788.83 1056.77 790.02 1045.17 790.02C1040.77 790.02 1036.00 789.87 1034.58 789.68C1033.16 789.49 1030.91 789.19 1029.58 789.02C1011.65 786.67 994.65 780.14 975.83 768.38C967.94 763.45 954.10 753.66 950.36 750.37C949.01 749.18 949.19 748.95 946.48 755.33C936.55 778.72 922.03 798.86 902.67 816.10C898.16 820.11 890.94 825.65 885.24 829.47C883.07 830.92 881.24 832.22 881.15 832.36C880.97 832.66 882.63 834.68 885.79 838.00C893.12 845.68 907.25 864.01 914.71 875.50C920.38 884.22 921.00 885.21 922.28 887.33C932.38 904.24 940.54 920.11 947.81 937.00C954.15 951.73 954.01 951.37 959.89 966.83C962.06 972.54 967.05 987.15 969.17 994.00L970.97 999.83L970.07 1000.50C969.57 1000.87 968.11 1002.22 966.81 1003.50C965.51 1004.78 962.31 1007.41 959.68 1009.33C957.06 1011.26 953.25 1014.16 951.21 1015.79C946.51 1019.53 940.11 1023.94 937.43 1025.29L935.35 1026.33L934.53 1023.58ZM543.87 731.31C537.51 730.43 532.72 728.46 531.50 726.23C530.89 725.11 530.88 724.92 531.33 724.12C532.22 722.55 533.38 722.04 539.50 720.50C553.92 716.88 565.91 712.38 577.39 706.25C590.07 699.50 602.51 690.20 609.70 682.12C613.79 677.51 614.67 675.47 614.67 670.49C614.67 667.52 614.56 666.92 613.77 665.32C611.05 659.79 606.00 654.98 590.37 643.05C583.04 637.45 580.92 634.71 580.92 630.86C580.92 625.68 584.47 623.11 593.83 621.52C601.94 620.15 608.18 619.83 627.33 619.85C644.15 619.86 646.43 619.93 652.33 620.59C664.31 621.94 667.88 622.84 670.92 625.26C674.36 627.99 674.60 632.11 671.55 636.26C670.20 638.10 667.07 640.70 658.00 647.52C648.00 655.04 641.09 662.27 639.79 666.57C638.84 669.74 639.39 675.54 640.86 677.86C642.37 680.23 645.25 683.47 648.74 686.71C653.42 691.05 655.99 693.10 661.50 696.87C670.70 703.16 675.45 705.88 684.34 709.95C694.69 714.68 703.87 717.89 714.50 720.50C720.88 722.07 722.33 722.92 722.33 725.10C722.33 727.85 716.62 730.46 708.67 731.36C703.97 731.89 695.58 731.57 690.67 730.68C682.25 729.14 673.03 726.24 665.83 722.88C653.10 716.93 641.56 709.55 630.22 700.12C628.60 698.77 627.14 697.67 626.99 697.67C626.83 697.67 624.48 699.43 621.77 701.59C601.55 717.69 580.75 727.90 562.17 730.85C558.19 731.48 547.11 731.76 543.87 731.31ZM149.46 713.81C149.82 712.60 152.57 704.97 153.30 703.17C153.90 701.65 159.65 690.20 161.33 687.17C162.69 684.71 166.70 678.70 172.00 671.20C176.88 664.29 188.91 649.66 198.83 638.56C201.77 635.28 205.35 631.22 206.79 629.55C208.24 627.87 210.71 625.08 212.29 623.34C213.87 621.60 215.63 619.65 216.20 619.00C216.76 618.36 218.49 616.41 220.04 614.67C221.59 612.93 223.38 610.82 224.01 609.99C224.65 609.16 226.77 606.53 228.73 604.16C233.19 598.75 237.24 593.63 240.57 589.24C241.98 587.37 245.16 583.28 247.63 580.17C250.09 577.05 253.25 573.06 254.64 571.31C256.03 569.55 258.07 566.95 259.17 565.52C260.27 564.10 261.84 562.07 262.67 561.03C263.49 559.98 264.92 558.17 265.83 557.00C267.74 554.57 284.86 532.09 288.41 527.33C295.74 517.53 306.49 504.64 313.88 496.78L318.25 492.12L318.46 489.14C318.57 487.51 318.82 483.77 319.01 480.83C320.39 459.18 322.85 433.13 325.00 417.33C331.03 372.92 334.11 357.71 340.21 342.28C349.88 317.81 366.05 299.38 390.07 285.47C393.12 283.70 405.68 277.33 406.12 277.33C406.20 277.33 407.56 276.73 409.15 275.99C410.73 275.25 412.88 274.33 413.93 273.95C414.98 273.56 416.43 272.99 417.17 272.67C420.03 271.43 427.83 268.69 434.83 266.47C436.85 265.83 439.85 264.87 441.50 264.34C443.15 263.81 445.10 263.22 445.83 263.04C446.57 262.86 448.89 262.25 451.00 261.70C453.11 261.15 456.41 260.31 458.33 259.83C460.26 259.36 462.36 258.83 463.00 258.66C463.64 258.49 465.44 258.05 467.00 257.68C468.56 257.32 471.41 256.65 473.33 256.20C475.26 255.75 477.66 255.21 478.67 255.02C479.68 254.82 481.55 254.43 482.83 254.16C485.50 253.59 489.30 252.85 493.17 252.14C501.62 250.58 501.29 250.64 510.75 249.20C525.26 246.98 535.73 245.52 540.83 244.98C568.06 242.14 583.30 241.16 613.33 240.29C626.78 239.90 642.28 240.12 663.33 241.01C684.81 241.91 713.97 244.53 730.50 247.04C732.88 247.40 735.96 247.84 737.33 248.01C738.71 248.19 740.66 248.48 741.67 248.66C742.68 248.83 745.07 249.22 747.00 249.51C748.93 249.81 752.52 250.42 755.00 250.88C757.48 251.34 760.32 251.84 761.33 251.99C762.34 252.15 763.84 252.43 764.67 252.61C766.52 253.04 769.86 253.74 775.50 254.87C777.88 255.35 780.44 255.86 781.19 256.01C781.93 256.17 784.48 256.76 786.86 257.33C789.23 257.90 792.74 258.74 794.67 259.19C796.59 259.64 798.92 260.21 799.83 260.46C800.75 260.71 802.48 261.17 803.67 261.49C809.53 263.06 810.44 263.34 818.33 265.86C842.02 273.42 859.15 281.03 873.33 290.27C880.84 295.17 891.21 303.93 896.26 309.67C902.64 316.89 908.64 325.64 912.51 333.35C913.33 334.99 914.96 338.77 916.13 341.75C920.24 352.20 922.93 361.98 925.16 374.67C928.99 396.36 931.22 416.82 932.83 445.00C933.12 450.04 933.57 457.69 933.83 462.00C934.10 466.31 934.49 474.71 934.70 480.67L935.09 491.50L936.11 492.83C936.67 493.57 938.43 495.59 940.01 497.33C944.85 502.67 960.17 521.36 965.15 528.00C973.51 539.16 988.26 558.43 995.50 567.66C1000.56 574.11 1004.90 579.72 1010.08 586.50C1015.52 593.63 1029.54 611.00 1030.66 612.00C1030.77 612.09 1032.27 613.82 1034.00 615.83C1035.73 617.85 1037.92 620.32 1038.86 621.33C1042.18 624.88 1057.68 642.71 1063.33 649.49C1069.97 657.45 1081.06 671.83 1084.05 676.33C1088.77 683.47 1091.84 688.72 1094.67 694.50C1098.25 701.84 1099.04 703.70 1101.31 710.31C1102.16 712.77 1103.04 714.85 1103.25 714.92C1103.74 715.08 1105.13 712.03 1106.03 708.83C1108.14 701.37 1108.22 692.68 1106.27 684.67C1103.71 674.13 1099.25 666.16 1086.11 648.59C1080.01 640.44 1070.45 628.70 1059.01 615.33C1054.69 610.29 1049.66 604.30 1047.83 602.02C1046.00 599.74 1043.46 596.59 1042.18 595.02C1038.58 590.59 1032.13 582.49 1029.00 578.48C1027.44 576.48 1025.26 573.72 1024.15 572.34C1023.04 570.96 1021.17 568.56 1019.99 567.00C1018.81 565.44 1016.57 562.58 1015.01 560.63C1013.44 558.69 1011.27 555.92 1010.17 554.49C1008.06 551.74 1003.46 545.85 999.51 540.83C998.21 539.18 996.63 537.16 996.00 536.33C995.38 535.51 993.12 532.66 991.00 530.00C988.87 527.34 985.42 522.92 983.33 520.17C981.24 517.42 978.37 513.71 976.95 511.94C975.53 510.16 972.76 506.64 970.80 504.10C968.83 501.57 966.46 498.58 965.53 497.46C960.89 491.88 959.74 490.44 959.40 489.81C959.19 489.40 958.83 483.49 958.52 475.15C958.23 467.46 957.77 456.82 957.50 451.50C957.23 446.18 956.85 438.46 956.65 434.33C955.17 403.13 951.47 369.11 947.79 352.83C945.45 342.47 940.48 328.48 936.60 321.33C925.35 300.58 911.11 285.99 889.00 272.55C885.20 270.25 874.20 264.53 870.67 263.03C869.66 262.60 867.33 261.58 865.50 260.75C863.67 259.92 861.19 258.88 860.00 258.43C856.48 257.11 853.57 255.97 852.50 255.50C849.65 254.25 839.13 250.64 829.67 247.67C826.64 246.72 823.57 245.73 822.83 245.47C821.56 245.03 814.86 243.11 807.33 241.03C796.28 237.98 783.11 234.77 772.25 232.49C770.92 232.21 768.86 231.77 767.67 231.51C763.29 230.56 751.12 228.40 745.00 227.49C743.07 227.21 740.15 226.76 738.50 226.50C724.38 224.27 700.89 221.66 684.67 220.51C624.86 216.28 571.36 218.28 515.17 226.86C507.36 228.05 506.22 228.24 503.17 228.80C500.88 229.22 496.15 230.09 491.17 230.99C485.99 231.94 478.16 233.59 472.00 235.04C469.71 235.58 466.78 236.26 465.50 236.56C464.22 236.86 461.74 237.47 460.00 237.92C458.26 238.38 456.31 238.86 455.67 239.00C453.72 239.43 441.74 242.57 437.83 243.68C435.82 244.25 433.57 244.86 432.83 245.03C432.10 245.21 431.12 245.49 430.67 245.65C429.82 245.96 426.70 246.94 419.50 249.17C417.30 249.85 414.90 250.61 414.17 250.86C411.24 251.85 404.40 254.31 402.67 255.00C401.66 255.40 400.23 255.92 399.50 256.17C388.40 259.81 369.82 268.72 359.33 275.44C346.44 283.69 335.30 293.63 327.10 304.21C322.79 309.77 321.73 311.38 317.99 318.00C310.22 331.76 305.69 345.02 302.19 364.25C298.87 382.49 297.24 396.96 295.03 428.00C294.36 437.30 294.26 439.02 293.68 450.00C292.78 466.91 292.60 470.94 292.38 479.90L292.13 489.59L289.81 492.59C288.54 494.24 285.03 498.78 282.00 502.69C276.19 510.19 269.35 519.09 263.44 526.83C261.48 529.40 259.45 532.02 258.94 532.67C258.42 533.31 256.08 536.32 253.75 539.36C245.61 549.96 240.81 556.15 236.98 560.98C234.86 563.65 232.17 567.11 230.99 568.67C229.82 570.23 227.73 572.94 226.35 574.69C224.96 576.45 222.11 580.11 220.00 582.83C217.89 585.55 214.67 589.65 212.83 591.94C211.00 594.23 208.91 596.87 208.19 597.80C207.47 598.74 205.82 600.78 204.52 602.34C203.23 603.90 201.57 605.92 200.84 606.84C200.12 607.75 198.39 609.78 197.01 611.35C195.63 612.91 193.57 615.31 192.44 616.68C191.31 618.05 189.36 620.37 188.11 621.85C170.97 642.04 163.27 651.90 155.24 663.93C151.86 668.99 148.57 675.68 146.72 681.22C144.89 686.71 144.50 689.25 144.51 695.67C144.53 701.92 144.85 704.59 146.14 709.03C147.77 714.65 148.77 716.10 149.46 713.81Z"/>
+</symbol>
 </svg>
-<div id="toasts" aria-live="polite"></div>
+<div id="toasts" popover="manual" aria-live="polite"></div>
 
 <section id="login" class="auth hidden">
 <div class="card auth-card">
-<h1><span class="brand-mark">A</span>AureusBot</h1>
-<p class="muted">请输入口令登录。</p>
+<h1><svg class="brand-mark" viewBox="0 0 1254 1254" aria-hidden="true"><use href="#aureus-logo"/></svg>AureusBot</h1>
+
 <div id="login-error" class="banner danger hidden" role="alert"></div>
-<div class="field"><label for="password">口令</label>
+<div class="field"><label for="password">密码</label>
 <input id="password" type="password" autocomplete="current-password"></div>
 <button id="login-btn" class="btn primary">登录</button>
 </div>
@@ -313,21 +379,22 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 
 <section id="change" class="auth hidden">
 <div class="card auth-card">
-<h1><span class="brand-mark">A</span>修改口令</h1>
+<h1><svg class="brand-mark" viewBox="0 0 1254 1254" aria-hidden="true"><use href="#aureus-logo"/></svg>修改密码</h1>
 <p id="change-hint" class="muted"></p>
 <div id="change-error" class="banner danger hidden" role="alert"></div>
-<div class="field"><label for="old-password">旧口令</label>
+<div class="field"><label for="old-password">旧密码</label>
 <input id="old-password" type="password" autocomplete="current-password"></div>
-<div class="field"><label for="new-password">新口令</label>
+<div class="field"><label for="new-password">新密码</label>
 <input id="new-password" type="password" autocomplete="new-password">
-<span class="hint">至少 8 位。改完后所有设备都会退出，需要用新口令重新登录。</span></div>
-<button id="change-btn" class="btn primary">修改口令</button>
+<span class="hint">至少 8 位。改完后所有设备都会退出，需要用新密码重新登录。</span></div>
+<button id="change-btn" class="btn primary">修改密码</button>
 </div>
 </section>
 
 <div id="app" class="hidden">
+<div class="nav-trigger" aria-hidden="true"></div>
 <nav class="side" aria-label="主导航">
-<div class="brand"><span class="brand-mark">A</span><span class="nav-label" style="--i:0">AureusBot</span></div>
+<div class="brand"><svg class="brand-mark" viewBox="0 0 1254 1254" aria-hidden="true"><use href="#aureus-logo"/></svg><span class="nav-label" style="--i:0">AureusBot</span></div>
 <button class="nav-item" data-page="overview" aria-label="总览"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-home"/></svg><span class="nav-label" style="--i:1">总览</span></button>
 <button class="nav-item" data-page="chat" aria-label="私聊"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-chat"/></svg><span class="nav-label" style="--i:2">私聊</span></button>
 <button class="nav-item" data-page="monitor" aria-label="观察"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-pulse"/></svg><span class="nav-label" style="--i:3">观察</span></button>
@@ -345,23 +412,23 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 </nav>
 <main id="pages">
 <section id="page-overview" class="page"><div class="page-body masthead"><span><b>AUREUS</b> <span id="ov-version" class="mono"></span></span><span class="sep"></span><span id="ov-date" class="mono"></span></div>
-<div class="page-head"><div><h2>总览</h2><p>它此刻的状态。</p></div><button id="ov-refresh" class="btn small">刷新</button></div>
+<div class="page-head"><div><h2>总览</h2></div><button id="ov-refresh" class="btn small">刷新</button></div>
 <div class="page-body stack">
 <div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div>
 <div id="ov-missing" class="empty hidden"></div>
 <div id="ov-content" class="stack hidden">
-<div class="panel"><div class="panel-bar"><span class="en">STATUS</span><span>此刻</span></div><div class="panel-body hero">
+<div class="panel"><div class="panel-bar"><span class="en">STATUS</span></div><div class="panel-body hero">
 <div id="ov-orb" class="orb"></div>
 <div class="hero-main"><div class="label">此刻</div><div class="value" id="ov-thinking"></div><div class="muted" style="font-size:14px">当前任务：<span id="ov-task"></span></div></div>
 <div class="hero-energy"><div class="label">精力</div><div class="value" id="ov-energy"></div><div class="meter"><i id="ov-meter" style="width:0"></i></div></div>
 </div></div>
-<div class="panel"><div class="panel-bar"><span class="en">STATE</span><span>此刻的状态</span></div><div class="panel-body"><div id="ov-state" class="state-text"></div></div></div>
-<div class="panel"><div class="panel-bar"><span class="en">LINKS</span><span>快捷入口</span></div><div class="panel-body row"><button class="btn" data-go="monitor">看它的内部状态</button><button class="btn" data-go="chat">和它说话</button><button class="btn" data-go="timeline">翻时间线</button><button class="btn" data-go="persona">看人设</button></div></div>
+<div class="panel"><div class="panel-bar"><span class="en">STATE</span></div><div class="panel-body"><div id="ov-state" class="state-text"></div></div></div>
+<div class="panel"><div class="panel-bar"><span class="en">LINKS</span></div><div class="panel-body row"><button class="btn" data-go="monitor">看它的内部状态</button><button class="btn" data-go="chat">和它说话</button><button class="btn" data-go="timeline">翻时间线</button><button class="btn" data-go="persona">看人设</button></div></div>
 </div>
 </div></section>
 <section id="page-chat" class="page"><div class="chat-wrap">
 <div class="chat-head">
-<div><h2 style="font-size:17px">私聊</h2><p class="muted" style="font-size:13px">和它直接说话，这里说的话也会记进时间线。每条都标明来自哪个通道。</p></div>
+<div><h2 style="font-size:17px">私聊</h2></div>
 <span class="tag" id="conn-tag"><span class="dot" id="conn-dot"></span><span id="conn-text">连接中</span></span>
 </div>
 <div id="chat-log" class="chat-log" aria-live="polite"></div>
@@ -370,11 +437,11 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 <button id="chat-send" class="btn primary"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-send"/></svg>发送</button>
 </div>
 </div></section>
-<section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2><p>它经历过的一切，只追加、不修改。新的在上面。</p></div><button id="tl-refresh" class="btn small">刷新</button></div>
+<section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small">刷新</button></div>
 <div class="page-body">
 <div class="card summary-card">
 <div class="card-head"><h3>滚动摘要</h3><span class="tag">还没有这个功能</span></div>
-<p class="muted" id="tl-summary-note">还没有滚动摘要。它回复时只带最近的几条对话，更早的不会带上，也没有被总结。</p>
+<p class="muted" id="tl-summary-note">暂无滚动摘要。</p>
 </div>
 <div class="tl-toolbar">
 <select id="tl-hours" aria-label="时间范围">
@@ -386,59 +453,48 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 <div id="tl-list" class="tl-list"></div>
 <div class="row" style="justify-content:center;margin-top:16px"><button id="tl-more" class="btn hidden">加载更早的</button></div>
 </div></section>
-<section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2><p>五层设定。下面三层可以随时改，底线两层要再输一次口令。</p></div></div>
+<section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2></div></div>
 <div class="page-body stack">
 <div id="ps-free" class="stack"></div>
 <div class="card">
 <div class="card-head"><h3>锁定</h3></div>
-<p class="muted" style="font-size:13px">锁定后，它自己不能再改这一层（它开始自己改设定时才起作用）。三个开关会一起保存。</p>
+
 <div id="ps-locks"></div>
 <div class="row" style="justify-content:flex-end"><button id="ps-save-locks" class="btn primary">保存锁定</button></div>
 </div>
 <div class="card">
-<div class="card-head"><h3>底线</h3><span class="tag warn">要输口令</span></div>
-<p class="muted" style="font-size:13px">身份事实和不变人格，只有你能改，它自己永远改不了。口令被人看到，就能改这里，请保管好口令。</p>
+<div class="card-head"><h3>底线</h3><span class="tag warn">要输密码</span></div>
+
 <div class="form-grid" style="margin-top:12px">
 <div class="field"><label for="ps-name">名字</label><input id="ps-name" type="text"></div>
-<div class="field"><label for="ps-aliases">昵称</label><input id="ps-aliases" type="text"><span class="hint">多个用逗号分开</span></div>
+<div class="field"><label for="ps-aliases">昵称</label><input id="ps-aliases" type="text"></div>
 <div class="field"><label for="ps-gender">性别</label><input id="ps-gender" type="text"></div>
 <div class="field"><label for="ps-birthday">生日</label><input id="ps-birthday" type="text" placeholder="YYYY-MM-DD"></div>
 <div class="field"><label for="ps-user-name">它怎么称呼你</label><input id="ps-user-name" type="text"></div>
 </div>
-<div class="field" style="margin-top:14px"><label for="ps-accounts">你的账号</label><textarea id="ps-accounts" rows="3"></textarea><span class="hint">每行一个，写成 平台:账号，比如 qq:10000</span></div>
+<div class="field" style="margin-top:14px"><label for="ps-accounts">你的账号</label><textarea id="ps-accounts" rows="3"></textarea></div>
 <div class="field" style="margin-top:14px"><label for="ps-immutable">不变人格</label><textarea id="ps-immutable" rows="8"></textarea></div>
 <div class="row" style="margin-top:14px;justify-content:flex-end">
-<input id="ps-password" type="password" placeholder="当前口令" autocomplete="current-password" style="max-width:220px">
+<input id="ps-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px">
 <button id="ps-save-baseline" class="btn primary">保存底线</button>
 </div>
 </div>
 </div></section>
-<section id="page-models" class="page wide"><div class='page-head'><div><h2>模型</h2><p>服务商和它提供的模型。保存后重启生效。</p></div>
-<div class='row'><button id='md-reset' class='btn' disabled>放弃修改</button><button id='md-save' class='btn primary' disabled>保存</button></div></div>
-<div class='page-body stack'>
-<div id='md-restart' class='banner hidden'>配置已保存，重启后生效。</div>
-<div id='md-missing' class='empty hidden'></div>
-<div id='md-content' class='stack hidden'>
-<div class='banner info'>改动先留在页面上，点「保存」才会写进模型配置文件。改已有服务商的地址或密钥名、新增带密钥名的服务商，要输入当前口令。</div>
-<div id='md-providers' class='stack'></div>
-<div class='row' style='justify-content:space-between'>
-<button id='md-add-provider' class='btn'>＋ 添加服务商</button>
-<input id='md-password' type='password' placeholder='当前口令（需要时才填）' autocomplete='current-password' style='max-width:240px'>
-</div>
-</div>
-</div></section>
-<section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2><p>每个器官按顺序用哪些模型，排在上面的先用，失败了顺延到下一个。保存后重启生效。</p></div>
-<div class="row"><button id="og-reset" class="btn" disabled>放弃修改</button><button id="og-save" class="btn primary" disabled>保存</button></div></div>
+<section id="page-models" class="page wide"><div class="page-head"><div><h2>模型库</h2></div><span id="md-status" class="tag" role="status">已自动保存</span></div>
 <div class="page-body stack">
-<div id="og-restart" class="banner hidden">配置已保存，重启后生效。</div>
-<div id="og-missing" class="empty hidden"></div>
-<div id="og-content" class="stack hidden">
-<div class="banner info">器官只给出建议，不直接改它的状态。这里和「模型」页共用同一份配置，两页的改动一起保存。思考等级只列出这个器官用的每个模型都支持的档位，要先到「模型」页给模型勾选。</div>
-<div id="og-grid" class="organ-grid"></div>
-<div class="row"><input id="og-new-name" type="text" placeholder="新器官的名字，比如 replyer" style="max-width:260px"><button id="og-add" class="btn">＋ 添加器官</button></div>
-</div>
-</div></section>
-<section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2><p>其他所有运行配置。保存后重启生效。</p></div>
+<div id="md-restart" class="banner hidden">密钥或运行设置已修改，重启后生效。</div>
+<div id="md-missing" class="empty hidden"></div>
+<div id="md-content" class="model-library hidden">
+<aside class="model-vendors" aria-label="模型厂商"><h3>模型厂商</h3><div id="md-providers" class="provider-list"></div><button id="md-add-provider" class="btn">＋ 添加厂商</button></aside>
+<div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或厂商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option><option value="llm">对话模型</option><option value="embedding">嵌入模型</option><option value="vision">视觉模型</option></select><button id="md-edit-provider" class="btn" disabled>编辑厂商</button><button id="md-add-model" class="btn primary">＋ 添加模型</button></div>
+<div class="model-table-wrap"><table class="model-table" aria-label="模型列表"><thead><tr><th>模型</th><th>厂商</th><th>类型</th><th class="model-price">价格（输入/输出）</th><th class="model-owners">负责的工作</th><th>操作</th></tr></thead><tbody id="md-models"></tbody></table></div>
+<div id="md-cards" class="model-cards"></div><div id="md-empty" class="empty hidden">没有匹配的模型。先添加厂商，再添加模型。</div>
+</div></div></div></section>
+<section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2></div><span id="og-status" class="tag" role="status">已自动保存</span></div>
+<div class="page-body stack"><div id="og-missing" class="empty hidden"></div><div id="og-content" class="stack hidden"><div id="og-grid" class="organ-grid"></div>
+<div class="row"><input id="og-new-name" type="text" placeholder="自定义器官名称" aria-label="自定义器官名称" style="max-width:260px"><button id="og-add" class="btn">＋ 添加器官</button></div>
+</div></div></section>
+<section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
 <div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
 <div class="page-body stack">
 <div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
@@ -446,28 +502,31 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 <div id="cf-content" class="cfg-layout hidden">
 <div id="cf-tabs" class="cfg-tabs"></div>
 <div class="stack">
-<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前口令：<input id="cf-password" type="password" placeholder="当前口令" autocomplete="current-password" style="max-width:220px;margin-left:8px"></div>
+<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px;margin-left:8px"></div>
 <div id="cf-section" class="card"></div>
 </div>
 </div>
 </div></section>
-<section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2><p>它的内部状态，只读，每 10 秒自动刷新。</p></div><button id='mo-refresh' class='btn small'>刷新</button></div>
+<section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'>刷新</button></div>
 <div class='page-body stack'>
 <div id='mo-missing' class='empty hidden'></div>
 <div id='mo-content' class='stack hidden'>
 <div class='panel-grid'>
-<div class='panel'><div class='panel-bar'><span class='en'>STATUS</span><span>状态</span></div><div class='panel-body'><div class='big'><span id='mo-dot' class='dot'></span><span id='mo-thinking'></span></div><div class='muted' style='font-size:14px;margin-top:6px'>当前任务：<span id='mo-task'></span></div></div></div>
-<div class='panel'><div class='panel-bar'><span class='en'>ENERGY</span><span>精力</span></div><div class='panel-body'><div class='big' id='mo-energy'></div><div class='meter'><i id='mo-meter' style='width:0'></i></div><div class='muted' style='font-size:13px;margin-top:8px'>档位：<span id='mo-tier'></span></div></div></div>
-<div class='panel full'><div class='panel-bar'><span class='en'>STATE</span><span>此刻的状态</span></div><div class='panel-body'><div id='mo-state' class='state-text'></div></div></div>
-<div class='panel'><div class='panel-bar'><span class='en'>HORMONE</span><span>激素与判断（最近 3 天）</span></div><div class='panel-body'><div id='mo-hormones' class='tl-list'></div></div></div>
-<div class='panel'><div class='panel-bar'><span class='en'>RECENT</span><span>最近动态（最近 24 小时）</span></div><div class='panel-body'><div id='mo-recent' class='tl-list'></div></div></div>
-<div class='panel'><div class='panel-bar'><span class='en'>PERSONA</span><span>人设变更（最近 30 天）</span></div><div class='panel-body'><div id='mo-persona' class='tl-list'></div></div></div>
+<div class='panel'><div class='panel-bar'><span class='en'>STATUS</span></div><div class='panel-body'><div class='big'><span id='mo-dot' class='dot'></span><span id='mo-thinking'></span></div><div class='muted' style='font-size:14px;margin-top:6px'>当前任务：<span id='mo-task'></span></div></div></div>
+<div class='panel'><div class='panel-bar'><span class='en'>ENERGY</span></div><div class='panel-body'><div class='big' id='mo-energy'></div><div class='meter'><i id='mo-meter' style='width:0'></i></div><div class='muted' style='font-size:13px;margin-top:8px'>档位：<span id='mo-tier'></span></div></div></div>
+<div class='panel full'><div class='panel-bar'><span class='en'>STATE</span></div><div class='panel-body'><div id='mo-state' class='state-text'></div></div></div>
+<div class='panel'><div class='panel-bar'><span class='en'>HORMONE</span></div><div class='panel-body'><div id='mo-hormones' class='tl-list'></div></div></div>
+<div class='panel'><div class='panel-bar'><span class='en'>RECENT</span></div><div class='panel-body'><div id='mo-recent' class='tl-list'></div></div></div>
+<div class='panel'><div class='panel-bar'><span class='en'>PERSONA</span></div><div class='panel-body'><div id='mo-persona' class='tl-list'></div></div></div>
 </div>
-<div class='banner info'>身体信号曲线、激素曲线和花费还没有网页接口，请在本机运行 aureus monitor 查看。这一页只读，不能改任何东西。</div>
+<div class='banner info'>暂未提供身体信号曲线、激素曲线和花费。</div>
 </div>
 </div></section>
 </main>
 </div>
+
+<dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
+<dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑">关闭</button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
 
 <script>
 'use strict';
@@ -499,14 +558,14 @@ async function api(path, method, body) {
   let data = null;
   try { data = await r.json(); } catch (e) { /* 没有正文也可以 */ }
   if (r.status === 401 && state.loggedIn) {
-    // 改口令时旧口令不对也会返回 401，先确认会话是否真的失效。
+    // 改密码时旧密码不对也会返回 401，先确认会话是否真的失效。
     if (path === '/api/status') showAuth('login', '登录已失效，请重新登录。');
     else await api('/api/status');
   }
   return { ok: r.ok, status: r.status, data, retryAfter: r.headers.get('Retry-After') };
 }
 
-// 后端的 detail 已经是中文、不含口令，原样显示；429 补上要等多久。
+// 后端的 detail 已经是中文、不含密码，原样显示；429 补上要等多久。
 function errorText(res) {
   if (res.status === 0) return '连不上服务，请检查网络后再试。';
   const d = res.data && res.data.detail;
@@ -518,11 +577,39 @@ const notBuilt = res => res.status === 404 || res.status === 405;
 const NOT_BUILT_TEXT = '这项功能的后端还没做好（路线图 2.12b），所以这里暂时没有内容。';
 
 function toast(text, kind) {
+  const host = $('toasts');
+  // 提示也要在原生编辑对话框之上；manual popover 不抢焦点，不阻挡操作。
+  if (host.showPopover) { host.hidePopover(); host.showPopover(); }
+  if ([...host.children].some(node => node.dataset.message === text && !node.classList.contains('leaving'))) return;
   const node = el('div', { class: 'toast ' + (kind || ''), text });
-  $('toasts').append(node);
-  setTimeout(() => node.remove(), kind === 'error' ? 6000 : 3500);
+  node.dataset.message = text;
+  host.append(node);
+  setTimeout(() => {
+    node.classList.add('leaving');
+    setTimeout(() => node.remove(), 220);
+  }, kind === 'error' ? 6000 : 3500);
 }
 const fail = res => toast(errorText(res), 'error');
+
+function confirmAction(message) {
+  const dialog = $('confirm-dialog');
+  $('confirm-text').textContent = message;
+  dialog.returnValue = '';
+  return new Promise(resolve => {
+    dialog.onclose = () => { dialog.onclose = null; resolve(dialog.returnValue === 'yes'); };
+    dialog.showModal();
+  });
+}
+function openEditor(title, body, drawer, actions) {
+  const dialog = $('editor-dialog');
+  dialog.className = 'editor-dialog' + (drawer ? ' drawer' : '');
+  $('editor-title').textContent = title;
+  $('editor-body').replaceChildren(body);
+  $('editor-footer').replaceChildren(...(actions || []));
+  $('editor-footer').classList.toggle('hidden', !(actions && actions.length));
+  if (!dialog.open) dialog.showModal();
+}
+$('editor-close').addEventListener('click', () => $('editor-dialog').close());
 
 function showBanner(id, text) {
   const box = $(id);
@@ -561,11 +648,12 @@ $('theme-btn').addEventListener('click', () => {
   try { localStorage.setItem('aureus-theme', next); } catch (e) { /* 同上 */ }
 });
 
-// ---------- 登录、改口令、退出 ----------
-// 默认口令时只能进改口令页（D63 第 6 条）；登录失效、改口令、退出都回到这里。
+// ---------- 登录、改密码、退出 ----------
+// 默认密码时只能进改密码页（D63 第 6 条）；登录失效、改密码、退出都回到这里。
 function showAuth(view, message) {
   state.loggedIn = false;
   state.loaded = {};
+  for (const id of ['editor-dialog', 'confirm-dialog']) if ($(id).open) $(id).close();
   if (typeof closeSocket === 'function') closeSocket();
   $('app').classList.add('hidden');
   $('login').classList.toggle('hidden', view !== 'login');
@@ -581,7 +669,7 @@ async function enter() {
   if (res.status === 401) { showAuth('login'); return; }
   if (!res.ok) { showAuth('login', errorText(res)); return; }
   if (res.data && res.data.must_change_password) {
-    showAuth('change', '现在用的是默认口令，必须先改成自己的口令才能使用。');
+    showAuth('change', '现在用的是默认密码，必须先改成自己的密码才能使用。');
     return;
   }
   state.loggedIn = true;
@@ -613,9 +701,9 @@ $('change-btn').addEventListener('click', async () => {
   $('old-password').value = '';
   $('new-password').value = '';
   if (!res.ok) { showBanner('change-error', errorText(res)); return; }
-  // 改口令会让所有设备退出，包括这一台，回到登录页。
+  // 改密码会让所有设备退出，包括这一台，回到登录页。
   showAuth('login');
-  toast('口令已修改，所有设备都已退出，请用新口令重新登录。', 'ok');
+  toast('密码已修改，所有设备都已退出，请用新密码重新登录。', 'ok');
 });
 $('new-password').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('change-btn').click(); });
 
@@ -846,9 +934,9 @@ PAGES.timeline = { load: () => loadTimeline(false) };
 // ---------- 人设：五层设定（接口 1.10 已有） ----------
 // 回退不是删除：是再存一个新版本，历史都还在（D62、D81 第 8 条）。
 const FREE_LAYERS = [
-  ['mutable', '可变人格', '它想成为的样子，随真实经历慢慢变化。'],
-  ['behavior_style', '行为风格', '它做事的习惯：什么时候回、回多长、主动不主动。'],
-  ['expression_style', '表达风格', '它说话的方式：语气、用词、口头禅。'],
+  ['mutable', '可变人格'],
+  ['behavior_style', '行为风格'],
+  ['expression_style', '表达风格'],
 ];
 
 async function savePersona(body, okText) {
@@ -859,7 +947,7 @@ async function savePersona(body, okText) {
   return true;
 }
 
-function personaLayerCard(key, title, desc, content, history) {
+function personaLayerCard(key, title, content, history) {
   const area = el('textarea', { id: 'ps-' + key, rows: '5' });
   area.value = content;
   const save = el('button', { class: 'btn primary', text: '保存' + title, onclick: () => { savePersona({ text: { [key]: area.value } }, title + '已保存，下一次回复就会用新的。'); } });
@@ -868,16 +956,17 @@ function personaLayerCard(key, title, desc, content, history) {
     el('span', { class: 'muted', text: fmtTime(item.time, true) }),
     el('span', { class: 'preview', text: item.content ? item.content.replace(/\s+/g, ' ').slice(0, 60) : '（空）' }),
     el('button', { class: 'btn small', text: '用这个版本', onclick: async () => {
+      if (!await confirmAction('确定要回退吗？')) return;
       const res = await api('/api/settings/rollback', 'POST', { layer: key, version_id: item.id });
       if (!res.ok) { fail(res); return; }
       toast(title + '已回退：所选内容存成了一个新版本。', 'ok');
       await loadPersona();
     } }))) : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有历史版本。' })];
   return el('div', { class: 'card layer-card' },
-    el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }), el('p', { class: 'muted', style: 'font-size:13px', text: desc }))),
+    el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }))),
     area,
     el('div', { class: 'row', style: 'justify-content:flex-end;margin-top:10px' }, save),
-    el('div', { class: 'field-label', style: 'margin-top:12px', text: '最近的版本（点「用这个版本」会存成一个新版本，历史都还在）' }),
+    el('div', { class: 'field-label', style: 'margin-top:12px', text: '最近的版本' }),
     ...rows);
 }
 
@@ -889,8 +978,8 @@ async function loadPersona() {
   const locks = $('ps-locks');
   free.textContent = '';
   locks.textContent = '';
-  for (const [key, title, desc] of FREE_LAYERS) {
-    free.append(personaLayerCard(key, title, desc, v.layers[key], v.history[key] || []));
+  for (const [key, title] of FREE_LAYERS) {
+    free.append(personaLayerCard(key, title, v.layers[key], v.history[key] || []));
     locks.append(el('div', { class: 'lock-row' },
       el('span', { text: '锁定' + title }),
       el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 'ps-lock-' + key, checked: !!v.locks[key] }), el('span', { class: 'track' }))));
@@ -923,7 +1012,7 @@ $('ps-save-baseline').addEventListener('click', async () => {
     accounts.push({ platform: text.slice(0, at).trim(), id: text.slice(at + 1).trim() });
   }
   const password = $('ps-password').value;
-  if (!password) { toast('改底线要输入当前口令。', 'error'); return; }
+  if (!password) { toast('改底线要输入当前密码。', 'error'); return; }
   $('ps-password').value = '';
   const aliases = $('ps-aliases').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
   await savePersona({
@@ -934,453 +1023,506 @@ $('ps-save-baseline').addEventListener('click', async () => {
   }, '底线已保存。');
 });
 PAGES.persona = { load: loadPersona };
-// ---------- 模型：服务商和模型（/api/models、/api/keys，2.12b 的接口） ----------
-// 改动先留在页面上，点保存才写文件；写成功后提示重启生效（D84 第 5 条）。器官页共用这份数据。
-const mdl = { cfg: null, choices: {}, keys: {}, dirty: false };
+// ---------- 模型库与器官分工（D86）：参考 MaiBot 公开界面交互，保留本页视觉 ----------
+// 参考提交及文件见 docs/tasks/2.12.md 第 2 轮；只参考交互，未复制代码。
+const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], provider: '',
+  dirty: false, revision: 0, saved: 0, pending: 0, queue: Promise.resolve() };
 const clone = value => JSON.parse(JSON.stringify(value));
-function refreshDirty() {
-  for (const id of ['md-save', 'md-reset', 'og-save', 'og-reset']) { const b = $(id); if (b) b.disabled = !mdl.dirty; }
-}
-function markDirty() { mdl.dirty = true; refreshDirty(); }
+const ORGAN_NAMES = { replyer: '回复', planner: '规划', judge: '判断', summarizer: '总结' };
+const emptyOrgan = () => ({ models: [], strategy: 'sequential', temperature: null, max_tokens: null, reasoning_effort: null });
 
-// 返回 true：读到了；'missing'：后端没做好；false：出错（已提示）。有没保存的改动时不覆盖。
-async function loadModelsConfig(force) {
-  if (mdl.dirty && !force) return true;
+function refreshDirty() {
+  const text = mdl.pending ? '正在自动保存…' : mdl.dirty ? '有改动未保存' : '已自动保存';
+  for (const id of ['md-status', 'og-status']) $(id).textContent = text;
+}
+function modelWarnings(names) {
+  const known = new Set(mdl.cfg.models.map(model => model.name));
+  const warnings = [];
+  for (const [name, organ] of Object.entries(mdl.cfg.organs)) {
+    if (names && !names.includes(name)) continue;
+    if (!organ.models.length) warnings.push(name + '未配置模型');
+    const missing = organ.models.filter(model => !known.has(model));
+    if (missing.length) warnings.push(name + '引用了不存在的模型：' + missing.join('、'));
+  }
+  return warnings;
+}
+function notifyModelWarnings(names) {
+  const warnings = modelWarnings(names);
+  if (warnings.length) toast(warnings.join('；'), 'error');
+}
+
+// 每次 change/选模型产生一份完整快照，按操作顺序写；旧响应不覆盖后来的编辑，不自动重试。
+function markDirty(password) {
+  const config = clone(mdl.cfg), revision = ++mdl.revision;
+  mdl.dirty = true; mdl.pending++; refreshDirty();
+  mdl.queue = mdl.queue.then(async () => {
+    try {
+      const res = await api('/api/models', 'PUT', { config, password: password || undefined });
+      if (!res.ok) { failApi(res); return false; }
+      mdl.baseline = config; mdl.saved = revision;
+      if (res.data.restart_required) showRestart();
+      return true;
+    } finally {
+      mdl.pending--; mdl.dirty = mdl.saved !== mdl.revision; refreshDirty();
+    }
+  });
+  return mdl.queue;
+}
+async function loadModelsConfig() {
+  const editing = () => $('editor-dialog').open || $('confirm-dialog').open;
+  if (mdl.pending || mdl.dirty || (mdl.cfg && editing())) return true;
+  const revision = mdl.revision;
   const res = await api('/api/models');
+  if (mdl.cfg && (mdl.revision !== revision || editing())) return true;
   if (notBuilt(res)) return 'missing';
   if (!res.ok) { fail(res); return false; }
-  mdl.cfg = clone(res.data.config);
-  mdl.choices = res.data.choices || {};
-  mdl.keys = res.data.key_status || {};
-  mdl.dirty = false;
+  mdl.cfg = clone(res.data.config); mdl.baseline = clone(mdl.cfg);
+  mdl.choices = res.data.choices || {}; mdl.keys = res.data.key_status || {};
+  mdl.builtin = res.data.builtin_organs || Object.keys(ORGAN_NAMES);
   refreshDirty();
   return true;
 }
+function failApi(res) { if (notBuilt(res)) toast(NOT_BUILT_TEXT, 'error'); else fail(res); }
+function showRestart() { for (const id of ['md-restart', 'cf-restart', 'ov-restart']) { const box = $(id); if (box) box.classList.remove('hidden'); } }
 
-function inputField(label, value, onInput, opt) {
-  opt = opt || {};
-  const input = el('input', { type: opt.number ? 'number' : 'text', placeholder: opt.placeholder, step: opt.step, min: opt.min });
+function editorField(label, value, options) {
+  const opt = options || {};
+  const input = opt.values ? el('select', { 'aria-label': label }, opt.values.map(item => {
+    const option = typeof item === 'string' ? { value: item, label: item } : item;
+    return el('option', { value: option.value, text: option.label, selected: option.value === value });
+  })) : el('input', { type: opt.type || 'text', 'aria-label': label, min: opt.min, step: opt.step, required: !!opt.required, placeholder: opt.hint });
   input.value = value === null || value === undefined ? '' : value;
-  input.addEventListener('input', () => { onInput(opt.number ? (input.value === '' ? null : Number(input.value)) : input.value); markDirty(); });
-  return el('div', { class: 'field' }, el('label', { text: label }), input, opt.hint ? el('span', { class: 'hint', text: opt.hint }) : null);
+  return { input, node: el('div', { class: 'field' }, el('label', { text: label }), input) };
 }
-function selectField(label, value, options, onChange, hint) {
-  const select = el('select', {}, options.map(o => el('option', { value: o, text: o, selected: o === value })));
-  select.addEventListener('change', () => { onChange(select.value); markDirty(); });
-  return el('div', { class: 'field' }, el('label', { text: label }), select, hint ? el('span', { class: 'hint', text: hint }) : null);
+function editorForm(title, fields, onChange, action) {
+  const body = el('div', { class: 'stack' }, ...Object.values(fields).map(field => field.node));
+  for (const field of Object.values(fields)) field.input.addEventListener('change', onChange);
+  openEditor(title, body, false, action ? [action] : []);
+  return body;
 }
-const modelsInUse = () => new Set(Object.values(mdl.cfg.organs).flatMap(o => o.models));
-
-function providerCard(p) {
-  const title = el('h3', { text: p.name || '（未命名）' });
-  const hasKey = p.api_key_env && mdl.keys[p.api_key_env];
-  const keyTag = !p.api_key_env ? el('span', { class: 'tag', text: '不需要密钥' })
-    : el('span', { class: 'tag ' + (hasKey ? 'ok' : 'warn'), text: hasKey ? '密钥已设置' : '密钥未设置' });
-  const panel = keyPanel(p);
-  const head = el('div', { class: 'card-head' }, el('div', { class: 'row' }, title, keyTag),
-    el('div', { class: 'row' },
-      el('button', { class: 'btn small', text: '录入密钥', onclick: () => { if (!p.api_key_env) { toast('先填写密钥名并保存，再录入密钥。', 'error'); return; } panel.classList.toggle('hidden'); } }),
-      el('button', { class: 'btn small danger', text: '删除服务商', onclick: () => removeProvider(p) })));
-  const fields = el('div', { class: 'form-grid' },
-    inputField('名称', p.name, v => { for (const m of mdl.cfg.models) if (m.provider === p.name) m.provider = v; p.name = v; title.textContent = v || '（未命名）'; }, { hint: '模型按这个名字引用服务商' }),
-    selectField('协议', p.protocol, mdl.choices.protocols || [p.protocol], v => { p.protocol = v; }, 'openai_responses 是 OpenAI 的 Responses 接口'),
-    inputField('请求地址', p.base_url, v => { p.base_url = v; }, { placeholder: '留空用该协议的官方地址' }),
-    inputField('密钥名', p.api_key_env, v => { p.api_key_env = v; }, { placeholder: 'AUREUS_KEY_某某', hint: '只写名字，密钥本身用「录入密钥」存进加密的密钥库；本地模型不需要就留空' }),
-    inputField('超时（秒）', p.timeout_seconds, v => { p.timeout_seconds = v; }, { number: true, min: 1, placeholder: '默认 60' }),
-    inputField('失败重试次数', p.max_retry, v => { p.max_retry = v; }, { number: true, min: 0, placeholder: '默认 2' }));
-  const rows = mdl.cfg.models.filter(m => m.provider === p.name).map(modelRow);
-  return el('div', { class: 'card provider-card' }, head, panel, fields,
-    el('div', { class: 'divider' }), el('div', { class: 'field-label', text: '这个服务商的模型' }),
-    ...(rows.length ? rows : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有模型。' })]),
-    el('div', { class: 'row', style: 'margin-top:8px' }, el('button', { class: 'btn small', text: '＋ 添加模型', onclick: () => addModel(p) })));
-}
-
-function removeProvider(p) {
-  const names = mdl.cfg.models.filter(m => m.provider === p.name).map(m => m.name);
-  if (names.some(n => modelsInUse().has(n))) { toast('这个服务商的模型还有器官在用，先到「器官」页换掉它们。', 'error'); return; }
-  mdl.cfg.models = mdl.cfg.models.filter(m => m.provider !== p.name);
-  mdl.cfg.providers = mdl.cfg.providers.filter(x => x !== p);
-  markDirty();
-  renderModels();
-}
-$('md-add-provider').addEventListener('click', () => {
-  mdl.cfg.providers.push({ name: '新服务商' + (mdl.cfg.providers.length + 1), protocol: (mdl.choices.protocols || ['openai'])[0], base_url: null, api_key_env: null, timeout_seconds: null, max_retry: null });
-  markDirty();
-  renderModels();
-});
+const fieldText = field => field.input.value.trim();
+const fieldNumber = field => field.input.value === '' ? null : Number(field.input.value);
+function validFields(fields) { return Object.values(fields).every(field => field.input.reportValidity()); }
 
 function renderModels() {
-  const box = $('md-providers');
-  box.textContent = '';
-  if (!mdl.cfg.providers.length) box.append(el('div', { class: 'empty', text: '还没有服务商。先添加一个，再往里加模型。' }));
-  for (const p of mdl.cfg.providers) box.append(providerCard(p));
+  const cfg = mdl.cfg, sidebar = $('md-providers');
+  sidebar.textContent = '';
+  if (mdl.provider && !cfg.providers.some(provider => provider.name === mdl.provider)) mdl.provider = '';
+  const providerButton = (name, label, count) => el('button', { class: 'provider-row' + (mdl.provider === name ? ' active' : ''),
+    text: label + ' · ' + count, 'aria-pressed': mdl.provider === name, onclick: () => { mdl.provider = name; renderModels(); } });
+  sidebar.append(providerButton('', '全部厂商', cfg.models.length));
+  for (const provider of cfg.providers) sidebar.append(providerButton(provider.name, provider.name, cfg.models.filter(model => model.provider === provider.name).length));
+  $('md-edit-provider').disabled = !mdl.provider;
+  const search = $('md-search').value.trim().toLowerCase();
+  const kind = $('md-kind').value;
+  const models = cfg.models.filter(model => (!mdl.provider || model.provider === mdl.provider)
+    && (!kind || model.kind === kind) && [model.name, model.identifier, model.provider].join(' ').toLowerCase().includes(search));
+  const table = $('md-models'); table.textContent = '';
+  const mobile = $('md-cards'); mobile.textContent = '';
+  for (const model of models) {
+    const owners = Object.entries(cfg.organs).filter(([, organ]) => organ.models.includes(model.name)).map(([name]) => ORGAN_NAMES[name] || name);
+    const actions = () => el('div', { class: 'row' },
+      el('button', { class: 'btn small', text: '编辑', 'aria-label': '编辑模型 ' + model.name, onclick: () => openModelEditor(model) }),
+      el('button', { class: 'btn small danger', text: '删除', 'aria-label': '删除模型 ' + model.name, onclick: () => removeModel(model) }));
+    table.append(el('tr', {},
+      el('td', {}, el('strong', { text: model.name }), el('div', { class: 'muted mono model-id', text: model.identifier })),
+      el('td', { text: model.provider }), el('td', { text: model.kind }),
+      el('td', { class: 'model-price', text: model.price_in === null || model.price_in === undefined ? '未知' : model.price_in + ' / ' + (model.price_out ?? '未知') }),
+      el('td', { class: 'model-owners', text: owners.join('、') || '未使用' }), el('td', {}, actions())));
+    mobile.append(el('div', { class: 'card model-compact' }, el('h3', { text: model.name }),
+      el('div', { class: 'muted model-id', text: model.provider + ' · ' + model.identifier }),
+      el('div', { class: 'row' }, el('span', { class: 'tag', text: model.kind }), el('span', { class: 'muted', text: owners.join('、') || '未使用' })), actions()));
+  }
+  $('md-empty').classList.toggle('hidden', models.length > 0);
+  $('md-add-model').disabled = !cfg.providers.length;
 }
 async function loadModelsPage() {
-  const r = await loadModelsConfig(false);
-  const missing = $('md-missing');
-  missing.classList.toggle('hidden', r !== 'missing');
-  if (r === 'missing') missing.textContent = NOT_BUILT_TEXT;
-  $('md-content').classList.toggle('hidden', r !== true);
-  if (r === true) renderModels();
+  const result = await loadModelsConfig();
+  $('md-missing').classList.toggle('hidden', result !== 'missing');
+  if (result === 'missing') $('md-missing').textContent = NOT_BUILT_TEXT;
+  $('md-content').classList.toggle('hidden', result !== true);
+  if (result === true) renderModels();
 }
 PAGES.models = { load: loadModelsPage };
-function failApi(res) { if (notBuilt(res)) toast(NOT_BUILT_TEXT, 'error'); else fail(res); }
-function showRestart() { for (const id of ['md-restart', 'og-restart', 'cf-restart', 'ov-restart']) { const b = $(id); if (b) b.classList.remove('hidden'); } }
+$('md-search').addEventListener('input', renderModels);
+$('md-kind').addEventListener('change', renderModels);
+$('md-add-provider').addEventListener('click', () => openProviderEditor(null));
+$('md-edit-provider').addEventListener('click', () => openProviderEditor(mdl.cfg.providers.find(provider => provider.name === mdl.provider)));
+$('md-add-model').addEventListener('click', () => openModelEditor(null));
 
-function modelRow(m) {
-  m.reasoning_levels = m.reasoning_levels || [];
-  const chips = (mdl.choices.reasoning_levels || []).map(level => {
-    const chip = el('button', { class: 'chip' + (m.reasoning_levels.includes(level) ? ' on' : ''), type: 'button', text: level });
-    chip.addEventListener('click', () => {
-      const on = m.reasoning_levels.includes(level);
-      m.reasoning_levels = on ? m.reasoning_levels.filter(x => x !== level) : m.reasoning_levels.concat(level);
-      chip.classList.toggle('on', !on);
-      markDirty();
-    });
-    return chip;
-  });
-  const rename = v => { for (const o of Object.values(mdl.cfg.organs)) o.models = o.models.map(n => n === m.name ? v : n); m.name = v; };
-  const detail = el('div', { style: 'grid-column:1/-1' },
-    el('div', { class: 'form-grid' },
-      selectField('类型', m.kind, mdl.choices.kinds || [m.kind], v => { m.kind = v; }, '目前只有 llm 会被调用'),
-      inputField('输入价格', m.price_in, v => { m.price_in = v; }, { number: true, min: 0, step: 'any', hint: '元 / 百万 token，可不填' }),
-      inputField('输出价格', m.price_out, v => { m.price_out = v; }, { number: true, min: 0, step: 'any', hint: '可不填' }),
-      inputField('缓存命中输入价格', m.price_cache_in, v => { m.price_cache_in = v; }, { number: true, min: 0, step: 'any', hint: '不填就按输入价格算' }),
-      inputField('温度', m.temperature, v => { m.temperature = v; }, { number: true, min: 0, step: 'any', hint: '不填用服务商默认值' }),
-      inputField('单次回复 token 上限', m.max_tokens, v => { m.max_tokens = v; }, { number: true, min: 1 })),
-    el('div', { class: 'field', style: 'margin-top:10px' }, el('span', { class: 'field-label', text: '思考等级可选项' }),
-      el('div', { class: 'levels' }, chips),
-      el('span', { class: 'hint', text: '这个模型支持哪几档，一档都不选就是不支持。器官选的档位必须是它用的每个模型都支持的。' })));
-  return el('div', { class: 'model-row' },
-    inputField('模型名', m.name, rename, { hint: '器官按这个名字引用模型' }),
-    inputField('服务商给的模型标识', m.identifier, v => { m.identifier = v; }),
-    el('button', { class: 'btn small danger', text: '删除', onclick: () => removeModel(m) }),
-    detail);
+function providerNeedsPassword(before, next) {
+  return before ? before.base_url !== next.base_url || before.api_key_env !== next.api_key_env : !!next.api_key_env;
+}
+function openProviderEditor(provider) {
+  const original = provider, isNew = !provider;
+  provider = provider || { name: '', protocol: (mdl.choices.protocols || ['openai'])[0], base_url: null, api_key_env: null, timeout_seconds: 60, max_retry: 2 };
+  const fields = {
+    name: editorField('厂商名称', provider.name, { required: true }),
+    protocol: editorField('协议', provider.protocol, { values: mdl.choices.protocols || [provider.protocol] }),
+    base_url: editorField('请求地址', provider.base_url, { hint: '留空使用该协议的默认地址' }),
+    api_key_env: editorField('密钥名', provider.api_key_env, { hint: 'AUREUS_KEY_ 开头；本地模型可留空' }),
+    timeout: editorField('超时（秒）', provider.timeout_seconds, { type: 'number', min: 1, required: true, step: 'any' }),
+    retry: editorField('失败重试次数', provider.max_retry, { type: 'number', min: 0, required: true, step: 1 }),
+    password: editorField('当前密码', '', { type: 'password', hint: '修改地址、密钥名或添加带密钥的厂商时填写' }),
+  };
+  const apply = () => {
+    if (!validFields(fields)) return;
+    const next = { name: fieldText(fields.name), protocol: fields.protocol.input.value, base_url: fieldText(fields.base_url) || null,
+      api_key_env: fieldText(fields.api_key_env) || null, timeout_seconds: fieldNumber(fields.timeout), max_retry: fieldNumber(fields.retry) };
+    if (mdl.cfg.providers.some(item => item !== original && item.name === next.name)) { toast('厂商名称已存在。', 'error'); return; }
+    const password = fields.password.input.value;
+    if (providerNeedsPassword(original, next) && !password) { toast('这项修改需要当前密码，填写后会自动保存。', 'error'); return; }
+    if (original) {
+      for (const model of mdl.cfg.models) if (model.provider === original.name) model.provider = next.name;
+      Object.assign(original, next);
+    } else mdl.cfg.providers.push(next);
+    mdl.provider = next.name; fields.password.input.value = '';
+    markDirty(password); renderModels();
+    if (isNew) $('editor-dialog').close();
+  };
+  const body = editorForm(isNew ? '添加厂商' : '编辑厂商 · 自动保存', fields, () => { if (!isNew) apply(); },
+    isNew ? el('button', { class: 'btn primary', text: '添加厂商', onclick: apply }) : null);
+  if (original) body.append(keyPanel(original), el('button', { class: 'btn danger', text: '删除厂商', onclick: () => removeProvider(original) }));
+}
+async function removeProvider(provider) {
+  if (!await confirmAction('确定要删除厂商「' + provider.name + '」及其模型吗？')) return;
+  mdl.cfg.models = mdl.cfg.models.filter(model => model.provider !== provider.name);
+  mdl.cfg.providers = mdl.cfg.providers.filter(item => item.name !== provider.name);
+  markDirty(); notifyModelWarnings(); renderModels(); renderOrgans(); $('editor-dialog').close();
 }
 
-function removeModel(m) {
-  if (modelsInUse().has(m.name)) { toast('还有器官在用这个模型，先到「器官」页换掉它。', 'error'); return; }
-  mdl.cfg.models = mdl.cfg.models.filter(x => x !== m);
-  markDirty();
-  renderModels();
+function openModelEditor(model) {
+  const original = model, isNew = !model;
+  model = model || { name: '', identifier: '', provider: mdl.provider || mdl.cfg.providers[0].name, kind: 'llm',
+    price_in: null, price_out: null, price_cache_in: null, temperature: null, max_tokens: null, reasoning_levels: [] };
+  const fields = {
+    provider: editorField('厂商', model.provider, { values: mdl.cfg.providers.map(provider => provider.name) }),
+    identifier: editorField('模型标识符', model.identifier, { required: true }),
+    name: editorField('模型名称', model.name, { hint: '留空使用模型标识符' }),
+    kind: editorField('模型类型', model.kind, { values: mdl.choices.kinds || ['llm', 'embedding', 'vision'] }),
+    price_in: editorField('输入价格（元 / 百万 token）', model.price_in, { type: 'number', min: 0, step: 'any' }),
+    price_out: editorField('输出价格（元 / 百万 token）', model.price_out, { type: 'number', min: 0, step: 'any' }),
+    price_cache_in: editorField('缓存命中输入价格', model.price_cache_in, { type: 'number', min: 0, step: 'any' }),
+    temperature: editorField('温度', model.temperature, { type: 'number', min: 0, step: 'any' }),
+    max_tokens: editorField('单次回复 token 上限', model.max_tokens, { type: 'number', min: 1, step: 1 }),
+  };
+  const levels = new Set(model.reasoning_levels || []);
+  const apply = () => {
+    if (!validFields(fields)) return;
+    const name = fieldText(fields.name) || fieldText(fields.identifier);
+    if (mdl.cfg.models.some(item => item !== original && item.name === name)) { toast('模型名称已存在。', 'error'); return; }
+    const next = { name, identifier: fieldText(fields.identifier), provider: fields.provider.input.value, kind: fields.kind.input.value,
+      price_in: fieldNumber(fields.price_in), price_out: fieldNumber(fields.price_out), price_cache_in: fieldNumber(fields.price_cache_in),
+      temperature: fieldNumber(fields.temperature), max_tokens: fieldNumber(fields.max_tokens), reasoning_levels: [...levels] };
+    if (original) {
+      for (const organ of Object.values(mdl.cfg.organs)) organ.models = organ.models.map(item => item === original.name ? name : item);
+      Object.assign(original, next);
+    } else mdl.cfg.models.push(next);
+    markDirty(); renderModels(); renderOrgans();
+    if (isNew) $('editor-dialog').close();
+  };
+  const body = editorForm(isNew ? '添加模型' : '编辑模型 · 自动保存', fields, () => { if (!isNew) apply(); },
+    isNew ? el('button', { class: 'btn primary', text: '添加模型', onclick: apply }) : null);
+  const choices = el('div', { class: 'row' });
+  for (const level of mdl.choices.reasoning_levels || []) {
+    const checkbox = el('input', { type: 'checkbox', checked: levels.has(level) });
+    checkbox.addEventListener('change', () => { if (checkbox.checked) levels.add(level); else levels.delete(level); if (!isNew) apply(); });
+    choices.append(el('label', { class: 'row' }, checkbox, level));
+  }
+  body.append(el('div', { class: 'field' }, el('label', { text: '支持的思考等级' }), choices));
 }
-function addModel(p) {
-  let n = mdl.cfg.models.length + 1;
-  while (mdl.cfg.models.some(m => m.name === '新模型' + n)) n++;
-  mdl.cfg.models.push({ name: '新模型' + n, identifier: '', provider: p.name, kind: (mdl.choices.kinds || ['llm'])[0], price_in: null, price_out: null, price_cache_in: null, temperature: null, max_tokens: null, reasoning_levels: [] });
-  markDirty();
-  renderModels();
+async function removeModel(model) {
+  if (!await confirmAction('确定要删除模型「' + model.name + '」吗？')) return;
+  mdl.cfg.models = mdl.cfg.models.filter(item => item.name !== model.name);
+  const affected = Object.keys(mdl.cfg.organs).filter(name => mdl.cfg.organs[name].models.includes(model.name));
+  markDirty(); notifyModelWarnings(affected); renderModels(); renderOrgans();
 }
 
-// 密钥：页面从不显示原文，只看得到「已设置」「未设置」。读完输入框立刻清空，不留在页面上。
-function keyPanel(p) {
-  const value = el('input', { type: 'password', autocomplete: 'off', placeholder: '密钥原文' });
-  const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: '当前口令' });
-  async function send(path, body, okText) {
+function keyPanel(provider) {
+  const value = el('input', { type: 'password', autocomplete: 'off', 'aria-label': '密钥原文', placeholder: '密钥原文' });
+  const password = el('input', { type: 'password', autocomplete: 'current-password', 'aria-label': '密钥操作密码', placeholder: '当前密码' });
+  async function send(path) {
+    if (!provider.api_key_env) { toast('先填写密钥名。', 'error'); return; }
+    const body = { name: provider.api_key_env, password: password.value };
+    if (path === '/api/keys') body.value = value.value;
+    value.value = ''; password.value = '';
+    await mdl.queue;
     const res = await api(path, path === '/api/keys' ? 'PUT' : 'POST', body);
     if (!res.ok) { failApi(res); return; }
-    mdl.keys[body.name] = path === '/api/keys';
-    toast(okText, 'ok');
-    showRestart();
-    renderModels();
+    mdl.keys[provider.api_key_env] = path === '/api/keys';
+    toast('密钥已更新，重启后生效。', 'ok'); showRestart(); renderModels();
   }
-  const save = el('button', { class: 'btn primary small', text: '保存密钥', onclick: () => {
-    const body = { name: p.api_key_env, value: value.value, password: pw.value };
-    value.value = ''; pw.value = '';
-    if (!body.value.trim()) { toast('请先填密钥原文。', 'error'); return; }
-    send('/api/keys', body, '密钥已存进加密的密钥库，重启后生效。');
-  } });
-  const remove = el('button', { class: 'btn danger small', text: '删除这条密钥', onclick: () => {
-    const body = { name: p.api_key_env, password: pw.value };
-    pw.value = '';
-    send('/api/keys/remove', body, '这条密钥已从密钥库删除，重启后生效。');
-  } });
-  return el('div', { class: 'card flat hidden', style: 'margin-bottom:14px' },
-    el('p', { class: 'muted', style: 'font-size:13px;margin-bottom:10px', text: '密钥只能在本机的网页上录入，要再输一次当前口令。局域网里的其他设备请到本机的网页，或用命令 aureus keys set。保存后页面不会再显示它。' }),
-    el('div', { class: 'form-grid' }, el('div', { class: 'field' }, el('label', { text: '密钥原文' }), value), el('div', { class: 'field' }, el('label', { text: '当前口令' }), pw)),
-    el('div', { class: 'row', style: 'margin-top:10px' }, save, remove));
-}
-// ---------- 模型：保存和放弃 ----------
-// 页面提交的是整份配置：按条目比较、没改的连注释原样不动（2.12b 接口第 2 点）。
-// 清空的输入框是空串，可选项要发 null（「不写」）；空的必填项照样发，由后端校验报中文错误，页面不悄悄删条目。
-function cleanModelsConfig() {
-  const blank = v => (typeof v === 'string' && !v.trim() ? null : v);
-  for (const p of mdl.cfg.providers) { p.base_url = blank(p.base_url); p.api_key_env = blank(p.api_key_env); }
+  return el('div', { class: 'stack key-editor' },
+    el('h3', { text: '密钥 · ' + (mdl.keys[provider.api_key_env] ? '已设置' : '未设置') }), value, password,
+    el('div', { class: 'row' }, el('button', { class: 'btn', text: '录入密钥', onclick: () => send('/api/keys') }),
+      el('button', { class: 'btn danger', text: '删除密钥', onclick: async () => { if (await confirmAction('确定要删除此密钥吗？')) send('/api/keys/remove'); } })));
 }
 
-$('md-save').addEventListener('click', async () => {
-  cleanModelsConfig();
-  const password = $('md-password').value;
-  $('md-password').value = '';
-  const res = await api('/api/models', 'PUT', { config: mdl.cfg, password: password || undefined });
-  if (!res.ok) { failApi(res); return; }
-  mdl.dirty = false;
-  refreshDirty();
-  toast('模型配置已保存，重启后生效。', 'ok');
-  showRestart();
-  if (await loadModelsConfig(true) === true) { renderModels(); renderOrgans(); }
-});
-
-$('md-reset').addEventListener('click', async () => {
-  if (!confirm('放弃所有没保存的改动？')) return;
-  if (await loadModelsConfig(true) === true) { renderModels(); renderOrgans(); }
-});
-// ---------- 器官：每个器官用哪些模型（和模型页共用 mdl.cfg，保存走 PUT /api/models） ----------
-// 器官名由配置决定；这里只给常见的几个写说明，不认识的照名字显示。
-const ORGAN_ROLES = {
-  replyer: '回复你的话。',
-  planner: '决定这一拍要不要做事、做什么。',
-  judge: '判断你这句话的情绪和意图。',
-  summarizer: '写日记、整理人设回顾、总结探索结果。',
-};
-
-// 思考等级只列器官用的每个模型都支持的档位（D84 第 3 条）；一个模型都没有时只留「不用」。
-function allowedEfforts(organ) {
-  const rows = organ.models.map(n => mdl.cfg.models.find(m => m.name === n)).filter(Boolean);
-  if (!rows.length) return [];
-  return (mdl.choices.reasoning_levels || []).filter(level => rows.every(m => (m.reasoning_levels || []).includes(level)));
-}
-
+// ---------- 器官工作卡片：选择卡片后，在右侧抽屉里编辑；模型选择立即自动保存 ----------
 function organCard(name, organ) {
-  const move = (i, step) => {
-    const list = organ.models.slice();
-    const j = i + step;
-    if (j < 0 || j >= list.length) return;
-    [list[i], list[j]] = [list[j], list[i]];
-    organ.models = list;
-    markDirty();
-    renderOrgans();
-  };
-  const steps = organ.models.map((model, i) => el('div', { class: 'chain-step' },
-    el('span', { class: 'order', text: i + 1 }),
-    el('span', { class: 'label', text: model }),
-    el('button', { class: 'btn small', type: 'button', text: '↑', disabled: i === 0, 'aria-label': '上移', onclick: () => move(i, -1) }),
-    el('button', { class: 'btn small', type: 'button', text: '↓', disabled: i === organ.models.length - 1, 'aria-label': '下移', onclick: () => move(i, 1) }),
-    el('button', { class: 'btn small danger', type: 'button', text: '移除', onclick: () => { organ.models = organ.models.filter((_, k) => k !== i); markDirty(); renderOrgans(); } })));
-  const candidates = mdl.cfg.models.filter(m => !organ.models.includes(m.name));
-  const picker = el('select', { 'aria-label': '添加模型' }, el('option', { value: '', text: candidates.length ? '选一个模型加进来…' : '没有可加的模型' }), candidates.map(m => el('option', { value: m.name, text: m.name })));
-  picker.addEventListener('change', () => { if (!picker.value) return; organ.models = organ.models.concat(picker.value); markDirty(); renderOrgans(); });
-  const allowed = allowedEfforts(organ);
-  const options = ['', ...allowed];
-  if (organ.reasoning_effort && !allowed.includes(organ.reasoning_effort)) options.push(organ.reasoning_effort);
-  const effort = el('select', { 'aria-label': '思考等级' }, options.map(level => el('option', { value: level, selected: (organ.reasoning_effort || '') === level,
-    text: level === '' ? '不用' : level + (allowed.includes(level) ? '' : '（模型已不支持）') })));
-  effort.addEventListener('change', () => { organ.reasoning_effort = effort.value || null; markDirty(); });
-  const removeBtn = el('button', { class: 'btn small danger', text: '删除器官', onclick: () => { if (!confirm('删除器官「' + name + '」？用到它的功能会找不到它。')) return; delete mdl.cfg.organs[name]; markDirty(); renderOrgans(); } });
-  return el('div', { class: 'card organ-card' },
-    el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: name }), el('div', { class: 'role', text: ORGAN_ROLES[name] || '自定义器官。' })), removeBtn),
-    el('div', { class: 'field-label', text: '用哪些模型（上面的先用）' }),
-    el('div', { class: 'chain' }, steps.length ? steps : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有模型：至少要选一个才能保存。' })]),
-    picker,
-    el('div', { class: 'divider' }),
-    el('div', { class: 'form-grid' },
-      el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort,
-        el('span', { class: 'hint', text: allowed.length ? '只列出每个模型都支持的档位。' : '模型都没有勾选思考等级，所以只能不用。' })),
-      inputField('温度', organ.temperature, v => { organ.temperature = v; }, { number: true, min: 0, step: 'any', hint: '写在这里的优先于模型自己的，不填用模型的' }),
-      inputField('单次回复 token 上限', organ.max_tokens, v => { organ.max_tokens = v; }, { number: true, min: 1, hint: '同上' })));
+  const missing = organ.models.some(model => !mdl.cfg.models.some(item => item.name === model));
+  const configured = organ.models.length > 0 && !missing;
+  return el('button', { class: 'card organ-tile', 'data-organ': name, onclick: () => openOrganEditor(name) },
+    el('div', { class: 'row' }, el('span', { class: 'dot' + (configured ? ' on' : ' off') }),
+      el('h3', { text: ORGAN_NAMES[name] || name }), mdl.builtin.includes(name) ? el('span', { class: 'tag', text: '默认' }) : null),
+    el('div', { class: 'organ-summary', text: organ.models.join(' → ') || '＋ 安排模型' }),
+    el('span', { class: missing ? 'danger-text' : 'muted', text: missing ? '引用了不存在的模型' : configured ? organ.models.length + ' 个模型' : '未配置模型' }));
 }
-
 function renderOrgans() {
-  const grid = $('og-grid');
-  grid.textContent = '';
-  const names = Object.keys(mdl.cfg.organs);
-  if (!names.length) grid.append(el('div', { class: 'empty', text: '还没有器官。先在「模型」页配好服务商和模型，再在这里添加器官。' }));
-  for (const name of names) grid.append(organCard(name, mdl.cfg.organs[name]));
+  const grid = $('og-grid'); grid.textContent = '';
+  const names = [...new Set([...mdl.builtin, ...Object.keys(mdl.cfg.organs)])];
+  for (const name of names) grid.append(organCard(name, mdl.cfg.organs[name] || emptyOrgan()));
 }
-
+function allowedEfforts(organ) {
+  const rows = organ.models.map(name => mdl.cfg.models.find(model => model.name === name)).filter(Boolean);
+  if (!rows.length) return [];
+  return (mdl.choices.reasoning_levels || []).filter(level => rows.every(model => (model.reasoning_levels || []).includes(level)));
+}
+function openOrganEditor(name) {
+  const organ = mdl.cfg.organs[name] || (mdl.cfg.organs[name] = emptyOrgan());
+  const body = el('div', { class: 'stack' });
+  const list = el('div', { class: 'chain' });
+  const changed = () => { markDirty(); notifyModelWarnings([name]); renderOrgans(); renderModels(); refreshList(); };
+  let dragIndex = null;
+  const move = (from, to) => {
+    if (to < 0 || to >= organ.models.length) return;
+    const [model] = organ.models.splice(from, 1); organ.models.splice(to, 0, model); changed();
+  };
+  const picker = el('select', { 'aria-label': '添加模型' });
+  const search = el('input', { type: 'search', placeholder: '搜索模型名称或厂商', 'aria-label': '搜索可选模型' });
+  const effort = el('select', { 'aria-label': '思考等级' });
+  function refreshList() {
+    list.textContent = '';
+    organ.models.forEach((model, index) => {
+      const row = el('div', { class: 'chain-step', draggable: true },
+        el('span', { class: 'order', text: index + 1 }),
+        el('span', { class: 'label' + (mdl.cfg.models.some(item => item.name === model) ? '' : ' danger-text'), text: model }),
+        el('button', { class: 'btn small', text: '↑', disabled: index === 0, 'aria-label': '上移 ' + model, onclick: () => move(index, index - 1) }),
+        el('button', { class: 'btn small', text: '↓', disabled: index === organ.models.length - 1, 'aria-label': '下移 ' + model, onclick: () => move(index, index + 1) }),
+        el('button', { class: 'btn small danger', text: '移除', 'aria-label': '移除 ' + model, onclick: () => { organ.models.splice(index, 1); changed(); } }));
+      row.addEventListener('dragstart', () => { dragIndex = index; });
+      row.addEventListener('dragover', event => event.preventDefault());
+      row.addEventListener('drop', event => { event.preventDefault(); if (dragIndex !== null) move(dragIndex, index); dragIndex = null; });
+      list.append(row);
+    });
+    if (!organ.models.length) list.append(el('p', { class: 'empty', text: name + '未配置模型' }));
+    picker.textContent = ''; picker.append(el('option', { value: '', text: '＋ 添加模型' }));
+    const query = search.value.trim().toLowerCase();
+    for (const provider of mdl.cfg.providers) {
+      const group = el('optgroup', { label: provider.name });
+      for (const model of mdl.cfg.models) if (model.provider === provider.name && model.kind === 'llm' && !organ.models.includes(model.name)
+        && (model.name + ' ' + provider.name).toLowerCase().includes(query)) group.append(el('option', { value: model.name, text: model.name }));
+      if (group.children.length) picker.append(group);
+    }
+    const allowed = allowedEfforts(organ); effort.textContent = ''; effort.append(el('option', { value: '', text: '不用' }));
+    for (const level of new Set([...allowed, ...(organ.reasoning_effort ? [organ.reasoning_effort] : [])])) effort.append(el('option', { value: level, text: level + (allowed.includes(level) ? '' : '（模型不支持）') }));
+    effort.value = organ.reasoning_effort || '';
+  }
+  picker.addEventListener('change', () => { if (picker.value) { organ.models.push(picker.value); changed(); } });
+  search.addEventListener('input', refreshList);
+  effort.addEventListener('change', () => { organ.reasoning_effort = effort.value || null; markDirty(); });
+  const temperature = editorField('温度', organ.temperature, { type: 'number', min: 0, step: 'any', hint: '留空使用模型自己的值' });
+  const maxTokens = editorField('单次回复 token 上限', organ.max_tokens, { type: 'number', min: 1, step: 1 });
+  temperature.input.addEventListener('change', () => { if (temperature.input.reportValidity()) { organ.temperature = fieldNumber(temperature); markDirty(); } });
+  maxTokens.input.addEventListener('change', () => { if (maxTokens.input.reportValidity()) { organ.max_tokens = fieldNumber(maxTokens); markDirty(); } });
+  body.append(list, search, picker,
+    el('button', { class: 'btn small', text: '清空模型', onclick: () => { organ.models = []; changed(); } }),
+    el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort), temperature.node, maxTokens.node);
+  if (!mdl.builtin.includes(name)) body.append(el('button', { class: 'btn danger', text: '删除器官', onclick: async () => {
+    if (!await confirmAction('确定要删除器官「' + name + '」吗？')) return;
+    delete mdl.cfg.organs[name]; markDirty(); renderOrgans(); $('editor-dialog').close();
+  } }));
+  openEditor((ORGAN_NAMES[name] || name) + ' · ' + name, body, true); refreshList();
+  notifyModelWarnings([name]);
+}
 async function loadOrgansPage() {
-  const r = await loadModelsConfig(false);
-  const missing = $('og-missing');
-  missing.classList.toggle('hidden', r !== 'missing');
-  if (r === 'missing') missing.textContent = NOT_BUILT_TEXT;
-  $('og-content').classList.toggle('hidden', r !== true);
-  if (r === true) renderOrgans();
+  const result = await loadModelsConfig();
+  $('og-missing').classList.toggle('hidden', result !== 'missing');
+  if (result === 'missing') $('og-missing').textContent = NOT_BUILT_TEXT;
+  $('og-content').classList.toggle('hidden', result !== true);
+  if (result === true) { renderOrgans(); notifyModelWarnings(); }
 }
 PAGES.organs = { load: loadOrgansPage };
-
 $('og-add').addEventListener('click', () => {
   const name = $('og-new-name').value.trim();
   if (!name) { toast('先写器官的名字。', 'error'); return; }
-  if (mdl.cfg.organs[name]) { toast('已经有这个器官了。', 'error'); return; }
-  mdl.cfg.organs[name] = { models: [], strategy: (mdl.choices.strategies || ['sequential'])[0], temperature: null, max_tokens: null, reasoning_effort: null };
-  $('og-new-name').value = '';
-  markDirty();
-  renderOrgans();
+  if (mdl.cfg.organs[name] || mdl.builtin.includes(name)) { toast('已经有这个器官了。', 'error'); return; }
+  mdl.cfg.organs[name] = emptyOrgan(); $('og-new-name').value = '';
+  markDirty(); renderOrgans(); openOrganEditor(name);
 });
-$('og-save').addEventListener('click', () => $('md-save').click());
-$('og-reset').addEventListener('click', async () => { if (!confirm('放弃所有没保存的改动？')) return; await loadModelsConfig(true); renderOrgans(); });
+
 // ---------- 设置：运行配置（/api/config，2.12b 的接口） ----------
 // 字段的类型、范围、默认值都从后端给的 schema 读；这里只写中文名和说明。不认识的节和字段照原名显示。
 const CFG_SECTIONS = [
-  ['', '通用', '日志详细程度和配置格式版本。'],
-  ['heartbeat', '心跳与回复', '多久跳一拍、回复带多少条对话、怎么拆成几条发。'],
-  ['body', '身体', '精力、疲劳、压力、社交需求、睡眠，以及给观察台记的样本。'],
-  ['hormones', '激素', '怒气、愉悦、低落、惊讶的触发和回落。'],
-  ['mood', '心情', '几小时到几天的情绪基调，以及什么时候变得谨慎。'],
-  ['people', '人际', '对每个人的好感怎么涨落。'],
-  ['empathy', '同理心', '别人的情绪对它的影响。'],
-  ['judge', '判断', '回复前判断对方情绪和意图的器官。'],
-  ['feedback', '反馈', '记下预期和结果，算出对每类行动有多大把握。'],
-  ['agenda', '日程', '记下承诺、到期提醒、兑现记账。'],
-  ['initiative', '主动联系', '它什么时候、多常主动找你。'],
-  ['interests', '兴趣', '它关心哪些话题。'],
-  ['exploration', '探索', '围绕兴趣做只读的小探索。'],
-  ['memory', '记忆', '记忆索引和按关键词召回。'],
-  ['diary', '日记', '每天什么时候写、写多长。'],
-  ['persona_growth', '人设成长', '它按规则慢慢改自己下面三层人设。'],
-  ['time', '时间', '时区，以及「一天」从几点开始算。'],
-  ['snapshots', '快照', '快照最多占多少空间。'],
-  ['safety', '安全', '每月用量上限和失控拦截。'],
-  ['web', '网页', '网页的端口、登录有效期和登录限流。'],
+  ['', '通用'],
+  ['heartbeat', '心跳与回复'],
+  ['body', '身体'],
+  ['hormones', '激素'],
+  ['mood', '心情'],
+  ['people', '人际'],
+  ['empathy', '同理心'],
+  ['judge', '判断'],
+  ['feedback', '反馈'],
+  ['agenda', '日程'],
+  ['initiative', '主动联系'],
+  ['interests', '兴趣'],
+  ['exploration', '探索'],
+  ['memory', '记忆'],
+  ['diary', '日记'],
+  ['persona_growth', '人设成长'],
+  ['time', '时间'],
+  ['snapshots', '快照'],
+  ['safety', '安全'],
+  ['web', '网页'],
 ];
 const CFG_LABELS = {
-  'log_level': ['日志级别', 'DEBUG 最详细，ERROR 只记错误'],
-  'config_version': ['配置格式版本', '软件升级时用，不要手改'],
-  'safety.monthly_token_limit': ['每月 token 上限', '输入加输出合计；不写就是不限'],
-  'safety.runaway_guard_enabled': ['失控拦截', '短时间调用太多或连续失败时自动暂停'],
-  'safety.max_calls_per_minute': ['每分钟最多调用几次', ''],
-  'safety.max_consecutive_failures': ['连续失败几次就暂停', ''],
-  'safety.failure_pause_seconds': ['暂停多少秒', ''],
-  'heartbeat.tick_interval_seconds': ['心跳间隔（秒）', '没有新消息时多久跳一拍；有消息会马上醒'],
-  'heartbeat.advance_biomodel': ['旧神经递质模型', '已废弃，不再起作用'],
-  'heartbeat.broadcast_cognitive_state': ['状态变化写进时间线', ''],
-  'heartbeat.shutdown_grace_seconds': ['关机时最多等几秒', '等进行中的调用结束，等不到就取消'],
-  'heartbeat.recent_message_limit': ['回复时带上最近几条对话', '正常档；包括刚收到的'],
-  'heartbeat.saving_message_limit': ['节省档带几条', '不会超过上一项'],
-  'heartbeat.low_message_limit': ['低电量带几条', '不会超过正常档'],
-  'heartbeat.reply_organ': ['回复用的器官', '要和「器官」页里的名字一致'],
-  'heartbeat.planning_enabled': ['先规划再回复', '关掉后合并成一次调用'],
-  'heartbeat.plan_organ': ['规划用的器官', ''],
-  'heartbeat.split_reply_enabled': ['拆成几条短消息发', ''],
-  'heartbeat.max_reply_messages': ['最多拆成几条', ''],
-  'heartbeat.min_message_chars': ['每条至少几个字', '更短的并进相邻一句'],
-  'heartbeat.identity_changes_in_prompt': ['告诉它哪几层设定被你改过', '只说哪几层，不给旧内容'],
-  'heartbeat.roleplay_mode': ['扮演模式', '实验对照用：身体信号全部不起作用，只让模型自己演；安全检查照常'],
-  'body.energy_enabled': ['精力', '关掉后不按每日额度限制；月度上限照样生效'],
-  'body.user_reserve_fraction': ['留给你的额度比例', '可选的事用到 1 减这个比例就停'],
-  'body.state_in_prompt_enabled': ['把身体状态告诉它', '关掉后它不知道自己的状态，行为影响不变'],
-  'body.saving_below': ['低于多少进节省档', '精力 = 今日剩余 ÷ 今日额度'],
-  'body.low_below': ['低于多少进低电量', ''],
-  'body.overdraft_below': ['低于多少进透支保护', '三个分界要从小到大'],
-  'body.fatigue_enabled': ['疲劳', ''],
-  'body.fatigue_window_minutes': ['疲劳看最近几分钟', ''],
-  'body.fatigue_full_calls': ['调用多少次算满疲劳', ''],
-  'body.fatigue_high_at': ['疲劳偏高线', ''],
-  'body.fatigue_batch_seconds': ['疲劳时攒几秒再回', ''],
-  'body.stress_enabled': ['压力', ''],
-  'body.stress_window_calls': ['压力看最近几次调用', ''],
-  'body.stress_backlog_full': ['排队几条算满压力', ''],
-  'body.stress_high_at': ['压力偏高线', ''],
-  'body.stress_lowers_tier': ['压力高时回复降一档', ''],
-  'body.social_need_enabled': ['社交需求', '越久没聊越想找你'],
-  'body.social_need_time_constant_hours': ['社交需求上涨快慢（小时）', '过这么久涨到约 63%'],
-  'body.social_need_high_at': ['社交需求偏高线', '达到才可能主动联系'],
-  'body.sleep_enabled': ['睡眠', ''],
-  'body.night_start_hour': ['夜里从几点开始', '当地时间；比结束大表示跨午夜'],
-  'body.night_end_hour': ['夜里到几点结束', ''],
-  'body.night_tick_interval_seconds': ['夜里心跳间隔（秒）', ''],
-  'body.sample_enabled': ['记录身体样本', '观察台画曲线用'],
-  'body.sample_interval_seconds': ['样本间隔（秒）', ''],
-  'body.sample_retention_days': ['样本留几天', ''],
+  'log_level': '日志级别',
+  'config_version': '配置格式版本',
+  'safety.monthly_token_limit': '每月 token 上限',
+  'safety.runaway_guard_enabled': '失控拦截',
+  'safety.max_calls_per_minute': '每分钟最多调用几次',
+  'safety.max_consecutive_failures': '连续失败几次就暂停',
+  'safety.failure_pause_seconds': '暂停多少秒',
+  'heartbeat.tick_interval_seconds': '心跳间隔（秒）',
+  'heartbeat.advance_biomodel': '旧神经递质模型',
+  'heartbeat.broadcast_cognitive_state': '状态变化写进时间线',
+  'heartbeat.shutdown_grace_seconds': '关机时最多等几秒',
+  'heartbeat.recent_message_limit': '回复时带上最近几条对话',
+  'heartbeat.saving_message_limit': '节省档带几条',
+  'heartbeat.low_message_limit': '低电量带几条',
+  'heartbeat.reply_organ': '回复用的器官',
+  'heartbeat.planning_enabled': '先规划再回复',
+  'heartbeat.plan_organ': '规划用的器官',
+  'heartbeat.split_reply_enabled': '拆成几条短消息发',
+  'heartbeat.max_reply_messages': '最多拆成几条',
+  'heartbeat.min_message_chars': '每条至少几个字',
+  'heartbeat.identity_changes_in_prompt': '告诉它哪几层设定被你改过',
+  'heartbeat.roleplay_mode': '扮演模式',
+  'body.energy_enabled': '精力',
+  'body.user_reserve_fraction': '留给你的额度比例',
+  'body.state_in_prompt_enabled': '把身体状态告诉它',
+  'body.saving_below': '低于多少进节省档',
+  'body.low_below': '低于多少进低电量',
+  'body.overdraft_below': '低于多少进透支保护',
+  'body.fatigue_enabled': '疲劳',
+  'body.fatigue_window_minutes': '疲劳看最近几分钟',
+  'body.fatigue_full_calls': '调用多少次算满疲劳',
+  'body.fatigue_high_at': '疲劳偏高线',
+  'body.fatigue_batch_seconds': '疲劳时攒几秒再回',
+  'body.stress_enabled': '压力',
+  'body.stress_window_calls': '压力看最近几次调用',
+  'body.stress_backlog_full': '排队几条算满压力',
+  'body.stress_high_at': '压力偏高线',
+  'body.stress_lowers_tier': '压力高时回复降一档',
+  'body.social_need_enabled': '社交需求',
+  'body.social_need_time_constant_hours': '社交需求上涨快慢（小时）',
+  'body.social_need_high_at': '社交需求偏高线',
+  'body.sleep_enabled': '睡眠',
+  'body.night_start_hour': '夜里从几点开始',
+  'body.night_end_hour': '夜里到几点结束',
+  'body.night_tick_interval_seconds': '夜里心跳间隔（秒）',
+  'body.sample_enabled': '记录身体样本',
+  'body.sample_interval_seconds': '样本间隔（秒）',
+  'body.sample_retention_days': '样本留几天',
 };
 Object.assign(CFG_LABELS, {
-  'hormones.enabled': ['激素总开关', ''],
-  'hormones.anger_enabled': ['怒气', ''], 'hormones.joy_enabled': ['愉悦', ''],
-  'hormones.hurt_enabled': ['低落', ''], 'hormones.surprise_enabled': ['惊讶', ''],
-  'hormones.anger_half_life_seconds': ['怒气半衰期（秒）', '浓度降到一半要多久'],
-  'hormones.joy_half_life_seconds': ['愉悦半衰期（秒）', ''],
-  'hormones.hurt_half_life_seconds': ['低落半衰期（秒）', ''],
-  'hormones.surprise_half_life_seconds': ['惊讶半衰期（秒）', ''],
-  'hormones.base_amount': ['基础上涨量', '上涨 = 基础量 × 强度 × 把握'],
-  'hormones.max_single_rise': ['单次最多涨多少', ''],
-  'hormones.min_confidence': ['判断把握至少多少才算', ''],
-  'hormones.repeat_decay': ['反复触发的递减系数', '刷屏刷不出情绪'],
-  'hormones.repeat_window_seconds': ['反复触发的窗口（秒）', ''],
-  'hormones.calm_below': ['怒气平息线', '要满足 平息 < 回击 < 冷处理'],
-  'hormones.retaliate_at': ['怒气回击线', ''],
-  'hormones.cold_shoulder_at': ['怒气冷处理线', '达到后可以选择不回'],
-  'hormones.max_retaliations': ['一场冲突最多回击几次', ''],
-  'hormones.hurt_shorten_at': ['低落到多少回复变短', ''],
-  'hormones.surprise_at': ['惊讶到多少马上回', '不等疲劳攒消息'],
-  'hormones.surprise_gap': ['结果和预期差多少算惊讶', ''],
-  'mood.enabled': ['心情', ''],
-  'mood.half_life_seconds': ['心情回落半衰期（秒）', '默认 6 小时'],
-  'mood.hormone_weight': ['激素对心情的权重', ''],
-  'mood.success_amount': ['一次成功加多少', ''],
-  'mood.failure_amount': ['一次失败减多少', ''],
-  'mood.max_single_change': ['单件事最多影响多少', ''],
-  'mood.stress_weight': ['压力往下拉多少', ''],
-  'mood.cautious_below': ['低于多少变谨慎', ''],
-  'mood.recover_above': ['高于多少恢复', '要比上一项大'],
-  'people.affinity_enabled': ['好感', ''],
-  'people.user_initial_affinity': ['对你的初始好感', '满分 100；只在第一次用到时采用'],
-  'people.stranger_affinity': ['对陌生人的初始好感', ''],
-  'people.praise_amount': ['被夸奖涨多少', ''],
-  'people.offense_amount': ['被冒犯跌多少', ''],
-  'people.rejection_amount': ['被拒绝跌多少', ''],
-  'people.interaction_amount': ['每天聊过涨多少', ''],
-  'people.daily_rise_cap': ['每天最多涨多少', ''],
-  'people.daily_fall_cap': ['每天最多跌多少', ''],
-  'empathy.enabled': ['同理心', ''],
-  'empathy.base_amount': ['基础量', ''],
-  'empathy.affinity_floor': ['好感系数下限', '对讨厌的人共情变弱，但不会反过来'],
-  'judge.enabled': ['判断', ''],
-  'judge.organ': ['判断用的器官', '没配这个器官时跳过判断'],
-  'judge.timeout_seconds': ['最多等几秒', ''],
-  'judge.context_messages': ['再带之前几条对话', '0 表示只看这一条'],
-  'feedback.enabled': ['反馈', ''],
-  'feedback.window_size': ['看最近几次结果', ''],
-  'feedback.min_samples': ['至少几次才不算样本不足', '不能大于上一项'],
-  'agenda.enabled': ['日程', ''],
-  'agenda.max_open_per_person': ['每人最多几条没完成的', ''],
-  'agenda.max_due_days': ['到期最远几天后', ''],
-  'agenda.expire_grace_days': ['到期后几天算过期', ''],
-  'agenda.context_items': ['回复时列几条', ''],
-  'initiative.enabled': ['主动联系', '默认关闭'],
-  'initiative.max_per_day': ['每天最多几次', ''],
-  'initiative.min_interval_hours': ['最短间隔（小时）', '没回应就翻倍'],
-  'initiative.max_interval_hours': ['最长间隔（小时）', ''],
-  'initiative.answer_window_hours': ['等你回应多久（小时）', ''],
-  'initiative.give_up_after': ['连续几次没回应就停', '等你先开口'],
-  'interests.enabled': ['兴趣', ''],
-  'interests.max_active': ['最多几个兴趣', ''],
-  'interests.max_changes_per_day': ['每天自己最多改几次', ''],
-  'exploration.enabled': ['探索', '要先开兴趣'],
-  'exploration.organ': ['总结用的器官', ''],
-  'exploration.search_provider': ['搜索服务', '还没接真实搜索，只能选 none'],
-  'exploration.max_per_day': ['每天最多几次', ''],
-  'exploration.min_interval_hours': ['最短间隔（小时）', ''],
-  'exploration.max_results': ['每次最多看几条结果', ''],
-  'exploration.fetch_timeout_seconds': ['取网页超时（秒）', ''],
-  'exploration.max_page_bytes': ['网页最大字节数', ''],
-  'exploration.max_page_chars': ['网页最多读几个字', ''],
-  'exploration.share_within_days': ['几天内的发现会拿来聊', ''],
-  'memory.enabled': ['记忆索引', ''],
-  'memory.recall_enabled': ['回复时召回记忆', ''],
-  'memory.max_results': ['最多召回几条', ''],
-  'memory.index_batch': ['每次索引几条', ''],
-  'diary.enabled': ['日记', ''],
-  'diary.organ': ['写日记的器官', ''],
-  'diary.write_after_hour': ['几点以后写', '当地时间'],
-  'diary.max_input_chars': ['最多读几个字的经历', ''],
-  'diary.max_chars': ['日记最长几个字', ''],
-  'persona_growth.enabled': ['人设成长', '会改它自己的设定，默认关闭；锁定的层不会改'],
-  'persona_growth.organ': ['用的器官', ''],
-  'persona_growth.max_input_chars': ['最多读几个字的材料', ''],
-  'persona_growth.layer_cooldown_days': ['同一层至少隔几天才再改', ''],
-  'persona_growth.min_similarity': ['新旧至少多相似', '防止一次改太多'],
-  'persona_growth.max_chars_from_empty': ['空层第一次最多写几个字', ''],
-  'persona_growth.max_layer_chars': ['每层最长几个字', ''],
-  'time.timezone': ['时区', '比如 Asia/Shanghai；不写用这台电脑的时区'],
-  'time.day_start_hour': ['一天从几点开始', '每天的额度从这时重置'],
-  'snapshots.max_total_megabytes': ['快照最多占多少 MB', ''],
-  'web.enabled': ['网页', '关掉后网页打不开'],
-  'web.allow_remote': ['允许局域网访问', '局域网里是不加密的 HTTP'],
-  'web.port': ['端口', ''],
-  'web.session_days': ['登录保持几天', '从最后一次活动算起'],
-  'web.login_max_failures': ['登录失败几次就锁定', ''],
-  'web.login_window_seconds': ['统计失败的窗口（秒）', ''],
-  'web.login_lockout_seconds': ['锁定多少秒', ''],
+  'hormones.enabled': '激素总开关',
+  'hormones.anger_enabled': '怒气', 'hormones.joy_enabled': '愉悦',
+  'hormones.hurt_enabled': '低落', 'hormones.surprise_enabled': '惊讶',
+  'hormones.anger_half_life_seconds': '怒气半衰期（秒）',
+  'hormones.joy_half_life_seconds': '愉悦半衰期（秒）',
+  'hormones.hurt_half_life_seconds': '低落半衰期（秒）',
+  'hormones.surprise_half_life_seconds': '惊讶半衰期（秒）',
+  'hormones.base_amount': '基础上涨量',
+  'hormones.max_single_rise': '单次最多涨多少',
+  'hormones.min_confidence': '判断把握至少多少才算',
+  'hormones.repeat_decay': '反复触发的递减系数',
+  'hormones.repeat_window_seconds': '反复触发的窗口（秒）',
+  'hormones.calm_below': '怒气平息线',
+  'hormones.retaliate_at': '怒气回击线',
+  'hormones.cold_shoulder_at': '怒气冷处理线',
+  'hormones.max_retaliations': '一场冲突最多回击几次',
+  'hormones.hurt_shorten_at': '低落到多少回复变短',
+  'hormones.surprise_at': '惊讶到多少马上回',
+  'hormones.surprise_gap': '结果和预期差多少算惊讶',
+  'mood.enabled': '心情',
+  'mood.half_life_seconds': '心情回落半衰期（秒）',
+  'mood.hormone_weight': '激素对心情的权重',
+  'mood.success_amount': '一次成功加多少',
+  'mood.failure_amount': '一次失败减多少',
+  'mood.max_single_change': '单件事最多影响多少',
+  'mood.stress_weight': '压力往下拉多少',
+  'mood.cautious_below': '低于多少变谨慎',
+  'mood.recover_above': '高于多少恢复',
+  'people.affinity_enabled': '好感',
+  'people.user_initial_affinity': '对你的初始好感',
+  'people.stranger_affinity': '对陌生人的初始好感',
+  'people.praise_amount': '被夸奖涨多少',
+  'people.offense_amount': '被冒犯跌多少',
+  'people.rejection_amount': '被拒绝跌多少',
+  'people.interaction_amount': '每天聊过涨多少',
+  'people.daily_rise_cap': '每天最多涨多少',
+  'people.daily_fall_cap': '每天最多跌多少',
+  'empathy.enabled': '同理心',
+  'empathy.base_amount': '基础量',
+  'empathy.affinity_floor': '好感系数下限',
+  'judge.enabled': '判断',
+  'judge.organ': '判断用的器官',
+  'judge.timeout_seconds': '最多等几秒',
+  'judge.context_messages': '再带之前几条对话',
+  'feedback.enabled': '反馈',
+  'feedback.window_size': '看最近几次结果',
+  'feedback.min_samples': '至少几次才不算样本不足',
+  'agenda.enabled': '日程',
+  'agenda.max_open_per_person': '每人最多几条没完成的',
+  'agenda.max_due_days': '到期最远几天后',
+  'agenda.expire_grace_days': '到期后几天算过期',
+  'agenda.context_items': '回复时列几条',
+  'initiative.enabled': '主动联系',
+  'initiative.max_per_day': '每天最多几次',
+  'initiative.min_interval_hours': '最短间隔（小时）',
+  'initiative.max_interval_hours': '最长间隔（小时）',
+  'initiative.answer_window_hours': '等你回应多久（小时）',
+  'initiative.give_up_after': '连续几次没回应就停',
+  'interests.enabled': '兴趣',
+  'interests.max_active': '最多几个兴趣',
+  'interests.max_changes_per_day': '每天自己最多改几次',
+  'exploration.enabled': '探索',
+  'exploration.organ': '总结用的器官',
+  'exploration.search_provider': '搜索服务',
+  'exploration.max_per_day': '每天最多几次',
+  'exploration.min_interval_hours': '最短间隔（小时）',
+  'exploration.max_results': '每次最多看几条结果',
+  'exploration.fetch_timeout_seconds': '取网页超时（秒）',
+  'exploration.max_page_bytes': '网页最大字节数',
+  'exploration.max_page_chars': '网页最多读几个字',
+  'exploration.share_within_days': '几天内的发现会拿来聊',
+  'memory.enabled': '记忆索引',
+  'memory.recall_enabled': '回复时召回记忆',
+  'memory.max_results': '最多召回几条',
+  'memory.index_batch': '每次索引几条',
+  'diary.enabled': '日记',
+  'diary.organ': '写日记的器官',
+  'diary.write_after_hour': '几点以后写',
+  'diary.max_input_chars': '最多读几个字的经历',
+  'diary.max_chars': '日记最长几个字',
+  'persona_growth.enabled': '人设成长',
+  'persona_growth.organ': '用的器官',
+  'persona_growth.max_input_chars': '最多读几个字的材料',
+  'persona_growth.layer_cooldown_days': '同一层至少隔几天才再改',
+  'persona_growth.min_similarity': '新旧至少多相似',
+  'persona_growth.max_chars_from_empty': '空层第一次最多写几个字',
+  'persona_growth.max_layer_chars': '每层最长几个字',
+  'time.timezone': '时区',
+  'time.day_start_hour': '一天从几点开始',
+  'snapshots.max_total_megabytes': '快照最多占多少 MB',
+  'web.enabled': '网页',
+  'web.allow_remote': '允许局域网访问',
+  'web.port': '端口',
+  'web.session_days': '登录保持几天',
+  'web.login_max_failures': '登录失败几次就锁定',
+  'web.login_window_seconds': '统计失败的窗口（秒）',
+  'web.login_lockout_seconds': '锁定多少秒',
 });
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
 const cf = { data: null, schema: null, readonly: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '' };
@@ -1467,22 +1609,18 @@ function cfRow(sec, field) {
   const prop = sec ? cfResolve(cf.schema.properties[sec]).properties[field] : cf.schema.properties[field];
   const info = cfFieldInfo(prop);
   const readonly = cf.readonly.has(key);
-  const [name, desc] = CFG_LABELS[key] || [field, ''];
-  const notes = [];
-  if (desc) notes.push(desc);
-  if (info.def !== undefined && info.def !== null) notes.push('默认 ' + info.def);
-  if (readonly) notes.push('只能在本机直接编辑 aureus.toml：改错了会让你从网页上进不来');
-  else if (info.nullable) notes.push('要改回「不写」，请直接编辑 aureus.toml');
+  const name = CFG_LABELS[key] || field;
   return el('div', { class: 'cfg-field' },
-    el('div', {}, el('div', { class: 'name' }, name, ' ', el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field })),
-      el('div', { class: 'desc', text: notes.join('。') })),
+    el('div', { class: 'name' }, name, ' ',
+      el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field }),
+      readonly ? el('span', { class: 'tag', text: '只读' }) : null),
     cfControl(sec, field, info, readonly));
 }
 function renderConfigSection(sec) {
   const container = $('cf-section');
   container.textContent = '';
-  const [_, title, subtitle] = CFG_SECTIONS.find(([k]) => k === sec) || [sec, sec, ''];
-  container.append(el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }), el('p', { class: 'muted', style: 'font-size:13px', text: subtitle }))));
+  const [_, title] = CFG_SECTIONS.find(([k]) => k === sec) || [sec, sec];
+  container.append(el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }))));
   for (const field of cfFields(sec)) container.append(cfRow(sec, field));
 }
 
@@ -1546,7 +1684,7 @@ $('cf-save').addEventListener('click', async () => {
   await loadConfigPage(true);
 });
 
-$('cf-reset').addEventListener('click', () => { if (confirm('放弃所有没保存的改动？')) loadConfigPage(true); });
+$('cf-reset').addEventListener('click', async () => { if (await confirmAction('放弃所有没保存的改动？')) loadConfigPage(true); });
 // ---------- 观察：只读，用 /api/overview 和 /api/timeline（D85）；曲线和花费没有网页接口，不假造 ----------
 const MONITOR_REFRESH_MS = 10000;
 function monitorList(id, res, emptyText) {
@@ -1593,7 +1731,7 @@ $('mo-refresh').addEventListener('click', loadMonitor);
 PAGES.monitor = { load: loadMonitor };
 setInterval(() => { if (state.loggedIn && state.page === 'monitor') loadMonitor(); }, MONITOR_REFRESH_MS);
 
-// ---------- 启动：先问登录状态，再决定显示登录页、改口令页还是主界面 ----------
+// ---------- 启动：先问登录状态，再决定显示登录页、改密码页还是主界面 ----------
 enter();
 </script>
 </body>

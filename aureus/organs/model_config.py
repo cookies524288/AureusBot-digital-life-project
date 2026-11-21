@@ -18,6 +18,9 @@ from aureus.common.paths import AureusPaths
 # 当前软件认识的模型配置格式版本。以后改了格式就加一，并写迁移说明。
 MODELS_CONFIG_FORMAT_VERSION = 1
 
+# 项目自带的器官；网页不能删除，模型可以暂时留空（D86）。
+BUILTIN_ORGANS = ("replyer", "planner", "judge", "summarizer")
+
 # 服务商没写超时和重试次数时的默认值。
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_RETRY = 2
@@ -82,7 +85,7 @@ class OrganConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     # 按名字引用模型，排在前面的先用。
-    models: tuple[str, ...] = Field(min_length=1)
+    models: tuple[str, ...] = ()
     strategy: OrganStrategy = "sequential"
     # 写在器官上的参数优先于模型自己的参数。
     temperature: float | None = Field(default=None, ge=0)
@@ -127,7 +130,7 @@ class ModelsConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_references(self) -> Self:
-        # 引用错了就在启动时报错，而不是等到调用模型时才发现（见 15 号文档第 4 节）。
+        # 模型删除后保留器官引用并给警告；其余配置错误仍拒绝（D86）。
         provider_names = _require_unique("服务商", [item.name for item in self.providers])
         model_names = _require_unique("模型", [item.name for item in self.models])
         models_by_name = {item.name: item for item in self.models}
@@ -137,7 +140,7 @@ class ModelsConfig(BaseModel):
         for organ_id, organ in self.organs.items():
             for model_name in organ.models:
                 if model_name not in model_names:
-                    raise ValueError(f"器官 {organ_id} 引用了不存在的模型 {model_name}")
+                    continue
                 if (
                     organ.reasoning_effort is not None
                     and organ.reasoning_effort not in models_by_name[model_name].reasoning_levels
@@ -147,6 +150,18 @@ class ModelsConfig(BaseModel):
                         f"{model_name} 支持的（没写 reasoning_levels 就是不支持）"
                     )
         return self
+
+    def warnings(self) -> list[str]:
+        """列出空器官和失效引用，供网页提示；不修改用户的引用列表。"""
+        names = {model.name for model in self.models}
+        result: list[str] = []
+        for name, organ in self.organs.items():
+            if not organ.models:
+                result.append(f"{name}未配置模型")
+            missing = [model for model in organ.models if model not in names]
+            if missing:
+                result.append(f"{name}引用了不存在的模型：{'、'.join(missing)}")
+        return result
 
     def routes_for(self, organ_id: str) -> tuple[ModelRoute, ...]:
         """列出某个器官可以走的模型，按配置里的顺序。
@@ -167,6 +182,8 @@ class ModelsConfig(BaseModel):
         providers = {item.name: item for item in self.providers}
         routes: list[ModelRoute] = []
         for model_name in organ.models:
+            if model_name not in models:
+                continue
             model = models[model_name]
             routes.append(
                 ModelRoute(

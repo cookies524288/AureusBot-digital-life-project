@@ -168,11 +168,9 @@ def test_unknown_organ_is_reported(tmp_path: Path) -> None:
     ("old", "new", "expected"),
     [
         ("provider = 'local'", "provider = 'nowhere'", "不存在的服务商 nowhere"),
-        ("models = ['big', 'small']", "models = ['big', 'ghost']", "不存在的模型 ghost"),
         ("name = 'small'", "name = 'big'", "名字重复"),
         ("price_out = 8.0", "price_out = -1", "price_out"),
         ("max_tokens = 300", "strategy = 'random'\nmax_tokens = 300", "strategy"),
-        ("models = ['big', 'small']", "models = []", "models"),
         (
             "max_tokens = 300",
             "reasoning_effort = 'ultra'\nmax_tokens = 300",

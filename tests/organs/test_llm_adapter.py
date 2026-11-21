@@ -322,6 +322,17 @@ def test_organ_without_a_chat_model_fails_at_startup(keys: KeyResolver) -> None:
         LLMOrgan.from_config("replyer", config, keys, FakeCompletion())
 
 
+@pytest.mark.asyncio
+async def test_an_empty_organ_makes_no_model_request(keys: KeyResolver) -> None:
+    completion = FakeCompletion()
+    organ = make_organ(completion, keys, organ_models=())
+    with pytest.raises(OrganCallError) as error:
+        await organ.process(ask())
+    assert completion.calls == []
+    assert error.value.attempts == []
+    assert "未配置" in str(error.value)
+
+
 def test_unknown_organ_fails_at_startup(keys: KeyResolver) -> None:
     with pytest.raises(ConfigError, match="没有器官 planner"):
         LLMOrgan.from_config("planner", make_config(), keys, FakeCompletion())

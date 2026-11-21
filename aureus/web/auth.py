@@ -1,10 +1,10 @@
-"""网页通道：口令、登录限流和登录流程（路线图 1.10，D63 第 6、7 条）。
+"""网页通道：密码、登录限流和登录流程（路线图 1.10，D63 第 6、7 条）。
 
-口令只存 argon2 哈希，放在 config/web_password.argon2。
-没有这个文件就是「默认口令」状态，口令是 admin。
-删掉这个文件等于把口令重置回默认：能碰到数据根目录的人本来就能这么做，
-这也是忘了口令时的恢复办法。
-默认口令人人都知道，所以默认状态下只认来自本机的登录。
+密码只存 argon2 哈希，放在 config/web_password.argon2。
+没有这个文件就是「默认密码」状态，密码是 admin。
+删掉这个文件等于把密码重置回默认：能碰到数据根目录的人本来就能这么做，
+这也是忘了密码时的恢复办法。
+默认密码人人都知道，所以默认状态下只认来自本机的登录。
 """
 
 import hmac
@@ -23,16 +23,16 @@ from aureus.web.session import SessionStore
 
 DEFAULT_PASSWORD = "admin"
 MIN_PASSWORD_LENGTH = 8
-# 上限：argon2 要把整个口令读进内存算哈希，不设上限的话，一个超大的请求就能拖慢服务。
+# 上限：argon2 要把整个密码读进内存算哈希，不设上限的话，一个超大的请求就能拖慢服务。
 MAX_PASSWORD_LENGTH = 256
 
 
 class PasswordPolicyError(ValueError):
-    """新口令不合规。消息是中文，不回显口令。"""
+    """新密码不合规。消息是中文，不回显密码。"""
 
 
 class LoginRejectedError(Exception):
-    """口令不对，或者当前状态不允许从这个地址登录。两种情况说法一样，不给猜口令的人线索。"""
+    """密码不对，或者当前状态不允许从这个地址登录。两种情况说法一样，不给猜密码的人线索。"""
 
 
 class LoginLockedError(Exception):
@@ -44,13 +44,13 @@ class LoginLockedError(Exception):
 
 
 def check_new_password(password: str) -> None:
-    """检查新口令是否合规（D63 第 6 条：至少 8 位，不能是默认口令）。"""
+    """检查新密码是否合规（D63 第 6 条：至少 8 位，不能是默认密码）。"""
     if len(password) < MIN_PASSWORD_LENGTH:
-        raise PasswordPolicyError(f"口令至少要 {MIN_PASSWORD_LENGTH} 位。")
+        raise PasswordPolicyError(f"密码至少要 {MIN_PASSWORD_LENGTH} 位。")
     if len(password) > MAX_PASSWORD_LENGTH:
-        raise PasswordPolicyError(f"口令最多 {MAX_PASSWORD_LENGTH} 位。")
+        raise PasswordPolicyError(f"密码最多 {MAX_PASSWORD_LENGTH} 位。")
     if password.strip().lower() == DEFAULT_PASSWORD:
-        raise PasswordPolicyError("新口令不能是默认口令。")
+        raise PasswordPolicyError("新密码不能是默认密码。")
 
 
 def is_loopback(address: str) -> bool:
@@ -65,25 +65,25 @@ def is_loopback(address: str) -> bool:
 
 
 class PasswordStore:
-    """口令哈希文件的读写。"""
+    """密码哈希文件的读写。"""
 
     def __init__(self, path: Path, hasher: PasswordHasher | None = None) -> None:
         self._path = path
         self._hasher = hasher or PasswordHasher()
 
     def is_default(self) -> bool:
-        """还在用默认口令吗？只有文件确实不存在才算。"""
+        """还在用默认密码吗？只有文件确实不存在才算。"""
         try:
             self._path.stat()
         except FileNotFoundError:
             return True
         except OSError:
-            # 读不了文件：当作已经设过口令，之后的验证会失败，而不是放行默认口令。
+            # 读不了文件：当作已经设过密码，之后的验证会失败，而不是放行默认密码。
             return False
         return False
 
     def verify(self, password: str) -> bool:
-        """口令对不对。文件读不了、内容坏了都算不对。"""
+        """密码对不对。文件读不了、内容坏了都算不对。"""
         if len(password) > MAX_PASSWORD_LENGTH:
             return False
         if self.is_default():
@@ -99,11 +99,11 @@ class PasswordStore:
             return False
 
     def set_password(self, new_password: str) -> None:
-        """换成新口令：先检查是否合规，再写临时文件、替换，不会留下写一半的文件。
+        """换成新密码：先检查是否合规，再写临时文件、替换，不会留下写一半的文件。
 
         Raises:
-            PasswordPolicyError: 新口令不合规。
-            OSError: 写不进去，旧口令保持不变。
+            PasswordPolicyError: 新密码不合规。
+            OSError: 写不进去，旧密码保持不变。
         """
         check_new_password(new_password)
         digest = self._hasher.hash(new_password)
@@ -164,11 +164,11 @@ class LoginResult:
     """登录成功的结果。"""
 
     token: str
-    must_change_password: bool  # 还在用默认口令：只能进改口令页（D63 第 6 条）
+    must_change_password: bool  # 还在用默认密码：只能进改密码页（D63 第 6 条）
 
 
 class WebAuth:
-    """登录流程：限流、验口令、发 token、改口令。"""
+    """登录流程：限流、验密码、发 token、改密码。"""
 
     def __init__(
         self, passwords: PasswordStore, sessions: SessionStore, limiter: LoginLimiter
@@ -179,25 +179,25 @@ class WebAuth:
 
     @property
     def password_is_default(self) -> bool:
-        """还在用默认口令吗（D63 第 6 条：这时只能进改口令页）。"""
+        """还在用默认密码吗（D63 第 6 条：这时只能进改密码页）。"""
         return self._passwords.is_default()
 
     def confirm_password(self, password: str, remote_addr: str) -> None:
-        """核对口令：登录、改口令、改身份事实和不变人格前都要过这一关（D63 第 1 条）。
+        """核对密码：登录、改密码、改身份事实和不变人格前都要过这一关（D63 第 1 条）。
 
         Raises:
             LoginLockedError: 这个 IP 正在锁定期。
-            LoginRejectedError: 口令不对，或者默认口令却不是从本机来的。
+            LoginRejectedError: 密码不对，或者默认密码却不是从本机来的。
         """
         retry_after = self._limiter.locked_for(remote_addr)
         if retry_after is not None:
             raise LoginLockedError(retry_after)
         matches = self._passwords.verify(password)
-        # 默认口令人人都知道：不是本机就不认，免得局域网里的人用 admin 进来。
+        # 默认密码人人都知道：不是本机就不认，免得局域网里的人用 admin 进来。
         allowed = not self._passwords.is_default() or is_loopback(remote_addr)
         if not (matches and allowed):
             self._limiter.record_failure(remote_addr)
-            raise LoginRejectedError("口令不对。")
+            raise LoginRejectedError("密码不对。")
         self._limiter.record_success(remote_addr)
 
     def login(self, password: str, remote_addr: str) -> LoginResult:
@@ -207,11 +207,11 @@ class WebAuth:
         return LoginResult(token=self._sessions.create(), must_change_password=must_change)
 
     def change_password(self, old_password: str, new_password: str, remote_addr: str) -> None:
-        """改口令：要输旧口令；改完所有设备的登录全部失效（D63 第 7 条）。
+        """改密码：要输旧密码；改完所有设备的登录全部失效（D63 第 7 条）。
 
         Raises:
-            LoginLockedError、LoginRejectedError: 旧口令没通过。
-            PasswordPolicyError: 新口令不合规，旧口令和登录状态都不动。
+            LoginLockedError、LoginRejectedError: 旧密码没通过。
+            PasswordPolicyError: 新密码不合规，旧密码和登录状态都不动。
         """
         self.confirm_password(old_password, remote_addr)
         self._passwords.set_password(new_password)

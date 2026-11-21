@@ -6,7 +6,7 @@
 下次启动 sync_from_file 会把这次改动当作用户修改补记上，不会丢。
 
 用 tomlkit 而不是 tomllib 写：它能保留用户手写的注释和排版。
-是否允许改、要不要再输口令，由调用方（网页服务）决定；这里只管改。
+是否允许改、要不要再输密码，由调用方（网页服务）决定；这里只管改。
 """
 
 from collections.abc import Mapping
@@ -49,7 +49,7 @@ class IdentityEdit:
     locks: PersonaLocks | None = None  # 三层的锁定开关
 
     def requires_password(self) -> bool:
-        """改的是底线（身份事实、不变人格）吗？是的话，调用方要先让用户再输一次口令。"""
+        """改的是底线（身份事实、不变人格）吗？是的话，调用方要先让用户再输一次密码。"""
         return (
             self.facts is not None or self.user is not None or IdentityLayer.IMMUTABLE in self.text
         )

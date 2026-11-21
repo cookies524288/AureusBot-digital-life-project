@@ -1,4 +1,4 @@
-"""运行配置接口：按字段保存、只读项优先拒绝、敏感节确认口令（D84）。"""
+"""运行配置接口：按字段保存、只读项优先拒绝、敏感节确认密码（D84）。"""
 
 import logging
 import tomllib
@@ -106,7 +106,7 @@ def test_sensitive_sections_require_the_current_password(
     for password in (None, "wrong"):
         response = rig.client.put("/api/config", json={"changes": changes, "password": password})
         assert response.status_code == 403
-        assert response.json()["detail"] == "口令不对。"
+        assert response.json()["detail"] == "密码不对。"
         assert not rig.paths.runtime_config_file.exists()
     assert (
         rig.client.put("/api/config", json={"changes": changes, "password": GOOD}).status_code

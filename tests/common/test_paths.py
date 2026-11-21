@@ -75,7 +75,7 @@ def test_ensure_directories_creates_folders_but_no_files(tmp_path: Path) -> None
     assert not paths.database_file.exists()
     assert not paths.env_file.exists()
     assert not paths.runtime_config_file.exists()
-    # 没有口令文件就是默认口令状态（D63），初始化时不能替用户建出一个。
+    # 没有密码文件就是默认密码状态（D63），初始化时不能替用户建出一个。
     assert not paths.web_password_file.exists()
 
 

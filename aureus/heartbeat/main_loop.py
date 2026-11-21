@@ -361,6 +361,12 @@ class Heartbeat:
 
     # ---------- 给通道用的接口 ----------
 
+    def update_available_organs(self, available: frozenset[str]) -> None:
+        """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
+        for tracker in (self._diary, self._persona_growth, self._exploration):
+            if tracker is not None:
+                tracker.has_organ = tracker.config.organ in available
+
     def attach_channel(self, name: str, sink: MessageSink) -> None:
         """接上一个通道：发往这个通道的消息交给 sink。
 

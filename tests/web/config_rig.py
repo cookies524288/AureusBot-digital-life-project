@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from aureus.channels import WebChannel
 from aureus.common import AureusPaths, ManualClock, WebConfig
+from aureus.core.model_runtime import ModelRuntime
+from aureus.organs import KeyResolver, OrganBus
 from aureus.timeline import TimelineDatabase
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 from aureus.web.config_files import ConfigService
@@ -28,6 +30,9 @@ class ConfigRig:
         self.auth = WebAuth(passwords, self.sessions, LoginLimiter(config, self.clock))
         self.heartbeat = FakeHeartbeat()
         self.service = ConfigService(self.paths)
+        self.models = ModelRuntime(
+            OrganBus(), KeyResolver(self.paths.env_file, environ={}), fake_organs=True
+        )
         self.app = create_app(
             config=config,
             auth=self.auth,
@@ -37,6 +42,7 @@ class ConfigRig:
             heartbeat=self.heartbeat,
             clock=self.clock,
             config_files=self.service,
+            model_runtime=self.models,
         )
         self.client = TestClient(self.app, client=("127.0.0.1", 50000))
 

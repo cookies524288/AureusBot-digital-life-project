@@ -34,6 +34,7 @@ from aureus.common import (
     shutdown_logging,
 )
 from aureus.common.vault import SecretVault
+from aureus.core.model_runtime import ModelRuntime
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat
@@ -42,7 +43,7 @@ from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
 from aureus.memory import DiaryBook, MemoryIndex
 from aureus.mood import Mood
-from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, OrganBus, load_models_config
+from aureus.organs import FakeReplyer, KeyResolver, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
 from aureus.people import AffinityBook, PeopleDirectory, PeopleError
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
@@ -63,6 +64,7 @@ class Core:
     people: PeopleDirectory
     identity_history: IdentityHistory
     feedback: FeedbackStore | None = None  # [feedback] enabled 关闭时为 None
+    models: ModelRuntime | None = None
 
 
 def _open_people(
@@ -71,7 +73,7 @@ def _open_people(
     """打开人物档案，登记用户和用户的账号（1.8，05 号文档）。
 
     用户的账号来自 identity.toml，再加上本机终端和登录后的网页：终端只有本机能用，
-    网页要口令登录（D63 第 8 条），所以都默认就是用户。
+    网页要密码登录（D63 第 8 条），所以都默认就是用户。
     账号已经登记在别人名下时报配置错误，不悄悄换主人。
     """
     people = PeopleDirectory(paths.database_file, clock)
@@ -89,15 +91,16 @@ def _open_people(
 
 def _build_organ_bus(
     paths: AureusPaths, heartbeat: HeartbeatConfig, resolver: KeyResolver, *, fake_organs: bool
-) -> OrganBus:
+) -> ModelRuntime:
     """注册器官。假器官模式不读 models.toml、不调用任何模型，不花钱。"""
     bus = OrganBus()
+    models = ModelRuntime(bus, resolver, fake_organs=fake_organs)
     if fake_organs:
         bus.register(FakeReplyer(organ_id=heartbeat.reply_organ))
-        return bus
+        models.available_organs = frozenset(bus.list_organs())
+        return models
     models_config = load_models_config(paths)
-    for organ_id in models_config.organs:
-        bus.register(LLMOrgan.from_config(organ_id, models_config, resolver))
+    models.apply(models.prepare(models_config))
     # 启动时就报错，而不是等用户说第一句话才发现器官不存在。
     if not bus.is_registered(heartbeat.reply_organ):
         raise ConfigError(
@@ -110,7 +113,7 @@ def _build_organ_bus(
             f"（缺少 [organs.{heartbeat.plan_organ}]）。"
             "不想用规划器，可以在 aureus.toml 的 [heartbeat] 里写 planning_enabled = false。"
         )
-    return bus
+    return models
 
 
 @contextmanager
@@ -199,7 +202,8 @@ def open_core(
         if fake_organs and heartbeat_config.planning_enabled:
             # 假器官只有回复器：试运行和测试时不规划，每次一次调用。
             heartbeat_config = heartbeat_config.model_copy(update={"planning_enabled": False})
-        bus = _build_organ_bus(paths, heartbeat_config, resolver, fake_organs=fake_organs)
+        models = _build_organ_bus(paths, heartbeat_config, resolver, fake_organs=fake_organs)
+        bus = models.bus
         # 网关和心跳共用同一个权限检查器，两边看到的急停状态一致（D54）。
         emergency_stop = EmergencyStop(paths.halt_file, the_clock)
         permissions = PermissionChecker(emergency_stop)
@@ -287,15 +291,16 @@ def open_core(
             exploration=exploration,
             search=None,  # D79：当前唯一的搜索选项是 none。
             reader=WebReader(exploration),
-            has_exploration_organ=bus.is_registered(exploration.organ),
+            has_exploration_organ=exploration.organ in models.available_organs,
             memory=memory,
             memory_config=runtime.memory,
             diary=DiaryBook(paths.diary_dir),
             diary_config=runtime.diary,
-            has_diary_organ=bus.is_registered(runtime.diary.organ),
+            has_diary_organ=runtime.diary.organ in models.available_organs,
             persona_growth=persona_growth,
-            has_persona_organ=bus.is_registered(persona_growth.organ),
+            has_persona_organ=persona_growth.organ in models.available_organs,
         )
+        models.on_reload = heartbeat.update_available_organs
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
         )
@@ -310,4 +315,5 @@ def open_core(
             people,
             identity_history,
             feedback,
+            models,
         )

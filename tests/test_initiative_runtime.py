@@ -7,8 +7,16 @@ import pytest
 
 from aureus.common import AureusPaths, ManualClock
 from aureus.core import runtime
+from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import MessageKind, OutgoingMessage, Perception, TrustLevel
-from aureus.organs import CallAttempt, CallPurpose, OrganBus, OrganRequest, OrganResponse
+from aureus.organs import (
+    CallAttempt,
+    CallPurpose,
+    KeyResolver,
+    OrganBus,
+    OrganRequest,
+    OrganResponse,
+)
 from aureus.timeline import TimelineQuery, VisibilityScope
 from tests.heartbeat.test_initiative_flow import REACH
 from tests.heartbeat.test_judging_flow import NOW, PLAN
@@ -54,8 +62,10 @@ async def test_open_core_wires_initiative_and_disables_it_in_roleplay(
     bus.register(FixedOrgan("planner", requests))
     bus.register(FixedOrgan("replyer", requests))
 
-    def build_bus(*_args: object, **_kwargs: object) -> OrganBus:
-        return bus
+    def build_bus(
+        _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
+    ) -> ModelRuntime:
+        return ModelRuntime(bus, resolver, fake_organs=False)
 
     monkeypatch.setattr(runtime, "_build_organ_bus", build_bus)
     clock = ManualClock(NOW)

@@ -1,4 +1,4 @@
-"""网页配置接口：中文错误、口令确认留在主线程，文件读写交给线程（D84）。"""
+"""网页配置接口：中文错误、密码确认留在主线程，文件读写交给线程（D84）。"""
 
 import asyncio
 import math
@@ -12,7 +12,8 @@ from tomlkit.exceptions import TOMLKitError
 
 from aureus.common import ConfigError
 from aureus.common.vault import VaultError
-from aureus.organs import API_KEY_ENV_PATTERN, validate_models_config
+from aureus.core.model_runtime import ModelRuntime
+from aureus.organs import API_KEY_ENV_PATTERN, BUILTIN_ORGANS, validate_models_config
 
 from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
 from .config_files import (
@@ -36,7 +37,7 @@ def _translate_errors(service: ConfigService) -> Iterator[None]:
         seconds = max(1, math.ceil(error.retry_after.total_seconds()))
         raise HTTPException(429, detail=str(error), headers={"Retry-After": str(seconds)}) from None
     except LoginRejectedError:
-        raise HTTPException(403, detail="口令不对。") from None
+        raise HTTPException(403, detail="密码不对。") from None
     except ConfigError as error:
         raise HTTPException(422, detail=str(error)) from None
     except VaultError as error:
@@ -67,7 +68,7 @@ def _confirm(auth: WebAuth, body: dict[str, Any], request: Request) -> None:
 
 def _require_local(request: Request) -> None:
     if not is_loopback(request.client.host if request.client else ""):
-        # 必须在确认口令之前，局域网来源不能借密钥接口尝试口令或耗尽限流。
+        # 必须在确认密码之前，局域网来源不能借密钥接口尝试密码或耗尽限流。
         raise HTTPException(403, detail=LOCAL_KEYS_ONLY)
 
 
@@ -96,8 +97,9 @@ def register_config_routes(
     service: ConfigService,
     auth: WebAuth,
     require_ready: Callable[..., Awaitable[str]],
+    model_runtime: ModelRuntime | None = None,
 ) -> None:
-    """注册配置接口；统一要求已登录且已修改默认口令。"""
+    """注册配置接口；统一要求已登录且已修改默认密码。"""
 
     @app.get("/api/models")
     async def view_models(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
@@ -107,7 +109,7 @@ def register_config_routes(
     @app.put("/api/models")
     async def edit_models(
         request: Request, _token: Annotated[str, Depends(require_ready)]
-    ) -> dict[str, bool]:
+    ) -> dict[str, Any]:
         with _translate_errors(service):
             body = await _body(request)
             raw = body.get("config")
@@ -117,11 +119,25 @@ def register_config_routes(
             async with service.write_lock:
                 _, current = await asyncio.to_thread(service.read_models)
                 submitted = submitted.model_copy(update={"config_version": current.config_version})
+                removed = set(current.organs) - set(submitted.organs)
+                if removed.intersection(BUILTIN_ORGANS):
+                    raise HTTPException(422, detail="默认器官不可删除，可以清空它使用的模型。")
                 if models_require_password(current, submitted):
                     _confirm(auth, body, request)
                 if current != submitted or list(current.organs) != list(submitted.organs):
+                    prepared = (
+                        await asyncio.to_thread(model_runtime.prepare, submitted)
+                        if model_runtime is not None
+                        else None
+                    )
                     await asyncio.to_thread(service.write_models, submitted)
-            return {"ok": True, "restart_required": service.restart_required}
+                    if model_runtime is not None and prepared is not None:
+                        model_runtime.apply(prepared)
+            return {
+                "ok": True,
+                "restart_required": service.restart_required,
+                "warnings": submitted.warnings(),
+            }
 
     @app.get("/api/keys")
     async def view_keys(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:

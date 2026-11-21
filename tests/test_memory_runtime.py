@@ -9,6 +9,7 @@ import pytest
 from aureus.common import ManualClock
 from aureus.common.logging_setup import LOG_FILE_NAME
 from aureus.core import runtime
+from aureus.core.model_runtime import ModelRuntime
 from aureus.organs import OrganBus
 from aureus.timeline import ActorType
 from tests.heartbeat.test_judging_flow import NOW
@@ -34,7 +35,13 @@ async def test_runtime_opens_memory_and_diary_in_roleplay(
     bus = OrganBus()
     for organ_id in ("planner", "replyer", "summarizer"):
         bus.register(FixedOrgan(organ_id, requests))
-    monkeypatch.setattr(runtime, "_build_organ_bus", lambda *_args, **_kwargs: bus)
+    monkeypatch.setattr(
+        runtime,
+        "_build_organ_bus",
+        lambda _paths, _heartbeat, resolver, **_kwargs: ModelRuntime(
+            bus, resolver, fake_organs=False
+        ),
+    )
     clock = ManualClock(NOW)
     with runtime.open_core(paths, clock=clock, to_console=False) as core:
         index = core.heartbeat._memory.index

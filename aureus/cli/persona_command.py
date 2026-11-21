@@ -110,7 +110,7 @@ def _revert(version_id: int, paths: AureusPaths, write_line: WriteLine) -> int:
                     write_line("版本不存在。")
                     return EXIT_FAILURE
                 if version.layer not in PERSONA_LAYERS:
-                    write_line("身份事实和不变人格请用网页设置页回退，并输入口令。")
+                    write_line("身份事实和不变人格请用网页设置页回退，并输入密码。")
                     return EXIT_FAILURE
                 IdentityEditor(paths.identity_file, history).apply(
                     IdentityEdit(text={version.layer: version.content})

@@ -115,7 +115,7 @@ class SessionStore:
             conn.execute("DELETE FROM web_sessions WHERE token_hash = ?", (_hash_token(token),))
 
     def revoke_all(self) -> int:
-        """让所有设备的登录失效（退出所有设备、改口令），返回删掉了几条。"""
+        """让所有设备的登录失效（退出所有设备、改密码），返回删掉了几条。"""
         conn = self._require_open()
         with conn:
             return conn.execute("DELETE FROM web_sessions").rowcount

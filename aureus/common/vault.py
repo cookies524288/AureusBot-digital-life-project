@@ -25,8 +25,8 @@ from filelock import FileLock, Timeout
 KEY_FILE_FORMAT_VERSION = 1
 VAULT_FORMAT_VERSION = 1
 
-# 主密钥的保护方式。现在只有 none（不加口令）；字段先留着，以后给主密钥
-# 加口令保护时，密钥库不用重新加密（15 号文档 7.9）。
+# 主密钥的保护方式。现在只有 none（不加密码）；字段先留着，以后给主密钥
+# 加密码保护时，密钥库不用重新加密（15 号文档 7.9）。
 PROTECTION_NONE = "none"
 
 # 改密钥库时最多等别的进程多久。改一次只要几毫秒，等这么久还拿不到，多半是有进程卡住了。

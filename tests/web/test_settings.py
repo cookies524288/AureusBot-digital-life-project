@@ -1,4 +1,4 @@
-"""设置页服务层的测试：口令确认、写回、热更新心跳、回退（路线图 1.10，D63 第 1、2、4、5 条）。"""
+"""设置页服务层的测试：密码确认、写回、热更新心跳、回退（路线图 1.10，D63 第 1、2、4、5 条）。"""
 
 import tomllib
 from collections.abc import Iterator, Sequence

@@ -1,10 +1,12 @@
-"""网页服务端的测试：登录、默认口令限制、历史对话（路线图 1.10，D63）。
+"""网页服务端的测试：登录、默认密码限制、历史对话（路线图 1.10，D63）。
 
 用 Starlette 的测试客户端，不开真实端口。测试客户端的来源地址是 testclient，
 不是回环地址，所以要测「本机」的路径时，把客户端的来源地址指定成 127.0.0.1。
 """
 
 import asyncio
+import re
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -98,6 +100,23 @@ def test_the_api_docs_are_not_exposed(rig: Rig) -> None:
         assert client.get(path).status_code == 404
 
 
+def test_the_project_logo_is_embedded_and_used_without_a_new_route(rig: Rig) -> None:
+    client = rig.client()
+    source = Path(__file__).resolve().parents[2] / "assets/logo/logo-black-no-ring.svg"
+    html = client.get("/").text
+    match = re.search(r'<symbol id="aureus-logo"[^>]*>.*?</symbol>', html, re.DOTALL)
+    assert match is not None
+    embedded = ET.fromstring(match.group())
+    original = ET.fromstring(source.read_bytes())
+    assert embedded.attrib["viewBox"] == original.attrib["viewBox"]
+    expected = [(node.tag.split("}")[-1], node.attrib) for node in original.iter()][1:]
+    actual = [(node.tag.split("}")[-1], node.attrib) for node in embedded.iter()][1:]
+    assert actual == expected
+    assert html.count('<use href="#aureus-logo"/>') == 3
+    assert 'src="/logo.svg"' not in html
+    assert ">A</span>" not in html
+
+
 # ---------- 登录 ----------
 
 
@@ -147,7 +166,7 @@ def test_default_login_limit_uses_seven_failures_and_a_thirty_second_retry(tmp_p
         client = rig.client()
         for _ in range(6):
             assert login(client, "wrong").status_code == 401
-        assert login(client, GOOD).status_code == 200  # 六次失败仍能用正确口令登录。
+        assert login(client, GOOD).status_code == 200  # 六次失败仍能用正确密码登录。
         for _ in range(7):
             assert login(client, "wrong").status_code == 401
         locked = login(client, GOOD)
@@ -212,7 +231,7 @@ async def test_parallel_requests_keep_the_session_valid(rig: Rig) -> None:
         assert (await client.get("/api/status")).status_code == 200
 
 
-# ---------- 默认口令状态：只能改口令 ----------
+# ---------- 默认密码状态：只能改密码 ----------
 
 
 def test_history_is_blocked_while_the_password_is_still_the_default(rig: Rig) -> None:
@@ -220,7 +239,7 @@ def test_history_is_blocked_while_the_password_is_still_the_default(rig: Rig) ->
     login(client)
     response = client.get("/api/history")
     assert response.status_code == 403
-    assert "默认口令" in response.json()["detail"]
+    assert "默认密码" in response.json()["detail"]
 
 
 def test_changing_the_password_works_in_the_default_state(rig: Rig) -> None:

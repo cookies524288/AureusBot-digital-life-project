@@ -91,7 +91,7 @@ class AureusPaths:
     runtime_config_file: Path = field(init=False)  # 运行配置 aureus.toml（不含密钥）
     models_config_file: Path = field(init=False)  # 模型配置 models.toml（不含密钥）
     identity_file: Path = field(init=False)  # 身份事实与四层人设 identity.toml
-    web_password_file: Path = field(init=False)  # 网页口令哈希；没有它就是默认口令（D63）
+    web_password_file: Path = field(init=False)  # 网页密码哈希；没有它就是默认密码（D63）
     env_file: Path = field(init=False)  # 旧的明文密钥 .env，最低优先级的回退（D36）
     vault_file: Path = field(init=False)  # 加密的密钥库 secrets.vault（D36）
     master_key_file: Path = field(init=False)  # 主密钥 secrets.key，解开密钥库用（D36）
