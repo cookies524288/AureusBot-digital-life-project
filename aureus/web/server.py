@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
-from aureus.common import WebConfig
+from aureus.common import Clock, WebConfig
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.timeline import TimelineDatabase, TimelineQuery
 
@@ -42,6 +42,7 @@ from .auth import (
 from .session import SessionStore
 from .settings import SettingsService
 from .settings_api import register_settings_routes
+from .timeline_api import HeartbeatView, register_timeline_routes
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,8 @@ def create_app(
     channel: WebChannel,
     timeline: TimelineDatabase,
     settings: SettingsService | None = None,
+    heartbeat: HeartbeatView | None = None,
+    clock: Clock | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -281,6 +284,16 @@ def create_app(
 
     if settings is not None:
         register_settings_routes(app, settings, require_ready)
+
+    if heartbeat is not None and clock is not None:
+        register_timeline_routes(
+            app,
+            timeline=timeline,
+            heartbeat=heartbeat,
+            clock=clock,
+            visibility=channel.user_visibility,
+            require_ready=require_ready,
+        )
 
     # ---------- 网页本身 ----------
 

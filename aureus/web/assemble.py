@@ -62,6 +62,8 @@ def open_web(core: Core, clock: Clock) -> Iterator[WebServer | None]:
             channel=channel,
             timeline=core.timeline,
             settings=settings,
+            heartbeat=core.heartbeat,
+            clock=clock,
         )
         yield WebServer(app, config)
     finally:

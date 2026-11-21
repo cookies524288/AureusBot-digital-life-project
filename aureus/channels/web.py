@@ -44,6 +44,11 @@ class WebChannel:
         self._next_key = 0
 
     @property
+    def user_visibility(self) -> VisibilityScope:
+        """网页登录用户的对话范围；回复上下文和网页时间线共用（D84）。"""
+        return VisibilityScope.USER_ONLY
+
+    @property
     def subscriber_count(self) -> int:
         """现在有几个网页连着。"""
         return len(self._subscribers)
@@ -93,7 +98,7 @@ class WebChannel:
                 channel=CHANNEL_NAME,
                 sender_id=WEB_USER_ID,
                 content=content,
-                visibility=VisibilityScope.USER_ONLY,
+                visibility=self.user_visibility,
                 trust=TrustLevel.VERIFIED_USER,
             )
         )
