@@ -36,6 +36,9 @@ aureus = "aureus.cli.main:main"
 monitor = [
     "streamlit>=1.67.0",
 ]
+lab = [
+    "matplotlib>=3.11.2",
+]
 
 # ---------------------------------------------------------------------
 # 打包方式：用 hatchling 把 aureus/ 目录当作一个 Python 包。

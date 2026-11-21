@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aureus.common import Clock
+from aureus.lab.charts import draw_charts, matplotlib_installed
 from aureus.lab.experiment import Experiment, MetricValue
 from aureus.lab.output import (
     create_run_directory,
@@ -46,10 +47,13 @@ async def run_experiment(
         aureus_logger.setLevel(previous_level)
     write_metrics(run_dir, result.metrics)
     write_tables(run_dir, result.tables)
+    charts_drawn = matplotlib_installed()
+    if charts_drawn:
+        draw_charts(run_dir, result.charts)
     pruned = prune_runs(experiments_dir / experiment.name)
     return RunReport(
         run_dir=run_dir,
         metrics=dict(result.metrics),
-        charts_drawn=False,
+        charts_drawn=charts_drawn,
         pruned=len(pruned),
     )
