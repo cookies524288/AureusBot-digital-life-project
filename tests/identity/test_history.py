@@ -71,6 +71,39 @@ def test_an_unchanged_file_adds_nothing(history: IdentityHistory) -> None:
     assert len(history.versions(limit=100)) == len(IdentityLayer)
 
 
+def test_get_and_latest_self_change_skip_user_versions(history: IdentityHistory) -> None:
+    layer = IdentityLayer.EXPRESSION_STYLE
+    history.sync_from_file(make_identity())
+    assert history.get(999) is None
+    assert history.latest_self_change(layer) is None
+    history.record_self_change(layer, "句子短，多关心对方。")
+    changed = history.versions(layer, limit=1)[0]
+    history.sync_from_file(make_identity(expression_style="用户改过。"))
+    assert history.get(changed.id) == changed
+    assert history.latest_self_change(layer) == changed
+    assert history.latest_self_change(IdentityLayer.MUTABLE) is None
+
+
+def test_explicit_edit_restores_original_without_duplicate_versions(
+    history: IdentityHistory,
+) -> None:
+    layer = IdentityLayer.EXPRESSION_STYLE
+    original = make_identity()
+    history.sync_from_file(original)
+    history.record_self_change(layer, "句子短，多关心对方。")
+    restored = history.sync_from_file(original, edited=[layer])
+    assert restored.persona.expression_style == "句子短。"
+    assert sources(history, layer) == [
+        VersionSource.INITIAL,
+        VersionSource.SELF,
+        VersionSource.USER_FILE,
+    ]
+    history.sync_from_file(original, edited=[layer, layer])
+    assert len(history.user_changes_after(0)) == 1
+    history.sync_from_file(make_identity(expression_style="新原文。"), edited=[layer])
+    assert len(history.user_changes_after(0)) == 2
+
+
 def test_a_changed_layer_becomes_a_user_change(
     history: IdentityHistory, clock: ManualClock
 ) -> None:

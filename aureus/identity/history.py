@@ -11,6 +11,7 @@ identity.toml，这里只存它们的快照，用来发现「用户改过了」�
 
 import json
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -217,11 +218,14 @@ class IdentityHistory:
             ).fetchone()
         return None if row is None else str(row["content"])
 
-    def sync_from_file(self, from_file: Identity) -> Identity:
+    def sync_from_file(
+        self, from_file: Identity, *, edited: Collection[IdentityLayer] = ()
+    ) -> Identity:
         """和 identity.toml 对一遍：第一次见到的层记成初始版本，改过的层记成一次用户修改。
 
         Args:
             from_file: 从 identity.toml 读出来的身份。
+            edited: 用户这次明确编辑的层；D81 允许恢复到文件里原来的文字。
 
         Returns:
             此刻生效的身份：身份事实、不变人格和锁定状态照 identity.toml；
@@ -239,7 +243,11 @@ class IdentityHistory:
                 previous = self._latest_content(conn, layer, from_file=True)
                 if previous is None:
                     self._insert(conn, layer, content, VersionSource.INITIAL)
-                elif previous != content:
+                elif previous != content or (
+                    layer in PERSONA_LAYERS
+                    and layer in edited
+                    and self._latest_content(conn, layer, from_file=False) != content
+                ):
                     self._insert(conn, layer, content, VersionSource.USER_FILE)
             current: dict[str, str] = {}
             for layer in PERSONA_LAYERS:
@@ -267,6 +275,31 @@ class IdentityHistory:
             raise IdentityHistoryError(f"{layer.describe()}被用户锁定了，不能改。")
         with conn:
             self._insert(conn, layer, content.strip(), VersionSource.SELF)
+
+    def get(self, version_id: int) -> IdentityVersion | None:
+        """按序号取版本，不存在时返回 None（D81 的命令行回退）。"""
+        row = (
+            self._require_open()
+            .execute(
+                "SELECT id, layer, content, source, created_at FROM identity_versions WHERE id = ?",
+                (version_id,),
+            )
+            .fetchone()
+        )
+        return None if row is None else _version_of(row)
+
+    def latest_self_change(self, layer: IdentityLayer) -> IdentityVersion | None:
+        """这一层最近一次自己修改的版本；用户改动不重置 D81 的冷却期。"""
+        row = (
+            self._require_open()
+            .execute(
+                "SELECT id, layer, content, source, created_at FROM identity_versions "
+                "WHERE layer = ? AND source = ? ORDER BY id DESC LIMIT 1",
+                (layer.value, VersionSource.SELF.value),
+            )
+            .fetchone()
+        )
+        return None if row is None else _version_of(row)
 
     def versions(self, layer: IdentityLayer | None = None, *, limit: int) -> list[IdentityVersion]:
         """最新的几个版本，从早到晚；不给 layer 就是所有层混在一起。"""

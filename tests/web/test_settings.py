@@ -250,6 +250,19 @@ def test_rolling_back_saves_a_new_version_and_keeps_the_history(rig: Rig) -> Non
     assert target["content"] in rig.file_text()  # 同样写回文件
 
 
+def test_rolling_back_self_change_to_file_text_updates_heartbeat(rig: Rig) -> None:
+    original = rig.history.versions(STYLE, limit=1)[0]
+    rig.history.record_self_change(STYLE, "句子短，多关心对方。")
+    effective = rig.history.sync_from_file(Identity.model_validate(tomllib.loads(ORIGINAL)))
+    rig.heartbeat.identity = effective
+    result = rig.service.roll_back(STYLE, original.id, remote_addr=LOCAL)
+    assert result.changed_layers == (STYLE,)
+    assert rig.heartbeat.identity.persona.expression_style == original.content
+    assert rig.heartbeat.applied[-1] == ((STYLE,), result.up_to_version_id, "web")
+    version = rig.history.get(result.up_to_version_id)
+    assert version is not None and version.source is VersionSource.USER_FILE
+
+
 def test_rolling_back_to_an_older_version_than_the_latest_few_is_refused(rig: Rig) -> None:
     make_versions(rig, 5)
     oldest = rig.history.versions(STYLE, limit=100)[0]  # 初始版本，已经不在最近 3 个里

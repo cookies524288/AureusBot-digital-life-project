@@ -92,7 +92,7 @@ class IdentityEditor:
             raise IdentityEditError("不变人格不能是空的。")
         before = self._latest_version_id()
         self._write(tomlkit.dumps(document))
-        effective = self._history.sync_from_file(new_identity)
+        effective = self._history.sync_from_file(new_identity, edited=edit.text.keys())
         changes = self._history.user_changes_after(before)
         layers = tuple(dict.fromkeys(change.layer for change in changes))
         up_to = changes[-1].id if changes else before

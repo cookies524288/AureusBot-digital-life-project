@@ -129,6 +129,18 @@ def test_saving_the_same_content_adds_no_version(
     assert len(history.versions(None, limit=100)) == before
 
 
+def test_restoring_file_text_after_self_change_records_user_version(
+    editor: IdentityEditor, history: IdentityHistory
+) -> None:
+    history.record_self_change(IdentityLayer.EXPRESSION_STYLE, "句子短，多关心对方。")
+    result = editor.apply(IdentityEdit(text={IdentityLayer.EXPRESSION_STYLE: "句子短。"}))
+    version = history.get(result.up_to_version_id)
+    assert version is not None and version.source is VersionSource.USER_FILE
+    assert version.content == result.identity.persona.expression_style == "句子短。"
+    assert result.changed_layers == (IdentityLayer.EXPRESSION_STYLE,)
+    assert history.user_changes_after(version.id - 1) == [version]
+
+
 def test_editing_the_immutable_persona_needs_the_password() -> None:
     assert IdentityEdit(text={IdentityLayer.IMMUTABLE: "新底线。"}).requires_password()
     facts = Facts(name="小蓝", birthday="2008-01-01")
