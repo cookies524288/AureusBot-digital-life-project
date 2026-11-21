@@ -1,250 +1,981 @@
 <!doctype html>
-<html lang='zh-CN'>
+<html lang="zh-CN">
 <head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
 <title>AureusBot</title>
 <style>
-body{font-family:sans-serif;max-width:720px;margin:0 auto;padding:1rem}
-.hidden{display:none}
-#log{border:1px solid #ccc;height:55vh;overflow:auto;padding:.5rem}
-.msg{margin:.25rem 0;white-space:pre-wrap}
-.msg small{color:#888}
-.notice{color:#a60}
-.error{color:#c00}
-nav button{margin-right:.5rem}
-input,textarea{box-sizing:border-box}
-#text{width:80%}
+/* ---------- 设计变量：浅色为默认，深色跟随系统，也可用 data-theme 强制 ---------- */
+:root{
+--bg:#fdf6e3;--surface:#fffaec;--surface-2:#eee8d5;--border:#ded7bf;
+--text:#586e75;--text-2:#6c8086;
+--accent:#b58900;--accent-strong:#8f6c00;--accent-soft:#f3e6bd;--on-accent:#fdf6e3;
+--danger:#dc322f;--danger-soft:#fae0d3;--ok:#728300;--ok-soft:#eef0c6;--warn:#cb4b16;--warn-soft:#fbe3cb;
+--shadow:0 1px 2px rgba(88,110,117,.10),0 4px 16px rgba(88,110,117,.10);
+--radius:12px;--radius-sm:8px;--nav-w:224px;--bar-h:56px;
+--font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+--mono:ui-monospace,'Cascadia Mono',Consolas,monospace;
+color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme='light']){
+--bg:#002b36;--surface:#073642;--surface-2:#0d4150;--border:#1d5461;
+--text:#93a1a1;--text-2:#839496;
+--accent:#d0a22a;--accent-strong:#e3b840;--accent-soft:#3f3a14;--on-accent:#002b36;
+--danger:#f0645f;--danger-soft:#3d2a2c;--ok:#9bb300;--ok-soft:#1c4036;--warn:#e0743c;--warn-soft:#3d3220;
+--shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);
+color-scheme:dark;}}
+:root[data-theme='dark']{
+--bg:#002b36;--surface:#073642;--surface-2:#0d4150;--border:#1d5461;
+--text:#93a1a1;--text-2:#839496;
+--accent:#d0a22a;--accent-strong:#e3b840;--accent-soft:#3f3a14;--on-accent:#002b36;
+--danger:#f0645f;--danger-soft:#3d2a2c;--ok:#9bb300;--ok-soft:#1c4036;--warn:#e0743c;--warn-soft:#3d3220;
+--shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);
+color-scheme:dark;}
+
+/* ---------- 基础 ---------- */
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font:15px/1.6 var(--font);background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)}
+button,input,select,textarea{font:inherit;color:inherit}
+h1,h2,h3,h4,p{margin:0}
+.hidden{display:none!important}
+.muted{color:var(--text-2)}
+.mono{font-family:var(--mono)}
+::selection{background:var(--accent-soft)}
+/* ---------- 布局：宽屏左侧导航，窄屏底部导航 ---------- */
+#app{display:grid;grid-template-columns:var(--nav-w) 1fr;height:100%;min-height:0}
+nav.side{display:flex;flex-direction:column;gap:4px;padding:16px 12px;background:var(--surface);border-right:1px solid var(--border);overflow-y:auto}
+.brand{display:flex;align-items:center;gap:10px;padding:4px 10px 16px;font-weight:700;font-size:17px;letter-spacing:.3px}
+.brand-mark{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-strong));color:var(--on-accent);display:grid;place-items:center;font-size:15px;font-weight:800}
+.nav-group{margin:12px 10px 4px;font-size:12px;color:var(--text-2);letter-spacing:.5px}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:0;border-radius:var(--radius-sm);background:none;color:var(--text-2);text-align:left;cursor:pointer;transition:background .12s,color .12s}
+.nav-item:hover{background:var(--surface-2);color:var(--text)}
+.nav-item.active{background:var(--accent-soft);color:var(--accent-strong);font-weight:600}
+.nav-icon{width:20px;text-align:center;font-size:16px;line-height:1}
+.nav-spacer{flex:1}
+.nav-foot{display:flex;flex-direction:column;gap:4px;padding-top:12px;border-top:1px solid var(--border)}
+#pages{position:relative;min-width:0;min-height:0;overflow:hidden}
+section.page{display:none;height:100%;overflow-y:auto;padding:28px 32px 40px}
+section.page.active{display:flex;flex-direction:column}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.page-head h2{font-size:22px;font-weight:700}
+.page-head p{margin-top:2px;color:var(--text-2);font-size:14px}
+.page-body{width:100%;max-width:960px}
+.page.wide .page-body{max-width:1240px}
+.stack{display:flex;flex-direction:column;gap:16px}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+
+/* 窄屏：导航挪到底部，只留图标和短名字 */
+@media (max-width:820px){
+#app{grid-template-columns:1fr;grid-template-rows:1fr auto}
+nav.side{grid-row:2;flex-direction:row;gap:0;padding:6px 6px calc(6px + env(safe-area-inset-bottom));border-right:0;border-top:1px solid var(--border);overflow-x:auto;overflow-y:hidden}
+.brand,.nav-group,.nav-spacer,.nav-foot{display:none}
+.nav-item{flex:1 0 64px;flex-direction:column;gap:2px;padding:6px 4px;font-size:11px;text-align:center}
+section.page{padding:18px 16px 24px}
+.page-head h2{font-size:19px}
+}
+/* ---------- 组件 ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;transition:background .12s,border-color .12s,opacity .12s}
+.btn:hover{background:var(--surface-2)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
+.btn.primary:hover{background:var(--accent-strong);border-color:var(--accent-strong)}
+.btn.danger{color:var(--danger);border-color:var(--danger)}
+.btn.danger:hover{background:var(--danger-soft)}
+.btn.small{padding:4px 10px;font-size:13px}
+.btn.ghost{border-color:transparent;background:none}
+.btn.ghost:hover{background:var(--surface-2)}
+.btn:focus-visible,.nav-item:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field>label,.field-label{font-size:13px;color:var(--text-2)}
+.field .hint{font-size:12px;color:var(--text-2)}
+input[type=text],input[type=password],input[type=number],input[type=search],select,textarea{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);transition:border-color .12s}
+input:hover,select:hover,textarea:hover{border-color:var(--text-2)}
+input:read-only,textarea:read-only{background:var(--surface-2);color:var(--text-2)}
+textarea{resize:vertical;min-height:96px;line-height:1.6}
+.form-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow)}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.card-head h3{font-size:16px;font-weight:600}
+.card.flat{box-shadow:none}
+.divider{height:1px;background:var(--border);margin:14px 0}
+
+.tag{display:inline-flex;align-items:center;gap:4px;padding:1px 9px;border-radius:999px;font-size:12px;background:var(--surface-2);color:var(--text-2);white-space:nowrap}
+.tag.accent{background:var(--accent-soft);color:var(--accent-strong)}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.tag.danger{background:var(--danger-soft);color:var(--danger)}
+
+/* 开关：真正的 checkbox，外观换成滑块，键盘和读屏照常可用 */
+.switch{position:relative;display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.switch input{position:absolute;opacity:0;width:0;height:0}
+.switch .track{position:relative;width:40px;height:22px;border-radius:999px;background:var(--border);transition:background .15s;flex:none}
+.switch .track::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .15s}
+.switch input:checked+.track{background:var(--accent)}
+.switch input:checked+.track::after{transform:translateX(18px)}
+.switch input:focus-visible+.track{outline:2px solid var(--accent);outline-offset:2px}
+.switch input:disabled+.track{opacity:.5}
+
+/* 提示条：保存结果、重启提示、后端还没做好 */
+#toasts{position:fixed;z-index:50;left:50%;bottom:calc(76px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;width:min(92vw,420px);pointer-events:none}
+@media (min-width:821px){#toasts{bottom:28px}}
+.toast{pointer-events:auto;padding:10px 16px;border-radius:var(--radius-sm);background:var(--text);color:var(--bg);box-shadow:var(--shadow);font-size:14px;animation:toast-in .2s ease-out}
+.toast.error{background:var(--danger);color:#fff}
+.toast.ok{background:var(--ok);color:#fff}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.banner{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--warn);font-size:14px}
+.banner.danger{background:var(--danger-soft);color:var(--danger)}
+.banner.info{background:var(--accent-soft);color:var(--accent-strong)}
+.empty{padding:28px 16px;text-align:center;color:var(--text-2);border:1px dashed var(--border);border-radius:var(--radius)}
+
+/* 登录页和改口令页：居中的一张卡片 */
+.auth{min-height:100%;display:grid;place-items:center;padding:24px}
+.auth-card{width:min(100%,380px);display:flex;flex-direction:column;gap:14px}
+.auth-card h1{font-size:22px;display:flex;align-items:center;gap:10px}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* ---------- 总览 ---------- */
+.stat-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.stat{padding:14px 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.stat .label{font-size:12px;color:var(--text-2)}
+.stat .value{margin-top:2px;font-size:22px;font-weight:700}
+.meter{height:8px;margin-top:8px;border-radius:999px;background:var(--surface-2);overflow:hidden}
+.meter>i{display:block;height:100%;border-radius:999px;background:var(--accent);transition:width .3s}
+.state-text{white-space:pre-wrap;font-size:14px;line-height:1.8}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-2)}
+.dot.on{background:var(--ok)}.dot.busy{background:var(--accent)}.dot.off{background:var(--danger)}
+
+/* ---------- 私聊 ---------- */
+#page-chat{padding:0}
+.chat-wrap{display:flex;flex-direction:column;height:100%;min-height:0}
+.chat-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 24px;border-bottom:1px solid var(--border);background:var(--surface)}
+.chat-log{flex:1;min-height:0;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:10px}
+.msg{display:flex;flex-direction:column;max-width:min(78%,640px);gap:2px}
+.msg .bubble{padding:9px 14px;border-radius:16px;white-space:pre-wrap;word-break:break-word}
+.msg .meta{font-size:11px;color:var(--text-2);padding:0 6px}
+.msg.user{align-self:flex-end;align-items:flex-end}
+.msg.user .bubble{background:var(--accent);color:var(--on-accent);border-bottom-right-radius:4px}
+.msg.me{align-self:flex-start}
+.msg.me .bubble{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:4px}
+.msg.person .bubble,.msg.system .bubble{background:var(--surface-2);border-bottom-left-radius:4px}
+.msg.notice{align-self:center;max-width:90%;align-items:center}
+.msg.notice .bubble{background:none;border:1px dashed var(--warn);color:var(--warn);font-size:13px;border-radius:var(--radius-sm)}
+.chat-day{align-self:center;font-size:12px;color:var(--text-2);padding:4px 0}
+.composer{display:flex;gap:10px;align-items:flex-end;padding:12px 24px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--surface)}
+.composer textarea{min-height:44px;max-height:160px;resize:none}
+@media (max-width:820px){.chat-head,.chat-log,.composer{padding-left:14px;padding-right:14px}.msg{max-width:88%}}
+
+/* ---------- 时间线 ---------- */
+.tl-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.tl-toolbar select{width:auto}
+.chip{padding:3px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text-2);font-size:13px;cursor:pointer}
+.chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong)}
+.summary-card{border-left:4px solid var(--accent);margin-bottom:16px}
+.tl-list{position:relative;display:flex;flex-direction:column;gap:2px;padding-left:22px}
+.tl-list::before{content:'';position:absolute;left:6px;top:8px;bottom:8px;width:2px;background:var(--border)}
+.tl-item{position:relative;padding:8px 12px;border-radius:var(--radius-sm)}
+.tl-item::before{content:'';position:absolute;left:-20px;top:16px;width:10px;height:10px;border-radius:50%;background:var(--surface);border:2px solid var(--text-2)}
+.tl-item.in-context::before{border-color:var(--accent);background:var(--accent)}
+.tl-item:hover{background:var(--surface-2)}
+.tl-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-2)}
+.tl-content{margin-top:2px;white-space:pre-wrap;word-break:break-word}
+.tl-content.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.tl-divider{display:flex;align-items:center;gap:10px;margin:10px 0 10px -22px;color:var(--accent-strong);font-size:12px;font-weight:600}
+.tl-divider::before,.tl-divider::after{content:'';flex:1;height:0;border-top:2px dashed var(--accent)}
+
+/* ---------- 人设 ---------- */
+.layer-card textarea{min-height:120px}
+.version-row{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--border);font-size:13px}
+.version-row .preview{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)}
+.lock-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
+
+/* ---------- 模型和器官 ---------- */
+.provider-card .card-head{align-items:flex-start}
+.model-row{display:grid;grid-template-columns:1.2fr 1.2fr auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--border)}
+.model-row .name{font-weight:600}
+.levels{display:flex;gap:6px;flex-wrap:wrap}
+.organ-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.organ-card .role{font-size:13px;color:var(--text-2)}
+.chain{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.chain-step{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2)}
+.chain-step .order{width:20px;height:20px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);font-size:12px;display:grid;place-items:center;flex:none}
+.chain-step .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:820px){.model-row{grid-template-columns:1fr}.organ-grid{grid-template-columns:1fr}}
+
+/* ---------- 设置 ---------- */
+.cfg-layout{display:grid;gap:20px;grid-template-columns:180px 1fr;align-items:start}
+.cfg-tabs{display:flex;flex-direction:column;gap:2px;position:sticky;top:0}
+@media (max-width:820px){.cfg-layout{grid-template-columns:1fr}.cfg-tabs{flex-direction:row;overflow-x:auto;position:static}.cfg-tabs .nav-item{flex:none;width:auto}}
+.cfg-field{display:grid;gap:4px 16px;grid-template-columns:minmax(0,1fr) minmax(0,220px);align-items:center;padding:10px 0;border-top:1px solid var(--border)}
+.cfg-field:first-child{border-top:0}
+.cfg-field .name{font-weight:600;font-size:14px}
+.cfg-field .desc{font-size:12px;color:var(--text-2)}
+@media (max-width:820px){.cfg-field{grid-template-columns:1fr}}
+.save-bar{position:sticky;bottom:0;display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:12px 0;background:linear-gradient(transparent,var(--bg) 30%)}
 </style>
 </head>
 <body>
-<h1>AureusBot</h1>
-<p id='error' class='error'></p>
-<section id='login' class='hidden'>
-<h2>登录</h2>
-<input id='password' type='password' placeholder='口令' autocomplete='current-password'>
-<button id='login-btn'>登录</button>
+<div id="toasts" aria-live="polite"></div>
+
+<section id="login" class="auth hidden">
+<div class="card auth-card">
+<h1><span class="brand-mark">A</span>AureusBot</h1>
+<p class="muted">请输入口令登录。</p>
+<div id="login-error" class="banner danger hidden" role="alert"></div>
+<div class="field"><label for="password">口令</label>
+<input id="password" type="password" autocomplete="current-password"></div>
+<button id="login-btn" class="btn primary">登录</button>
+</div>
 </section>
-<section id='change' class='hidden'>
-<h2>修改口令</h2>
-<p id='change-hint'></p>
-<input id='old-password' type='password' placeholder='旧口令' autocomplete='current-password'>
-<input id='new-password' type='password' placeholder='新口令（至少 8 位）' autocomplete='new-password'>
-<button id='change-btn'>修改</button>
+
+<section id="change" class="auth hidden">
+<div class="card auth-card">
+<h1><span class="brand-mark">A</span>修改口令</h1>
+<p id="change-hint" class="muted"></p>
+<div id="change-error" class="banner danger hidden" role="alert"></div>
+<div class="field"><label for="old-password">旧口令</label>
+<input id="old-password" type="password" autocomplete="current-password"></div>
+<div class="field"><label for="new-password">新口令</label>
+<input id="new-password" type="password" autocomplete="new-password">
+<span class="hint">至少 8 位。改完后所有设备都会退出，需要用新口令重新登录。</span></div>
+<button id="change-btn" class="btn primary">修改口令</button>
+</div>
 </section>
-<section id='main' class='hidden'>
-<nav>
-<button id='tab-chat'>聊天</button>
-<button id='tab-settings'>设置</button>
-<button id='logout-btn'>退出</button>
+
+<div id="app" class="hidden">
+<nav class="side" aria-label="主导航">
+<div class="brand"><span class="brand-mark">A</span>AureusBot</div>
+<button class="nav-item" data-page="chat"><span class="nav-icon">💬</span><span>私聊</span></button>
+<button class="nav-item" data-page="overview"><span class="nav-icon">◎</span><span>总览</span></button>
+<button class="nav-item" data-page="timeline"><span class="nav-icon">≡</span><span>时间线</span></button>
+<div class="nav-group">配置</div>
+<button class="nav-item" data-page="persona"><span class="nav-icon">☺</span><span>人设</span></button>
+<button class="nav-item" data-page="models"><span class="nav-icon">⚙</span><span>模型</span></button>
+<button class="nav-item" data-page="organs"><span class="nav-icon">❖</span><span>器官</span></button>
+<button class="nav-item" data-page="config"><span class="nav-icon">☰</span><span>设置</span></button>
+<div class="nav-spacer"></div>
+<div class="nav-foot">
+<button id="theme-btn" class="nav-item"><span class="nav-icon">◐</span><span>切换主题</span></button>
+<button id="logout-btn" class="nav-item"><span class="nav-icon">⏻</span><span>退出</span></button>
+</div>
 </nav>
-<div id='chat'>
-<div id='log'></div>
-<input id='text' placeholder='说点什么'>
-<button id='send-btn'>发送</button>
+<main id="pages">
+<section id="page-overview" class="page"><div class="page-head"><div><h2>总览</h2><p>它此刻的状态。</p></div><button id="ov-refresh" class="btn small">刷新</button></div>
+<div class="page-body stack">
+<div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div>
+<div id="ov-missing" class="empty hidden"></div>
+<div id="ov-content" class="stack hidden">
+<div class="stat-grid">
+<div class="stat"><div class="label">状态</div><div class="value" id="ov-thinking"></div></div>
+<div class="stat"><div class="label">当前任务</div><div class="value" id="ov-task"></div></div>
+<div class="stat"><div class="label">精力</div><div class="value" id="ov-energy"></div><div class="meter"><i id="ov-meter" style="width:0"></i></div></div>
 </div>
-<div id='settings' class='hidden'>
-<h2>可以自由改的三层</h2>
-<div id='free-layers'></div>
-<h3>锁定</h3>
-<p>锁定后，它自己不能再改这一层（以后它开始自己改设定时才起作用）。</p>
-<div id='locks'></div>
-<button id='save-locks'>保存锁定</button>
-<h2>底线（要再输一次口令）</h2>
-<p>身份事实和不变人格。口令被人看到，就能改这里，请保管好口令。</p>
-<div>名字 <input id='f-name'></div>
-<div>昵称（用逗号分开） <input id='f-aliases'></div>
-<div>性别 <input id='f-gender'></div>
-<div>生日（YYYY-MM-DD） <input id='f-birthday'></div>
-<div>它怎么称呼你 <input id='u-name'></div>
-<div>你的账号（每行一个，写成 平台:账号）<br><textarea id='u-accounts' rows='3' cols='40'></textarea></div>
-<div>不变人格<br><textarea id='immutable' rows='8' style='width:100%'></textarea></div>
-<input id='baseline-password' type='password' placeholder='当前口令' autocomplete='current-password'>
-<button id='save-baseline'>保存底线</button>
+<div class="card"><div class="card-head"><h3>此刻的状态</h3></div><div id="ov-state" class="state-text"></div></div>
 </div>
-</section>
+</div></section>
+<section id="page-chat" class="page"><div class="chat-wrap">
+<div class="chat-head">
+<div><h2 style="font-size:17px">私聊</h2><p class="muted" style="font-size:13px">和它直接说话，这里说的话也会记进时间线。每条都标明来自哪个通道。</p></div>
+<span class="tag" id="conn-tag"><span class="dot" id="conn-dot"></span><span id="conn-text">连接中</span></span>
+</div>
+<div id="chat-log" class="chat-log" aria-live="polite"></div>
+<div class="composer">
+<textarea id="chat-text" rows="1" placeholder="说点什么（Enter 发送，Shift+Enter 换行）"></textarea>
+<button id="chat-send" class="btn primary">发送</button>
+</div>
+</div></section>
+<section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2><p>它经历过的一切，只追加、不修改。新的在上面。</p></div><button id="tl-refresh" class="btn small">刷新</button></div>
+<div class="page-body">
+<div class="card summary-card">
+<div class="card-head"><h3>滚动摘要</h3><span class="tag">还没有这个功能</span></div>
+<p class="muted" id="tl-summary-note">还没有滚动摘要。它回复时只带最近的几条对话，更早的不会带上，也没有被总结。</p>
+</div>
+<div class="tl-toolbar">
+<select id="tl-hours" aria-label="时间范围">
+<option value="1">最近 1 小时</option><option value="6">最近 6 小时</option><option value="24" selected>最近 24 小时</option><option value="72">最近 3 天</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option>
+</select>
+<div id="tl-chips" class="row" style="gap:6px"></div>
+</div>
+<div id="tl-missing" class="empty hidden"></div>
+<div id="tl-list" class="tl-list"></div>
+<div class="row" style="justify-content:center;margin-top:16px"><button id="tl-more" class="btn hidden">加载更早的</button></div>
+</div></section>
+<section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2><p>五层设定。下面三层可以随时改，底线两层要再输一次口令。</p></div></div>
+<div class="page-body stack">
+<div id="ps-free" class="stack"></div>
+<div class="card">
+<div class="card-head"><h3>锁定</h3></div>
+<p class="muted" style="font-size:13px">锁定后，它自己不能再改这一层（它开始自己改设定时才起作用）。三个开关会一起保存。</p>
+<div id="ps-locks"></div>
+<div class="row" style="justify-content:flex-end"><button id="ps-save-locks" class="btn primary">保存锁定</button></div>
+</div>
+<div class="card">
+<div class="card-head"><h3>底线</h3><span class="tag warn">要输口令</span></div>
+<p class="muted" style="font-size:13px">身份事实和不变人格，只有你能改，它自己永远改不了。口令被人看到，就能改这里，请保管好口令。</p>
+<div class="form-grid" style="margin-top:12px">
+<div class="field"><label for="ps-name">名字</label><input id="ps-name" type="text"></div>
+<div class="field"><label for="ps-aliases">昵称</label><input id="ps-aliases" type="text"><span class="hint">多个用逗号分开</span></div>
+<div class="field"><label for="ps-gender">性别</label><input id="ps-gender" type="text"></div>
+<div class="field"><label for="ps-birthday">生日</label><input id="ps-birthday" type="text" placeholder="YYYY-MM-DD"></div>
+<div class="field"><label for="ps-user-name">它怎么称呼你</label><input id="ps-user-name" type="text"></div>
+</div>
+<div class="field" style="margin-top:14px"><label for="ps-accounts">你的账号</label><textarea id="ps-accounts" rows="3"></textarea><span class="hint">每行一个，写成 平台:账号，比如 qq:10000</span></div>
+<div class="field" style="margin-top:14px"><label for="ps-immutable">不变人格</label><textarea id="ps-immutable" rows="8"></textarea></div>
+<div class="row" style="margin-top:14px;justify-content:flex-end">
+<input id="ps-password" type="password" placeholder="当前口令" autocomplete="current-password" style="max-width:220px">
+<button id="ps-save-baseline" class="btn primary">保存底线</button>
+</div>
+</div>
+</div></section>
+<section id="page-models" class="page wide"><div class='page-head'><div><h2>模型</h2><p>服务商和它提供的模型。保存后重启生效。</p></div>
+<div class='row'><button id='md-reset' class='btn' disabled>放弃修改</button><button id='md-save' class='btn primary' disabled>保存</button></div></div>
+<div class='page-body stack'>
+<div id='md-restart' class='banner hidden'>配置已保存，重启后生效。</div>
+<div id='md-missing' class='empty hidden'></div>
+<div id='md-content' class='stack hidden'>
+<div class='banner info'>改动先留在页面上，点「保存」才会写进模型配置文件。改已有服务商的地址或密钥名、新增带密钥名的服务商，要输入当前口令。</div>
+<div id='md-providers' class='stack'></div>
+<div class='row' style='justify-content:space-between'>
+<button id='md-add-provider' class='btn'>＋ 添加服务商</button>
+<input id='md-password' type='password' placeholder='当前口令（需要时才填）' autocomplete='current-password' style='max-width:240px'>
+</div>
+</div>
+</div></section>
+<section id="page-organs" class="page wide"><!-- @@HTML-ORGANS@@ 器官 --></section>
+<section id="page-config" class="page"><!-- @@HTML-CONFIG@@ 设置 --></section>
+</main>
+</div>
+
 <script>
-const $=id=>document.getElementById(id);
-let socket=null;
-let loggedIn=false;
-const WHO={user:'你',me:'它'};
-function showView(name){for(const id of ['login','change','main'])$(id).classList.toggle('hidden',id!==name);}
-function showTab(name){for(const id of ['chat','settings'])$(id).classList.toggle('hidden',id!==name);}
-function say(text){$('error').textContent=text||'';}
-async function api(path,method,body){
-  const opt={method:method||'GET',headers:{},credentials:'same-origin'};
-  if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body);}
-  const r=await fetch(path,opt);
-  let data=null;
-  try{data=await r.json();}catch(e){}
-  return {ok:r.ok,status:r.status,data:data};
+'use strict';
+// ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
+const $ = id => document.getElementById(id);
+const state = { loggedIn: false, page: '', loaded: {} };
+
+function el(tag, props, ...kids) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else if (value !== false && value !== null && value !== undefined) node.setAttribute(key, value === true ? '' : value);
+  }
+  for (const kid of kids.flat()) {
+    if (kid === null || kid === undefined || kid === false) continue;
+    node.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return node;
 }
-function detail(res){const d=res.data&&res.data.detail;return typeof d==='string'?d:'请求没有成功（'+res.status+'）。';}
-function addLine(who,channel,text,notice){
-  const div=document.createElement('div');
-  div.className='msg'+(notice?' notice':'');
-  const tag=document.createElement('small');
-  tag.textContent='['+channel+'] '+who+'：';
-  div.appendChild(tag);
-  div.appendChild(document.createTextNode(text));
-  const log=$('log');
-  log.appendChild(div);
-  log.scrollTop=log.scrollHeight;
+
+// 所有接口都走这里。返回 {ok, status, data, retryAfter}；网络断了 status 是 0。
+async function api(path, method, body) {
+  const opt = { method: method || 'GET', headers: {}, credentials: 'same-origin' };
+  if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  let r;
+  try { r = await fetch(path, opt); } catch (e) { return { ok: false, status: 0, data: null }; }
+  let data = null;
+  try { data = await r.json(); } catch (e) { /* 没有正文也可以 */ }
+  if (r.status === 401 && state.loggedIn) { showAuth('login', '登录已失效，请重新登录。'); }
+  return { ok: r.ok, status: r.status, data, retryAfter: r.headers.get('Retry-After') };
 }
-async function loadHistory(){
-  $('log').textContent='';
-  const res=await api('/api/history');
-  if(!res.ok){say(detail(res));return;}
-  for(const item of res.data)addLine(WHO[item.who]||item.who,item.channel,item.content,false);
+
+// 后端的 detail 已经是中文、不含口令，原样显示；429 补上要等多久。
+function errorText(res) {
+  if (res.status === 0) return '连不上服务，请检查网络后再试。';
+  const d = res.data && res.data.detail;
+  let text = typeof d === 'string' ? d : '请求没有成功（' + res.status + '）。';
+  if (res.status === 429 && res.retryAfter) text += '请等 ' + res.retryAfter + ' 秒后再试。';
+  return text;
 }
-function connect(){
-  if(socket||!loggedIn)return;
-  const scheme=location.protocol==='https:'?'wss':'ws';
-  socket=new WebSocket(scheme+'://'+location.host+'/ws');
-  socket.onmessage=ev=>{
-    const m=JSON.parse(ev.data);
-    if(m.type==='error')say(m.detail);
-    else addLine(m.sender,m.channel,m.content,m.type==='notice');
-  };
-  socket.onclose=()=>{socket=null;if(loggedIn)setTimeout(connect,3000);};
+const notBuilt = res => res.status === 404 || res.status === 405;
+const NOT_BUILT_TEXT = '这项功能的后端还没做好（路线图 2.12b），所以这里暂时没有内容。';
+
+function toast(text, kind) {
+  const node = el('div', { class: 'toast ' + (kind || ''), text });
+  $('toasts').append(node);
+  setTimeout(() => node.remove(), kind === 'error' ? 6000 : 3500);
 }
-async function enter(){
-  const res=await api('/api/status');
-  if(res.status===401){loggedIn=false;showView('login');return;}
-  if(res.data.must_change_password){
-    showView('change');
-    $('change-hint').textContent='现在用的是默认口令，必须先改成自己的口令才能使用。';
+const fail = res => toast(errorText(res), 'error');
+
+function showBanner(id, text) {
+  const box = $(id);
+  box.textContent = text || '';
+  box.classList.toggle('hidden', !text);
+}
+
+function fmtTime(iso, full) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso || '';
+  const p = n => String(n).padStart(2, '0');
+  const clock = p(d.getHours()) + ':' + p(d.getMinutes());
+  return full ? (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + clock : clock;
+}
+
+// ---------- 页面切换 ----------
+const PAGES = {};   // 页面名 -> {load}，各页在下面登记
+function showPage(name) {
+  if (!PAGES[name]) name = 'chat';
+  state.page = name;
+  for (const sec of document.querySelectorAll('section.page')) sec.classList.toggle('active', sec.id === 'page-' + name);
+  for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.classList.toggle('active', btn.dataset.page === name);
+  if (PAGES[name].load) PAGES[name].load();
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+}
+for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.addEventListener('click', () => showPage(btn.dataset.page));
+window.addEventListener('hashchange', () => { if (state.loggedIn) showPage(location.hash.slice(1)); });
+
+// ---------- 主题：默认跟随系统，点一下在浅色和深色之间切；只记在这台浏览器里 ----------
+function applyTheme(theme) { if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; }
+try { applyTheme(localStorage.getItem('aureus-theme')); } catch (e) { /* 浏览器不让存就跟随系统 */ }
+$('theme-btn').addEventListener('click', () => {
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const current = document.documentElement.dataset.theme || (dark ? 'dark' : 'light');
+  const next = current === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  try { localStorage.setItem('aureus-theme', next); } catch (e) { /* 同上 */ }
+});
+
+// @@JS-CORE-END@@
+// ---------- 登录、改口令、退出 ----------
+// 默认口令时只能进改口令页（D63 第 6 条）；登录失效、改口令、退出都回到这里。
+function showAuth(view, message) {
+  state.loggedIn = false;
+  state.loaded = {};
+  if (typeof closeSocket === 'function') closeSocket();
+  $('app').classList.add('hidden');
+  $('login').classList.toggle('hidden', view !== 'login');
+  $('change').classList.toggle('hidden', view !== 'change');
+  showBanner('login-error', view === 'login' ? message : '');
+  showBanner('change-error', '');
+  if (view === 'change') $('change-hint').textContent = message || '';
+  (view === 'login' ? $('password') : $('old-password')).focus();
+}
+
+async function enter() {
+  const res = await api('/api/status');
+  if (res.status === 401) { showAuth('login'); return; }
+  if (!res.ok) { showAuth('login', errorText(res)); return; }
+  if (res.data && res.data.must_change_password) {
+    showAuth('change', '现在用的是默认口令，必须先改成自己的口令才能使用。');
     return;
   }
-  loggedIn=true;
-  showView('main');
-  showTab('chat');
-  await loadHistory();
-  connect();
+  state.loggedIn = true;
+  $('login').classList.add('hidden');
+  $('change').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  showPage(location.hash.slice(1));
+  if (typeof openSocket === 'function') openSocket();
 }
-$('login-btn').onclick=async()=>{
-  say('');
-  const res=await api('/api/login','POST',{password:$('password').value});
-  $('password').value='';
-  if(!res.ok){say(detail(res));return;}
+
+$('login-btn').addEventListener('click', async () => {
+  showBanner('login-error', '');
+  const button = $('login-btn');
+  button.disabled = true;
+  const res = await api('/api/login', 'POST', { password: $('password').value });
+  button.disabled = false;
+  $('password').value = '';
+  if (!res.ok) { showBanner('login-error', errorText(res)); return; }
   await enter();
-};
-$('password').onkeydown=ev=>{if(ev.key==='Enter')$('login-btn').click();};
-$('change-btn').onclick=async()=>{
-  say('');
-  const res=await api('/api/password','POST',{old_password:$('old-password').value,new_password:$('new-password').value});
-  $('old-password').value='';
-  $('new-password').value='';
-  if(!res.ok){say(detail(res));return;}
-  loggedIn=false;
-  if(socket)socket.close();
-  showView('login');
-  say('口令已修改，所有设备都已退出，请用新口令重新登录。');
-};
-function send(){
-  const text=$('text').value.trim();
-  if(!text||!socket||socket.readyState!==1)return;
-  socket.send(JSON.stringify({text:text}));
-  addLine('你','web',text,false);
-  $('text').value='';
-}
-$('send-btn').onclick=send;
-$('text').onkeydown=ev=>{if(ev.key==='Enter')send();};
-$('tab-chat').onclick=()=>showTab('chat');
-$('tab-settings').onclick=()=>showTab('settings');
-$('logout-btn').onclick=async()=>{
-  await api('/api/logout','POST');
-  loggedIn=false;
-  if(socket)socket.close();
-  showView('login');
-};
-const FREE=[['mutable','可变人格'],['behavior_style','行为风格'],['expression_style','表达风格']];
-function el(tag,text,props){const e=document.createElement(tag);if(text)e.textContent=text;return Object.assign(e,props||{});}
-async function saveSettings(body,okText){
-  say('');
-  const res=await api('/api/settings','PUT',body);
-  if(!res.ok){say(detail(res));return;}
-  say(okText);
-  await loadSettings();
-}
-function renderFreeLayer(box,key,title,content,history){
-  const wrap=el('div');
-  wrap.appendChild(el('h3',title));
-  const area=el('textarea','',{rows:5});
-  area.style.width='100%';
-  area.value=content;
-  wrap.appendChild(area);
-  const save=el('button','保存'+title);
-  save.onclick=()=>{const body={text:{}};body.text[key]=area.value;saveSettings(body,title+'已保存，下一次回复就会用新的。');};
-  wrap.appendChild(save);
-  wrap.appendChild(el('p','最近的版本（点「用这个版本」会存成一个新版本，历史不会删）：'));
-  for(const item of history){
-    const row=el('div');
-    row.appendChild(el('small',item.source+' '+item.time+'：'));
-    row.appendChild(el('span',item.content?item.content.slice(0,60):'（空）'));
-    const back=el('button','用这个版本');
-    back.onclick=async()=>{
-      say('');
-      const res=await api('/api/settings/rollback','POST',{layer:key,version_id:item.id});
-      if(!res.ok){say(detail(res));return;}
-      say(title+'已回退。');
-      await loadSettings();
-    };
-    row.appendChild(back);
-    wrap.appendChild(row);
+});
+$('password').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('login-btn').click(); });
+
+$('change-btn').addEventListener('click', async () => {
+  showBanner('change-error', '');
+  const button = $('change-btn');
+  button.disabled = true;
+  const res = await api('/api/password', 'POST', { old_password: $('old-password').value, new_password: $('new-password').value });
+  button.disabled = false;
+  $('old-password').value = '';
+  $('new-password').value = '';
+  if (!res.ok) { showBanner('change-error', errorText(res)); return; }
+  // 改口令会让所有设备退出，包括这一台，回到登录页。
+  showAuth('login');
+  toast('口令已修改，所有设备都已退出，请用新口令重新登录。', 'ok');
+});
+$('new-password').addEventListener('keydown', ev => { if (ev.key === 'Enter') $('change-btn').click(); });
+
+$('logout-btn').addEventListener('click', async () => {
+  await api('/api/logout', 'POST');
+  showAuth('login');
+});
+// ---------- 总览：读 /api/overview（2.12b 的接口，没做好时如实说明） ----------
+async function loadOverview() {
+  const res = await api('/api/overview');
+  const missing = $('ov-missing');
+  if (notBuilt(res)) {
+    $('ov-content').classList.add('hidden');
+    missing.textContent = NOT_BUILT_TEXT;
+    missing.classList.remove('hidden');
+    return;
   }
-  box.appendChild(wrap);
+  if (!res.ok) { fail(res); return; }
+  const d = res.data;
+  missing.classList.add('hidden');
+  $('ov-content').classList.remove('hidden');
+  $('ov-restart').classList.toggle('hidden', !d.restart_required);
+  $('ov-thinking').textContent = d.thinking ? '正在想' : '空闲';
+  $('ov-task').textContent = d.current_task || '待机';
+  const level = d.energy_level;
+  $('ov-energy').textContent = level === null || level === undefined ? '不限' : Math.round(level * 100) + '%' + (d.energy_tier ? '（' + d.energy_tier + '档）' : '');
+  $('ov-meter').style.width = (level === null || level === undefined ? 100 : Math.round(level * 100)) + '%';
+  $('ov-state').textContent = d.state_text || '';
 }
-async function loadSettings(){
-  const res=await api('/api/settings');
-  if(!res.ok){say(detail(res));return;}
-  const v=res.data;
-  const free=$('free-layers');
-  free.textContent='';
-  const locks=$('locks');
-  locks.textContent='';
-  for(const [key,title] of FREE){
-    renderFreeLayer(free,key,title,v.layers[key],v.history[key]||[]);
-    const label=el('label');
-    const box=el('input','',{type:'checkbox',id:'lock-'+key,checked:!!v.locks[key]});
-    label.appendChild(box);
-    label.appendChild(document.createTextNode(' 锁定'+title+' '));
-    locks.appendChild(label);
-  }
-  const facts=v.layers.facts.facts, user=v.layers.facts.user;
-  $('f-name').value=facts.name;
-  $('f-aliases').value=facts.alias_names.join('，');
-  $('f-gender').value=facts.gender;
-  $('f-birthday').value=facts.birthday;
-  $('u-name').value=user.name;
-  $('u-accounts').value=user.accounts.map(a=>a.platform+':'+a.id).join('\n');
-  $('immutable').value=v.layers.immutable;
-  $('baseline-password').value='';
+$('ov-refresh').addEventListener('click', loadOverview);
+PAGES.overview = { load: loadOverview };
+// ---------- 私聊：历史加 WebSocket 实时收发 ----------
+// 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
+const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
+let socket = null, socketWanted = false, lastDay = '';
+
+function setConn(text, kind) {
+  $('conn-text').textContent = text;
+  $('conn-tag').className = 'tag' + (kind ? ' ' + kind : '');
+  $('conn-dot').className = 'dot' + (kind === 'ok' ? ' on' : kind === 'warn' ? ' off' : ' busy');
 }
-$('save-locks').onclick=()=>{
-  const locks={};
-  for(const [key] of FREE)locks[key]=$('lock-'+key).checked;
-  saveSettings({locks:locks},'锁定已保存。');
-};
-$('save-baseline').onclick=()=>{
-  const accounts=[];
-  for(const line of $('u-accounts').value.split('\n')){
-    const text=line.trim();
-    if(!text)continue;
-    const at=text.indexOf(':');
-    if(at<1||at===text.length-1){say('账号要写成 平台:账号，比如 qq:10000。');return;}
-    accounts.push({platform:text.slice(0,at).trim(),id:text.slice(at+1).trim()});
+
+function addMessage(kind, sender, channel, text, iso, notice) {
+  const log = $('chat-log');
+  const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  const empty = $('chat-empty');
+  if (empty) empty.remove();
+  const when = iso ? new Date(iso) : new Date();
+  const day = when.toDateString();
+  if (day !== lastDay) {
+    lastDay = day;
+    log.append(el('div', { class: 'chat-day', text: (when.getMonth() + 1) + '月' + when.getDate() + '日' }));
   }
-  const aliases=$('f-aliases').value.split(/[,，]/).map(s=>s.trim()).filter(Boolean);
-  saveSettings({
-    password:$('baseline-password').value,
-    text:{immutable:$('immutable').value},
-    facts:{name:$('f-name').value.trim(),alias_names:aliases,gender:$('f-gender').value.trim(),birthday:$('f-birthday').value.trim()},
-    user:{name:$('u-name').value.trim(),accounts:accounts}
-  },'底线已保存。');
+  const who = notice ? '系统通知' : sender;
+  const meta = who + ' · ' + (channel || '未标通道') + ' · ' + fmtTime(when.toISOString());
+  log.append(el('div', { class: 'msg ' + (notice ? 'notice' : kind) },
+    el('div', { class: 'bubble', text }),
+    el('div', { class: 'meta', text: meta })));
+  if (stick) log.scrollTop = log.scrollHeight;
+}
+
+async function loadChatHistory() {
+  if (state.loaded.chat) return;
+  const res = await api('/api/history');
+  if (!res.ok) { fail(res); return; }
+  state.loaded.chat = true;
+  const log = $('chat-log');
+  log.textContent = '';
+  lastDay = '';
+  for (const item of res.data) addMessage(item.who, WHO_NAME[item.who] || item.who, item.channel, item.content, item.time, false);
+  if (!res.data.length) log.append(el('div', { class: 'empty', id: 'chat-empty', text: '还没有对话，说点什么吧。' }));
+  log.scrollTop = log.scrollHeight;
+}
+PAGES.chat = { load: loadChatHistory };
+
+function openSocket() {
+  socketWanted = true;
+  if (socket) return;
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(scheme + '://' + location.host + '/ws');
+  socket = ws;
+  setConn('连接中', '');
+  ws.onopen = () => setConn('已连接', 'ok');
+  ws.onmessage = ev => {
+    let m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === 'error') { toast(m.detail, 'error'); return; }
+    addMessage('me', m.sender, m.channel, m.content, null, m.type === 'notice');
+  };
+  ws.onclose = () => {
+    if (socket !== ws) return;   // 主动关掉的，或者已经换了新连接
+    socket = null;
+    setConn('已断开', 'warn');
+    reconnectLater();
+  };
+}
+function closeSocket() {
+  socketWanted = false;
+  const old = socket;
+  socket = null;
+  if (old) old.close();
+}
+// 断线后隔 3 秒重连；先问一次登录状态，登录已经失效就不再连（api 会把页面带回登录）。
+function reconnectLater() {
+  setTimeout(async () => {
+    if (!socketWanted || !state.loggedIn || socket) return;
+    const res = await api('/api/status');
+    if (res.ok) openSocket();
+    else if (res.status === 0) reconnectLater();
+  }, 3000);
+}
+
+function sendChat() {
+  const box = $('chat-text');
+  const text = box.value.trim();
+  if (!text) return;
+  if (!socket || socket.readyState !== 1) { toast('还没连上，稍等一下再发。', 'error'); return; }
+  socket.send(JSON.stringify({ text }));
+  addMessage('user', '你', 'web', text, null, false);
+  box.value = '';
+  box.style.height = 'auto';
+}
+$('chat-send').addEventListener('click', sendChat);
+$('chat-text').addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); sendChat(); }
+});
+$('chat-text').addEventListener('input', ev => {
+  const box = ev.target;
+  box.style.height = 'auto';
+  box.style.height = Math.min(box.scrollHeight, 160) + 'px';
+});
+// ---------- 时间线：读 /api/timeline（2.12b 的接口） ----------
+const TL_FILTERS = [
+  ['全部', ''],
+  ['对话', 'message'],
+  ['日记与人设', 'diary_written,diary_failed,persona_changed,persona_unchanged,persona_review_failed'],
+  ['行动与日程', 'agenda_added,agenda_due,agenda_closed,initiative_considered,initiative_result,exploration_started,exploration_result,interest_changed'],
+  ['系统与安全', 'woke_up,shut_down,emergency_stop,emergency_resume,self_check,organ_call_abandoned,organ_call_rejected,organ_call_failed,cognitive_state'],
+];
+const EVENT_NAMES = {
+  message: '对话', woke_up: '醒来', shut_down: '关机', cognitive_state: '状态变化', organ_call_abandoned: '调用放弃',
+  emergency_stop: '急停', emergency_resume: '恢复', self_check: '自检', reply_declined: '没有回复',
+  identity_changed: '设定被改', judgment: '判断', hormone_triggered: '激素', agenda_added: '新增承诺',
+  agenda_due: '承诺到期', agenda_closed: '承诺了结', initiative_considered: '考虑主动联系', initiative_result: '主动联系结果',
+  interest_changed: '兴趣变化', exploration_started: '开始探索', exploration_result: '探索结果',
+  diary_written: '写了日记', diary_failed: '日记没写成', persona_changed: '人设变了', persona_unchanged: '人设没变',
+  persona_review_failed: '人设回顾失败', organ_call_rejected: '调用被拒', organ_call_failed: '调用失败',
 };
-$('tab-settings').addEventListener('click',loadSettings);
-enter();
+const VISIBILITY_NAMES = { private: '仅自己可见', user_only: '仅用户可见', group: '群聊可见', public: '公开' };
+const tl = { filter: '', records: [], next: null, context: null };
+
+function renderTimelineChips() {
+  const box = $('tl-chips');
+  box.textContent = '';
+  for (const [label, types] of TL_FILTERS) {
+    box.append(el('button', { class: 'chip' + (tl.filter === types ? ' on' : ''), text: label, onclick: () => { tl.filter = types; renderTimelineChips(); loadTimeline(false); } }));
+  }
+}
+
+function timelineItem(rec, inContext) {
+  const actor = { user: '你', me: '它', person: '对方', system: '系统' }[rec.actor] || rec.actor;
+  const top = el('div', { class: 'tl-top' },
+    el('span', { text: fmtTime(rec.time, true) }),
+    el('span', { class: 'tag ' + (rec.event_type === 'message' ? 'accent' : ''), text: EVENT_NAMES[rec.event_type] || rec.event_type }),
+    el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
+    rec.channel ? el('span', { class: 'tag', text: rec.channel }) : null,
+    el('span', { class: 'tag', text: VISIBILITY_NAMES[rec.visibility] || rec.visibility }),
+    el('span', { class: 'mono', text: '#' + rec.id }));
+  const content = el('div', { class: 'tl-content clamp', text: rec.content || '（没有正文）' });
+  content.addEventListener('click', () => content.classList.toggle('clamp'));
+  const keys = Object.keys(rec.metadata || {});
+  const meta = keys.length ? el('details', { class: 'muted', style: 'font-size:12px' }, el('summary', { text: '详细信息（' + keys.length + ' 项）' }), el('pre', { class: 'mono', style: 'white-space:pre-wrap;margin:4px 0 0', text: JSON.stringify(rec.metadata, null, 2) })) : null;
+  return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, meta);
+}
+
+// 分隔线画在「当前上下文」最后一条之后：序号不小于 boundary_id 的在上面，更早的在下面（D84 第 4 条）。
+function renderTimeline() {
+  const list = $('tl-list');
+  list.textContent = '';
+  const boundary = tl.context ? tl.context.boundary_id : null;
+  const items = tl.records.slice().reverse();
+  if (!items.length) { list.append(el('div', { class: 'empty', text: '这个时间范围里没有记录。' })); return; }
+  let drawn = boundary === null;
+  if (boundary !== null && items[0].id < boundary) { list.append(tlDivider()); drawn = true; }
+  for (const rec of items) {
+    if (!drawn && rec.id < boundary) { list.append(tlDivider()); drawn = true; }
+    list.append(timelineItem(rec, boundary !== null && rec.id >= boundary));
+  }
+}
+function tlDivider() {
+  const limit = tl.context ? tl.context.message_limit : '';
+  return el('div', { class: 'tl-divider', text: '↑ 当前上下文（回复时会带上最近 ' + limit + ' 条对话）  ↓ 历史（不会带上）' });
+}
+
+async function loadTimeline(more) {
+  const query = new URLSearchParams({ hours: $('tl-hours').value, limit: '100' });
+  if (tl.filter) query.set('types', tl.filter);
+  if (more && tl.next) query.set('before_id', String(tl.next));
+  const res = await api('/api/timeline?' + query);
+  const missing = $('tl-missing');
+  if (notBuilt(res)) {
+    missing.textContent = NOT_BUILT_TEXT;
+    missing.classList.remove('hidden');
+    $('tl-list').textContent = '';
+    $('tl-more').classList.add('hidden');
+    return;
+  }
+  missing.classList.add('hidden');
+  if (!res.ok) { fail(res); return; }
+  tl.records = more ? res.data.records.concat(tl.records) : res.data.records;
+  tl.next = res.data.next_before_id;
+  tl.context = res.data.context;
+  $('tl-more').classList.toggle('hidden', !tl.next);
+  renderTimeline();
+}
+$('tl-hours').addEventListener('change', () => loadTimeline(false));
+$('tl-refresh').addEventListener('click', () => loadTimeline(false));
+$('tl-more').addEventListener('click', () => loadTimeline(true));
+renderTimelineChips();
+PAGES.timeline = { load: () => loadTimeline(false) };
+// ---------- 人设：五层设定（接口 1.10 已有） ----------
+// 回退不是删除：是再存一个新版本，历史都还在（D62、D81 第 8 条）。
+const FREE_LAYERS = [
+  ['mutable', '可变人格', '它想成为的样子，随真实经历慢慢变化。'],
+  ['behavior_style', '行为风格', '它做事的习惯：什么时候回、回多长、主动不主动。'],
+  ['expression_style', '表达风格', '它说话的方式：语气、用词、口头禅。'],
+];
+
+async function savePersona(body, okText) {
+  const res = await api('/api/settings', 'PUT', body);
+  if (!res.ok) { fail(res); return false; }
+  toast(okText, 'ok');
+  await loadPersona();
+  return true;
+}
+
+function personaLayerCard(key, title, desc, content, history) {
+  const area = el('textarea', { id: 'ps-' + key, rows: '5' });
+  area.value = content;
+  const save = el('button', { class: 'btn primary', text: '保存' + title, onclick: () => { savePersona({ text: { [key]: area.value } }, title + '已保存，下一次回复就会用新的。'); } });
+  const rows = history.length ? history.map(item => el('div', { class: 'version-row' },
+    el('span', { class: 'tag', text: item.source }),
+    el('span', { class: 'muted', text: fmtTime(item.time, true) }),
+    el('span', { class: 'preview', text: item.content ? item.content.replace(/\s+/g, ' ').slice(0, 60) : '（空）' }),
+    el('button', { class: 'btn small', text: '用这个版本', onclick: async () => {
+      const res = await api('/api/settings/rollback', 'POST', { layer: key, version_id: item.id });
+      if (!res.ok) { fail(res); return; }
+      toast(title + '已回退：所选内容存成了一个新版本。', 'ok');
+      await loadPersona();
+    } }))) : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有历史版本。' })];
+  return el('div', { class: 'card layer-card' },
+    el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }), el('p', { class: 'muted', style: 'font-size:13px', text: desc }))),
+    area,
+    el('div', { class: 'row', style: 'justify-content:flex-end;margin-top:10px' }, save),
+    el('div', { class: 'field-label', style: 'margin-top:12px', text: '最近的版本（点「用这个版本」会存成一个新版本，历史都还在）' }),
+    ...rows);
+}
+
+async function loadPersona() {
+  const res = await api('/api/settings');
+  if (!res.ok) { fail(res); return; }
+  const v = res.data;
+  const free = $('ps-free');
+  const locks = $('ps-locks');
+  free.textContent = '';
+  locks.textContent = '';
+  for (const [key, title, desc] of FREE_LAYERS) {
+    free.append(personaLayerCard(key, title, desc, v.layers[key], v.history[key] || []));
+    locks.append(el('div', { class: 'lock-row' },
+      el('span', { text: '锁定' + title }),
+      el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 'ps-lock-' + key, checked: !!v.locks[key] }), el('span', { class: 'track' }))));
+  }
+  const facts = v.layers.facts.facts, user = v.layers.facts.user;
+  $('ps-name').value = facts.name;
+  $('ps-aliases').value = facts.alias_names.join('，');
+  $('ps-gender').value = facts.gender;
+  $('ps-birthday').value = facts.birthday;
+  $('ps-user-name').value = user.name;
+  $('ps-accounts').value = user.accounts.map(a => a.platform + ':' + a.id).join('\n');
+  $('ps-immutable').value = v.layers.immutable;
+  $('ps-password').value = '';
+}
+
+// 三个锁定开关一起发，都是 true 或 false（LocksRequest 是 strict 模式）。
+$('ps-save-locks').addEventListener('click', () => {
+  const locks = {};
+  for (const [key] of FREE_LAYERS) locks[key] = $('ps-lock-' + key).checked;
+  savePersona({ locks }, '锁定已保存。');
+});
+
+$('ps-save-baseline').addEventListener('click', async () => {
+  const accounts = [];
+  for (const line of $('ps-accounts').value.split('\n')) {
+    const text = line.trim();
+    if (!text) continue;
+    const at = text.indexOf(':');
+    if (at < 1 || at === text.length - 1) { toast('账号要写成 平台:账号，比如 qq:10000。', 'error'); return; }
+    accounts.push({ platform: text.slice(0, at).trim(), id: text.slice(at + 1).trim() });
+  }
+  const password = $('ps-password').value;
+  if (!password) { toast('改底线要输入当前口令。', 'error'); return; }
+  $('ps-password').value = '';
+  const aliases = $('ps-aliases').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  await savePersona({
+    password,
+    text: { immutable: $('ps-immutable').value },
+    facts: { name: $('ps-name').value.trim(), alias_names: aliases, gender: $('ps-gender').value.trim(), birthday: $('ps-birthday').value.trim() },
+    user: { name: $('ps-user-name').value.trim(), accounts },
+  }, '底线已保存。');
+});
+PAGES.persona = { load: loadPersona };
+// ---------- 模型：服务商和模型（/api/models、/api/keys，2.12b 的接口） ----------
+// 改动先留在页面上，点保存才写文件；写成功后提示重启生效（D84 第 5 条）。器官页共用这份数据。
+const mdl = { cfg: null, choices: {}, keys: {}, dirty: false };
+const clone = value => JSON.parse(JSON.stringify(value));
+function refreshDirty() {
+  for (const id of ['md-save', 'md-reset', 'og-save', 'og-reset']) { const b = $(id); if (b) b.disabled = !mdl.dirty; }
+}
+function markDirty() { mdl.dirty = true; refreshDirty(); }
+
+// 返回 true：读到了；'missing'：后端没做好；false：出错（已提示）。有没保存的改动时不覆盖。
+async function loadModelsConfig(force) {
+  if (mdl.dirty && !force) return true;
+  const res = await api('/api/models');
+  if (notBuilt(res)) return 'missing';
+  if (!res.ok) { fail(res); return false; }
+  mdl.cfg = clone(res.data.config);
+  mdl.choices = res.data.choices || {};
+  mdl.keys = res.data.key_status || {};
+  mdl.dirty = false;
+  refreshDirty();
+  return true;
+}
+
+function inputField(label, value, onInput, opt) {
+  opt = opt || {};
+  const input = el('input', { type: opt.number ? 'number' : 'text', placeholder: opt.placeholder, step: opt.step, min: opt.min });
+  input.value = value === null || value === undefined ? '' : value;
+  input.addEventListener('input', () => { onInput(opt.number ? (input.value === '' ? null : Number(input.value)) : input.value); markDirty(); });
+  return el('div', { class: 'field' }, el('label', { text: label }), input, opt.hint ? el('span', { class: 'hint', text: opt.hint }) : null);
+}
+function selectField(label, value, options, onChange, hint) {
+  const select = el('select', {}, options.map(o => el('option', { value: o, text: o, selected: o === value })));
+  select.addEventListener('change', () => { onChange(select.value); markDirty(); });
+  return el('div', { class: 'field' }, el('label', { text: label }), select, hint ? el('span', { class: 'hint', text: hint }) : null);
+}
+const modelsInUse = () => new Set(Object.values(mdl.cfg.organs).flatMap(o => o.models));
+
+function providerCard(p) {
+  const title = el('h3', { text: p.name || '（未命名）' });
+  const hasKey = p.api_key_env && mdl.keys[p.api_key_env];
+  const keyTag = !p.api_key_env ? el('span', { class: 'tag', text: '不需要密钥' })
+    : el('span', { class: 'tag ' + (hasKey ? 'ok' : 'warn'), text: hasKey ? '密钥已设置' : '密钥未设置' });
+  const panel = keyPanel(p);
+  const head = el('div', { class: 'card-head' }, el('div', { class: 'row' }, title, keyTag),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn small', text: '录入密钥', onclick: () => { if (!p.api_key_env) { toast('先填写密钥名并保存，再录入密钥。', 'error'); return; } panel.classList.toggle('hidden'); } }),
+      el('button', { class: 'btn small danger', text: '删除服务商', onclick: () => removeProvider(p) })));
+  const fields = el('div', { class: 'form-grid' },
+    inputField('名称', p.name, v => { for (const m of mdl.cfg.models) if (m.provider === p.name) m.provider = v; p.name = v; title.textContent = v || '（未命名）'; }, { hint: '模型按这个名字引用服务商' }),
+    selectField('协议', p.protocol, mdl.choices.protocols || [p.protocol], v => { p.protocol = v; }, 'openai_responses 是 OpenAI 的 Responses 接口'),
+    inputField('请求地址', p.base_url, v => { p.base_url = v; }, { placeholder: '留空用该协议的官方地址' }),
+    inputField('密钥名', p.api_key_env, v => { p.api_key_env = v; }, { placeholder: 'AUREUS_KEY_某某', hint: '只写名字，密钥本身用「录入密钥」存进加密的密钥库；本地模型不需要就留空' }),
+    inputField('超时（秒）', p.timeout_seconds, v => { p.timeout_seconds = v; }, { number: true, min: 1, placeholder: '默认 60' }),
+    inputField('失败重试次数', p.max_retry, v => { p.max_retry = v; }, { number: true, min: 0, placeholder: '默认 2' }));
+  const rows = mdl.cfg.models.filter(m => m.provider === p.name).map(modelRow);
+  return el('div', { class: 'card provider-card' }, head, panel, fields,
+    el('div', { class: 'divider' }), el('div', { class: 'field-label', text: '这个服务商的模型' }),
+    ...(rows.length ? rows : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有模型。' })]),
+    el('div', { class: 'row', style: 'margin-top:8px' }, el('button', { class: 'btn small', text: '＋ 添加模型', onclick: () => addModel(p) })));
+}
+
+function removeProvider(p) {
+  const names = mdl.cfg.models.filter(m => m.provider === p.name).map(m => m.name);
+  if (names.some(n => modelsInUse().has(n))) { toast('这个服务商的模型还有器官在用，先到「器官」页换掉它们。', 'error'); return; }
+  mdl.cfg.models = mdl.cfg.models.filter(m => m.provider !== p.name);
+  mdl.cfg.providers = mdl.cfg.providers.filter(x => x !== p);
+  markDirty();
+  renderModels();
+}
+$('md-add-provider').addEventListener('click', () => {
+  mdl.cfg.providers.push({ name: '新服务商' + (mdl.cfg.providers.length + 1), protocol: (mdl.choices.protocols || ['openai'])[0], base_url: null, api_key_env: null, timeout_seconds: null, max_retry: null });
+  markDirty();
+  renderModels();
+});
+
+function renderModels() {
+  const box = $('md-providers');
+  box.textContent = '';
+  if (!mdl.cfg.providers.length) box.append(el('div', { class: 'empty', text: '还没有服务商。先添加一个，再往里加模型。' }));
+  for (const p of mdl.cfg.providers) box.append(providerCard(p));
+}
+async function loadModelsPage() {
+  const r = await loadModelsConfig(false);
+  const missing = $('md-missing');
+  missing.classList.toggle('hidden', r !== 'missing');
+  if (r === 'missing') missing.textContent = NOT_BUILT_TEXT;
+  $('md-content').classList.toggle('hidden', r !== true);
+  if (r === true) renderModels();
+}
+PAGES.models = { load: loadModelsPage };
+function failApi(res) { if (notBuilt(res)) toast(NOT_BUILT_TEXT, 'error'); else fail(res); }
+function showRestart() { for (const id of ['md-restart', 'og-restart']) { const b = $(id); if (b) b.classList.remove('hidden'); } }
+
+function modelRow(m) {
+  m.reasoning_levels = m.reasoning_levels || [];
+  const chips = (mdl.choices.reasoning_levels || []).map(level => {
+    const chip = el('button', { class: 'chip' + (m.reasoning_levels.includes(level) ? ' on' : ''), type: 'button', text: level });
+    chip.addEventListener('click', () => {
+      const on = m.reasoning_levels.includes(level);
+      m.reasoning_levels = on ? m.reasoning_levels.filter(x => x !== level) : m.reasoning_levels.concat(level);
+      chip.classList.toggle('on', !on);
+      markDirty();
+    });
+    return chip;
+  });
+  const rename = v => { for (const o of Object.values(mdl.cfg.organs)) o.models = o.models.map(n => n === m.name ? v : n); m.name = v; };
+  const detail = el('div', { style: 'grid-column:1/-1' },
+    el('div', { class: 'form-grid' },
+      selectField('类型', m.kind, mdl.choices.kinds || [m.kind], v => { m.kind = v; }, '目前只有 llm 会被调用'),
+      inputField('输入价格', m.price_in, v => { m.price_in = v; }, { number: true, min: 0, step: 'any', hint: '元 / 百万 token，可不填' }),
+      inputField('输出价格', m.price_out, v => { m.price_out = v; }, { number: true, min: 0, step: 'any', hint: '可不填' }),
+      inputField('缓存命中输入价格', m.price_cache_in, v => { m.price_cache_in = v; }, { number: true, min: 0, step: 'any', hint: '不填就按输入价格算' }),
+      inputField('温度', m.temperature, v => { m.temperature = v; }, { number: true, min: 0, step: 'any', hint: '不填用服务商默认值' }),
+      inputField('单次回复 token 上限', m.max_tokens, v => { m.max_tokens = v; }, { number: true, min: 1 })),
+    el('div', { class: 'field', style: 'margin-top:10px' }, el('span', { class: 'field-label', text: '思考等级可选项' }),
+      el('div', { class: 'levels' }, chips),
+      el('span', { class: 'hint', text: '这个模型支持哪几档，一档都不选就是不支持。器官选的档位必须是它用的每个模型都支持的。' })));
+  return el('div', { class: 'model-row' },
+    inputField('模型名', m.name, rename, { hint: '器官按这个名字引用模型' }),
+    inputField('服务商给的模型标识', m.identifier, v => { m.identifier = v; }),
+    el('button', { class: 'btn small danger', text: '删除', onclick: () => removeModel(m) }),
+    detail);
+}
+
+function removeModel(m) {
+  if (modelsInUse().has(m.name)) { toast('还有器官在用这个模型，先到「器官」页换掉它。', 'error'); return; }
+  mdl.cfg.models = mdl.cfg.models.filter(x => x !== m);
+  markDirty();
+  renderModels();
+}
+function addModel(p) {
+  let n = mdl.cfg.models.length + 1;
+  while (mdl.cfg.models.some(m => m.name === '新模型' + n)) n++;
+  mdl.cfg.models.push({ name: '新模型' + n, identifier: '', provider: p.name, kind: (mdl.choices.kinds || ['llm'])[0], price_in: null, price_out: null, price_cache_in: null, temperature: null, max_tokens: null, reasoning_levels: [] });
+  markDirty();
+  renderModels();
+}
+
+// 密钥：页面从不显示原文，只看得到「已设置」「未设置」。读完输入框立刻清空，不留在页面上。
+function keyPanel(p) {
+  const value = el('input', { type: 'password', autocomplete: 'off', placeholder: '密钥原文' });
+  const pw = el('input', { type: 'password', autocomplete: 'current-password', placeholder: '当前口令' });
+  async function send(path, body, okText) {
+    const res = await api(path, path === '/api/keys' ? 'PUT' : 'POST', body);
+    if (!res.ok) { failApi(res); return; }
+    mdl.keys[body.name] = path === '/api/keys';
+    toast(okText, 'ok');
+    showRestart();
+    renderModels();
+  }
+  const save = el('button', { class: 'btn primary small', text: '保存密钥', onclick: () => {
+    const body = { name: p.api_key_env, value: value.value, password: pw.value };
+    value.value = ''; pw.value = '';
+    if (!body.value.trim()) { toast('请先填密钥原文。', 'error'); return; }
+    send('/api/keys', body, '密钥已存进加密的密钥库，重启后生效。');
+  } });
+  const remove = el('button', { class: 'btn danger small', text: '删除这条密钥', onclick: () => {
+    const body = { name: p.api_key_env, password: pw.value };
+    pw.value = '';
+    send('/api/keys/remove', body, '这条密钥已从密钥库删除，重启后生效。');
+  } });
+  return el('div', { class: 'card flat hidden', style: 'margin-bottom:14px' },
+    el('p', { class: 'muted', style: 'font-size:13px;margin-bottom:10px', text: '密钥只能在本机的网页上录入，要再输一次当前口令。局域网里的其他设备请到本机的网页，或用命令 aureus keys set。保存后页面不会再显示它。' }),
+    el('div', { class: 'form-grid' }, el('div', { class: 'field' }, el('label', { text: '密钥原文' }), value), el('div', { class: 'field' }, el('label', { text: '当前口令' }), pw)),
+    el('div', { class: 'row', style: 'margin-top:10px' }, save, remove));
+}
+// @@JS-MODELS-3@@ 清理配置、保存和放弃
+// @@JS-ORGANS@@
+// @@JS-CONFIG@@
+// @@JS-BOOT@@ 启动入口
 </script>
 </body>
 </html>
