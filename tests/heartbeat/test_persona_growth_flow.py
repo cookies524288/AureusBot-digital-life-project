@@ -162,7 +162,10 @@ async def test_diary_then_growth_records_before_version_and_next_reply_uses_it(
     assert len(env.growth_calls()) == 1
 
 
-async def test_stranger_and_group_induction_evidence_is_rejected(env: GrowthEnv) -> None:
+@pytest.mark.parametrize("evidence_source", ["incoming", "reply"])
+async def test_stranger_and_group_induction_evidence_is_rejected(
+    env: GrowthEnv, evidence_source: str
+) -> None:
     rig = env.growth()
     env.user_material()
     for visibility in (VisibilityScope.USER_ONLY, VisibilityScope.GROUP):
@@ -181,11 +184,18 @@ async def test_stranger_and_group_induction_evidence_is_rejected(env: GrowthEnv)
             rig.beat()
     foreign_ids = [r.id for r in env.records("message") if r.actor_type is ActorType.PERSON]
     assert len(foreign_ids) == 10
-    env.suggest(foreign_ids[:1])
+    foreign_reply_ids = [
+        r.id
+        for r in env.records("message")
+        if r.actor_type is ActorType.ME and "to_user" not in r.metadata
+    ]
+    assert len(foreign_reply_ids) == 10
+    env.suggest((foreign_ids if evidence_source == "incoming" else foreign_reply_ids)[:1])
     env.hour(17, 22)
     rig.beat()
     assert rig._persona_growth is not None
     assert not (set(foreign_ids) & rig._persona_growth._material_ids)
+    assert not (set(foreign_reply_ids) & rig._persona_growth._material_ids)
     await env.finish(rig)
     [record] = env.records("persona_unchanged")
     assert record.metadata["rejected"] == "bad_evidence"

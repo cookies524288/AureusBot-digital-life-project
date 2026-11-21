@@ -12,7 +12,7 @@ from aureus.common import BudgetCalendar, DiaryConfig, PersonaGrowthConfig
 from aureus.heartbeat import events
 from aureus.heartbeat.diary_runner import past_write_hour
 from aureus.identity import PERSONA_LAYERS, Identity, IdentityLayer, PersonaLocks
-from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
 
 # D81 第 3、5 条：有界读取，记录和理由的长度、引用条数不另增配置。
 MATERIAL_RECORD_LIMIT = 1000
@@ -81,7 +81,7 @@ def should_review(
 def read_material(
     timeline: TimelineDatabase, calendar: BudgetCalendar, now: datetime, max_chars: int
 ) -> list[MaterialLine]:
-    """只收用户和它在私聊的消息及两类自身记录；超过上限删最旧整条。"""
+    """只收用户、明确对用户说的消息及两类自身记录；超过上限删最旧整条。"""
     day = calendar.day_of(now)
     lines: list[MaterialLine] = []
     for record in timeline.query(TimelineQuery(latest=True, limit=MATERIAL_RECORD_LIMIT)):
@@ -93,9 +93,7 @@ def read_material(
         )
         trusted_message = record.event_type == events.EVENT_MESSAGE and (
             record.actor_type is ActorType.USER
-            or (
-                record.actor_type is ActorType.ME and record.visibility is VisibilityScope.USER_ONLY
-            )
+            or (record.actor_type is ActorType.ME and record.metadata.get("to_user") is True)
         )
         if own_event or trusted_message:
             stamp = record.timestamp.astimezone(calendar.timezone).strftime("%H:%M")

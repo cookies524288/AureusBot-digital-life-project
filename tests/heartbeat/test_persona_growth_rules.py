@@ -164,10 +164,16 @@ def test_material_filters_sources_and_keeps_newest_whole_lines(tmp_path: Path) -
             ("interest_changed", ActorType.ME, VisibilityScope.PRIVATE),
             ("identity_changed", ActorType.USER, VisibilityScope.PRIVATE),
         ]:
-            accepted.append(timeline.append(kind, "可信经历", actor, visibility=visibility).id)
+            metadata = {"to_user": True} if kind == "message" and actor is ActorType.ME else {}
+            accepted.append(
+                timeline.append(
+                    kind, "可信经历", actor, visibility=visibility, metadata=metadata
+                ).id
+            )
         for kind, actor, visibility in [
             ("message", ActorType.PERSON, VisibilityScope.USER_ONLY),
             ("message", ActorType.PERSON, VisibilityScope.GROUP),
+            ("message", ActorType.ME, VisibilityScope.USER_ONLY),  # 回复陌生人的私聊，无 to_user
             ("message", ActorType.ME, VisibilityScope.GROUP),
             ("exploration_result", ActorType.ME, VisibilityScope.PRIVATE),
             ("diary_written", ActorType.ME, VisibilityScope.PRIVATE),
