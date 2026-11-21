@@ -17,7 +17,7 @@ from aureus.common import AureusPaths
 
 # 只绑本机：观察台能看到时间线里的私聊，不对局域网开放（D64 第 8 条）。
 LOCAL_ADDRESS = "127.0.0.1"
-# 网页通道用 8765，观察台挨着用 8766。
+# 网页通道用 8767，观察台用 8766。
 DEFAULT_MONITOR_PORT = 8766
 MIN_PORT = 1024
 MAX_PORT = 65535

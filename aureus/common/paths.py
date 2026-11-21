@@ -1,8 +1,8 @@
 """公共地基 common：数据根目录与各类路径。
 
-用户数据（数据库、配置、密钥、日志……）全部放在软件目录之外的“数据根目录”里，
-软件目录里只有代码。别处需要路径时，一律从 AureusPaths 取，不要自己拼接。
-设计见 docs/14-user-data.md（D28）。
+用户数据（数据库、配置、密钥、日志……）在项目检出的 aureus_home/ 或指定的“数据根目录”里。
+项目检出时默认使用这个被 Git 忽略的目录（D31）；别处需要路径时，一律从 AureusPaths 取。
+设计见 docs/14-user-data.md（D28、D31）。
 """
 
 import os
@@ -12,10 +12,12 @@ from pathlib import Path
 
 from platformdirs import user_data_path
 
-# 没有指定位置时，数据根目录放在系统的用户数据目录下、以这个名字命名的文件夹里。
+# 源码检出默认放在项目目录；安装版找不到项目根目录时回退到系统用户数据目录。
 APP_NAME = "Aureus"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_HOME = PROJECT_ROOT / "aureus_home"
 
-# 指定数据根目录位置的环境变量。开发时把它指向项目目录之外，个人设定就不会混进 git。
+# 指定数据根目录位置的环境变量；未指定时，源码检出默认用项目根目录下的 aureus_home/。
 HOME_ENV_VAR = "AUREUS_HOME"
 
 
@@ -36,7 +38,8 @@ def resolve_home(
 ) -> Path:
     """确定数据根目录的位置。
 
-    优先级：显式参数（比如命令行的 --home） > 环境变量 AUREUS_HOME > 系统的用户数据目录。
+    优先级：显式参数（比如命令行的 --home） > 环境变量 AUREUS_HOME > 源码检出的 aureus_home/。
+    未运行于源码检出时，用系统用户数据目录作为最后回退。
 
     Args:
         explicit: 显式指定的位置；为 None 或空白时忽略。
@@ -54,6 +57,8 @@ def resolve_home(
     elif environment.get(HOME_ENV_VAR, "").strip():
         raw, origin = environment[HOME_ENV_VAR], f"环境变量 {HOME_ENV_VAR}"
     else:
+        if (PROJECT_ROOT / "pyproject.toml").is_file():
+            return PROJECT_HOME
         return user_data_path(APP_NAME, appauthor=False)
     home = Path(raw.strip()).expanduser()
     _require_absolute(home, origin)

@@ -21,6 +21,7 @@ from aureus.common.paths import AureusPaths
 CONFIG_FORMAT_VERSION = 1
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+DEFAULT_WEB_PORT = 8767
 
 
 class ConfigError(Exception):
@@ -243,7 +244,7 @@ class WebConfig(BaseModel):
     allow_remote: bool = False
     # 监听端口。默认值是随手挑的、不常被占用的端口，占用了可以改；
     # 不许小于 1024：那一段在不少系统上需要管理员权限。
-    port: int = Field(default=8765, ge=1024, le=65535)
+    port: int = Field(default=DEFAULT_WEB_PORT, ge=1024, le=65535)
     # 登录状态的有效天数，从最后一次活动算起，每次请求续期（D63 第 7 条）。
     session_days: int = Field(default=7, ge=1)
     # 登录失败限流（按 IP）：窗口内失败这么多次，就在锁定期内拒绝这个 IP 的登录（D63 第 7 条）。

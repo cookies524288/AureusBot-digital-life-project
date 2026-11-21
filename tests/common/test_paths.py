@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from aureus.common import AureusPaths, HomePathError, home_is_default, resolve_home
-from aureus.common.paths import APP_NAME, HOME_ENV_VAR
+from aureus.common.paths import HOME_ENV_VAR, PROJECT_HOME
 
 
 def test_explicit_argument_wins_over_environment(tmp_path: Path) -> None:
@@ -20,10 +20,13 @@ def test_environment_variable_is_used_without_explicit_argument(tmp_path: Path) 
 
 
 @pytest.mark.parametrize("blank", ["", "   "])
-def test_blank_values_fall_back_to_default(blank: str) -> None:
+def test_blank_values_fall_back_to_project_home(blank: str) -> None:
     home = resolve_home(blank, {HOME_ENV_VAR: blank})
-    assert home.is_absolute()
-    assert home.name == APP_NAME
+    assert home == PROJECT_HOME
+
+
+def test_no_home_uses_aureus_home_in_the_project_checkout() -> None:
+    assert resolve_home(None, {}) == PROJECT_HOME
 
 
 def test_home_directory_shortcut_is_expanded() -> None:

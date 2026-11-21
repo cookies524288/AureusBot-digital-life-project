@@ -21,7 +21,7 @@ Ask = Callable[[str], str]
 def _choose_home(paths: AureusPaths, ask: Ask, write_line: WriteLine) -> AureusPaths | None:
     """问用户数据根目录放哪里；回车表示用默认位置。输入被关闭或位置不合法时返回 None。"""
     write_line(f"还没有指定数据根目录。默认位置是 {paths.home}")
-    write_line("它在系统的用户目录下（Windows 上通常在 C 盘），而数据会越来越大。")
+    write_line("源码检出时默认放在项目根目录的 aureus_home/；也可以输入其他绝对路径。")
     try:
         answer = ask("想放在别处的话，输入一个绝对路径；直接回车用默认位置：").strip()
     except EOFError:

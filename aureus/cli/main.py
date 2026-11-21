@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--home",
         metavar="数据根目录",
-        help="数据根目录的位置；不给就用环境变量 AUREUS_HOME，再没有就用系统的用户数据目录。"
+        help="数据根目录的位置；不给就用环境变量 AUREUS_HOME；源码检出默认用项目下的 aureus_home/。"
         "可以写相对路径，按当前所在的目录算。",
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="命令")
