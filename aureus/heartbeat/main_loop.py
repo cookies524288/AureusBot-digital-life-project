@@ -38,10 +38,12 @@ from aureus.common import (
     JudgeConfig,
     MemoryConfig,
     PeopleConfig,
+    PersonaGrowthConfig,
 )
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat import exploration_runner, interest_changes
+from aureus.heartbeat import persona_growth_runner as growth
 from aureus.heartbeat.agenda_hooks import AgendaHooks
 from aureus.heartbeat.context import build_initiative_plan_prompt, build_initiative_reply_prompt
 from aureus.heartbeat.conversation import (
@@ -207,6 +209,8 @@ class Heartbeat:
         diary: DiaryBook | None = None,
         diary_config: DiaryConfig | None = None,
         has_diary_organ: bool = True,
+        persona_growth: PersonaGrowthConfig | None = None,
+        has_persona_organ: bool = True,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -250,6 +254,8 @@ class Heartbeat:
             diary: 日记文件写入接口；不给就不写日记（D80）。
             diary_config: 日记器官、写作时刻和长度限制（D80）。
             has_diary_organ: 总结器官是否已注册；缺少时只记一次日志（D68、D80）。
+            persona_growth: 默认关闭的人设成长配置（D81）。
+            has_persona_organ: 人设成长的总结器官是否已注册。
         """
         self._clock = clock
         self._timeline = timeline
@@ -297,15 +303,29 @@ class Heartbeat:
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._diary: DiaryTracker | None = None
+        diary_config = diary_config or DiaryConfig()
         if diary is not None:
             self._diary = DiaryTracker(
                 timeline,
                 calendar or BudgetCalendar(timezone),
                 diary,
-                diary_config or DiaryConfig(),
+                diary_config,
                 people,
                 findings,
                 has_diary_organ,
+            )
+        self._persona_growth: growth.PersonaGrowthTracker | None = None
+        if identity_history is not None:
+            self._persona_growth = growth.PersonaGrowthTracker(
+                timeline,
+                identity_history,
+                persona_growth or PersonaGrowthConfig(),
+                calendar or BudgetCalendar(timezone),
+                has_persona_organ,
+                clock,
+                diary_config=diary_config
+                if diary is not None
+                else diary_config.model_copy(update={"enabled": False}),
             )
         initiative_config = initiative or InitiativeConfig()
         if config.roleplay_mode:
@@ -559,6 +579,8 @@ class Heartbeat:
         self._initiative.restore(self._clock.now())
         if self._diary is not None:
             self._diary.restore(now)
+        if self._persona_growth is not None:
+            self._persona_growth.restore(now)
         self._downtime = downtime
         self._phase = _Phase.RUNNING
         logger.info("心跳醒来：%s", downtime.describe(self._timezone))
@@ -647,6 +669,7 @@ class Heartbeat:
         self._watch_emergency_stop()
         # D76：先收下已到的来信，不能把发送前排队的消息算作发送后的回应。
         self._take_in_perceptions()
+        diary_running = bool(self._thought and self._thought.task.get_name() == "aureus-diary")
         self._collect_finished_thought()
         self._memory.index_more()
         self._read_body()
@@ -656,6 +679,8 @@ class Heartbeat:
         self._maybe_start_initiative()
         self._maybe_start_exploration()
         self._maybe_start_diary()
+        if not diary_running:
+            self._maybe_start_persona_review()
         self._broadcast_cognitive_state()
         self._record_body_sample()
 
@@ -737,6 +762,10 @@ class Heartbeat:
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
         outcome = thought.task.result()
+        if isinstance(outcome, growth.PersonaReviewOutcome):
+            assert self._persona_growth is not None
+            self._identity = self._persona_growth.finish(outcome, self._identity) or self._identity
+            return
         if isinstance(outcome, DiaryOutcome):
             assert self._diary is not None
             self._diary.finish(outcome)
@@ -1136,13 +1165,31 @@ class Heartbeat:
             self._identity,
             tier=self._current_strategy().effective_tier,
             halted=self._halt_status.halted,
-            busy=self._stop_requested
-            or self._thought is not None
-            or bool(self._unanswered)
-            or bool(self._pending),
+            busy=bool(self._stop_requested or self._thought or self._unanswered or self._pending),
         )
         if job is not None:
             task = asyncio.create_task(write_diary(job, self._organs.call), name="aureus-diary")
+            task.add_done_callback(self._on_thought_done)
+            self._thought = _Thought(task, (), self._current_strategy())
+
+    def _maybe_start_persona_review(self) -> None:
+        """日记收尾后的下一个空闲拍才回顾（D81），共用思考槽。"""
+        tracker = self._persona_growth
+        if tracker is None:
+            return
+        job = tracker.prepare(
+            self._clock.now(),
+            self._identity,
+            diary_attempted_today=self._diary is not None
+            and self._diary.attempted_day == tracker.calendar.day_of(self._clock.now()),
+            tier=self._current_strategy().effective_tier,
+            halted=self._halt_status.halted,
+            busy=bool(self._stop_requested or self._thought or self._unanswered or self._pending),
+        )
+        if job is not None:
+            task = asyncio.create_task(
+                growth.review_persona(job, self._organs.call), name="aureus-persona-review"
+            )
             task.add_done_callback(self._on_thought_done)
             self._thought = _Thought(task, (), self._current_strategy())
 
@@ -1487,6 +1534,8 @@ class Heartbeat:
         """
         if thought.exploration is not None or thought.task.get_name() == "aureus-diary":
             return  # 取消探索或日记不写结果，也不补记（D79、D80）。
+        if thought.task.get_name() == "aureus-persona-review":
+            return  # D81：取消不写结果，重启后允许再试。
         if thought.initiative is not None:
             self._collect_initiative(
                 thought, _ThoughtOutcome(notice="急停时取消" if halted else "关闭时取消")

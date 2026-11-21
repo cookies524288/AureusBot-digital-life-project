@@ -247,6 +247,7 @@ def open_core(
         except Exception:
             logger.exception("起始兴趣同步失败，继续启动")
         exploration = runtime.exploration
+        persona_growth = runtime.persona_growth
         memory: MemoryIndex | None = None
         if runtime.memory.enabled:
             try:
@@ -258,6 +259,7 @@ def open_core(
                 logger.exception("记忆索引打不开，本次运行关闭记忆")
         if roleplay:
             exploration = exploration.model_copy(update={"enabled": False})
+            persona_growth = persona_growth.model_copy(update={"enabled": False})
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -291,6 +293,8 @@ def open_core(
             diary=DiaryBook(paths.diary_dir),
             diary_config=runtime.diary,
             has_diary_organ=bus.is_registered(runtime.diary.organ),
+            persona_growth=persona_growth,
+            has_persona_organ=bus.is_registered(persona_growth.organ),
         )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

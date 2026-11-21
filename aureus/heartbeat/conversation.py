@@ -38,6 +38,7 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.persona_growth_runner import PersonaReviewOutcome
 from aureus.heartbeat.planning import (
     InitiativePlan,
     Plan,
@@ -181,6 +182,7 @@ class _Thought:
         asyncio.Task[_ThoughtOutcome]
         | asyncio.Task[exploration_runner.ExplorationOutcome]
         | asyncio.Task[DiaryOutcome]
+        | asyncio.Task[PersonaReviewOutcome]
     )
     replying_to: Sequence[_Heard]
     strategy: ReplyStrategy

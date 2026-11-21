@@ -147,9 +147,14 @@ class DiaryTracker:
         self.timeline, self.calendar, self.book = timeline, calendar, book
         self.config, self.people, self.findings = config, people, findings
         self.has_organ = has_organ
-        self.attempted_day: date | None = None
+        self._attempted_day: date | None = None
         if config.enabled and not has_organ:
             logger.warning("没有总结器官，不写日记")
+
+    @property
+    def attempted_day(self) -> date | None:
+        """最后试过的预算日，供 D81 调度只读使用。"""
+        return self._attempted_day
 
     def restore(self, now: datetime) -> None:
         """醒来时只取最近成功或失败记录；读取失败则当天不写。"""
@@ -166,9 +171,9 @@ class DiaryTracker:
             ]
             latest = max(records, key=lambda record: record.id, default=None)
             if latest is not None and latest.metadata.get("day") == day.isoformat():
-                self.attempted_day = day
+                self._attempted_day = day
         except Exception:
-            self.attempted_day = day
+            self._attempted_day = day
             logger.exception("日记历史读不了，今天不写日记")
 
     def prepare(
@@ -193,7 +198,7 @@ class DiaryTracker:
             tier=tier,
         ):
             return None
-        self.attempted_day = day
+        self._attempted_day = day
         try:
             material = read_material(
                 self.timeline,
