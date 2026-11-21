@@ -8,6 +8,7 @@ import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
+from aureus import __version__
 from aureus.channels import WebChannel
 from aureus.common import ManualClock, WebConfig
 from aureus.core import CognitiveState
@@ -181,6 +182,7 @@ def test_invalid_query_returns_a_chinese_string(rig: Rig, query: str) -> None:
 def test_overview_before_and_after_the_first_beat(rig: Rig) -> None:
     rig.log_in()
     assert rig.client.get("/api/overview").json() == {
+        "version": __version__,
         "state_text": "测试状态",
         "thinking": False,
         "energy_level": None,

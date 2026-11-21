@@ -6,6 +6,7 @@ from typing import Annotated, Any, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException
 
+from aureus import __version__
 from aureus.common import Clock
 from aureus.core import CognitiveState
 from aureus.heartbeat import recent_dialogue
@@ -109,6 +110,7 @@ def register_timeline_routes(
     async def overview(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
         state = heartbeat.cognitive_state
         return {
+            "version": __version__,
             "state_text": heartbeat.describe_state(),
             "thinking": heartbeat.is_thinking,
             "energy_level": state.energy_level if state else None,
