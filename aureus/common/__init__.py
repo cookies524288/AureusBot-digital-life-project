@@ -30,6 +30,7 @@ from aureus.common.config import (
     WebConfig,
     load_runtime_config,
     load_settings,
+    validate_runtime_config,
 )
 from aureus.common.logging_setup import configure_logging, shutdown_logging
 from aureus.common.paths import AureusPaths, HomePathError, home_is_default, resolve_home
@@ -73,4 +74,5 @@ __all__ = [
     "load_timezone",
     "resolve_home",
     "shutdown_logging",
+    "validate_runtime_config",
 ]

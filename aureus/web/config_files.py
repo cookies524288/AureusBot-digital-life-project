@@ -3,14 +3,20 @@
 import asyncio
 import logging
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, get_args
 
 import tomlkit
 from tomlkit.toml_document import TOMLDocument
 
-from aureus.common import AureusPaths, ConfigError, apply_toml_edit
+from aureus.common import (
+    AureusPaths,
+    ConfigError,
+    RuntimeConfig,
+    apply_toml_edit,
+    validate_runtime_config,
+)
 from aureus.common.vault import SecretVault, VaultError
 from aureus.organs import (
     KeyResolver,
@@ -23,6 +29,21 @@ from aureus.organs import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 改错会关闭网页或改变开放范围，只能直接编辑文件（D84、2.12b）。
+READONLY_CONFIG = ("config_version", "web.enabled", "web.allow_remote", "web.port")
+PASSWORD_SECTIONS = ("safety", "web")
+
+
+def runtime_field_names(changes: dict[str, Any]) -> list[str]:
+    """此次实际修改的字段名，供权限判断、响应和不含值的日志共用。"""
+    names: list[str] = []
+    for name, value in changes.items():
+        if isinstance(value, dict):
+            names.extend(f"{name}.{field}" for field in value)
+        else:
+            names.append(name)
+    return names
 
 
 def _read_toml(path: Path, source: str) -> tuple[bool, dict[str, Any]]:
@@ -162,3 +183,65 @@ class ConfigService:
             self.restart_required = True
             logger.info("网页删除密钥：%s", name)
         return removed
+
+    def read_runtime(self) -> tuple[bool, RuntimeConfig]:
+        """读取文件的有效运行配置，缺文件时使用默认值。"""
+        exists, raw = _read_toml(self.paths.runtime_config_file, "aureus.toml")
+        return exists, validate_runtime_config(raw, "aureus.toml")
+
+    def view_runtime(self) -> dict[str, Any]:
+        """提供当前文件配置、自动生成的 schema、只读项和需口令的节。"""
+        exists, config = self.read_runtime()
+        return {
+            "exists": exists,
+            "config": config.model_dump(mode="json"),
+            "schema": RuntimeConfig.model_json_schema(),
+            "readonly": list(READONLY_CONFIG),
+            "password_sections": list(PASSWORD_SECTIONS),
+        }
+
+    def changed_runtime(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """按当前文件的有效值去掉没变的字段；布尔不能冒充整数。"""
+        _, config = self.read_runtime()
+        current = config.model_dump(mode="json")
+        changed: dict[str, Any] = {}
+
+        def same(before: Any, after: Any) -> bool:
+            return type(before) is type(after) and before == after
+
+        for name, value in changes.items():
+            if isinstance(value, dict):
+                previous = current.get(name, {})
+                if not isinstance(previous, dict):
+                    previous = {}
+                fields = {
+                    field: item
+                    for field, item in value.items()
+                    if not same(previous.get(field), item)
+                }
+                if fields:
+                    changed[name] = fields
+            elif not same(current.get(name), value):
+                changed[name] = value
+        return changed
+
+    def write_runtime(self, changes: dict[str, Any]) -> None:
+        """只修改提交的字段，保留其他内容和注释；成功后只记字段名并提示重启。"""
+
+        def edit(document: TOMLDocument) -> None:
+            for name, value in changes.items():
+                if isinstance(value, dict):
+                    if not isinstance(document.get(name), Mapping):
+                        document[name] = tomlkit.table()
+                    for field, item in value.items():
+                        document[name][field] = item
+                else:
+                    document[name] = value
+
+        apply_toml_edit(
+            self.paths.runtime_config_file,
+            edit,
+            lambda raw: validate_runtime_config(raw, "提交的配置"),
+        )
+        self.restart_required = True
+        logger.info("网页修改运行配置：%s", "、".join(runtime_field_names(changes)))

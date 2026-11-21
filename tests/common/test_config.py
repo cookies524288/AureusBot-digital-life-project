@@ -1,5 +1,6 @@
 """配置读取的测试：运行配置和报错信息。"""
 
+import tomllib
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from aureus.common import (
     WebConfig,
     load_runtime_config,
     load_settings,
+    validate_runtime_config,
 )
 from aureus.common.config import CONFIG_FORMAT_VERSION
 
@@ -49,6 +51,21 @@ def test_missing_config_file_gives_defaults(tmp_path: Path) -> None:
     config = load_runtime_config(AureusPaths(tmp_path))
     assert config.log_level == "INFO"
     assert config.config_version == CONFIG_FORMAT_VERSION
+
+
+@pytest.mark.parametrize("text", ["[diary]\nwrite_after_hour = 99", "config_version = 99"])
+def test_validate_runtime_config_keeps_the_file_error_except_for_source(
+    tmp_path: Path, text: str
+) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, text)
+    file_message = error_message_of(paths)
+    with pytest.raises(ConfigError) as error:
+        validate_runtime_config(tomllib.loads(text), "提交的配置")
+    assert str(error.value) == file_message.replace(
+        f"配置文件 {paths.runtime_config_file}", "提交的配置"
+    )
+    assert str(paths.home) not in str(error.value)
 
 
 @pytest.mark.parametrize(

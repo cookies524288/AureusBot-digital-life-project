@@ -9,8 +9,9 @@
 """
 
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -565,12 +566,26 @@ _REASON_BY_ERROR_TYPE = {
 
 def _describe_errors(source: str, error: ValidationError) -> str:
     """把校验错误改写成中文：只保留字段名和原因，不带填进去的值。"""
-    lines = [f"{source}有问题："]
+    lines = [f"{source} 有问题："]
     for item in error.errors(include_url=False, include_context=False, include_input=False):
         field_name = ".".join(str(part) for part in item["loc"]) or "（整个文件）"
         reason = _REASON_BY_ERROR_TYPE.get(item["type"], f"格式不对（{item['msg']}）")
         lines.append(f"  - 字段 {field_name}：{reason}")
     return "\n".join(lines)
+
+
+def validate_runtime_config(raw: Mapping[str, Any], source: str) -> RuntimeConfig:
+    """校验运行配置，来源说明由调用方提供；失败抛 ConfigError，不回显填入的值。"""
+    try:
+        config = RuntimeConfig.model_validate(raw)
+    except ValidationError as error:
+        raise ConfigError(_describe_errors(source, error)) from None
+    if config.config_version > CONFIG_FORMAT_VERSION:
+        raise ConfigError(
+            f"{source} 的 config_version 是 {config.config_version}，"
+            f"比当前软件认识的版本 {CONFIG_FORMAT_VERSION} 更新。请先升级软件。"
+        )
+    return config
 
 
 def load_runtime_config(paths: AureusPaths) -> RuntimeConfig:
@@ -595,17 +610,7 @@ def load_runtime_config(paths: AureusPaths) -> RuntimeConfig:
         raise ConfigError(f"配置文件 {path} 不是合法的 TOML：{error}") from None
     except OSError as error:
         raise ConfigError(f"读不了配置文件 {path}：{error}") from None
-    try:
-        config = RuntimeConfig.model_validate(raw)
-    except ValidationError as error:
-        raise ConfigError(_describe_errors(f"配置文件 {path} ", error)) from None
-    if config.config_version > CONFIG_FORMAT_VERSION:
-        # 数据或配置比软件新（降级）时拒绝读取，而不是硬读：见 docs/14-user-data.md 第 3 节。
-        raise ConfigError(
-            f"配置文件 {path} 的 config_version 是 {config.config_version}，"
-            f"比当前软件认识的版本 {CONFIG_FORMAT_VERSION} 更新。请先升级软件。"
-        )
-    return config
+    return validate_runtime_config(raw, f"配置文件 {path}")
 
 
 def load_settings(paths: AureusPaths) -> Settings:

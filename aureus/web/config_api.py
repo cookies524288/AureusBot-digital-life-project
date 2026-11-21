@@ -15,7 +15,13 @@ from aureus.common.vault import VaultError
 from aureus.organs import API_KEY_ENV_PATTERN, validate_models_config
 
 from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
-from .config_files import ConfigService, models_require_password
+from .config_files import (
+    PASSWORD_SECTIONS,
+    READONLY_CONFIG,
+    ConfigService,
+    models_require_password,
+    runtime_field_names,
+)
 
 # 无实测依据：远超常见密钥长度，只为挡住超大的录入请求（D84）。
 MAX_KEY_CHARS = 4096
@@ -74,6 +80,17 @@ def _key_name(body: dict[str, Any]) -> str:
     return name
 
 
+def _runtime_changes(body: dict[str, Any]) -> dict[str, Any]:
+    changes = body.get("changes")
+    if not isinstance(changes, dict):
+        raise HTTPException(422, detail="提交的配置改动必须是对象。")
+    for value in changes.values():
+        fields = value.values() if isinstance(value, dict) else [value]
+        if any(not isinstance(item, (bool, int, float, str)) for item in fields):
+            raise HTTPException(422, detail="配置的值只能是开关、数字或文字。")
+    return changes
+
+
 def register_config_routes(
     app: FastAPI, service: ConfigService, auth: WebAuth, require_ready: Callable[..., str]
 ) -> None:
@@ -127,6 +144,32 @@ def register_config_routes(
             async with service.write_lock:
                 await asyncio.to_thread(service.write_key, name, value.strip())
             return {"ok": True, "restart_required": service.restart_required}
+
+    @app.get("/api/config")
+    async def view_config(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
+        with _translate_errors(service):
+            return await asyncio.to_thread(service.view_runtime)
+
+    @app.put("/api/config")
+    async def edit_config(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, Any]:
+        with _translate_errors(service):
+            body = await _body(request)
+            changes = _runtime_changes(body)
+            async with service.write_lock:
+                changed = await asyncio.to_thread(service.changed_runtime, changes)
+                names = runtime_field_names(changed)
+                if any(name in READONLY_CONFIG for name in names):
+                    raise HTTPException(
+                        403,
+                        detail="这一项只能在本机直接编辑 aureus.toml：改错了会让你从网页上进不来。",
+                    )
+                if any(name.split(".")[0] in PASSWORD_SECTIONS for name in names):
+                    _confirm(auth, body, request)
+                if changed:
+                    await asyncio.to_thread(service.write_runtime, changed)
+            return {"ok": True, "changed": names, "restart_required": service.restart_required}
 
     @app.post("/api/keys/remove")
     async def remove_key(
