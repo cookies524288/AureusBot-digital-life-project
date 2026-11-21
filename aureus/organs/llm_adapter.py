@@ -389,6 +389,8 @@ class LLMOrgan:
             kwargs["temperature"] = route.temperature
         if route.max_tokens is not None:
             kwargs["max_tokens"] = route.max_tokens
+        if route.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = route.reasoning_effort
         requests = 1 + provider.max_retry
         for number in range(1, requests + 1):
             try:

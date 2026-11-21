@@ -6,9 +6,9 @@
 """
 
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -32,6 +32,8 @@ ModelKind = Literal["llm", "embedding", "vision"]
 # 目前只做“按顺序顺延”。D30 里的 balance、random 等用得上时再加（开发守则 2.5）；
 # 现在写别的值会直接报错，而不是悄悄当成顺序。
 OrganStrategy = Literal["sequential"]
+# litellm 1.109.1 的 reasoning_effort 取值（D84）。
+ReasoningLevel = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"]
 
 
 class ProviderConfig(BaseModel):
@@ -70,6 +72,8 @@ class ModelConfig(BaseModel):
     price_cache_in: float | None = Field(default=None, ge=0)
     temperature: float | None = Field(default=None, ge=0)
     max_tokens: int | None = Field(default=None, gt=0)
+    # 没列等级表示模型不声明支持思考等级（D84）。
+    reasoning_levels: tuple[ReasoningLevel, ...] = ()
 
 
 class OrganConfig(BaseModel):
@@ -83,6 +87,8 @@ class OrganConfig(BaseModel):
     # 写在器官上的参数优先于模型自己的参数。
     temperature: float | None = Field(default=None, ge=0)
     max_tokens: int | None = Field(default=None, gt=0)
+    # 配置了时，器官引用的每个模型都必须声明支持这档等级（D84）。
+    reasoning_effort: ReasoningLevel | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +99,7 @@ class ModelRoute:
     provider: ProviderConfig
     temperature: float | None
     max_tokens: int | None
+    reasoning_effort: ReasoningLevel | None = None
 
 
 def _first_set[T](first: T | None, second: T | None) -> T | None:
@@ -123,6 +130,7 @@ class ModelsConfig(BaseModel):
         # 引用错了就在启动时报错，而不是等到调用模型时才发现（见 15 号文档第 4 节）。
         provider_names = _require_unique("服务商", [item.name for item in self.providers])
         model_names = _require_unique("模型", [item.name for item in self.models])
+        models_by_name = {item.name: item for item in self.models}
         for model in self.models:
             if model.provider not in provider_names:
                 raise ValueError(f"模型 {model.name} 引用了不存在的服务商 {model.provider}")
@@ -130,6 +138,14 @@ class ModelsConfig(BaseModel):
             for model_name in organ.models:
                 if model_name not in model_names:
                     raise ValueError(f"器官 {organ_id} 引用了不存在的模型 {model_name}")
+                if (
+                    organ.reasoning_effort is not None
+                    and organ.reasoning_effort not in models_by_name[model_name].reasoning_levels
+                ):
+                    raise ValueError(
+                        f"器官 {organ_id} 的思考等级 {organ.reasoning_effort} 不是模型 "
+                        f"{model_name} 支持的（没写 reasoning_levels 就是不支持）"
+                    )
         return self
 
     def routes_for(self, organ_id: str) -> tuple[ModelRoute, ...]:
@@ -158,14 +174,15 @@ class ModelsConfig(BaseModel):
                     provider=providers[model.provider],
                     temperature=_first_set(organ.temperature, model.temperature),
                     max_tokens=_first_set(organ.max_tokens, model.max_tokens),
+                    reasoning_effort=organ.reasoning_effort,
                 )
             )
         return tuple(routes)
 
 
-def _describe_errors(path: Path, error: ValidationError) -> str:
+def _describe_errors(source: str, error: ValidationError) -> str:
     """把校验错误改写成中文：只保留字段位置和原因，不带填进去的值。"""
-    lines = [f"模型配置文件 {path} 有问题："]
+    lines = [f"{source} 有问题："]
     for item in error.errors(include_url=False, include_context=False, include_input=False):
         location = ".".join(str(part) for part in item["loc"]) or "（整个文件）"
         if item["type"] == "value_error":
@@ -178,6 +195,31 @@ def _describe_errors(path: Path, error: ValidationError) -> str:
             reason = f"格式不对（{item['msg']}）"
         lines.append(f"  - 字段 {location}：{reason}")
     return "\n".join(lines)
+
+
+def validate_models_config(raw: Mapping[str, Any], source: str) -> ModelsConfig:
+    """校验模型配置数据，错误文字由调用方指定来源。
+
+    Args:
+        raw: 已解析的 TOML 配置。
+        source: 错误消息中的来源说明，不应包含敏感路径。
+
+    Returns:
+        校验通过的模型配置。
+
+    Raises:
+        ConfigError: 配置字段、模型引用或格式版本不符合要求。
+    """
+    try:
+        config = ModelsConfig.model_validate(raw)
+    except ValidationError as error:
+        raise ConfigError(_describe_errors(source, error)) from None
+    if config.config_version > MODELS_CONFIG_FORMAT_VERSION:
+        raise ConfigError(
+            f"{source} 的 config_version 是 {config.config_version}，"
+            f"比当前软件认识的版本 {MODELS_CONFIG_FORMAT_VERSION} 更新。请先升级软件。"
+        )
+    return config
 
 
 def load_models_config(paths: AureusPaths) -> ModelsConfig:
@@ -205,14 +247,5 @@ def load_models_config(paths: AureusPaths) -> ModelsConfig:
         raise ConfigError(f"模型配置文件 {path} 不是合法的 TOML：{error}") from None
     except OSError as error:
         raise ConfigError(f"读不了模型配置文件 {path}：{error}") from None
-    try:
-        config = ModelsConfig.model_validate(raw)
-    except ValidationError as error:
-        raise ConfigError(_describe_errors(path, error)) from None
-    if config.config_version > MODELS_CONFIG_FORMAT_VERSION:
-        # 配置比软件新（降级）时拒绝读取，而不是硬读：见 docs/14-user-data.md 第 3 节。
-        raise ConfigError(
-            f"模型配置文件 {path} 的 config_version 是 {config.config_version}，"
-            f"比当前软件认识的版本 {MODELS_CONFIG_FORMAT_VERSION} 更新。请先升级软件。"
-        )
-    return config
+    # 配置比软件新（降级）时拒绝读取，而不是硬读：见 docs/14-user-data.md 第 3 节。
+    return validate_models_config(raw, f"模型配置文件 {path}")

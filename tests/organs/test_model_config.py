@@ -1,5 +1,6 @@
 """模型配置（models.toml）的读取与校验测试。"""
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from aureus.organs.model_config import (
     DEFAULT_TIMEOUT_SECONDS,
     MODELS_CONFIG_FORMAT_VERSION,
     load_models_config,
+    validate_models_config,
 )
 
 # TOML 里的字符串用单引号（字面量字符串），免得和 Python 的双引号混在一起。
@@ -70,6 +72,56 @@ def test_valid_file_loads_and_routes_keep_configured_order(tmp_path: Path) -> No
     assert [route.model.name for route in routes] == ["big", "small"]
     assert routes[0].provider.name == "cloud"
     assert routes[1].provider.protocol == "anthropic"
+    assert config.models[0].reasoning_levels == ()
+    assert config.organs["replyer"].reasoning_effort is None
+    assert routes[0].reasoning_effort is None
+
+
+def test_reasoning_effort_requires_every_model_to_list_the_supported_level(
+    tmp_path: Path,
+) -> None:
+    text = VALID_TOML.replace(
+        "max_tokens = 2000", "max_tokens = 2000\nreasoning_levels = ['high']"
+    ).replace("max_tokens = 300", "max_tokens = 300\nreasoning_effort = 'high'")
+
+    message = load_error(tmp_path, text)
+
+    assert "器官 replyer 的思考等级 high 不是模型 small 支持的" in message
+    assert "没写 reasoning_levels 就是不支持" in message
+
+
+def test_reasoning_effort_is_carried_to_routes_when_all_models_support_it(
+    tmp_path: Path,
+) -> None:
+    text = (
+        VALID_TOML.replace("max_tokens = 2000", "max_tokens = 2000\nreasoning_levels = ['high']")
+        .replace(
+            "name = 'small'\nidentifier", "name = 'small'\nreasoning_levels = ['high']\nidentifier"
+        )
+        .replace("max_tokens = 300", "max_tokens = 300\nreasoning_effort = 'high'")
+    )
+
+    config = load_models_config(write_models_toml(tmp_path, text))
+
+    assert [route.reasoning_effort for route in config.routes_for("replyer")] == ["high", "high"]
+
+
+def test_validate_models_config_uses_the_given_source_without_a_local_path(
+    tmp_path: Path,
+) -> None:
+    invalid = VALID_TOML.replace("provider = 'local'", "provider = 'missing'")
+    paths = write_models_toml(tmp_path, invalid)
+
+    with pytest.raises(ConfigError) as file_error:
+        load_models_config(paths)
+    with pytest.raises(ConfigError) as submission_error:
+        validate_models_config(tomllib.loads(invalid), "提交的模型配置")
+
+    expected = str(file_error.value).replace(
+        f"模型配置文件 {paths.models_config_file}", "提交的模型配置"
+    )
+    assert str(submission_error.value) == expected
+    assert str(paths.home) not in str(submission_error.value)
 
 
 def test_organ_settings_override_model_settings(tmp_path: Path) -> None:
@@ -121,6 +173,11 @@ def test_unknown_organ_is_reported(tmp_path: Path) -> None:
         ("price_out = 8.0", "price_out = -1", "price_out"),
         ("max_tokens = 300", "strategy = 'random'\nmax_tokens = 300", "strategy"),
         ("models = ['big', 'small']", "models = []", "models"),
+        (
+            "max_tokens = 300",
+            "reasoning_effort = 'ultra'\nmax_tokens = 300",
+            "reasoning_effort",
+        ),
         (
             "identifier = 'big-model'",
             "identifier = 'big-model'\nprice_cash = 1",

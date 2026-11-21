@@ -73,7 +73,11 @@ def make_config(
     protocol: str = "openai",
     big_kind: str = "llm",
     organ_models: tuple[str, ...] = ("big", "small"),
+    reasoning_effort: str | None = None,
 ) -> ModelsConfig:
+    organ: dict[str, Any] = {"models": list(organ_models), "max_tokens": 300}
+    if reasoning_effort is not None:
+        organ["reasoning_effort"] = reasoning_effort
     return ModelsConfig.model_validate(
         {
             "providers": [
@@ -96,6 +100,7 @@ def make_config(
                     "price_cache_in": 1.0,
                     "temperature": 0.9,
                     "max_tokens": 2000,
+                    "reasoning_levels": ["high"],
                 },
                 {
                     "name": "small",
@@ -103,9 +108,10 @@ def make_config(
                     "provider": "local",
                     "price_in": 0,
                     "price_out": 0,
+                    "reasoning_levels": ["high"],
                 },
             ],
-            "organs": {"replyer": {"models": list(organ_models), "max_tokens": 300}},
+            "organs": {"replyer": organ},
         }
     )
 
@@ -148,11 +154,22 @@ async def test_first_model_success_passes_the_configured_call_arguments(keys: Ke
     assert call["num_retries"] == 0  # 重试由适配器自己做，每次请求都记账（审查 H4）
     assert call["temperature"] == 0.9  # 模型自己的
     assert call["max_tokens"] == 300  # 器官上的，优先于模型的 2000
+    assert "reasoning_effort" not in call
     assert [m["role"] for m in call["messages"]] == ["system", "user"]
     assert call["messages"][1]["content"] == "你好"
     assert response.metadata["model"] == "big"
     assert response.metadata["cost"] == pytest.approx(0.0036)
     assert response.metadata["cached_tokens"] == 400
+
+
+@pytest.mark.asyncio
+async def test_configured_reasoning_effort_is_passed_to_litellm(keys: KeyResolver) -> None:
+    completion = FakeCompletion(make_response("嗨"))
+    await make_organ(completion, keys, reasoning_effort="high").process(ask())
+
+    assert completion.calls[0]["reasoning_effort"] == "high"
+    assert completion.calls[0]["temperature"] == 0.9
+    assert completion.calls[0]["max_tokens"] == 300
 
 
 @pytest.mark.parametrize("protocol", list(LITELLM_PREFIX_BY_PROTOCOL))

@@ -41,6 +41,7 @@ price_out = 2.0                  # 输出价格
 price_cache_in = 0.1             # 命中缓存的输入价格；不写就按 price_in 算
 # temperature = 0.7              # 不写就用服务商的默认值
 # max_tokens = 1024              # 单次回复的 token 上限
+# reasoning_levels = ["low", "medium", "high"]  # 该模型支持的思考等级；不写表示不支持
 
 # ---------------------------------------------------------------------
 # 第三层：器官（每个器官按顺序用哪些模型）。
@@ -49,9 +50,11 @@ price_cache_in = 0.1             # 命中缓存的输入价格；不写就按 pr
 # ---------------------------------------------------------------------
 [organs.planner]
 models = ["example-chat"]
+# reasoning_effort = "high"    # 所有引用的模型都要在 reasoning_levels 中列出该等级
 
 [organs.replyer]
 models = ["example-chat"]
+# reasoning_effort = "high"    # 所有引用的模型都要在 reasoning_levels 中列出该等级
 
 # 总结器官用于小探索（D79），也用来写日记（D80）；按需启用。
 # [organs.summarizer]
