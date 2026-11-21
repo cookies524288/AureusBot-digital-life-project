@@ -82,8 +82,13 @@ def should_write(
         or tier is EnergyTier.OVERDRAFT
     ):
         return False
+    return past_write_hour(now, calendar, config.write_after_hour)
+
+
+def past_write_hour(now: datetime, calendar: BudgetCalendar, hour: int) -> bool:
+    """预算日内第一次达到当地指定时刻；日记与人设回顾共用（D80、D81）。"""
     start = calendar.day_bounds(now)[0].astimezone(calendar.timezone).replace(tzinfo=None)
-    due = start.replace(hour=config.write_after_hour, minute=0, second=0, microsecond=0)
+    due = start.replace(hour=hour, minute=0, second=0, microsecond=0)
     if due < start:
         due += timedelta(days=1)
     return now >= due.replace(tzinfo=calendar.timezone).astimezone(UTC)

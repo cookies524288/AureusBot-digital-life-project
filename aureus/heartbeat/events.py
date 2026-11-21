@@ -40,3 +40,7 @@ EVENT_EXPLORATION_RESULT = "exploration_result"
 # 日记（D80）：成功正文和文件名，或当天失败原因；均只有自己可见。
 EVENT_DIARY_WRITTEN = "diary_written"
 EVENT_DIARY_FAILED = "diary_failed"
+# 人设成长（D81）：采纳、不变或回顾失败；只给自己看。
+EVENT_PERSONA_CHANGED = "persona_changed"
+EVENT_PERSONA_UNCHANGED = "persona_unchanged"
+EVENT_PERSONA_REVIEW_FAILED = "persona_review_failed"

@@ -488,6 +488,20 @@ class DiaryConfig(BaseModel):
     max_chars: int = Field(default=1500, ge=100, le=10000)
 
 
+class PersonaGrowthConfig(BaseModel):
+    """人设成长的慢速调整规则；会改自己的行为默认关闭（D81）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = False
+    organ: str = "summarizer"
+    max_input_chars: int = Field(default=6000, ge=1000, le=50000)
+    layer_cooldown_days: int = Field(default=7, ge=1, le=365)
+    min_similarity: float = Field(default=0.7, ge=0.3, le=0.99)
+    max_chars_from_empty: int = Field(default=200, ge=20, le=1000)
+    max_layer_chars: int = Field(default=1000, ge=100, le=5000)
+
+
 class RuntimeConfig(BaseModel):
     """运行配置（config/aureus.toml）。
 
@@ -519,6 +533,7 @@ class RuntimeConfig(BaseModel):
     exploration: ExplorationConfig = Field(default_factory=ExplorationConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     diary: DiaryConfig = Field(default_factory=DiaryConfig)
+    persona_growth: PersonaGrowthConfig = Field(default_factory=PersonaGrowthConfig)
 
     @model_validator(mode="after")
     def _check_exploration(self) -> Self:
