@@ -22,7 +22,7 @@
 ├── secrets.key            主密钥，解开密钥库用（D36）
 ├── .env                   旧的明文密钥，最低优先级回退（D36）
 ├── data/
-│   ├── aureus.db  diary/  memory/  skills/  snapshots/  logs/
+│   ├── aureus.db  diary/  memory/  skills/  snapshots/  logs/  experiments/（实验台的结果，每个实验留最近 20 次，不进导出包，D82）
 └── manifest.json          记录数据格式版本，升级和导入时用来判断
 ```
 

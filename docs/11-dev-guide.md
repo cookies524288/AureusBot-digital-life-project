@@ -91,10 +91,10 @@ AureusBot Project/
 │   ├── actions/            行动
 │   ├── feedback/           反馈
 │   ├── channels/           通道（terminal/、web/ ……）
-│   └── safety/             安全
+│   ├── safety/             安全
+│   ├── monitor/            观察台（D64）
+│   └── lab/                实验台（D82）
 ├── tools/
-│   ├── monitor/            观察台
-│   ├── lab/                实验台
 │   └── migrate/            迁移工具：把 MaiBot 等外部数据导入（见 13 号文档）
 ├── tests/                  测试，按子系统分目录
 ├── scripts/                开发用的小脚本，比如一条命令跑完检查
