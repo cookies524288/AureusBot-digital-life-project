@@ -345,8 +345,30 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 </div>
 </div>
 </div></section>
-<section id="page-organs" class="page wide"><!-- @@HTML-ORGANS@@ 器官 --></section>
-<section id="page-config" class="page"><!-- @@HTML-CONFIG@@ 设置 --></section>
+<section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2><p>每个器官按顺序用哪些模型，排在上面的先用，失败了顺延到下一个。保存后重启生效。</p></div>
+<div class="row"><button id="og-reset" class="btn" disabled>放弃修改</button><button id="og-save" class="btn primary" disabled>保存</button></div></div>
+<div class="page-body stack">
+<div id="og-restart" class="banner hidden">配置已保存，重启后生效。</div>
+<div id="og-missing" class="empty hidden"></div>
+<div id="og-content" class="stack hidden">
+<div class="banner info">器官只给出建议，不直接改它的状态。这里和「模型」页共用同一份配置，两页的改动一起保存。思考等级只列出这个器官用的每个模型都支持的档位，要先到「模型」页给模型勾选。</div>
+<div id="og-grid" class="organ-grid"></div>
+<div class="row"><input id="og-new-name" type="text" placeholder="新器官的名字，比如 replyer" style="max-width:260px"><button id="og-add" class="btn">＋ 添加器官</button></div>
+</div>
+</div></section>
+<section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2><p>其他所有运行配置。保存后重启生效。</p></div>
+<div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
+<div class="page-body stack">
+<div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
+<div id="cf-missing" class="empty hidden"></div>
+<div id="cf-content" class="cfg-layout hidden">
+<div id="cf-tabs" class="cfg-tabs"></div>
+<div class="stack">
+<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前口令：<input id="cf-password" type="password" placeholder="当前口令" autocomplete="current-password" style="max-width:220px;margin-left:8px"></div>
+<div id="cf-section" class="card"></div>
+</div>
+</div>
+</div></section>
 </main>
 </div>
 
@@ -439,7 +461,6 @@ $('theme-btn').addEventListener('click', () => {
   try { localStorage.setItem('aureus-theme', next); } catch (e) { /* 同上 */ }
 });
 
-// @@JS-CORE-END@@
 // ---------- 登录、改口令、退出 ----------
 // 默认口令时只能进改口令页（D63 第 6 条）；登录失效、改口令、退出都回到这里。
 function showAuth(view, message) {
@@ -897,7 +918,7 @@ async function loadModelsPage() {
 }
 PAGES.models = { load: loadModelsPage };
 function failApi(res) { if (notBuilt(res)) toast(NOT_BUILT_TEXT, 'error'); else fail(res); }
-function showRestart() { for (const id of ['md-restart', 'og-restart']) { const b = $(id); if (b) b.classList.remove('hidden'); } }
+function showRestart() { for (const id of ['md-restart', 'og-restart', 'cf-restart', 'ov-restart']) { const b = $(id); if (b) b.classList.remove('hidden'); } }
 
 function modelRow(m) {
   m.reasoning_levels = m.reasoning_levels || [];
@@ -972,10 +993,455 @@ function keyPanel(p) {
     el('div', { class: 'form-grid' }, el('div', { class: 'field' }, el('label', { text: '密钥原文' }), value), el('div', { class: 'field' }, el('label', { text: '当前口令' }), pw)),
     el('div', { class: 'row', style: 'margin-top:10px' }, save, remove));
 }
-// @@JS-MODELS-3@@ 清理配置、保存和放弃
-// @@JS-ORGANS@@
-// @@JS-CONFIG@@
-// @@JS-BOOT@@ 启动入口
+// ---------- 模型：保存和放弃 ----------
+// 页面提交的是整份配置：按条目比较、没改的连注释原样不动（2.12b 接口第 2 点）。
+// 清空的输入框是空串，可选项要发 null（「不写」）；空的必填项照样发，由后端校验报中文错误，页面不悄悄删条目。
+function cleanModelsConfig() {
+  const blank = v => (typeof v === 'string' && !v.trim() ? null : v);
+  for (const p of mdl.cfg.providers) { p.base_url = blank(p.base_url); p.api_key_env = blank(p.api_key_env); }
+}
+
+$('md-save').addEventListener('click', async () => {
+  cleanModelsConfig();
+  const password = $('md-password').value;
+  $('md-password').value = '';
+  const res = await api('/api/models', 'PUT', { config: mdl.cfg, password: password || undefined });
+  if (!res.ok) { failApi(res); return; }
+  mdl.dirty = false;
+  refreshDirty();
+  toast('模型配置已保存，重启后生效。', 'ok');
+  showRestart();
+  if (await loadModelsConfig(true) === true) { renderModels(); renderOrgans(); }
+});
+
+$('md-reset').addEventListener('click', async () => {
+  if (!confirm('放弃所有没保存的改动？')) return;
+  if (await loadModelsConfig(true) === true) { renderModels(); renderOrgans(); }
+});
+// ---------- 器官：每个器官用哪些模型（和模型页共用 mdl.cfg，保存走 PUT /api/models） ----------
+// 器官名由配置决定；这里只给常见的几个写说明，不认识的照名字显示。
+const ORGAN_ROLES = {
+  replyer: '回复你的话。',
+  planner: '决定这一拍要不要做事、做什么。',
+  judge: '判断你这句话的情绪和意图。',
+  summarizer: '写日记、整理人设回顾、总结探索结果。',
+};
+
+// 思考等级只列器官用的每个模型都支持的档位（D84 第 3 条）；一个模型都没有时只留「不用」。
+function allowedEfforts(organ) {
+  const rows = organ.models.map(n => mdl.cfg.models.find(m => m.name === n)).filter(Boolean);
+  if (!rows.length) return [];
+  return (mdl.choices.reasoning_levels || []).filter(level => rows.every(m => (m.reasoning_levels || []).includes(level)));
+}
+
+function organCard(name, organ) {
+  const move = (i, step) => {
+    const list = organ.models.slice();
+    const j = i + step;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    organ.models = list;
+    markDirty();
+    renderOrgans();
+  };
+  const steps = organ.models.map((model, i) => el('div', { class: 'chain-step' },
+    el('span', { class: 'order', text: i + 1 }),
+    el('span', { class: 'label', text: model }),
+    el('button', { class: 'btn small', type: 'button', text: '↑', disabled: i === 0, 'aria-label': '上移', onclick: () => move(i, -1) }),
+    el('button', { class: 'btn small', type: 'button', text: '↓', disabled: i === organ.models.length - 1, 'aria-label': '下移', onclick: () => move(i, 1) }),
+    el('button', { class: 'btn small danger', type: 'button', text: '移除', onclick: () => { organ.models = organ.models.filter((_, k) => k !== i); markDirty(); renderOrgans(); } })));
+  const candidates = mdl.cfg.models.filter(m => !organ.models.includes(m.name));
+  const picker = el('select', { 'aria-label': '添加模型' }, el('option', { value: '', text: candidates.length ? '选一个模型加进来…' : '没有可加的模型' }), candidates.map(m => el('option', { value: m.name, text: m.name })));
+  picker.addEventListener('change', () => { if (!picker.value) return; organ.models = organ.models.concat(picker.value); markDirty(); renderOrgans(); });
+  const allowed = allowedEfforts(organ);
+  const options = ['', ...allowed];
+  if (organ.reasoning_effort && !allowed.includes(organ.reasoning_effort)) options.push(organ.reasoning_effort);
+  const effort = el('select', { 'aria-label': '思考等级' }, options.map(level => el('option', { value: level, selected: (organ.reasoning_effort || '') === level,
+    text: level === '' ? '不用' : level + (allowed.includes(level) ? '' : '（模型已不支持）') })));
+  effort.addEventListener('change', () => { organ.reasoning_effort = effort.value || null; markDirty(); });
+  const removeBtn = el('button', { class: 'btn small danger', text: '删除器官', onclick: () => { if (!confirm('删除器官「' + name + '」？用到它的功能会找不到它。')) return; delete mdl.cfg.organs[name]; markDirty(); renderOrgans(); } });
+  return el('div', { class: 'card organ-card' },
+    el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: name }), el('div', { class: 'role', text: ORGAN_ROLES[name] || '自定义器官。' })), removeBtn),
+    el('div', { class: 'field-label', text: '用哪些模型（上面的先用）' }),
+    el('div', { class: 'chain' }, steps.length ? steps : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有模型：至少要选一个才能保存。' })]),
+    picker,
+    el('div', { class: 'divider' }),
+    el('div', { class: 'form-grid' },
+      el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort,
+        el('span', { class: 'hint', text: allowed.length ? '只列出每个模型都支持的档位。' : '模型都没有勾选思考等级，所以只能不用。' })),
+      inputField('温度', organ.temperature, v => { organ.temperature = v; }, { number: true, min: 0, step: 'any', hint: '写在这里的优先于模型自己的，不填用模型的' }),
+      inputField('单次回复 token 上限', organ.max_tokens, v => { organ.max_tokens = v; }, { number: true, min: 1, hint: '同上' })));
+}
+
+function renderOrgans() {
+  const grid = $('og-grid');
+  grid.textContent = '';
+  const names = Object.keys(mdl.cfg.organs);
+  if (!names.length) grid.append(el('div', { class: 'empty', text: '还没有器官。先在「模型」页配好服务商和模型，再在这里添加器官。' }));
+  for (const name of names) grid.append(organCard(name, mdl.cfg.organs[name]));
+}
+
+async function loadOrgansPage() {
+  const r = await loadModelsConfig(false);
+  const missing = $('og-missing');
+  missing.classList.toggle('hidden', r !== 'missing');
+  if (r === 'missing') missing.textContent = NOT_BUILT_TEXT;
+  $('og-content').classList.toggle('hidden', r !== true);
+  if (r === true) renderOrgans();
+}
+PAGES.organs = { load: loadOrgansPage };
+
+$('og-add').addEventListener('click', () => {
+  const name = $('og-new-name').value.trim();
+  if (!name) { toast('先写器官的名字。', 'error'); return; }
+  if (mdl.cfg.organs[name]) { toast('已经有这个器官了。', 'error'); return; }
+  mdl.cfg.organs[name] = { models: [], strategy: (mdl.choices.strategies || ['sequential'])[0], temperature: null, max_tokens: null, reasoning_effort: null };
+  $('og-new-name').value = '';
+  markDirty();
+  renderOrgans();
+});
+$('og-save').addEventListener('click', () => $('md-save').click());
+$('og-reset').addEventListener('click', async () => { if (!confirm('放弃所有没保存的改动？')) return; await loadModelsConfig(true); renderOrgans(); });
+// ---------- 设置：运行配置（/api/config，2.12b 的接口） ----------
+// 字段的类型、范围、默认值都从后端给的 schema 读；这里只写中文名和说明。不认识的节和字段照原名显示。
+const CFG_SECTIONS = [
+  ['', '通用', '日志详细程度和配置格式版本。'],
+  ['heartbeat', '心跳与回复', '多久跳一拍、回复带多少条对话、怎么拆成几条发。'],
+  ['body', '身体', '精力、疲劳、压力、社交需求、睡眠，以及给观察台记的样本。'],
+  ['hormones', '激素', '怒气、愉悦、低落、惊讶的触发和回落。'],
+  ['mood', '心情', '几小时到几天的情绪基调，以及什么时候变得谨慎。'],
+  ['people', '人际', '对每个人的好感怎么涨落。'],
+  ['empathy', '同理心', '别人的情绪对它的影响。'],
+  ['judge', '判断', '回复前判断对方情绪和意图的器官。'],
+  ['feedback', '反馈', '记下预期和结果，算出对每类行动有多大把握。'],
+  ['agenda', '日程', '记下承诺、到期提醒、兑现记账。'],
+  ['initiative', '主动联系', '它什么时候、多常主动找你。'],
+  ['interests', '兴趣', '它关心哪些话题。'],
+  ['exploration', '探索', '围绕兴趣做只读的小探索。'],
+  ['memory', '记忆', '记忆索引和按关键词召回。'],
+  ['diary', '日记', '每天什么时候写、写多长。'],
+  ['persona_growth', '人设成长', '它按规则慢慢改自己下面三层人设。'],
+  ['time', '时间', '时区，以及「一天」从几点开始算。'],
+  ['snapshots', '快照', '快照最多占多少空间。'],
+  ['safety', '安全', '每月用量上限和失控拦截。'],
+  ['web', '网页', '网页的端口、登录有效期和登录限流。'],
+];
+const CFG_LABELS = {
+  'log_level': ['日志级别', 'DEBUG 最详细，ERROR 只记错误'],
+  'config_version': ['配置格式版本', '软件升级时用，不要手改'],
+  'safety.monthly_token_limit': ['每月 token 上限', '输入加输出合计；不写就是不限'],
+  'safety.runaway_guard_enabled': ['失控拦截', '短时间调用太多或连续失败时自动暂停'],
+  'safety.max_calls_per_minute': ['每分钟最多调用几次', ''],
+  'safety.max_consecutive_failures': ['连续失败几次就暂停', ''],
+  'safety.failure_pause_seconds': ['暂停多少秒', ''],
+  'heartbeat.tick_interval_seconds': ['心跳间隔（秒）', '没有新消息时多久跳一拍；有消息会马上醒'],
+  'heartbeat.advance_biomodel': ['旧神经递质模型', '已废弃，不再起作用'],
+  'heartbeat.broadcast_cognitive_state': ['状态变化写进时间线', ''],
+  'heartbeat.shutdown_grace_seconds': ['关机时最多等几秒', '等进行中的调用结束，等不到就取消'],
+  'heartbeat.recent_message_limit': ['回复时带上最近几条对话', '正常档；包括刚收到的'],
+  'heartbeat.saving_message_limit': ['节省档带几条', '不会超过上一项'],
+  'heartbeat.low_message_limit': ['低电量带几条', '不会超过正常档'],
+  'heartbeat.reply_organ': ['回复用的器官', '要和「器官」页里的名字一致'],
+  'heartbeat.planning_enabled': ['先规划再回复', '关掉后合并成一次调用'],
+  'heartbeat.plan_organ': ['规划用的器官', ''],
+  'heartbeat.split_reply_enabled': ['拆成几条短消息发', ''],
+  'heartbeat.max_reply_messages': ['最多拆成几条', ''],
+  'heartbeat.min_message_chars': ['每条至少几个字', '更短的并进相邻一句'],
+  'heartbeat.identity_changes_in_prompt': ['告诉它哪几层设定被你改过', '只说哪几层，不给旧内容'],
+  'heartbeat.roleplay_mode': ['扮演模式', '实验对照用：身体信号全部不起作用，只让模型自己演；安全检查照常'],
+  'body.energy_enabled': ['精力', '关掉后不按每日额度限制；月度上限照样生效'],
+  'body.user_reserve_fraction': ['留给你的额度比例', '可选的事用到 1 减这个比例就停'],
+  'body.state_in_prompt_enabled': ['把身体状态告诉它', '关掉后它不知道自己的状态，行为影响不变'],
+  'body.saving_below': ['低于多少进节省档', '精力 = 今日剩余 ÷ 今日额度'],
+  'body.low_below': ['低于多少进低电量', ''],
+  'body.overdraft_below': ['低于多少进透支保护', '三个分界要从小到大'],
+  'body.fatigue_enabled': ['疲劳', ''],
+  'body.fatigue_window_minutes': ['疲劳看最近几分钟', ''],
+  'body.fatigue_full_calls': ['调用多少次算满疲劳', ''],
+  'body.fatigue_high_at': ['疲劳偏高线', ''],
+  'body.fatigue_batch_seconds': ['疲劳时攒几秒再回', ''],
+  'body.stress_enabled': ['压力', ''],
+  'body.stress_window_calls': ['压力看最近几次调用', ''],
+  'body.stress_backlog_full': ['排队几条算满压力', ''],
+  'body.stress_high_at': ['压力偏高线', ''],
+  'body.stress_lowers_tier': ['压力高时回复降一档', ''],
+  'body.social_need_enabled': ['社交需求', '越久没聊越想找你'],
+  'body.social_need_time_constant_hours': ['社交需求上涨快慢（小时）', '过这么久涨到约 63%'],
+  'body.social_need_high_at': ['社交需求偏高线', '达到才可能主动联系'],
+  'body.sleep_enabled': ['睡眠', ''],
+  'body.night_start_hour': ['夜里从几点开始', '当地时间；比结束大表示跨午夜'],
+  'body.night_end_hour': ['夜里到几点结束', ''],
+  'body.night_tick_interval_seconds': ['夜里心跳间隔（秒）', ''],
+  'body.sample_enabled': ['记录身体样本', '观察台画曲线用'],
+  'body.sample_interval_seconds': ['样本间隔（秒）', ''],
+  'body.sample_retention_days': ['样本留几天', ''],
+};
+Object.assign(CFG_LABELS, {
+  'hormones.enabled': ['激素总开关', ''],
+  'hormones.anger_enabled': ['怒气', ''], 'hormones.joy_enabled': ['愉悦', ''],
+  'hormones.hurt_enabled': ['低落', ''], 'hormones.surprise_enabled': ['惊讶', ''],
+  'hormones.anger_half_life_seconds': ['怒气半衰期（秒）', '浓度降到一半要多久'],
+  'hormones.joy_half_life_seconds': ['愉悦半衰期（秒）', ''],
+  'hormones.hurt_half_life_seconds': ['低落半衰期（秒）', ''],
+  'hormones.surprise_half_life_seconds': ['惊讶半衰期（秒）', ''],
+  'hormones.base_amount': ['基础上涨量', '上涨 = 基础量 × 强度 × 把握'],
+  'hormones.max_single_rise': ['单次最多涨多少', ''],
+  'hormones.min_confidence': ['判断把握至少多少才算', ''],
+  'hormones.repeat_decay': ['反复触发的递减系数', '刷屏刷不出情绪'],
+  'hormones.repeat_window_seconds': ['反复触发的窗口（秒）', ''],
+  'hormones.calm_below': ['怒气平息线', '要满足 平息 < 回击 < 冷处理'],
+  'hormones.retaliate_at': ['怒气回击线', ''],
+  'hormones.cold_shoulder_at': ['怒气冷处理线', '达到后可以选择不回'],
+  'hormones.max_retaliations': ['一场冲突最多回击几次', ''],
+  'hormones.hurt_shorten_at': ['低落到多少回复变短', ''],
+  'hormones.surprise_at': ['惊讶到多少马上回', '不等疲劳攒消息'],
+  'hormones.surprise_gap': ['结果和预期差多少算惊讶', ''],
+  'mood.enabled': ['心情', ''],
+  'mood.half_life_seconds': ['心情回落半衰期（秒）', '默认 6 小时'],
+  'mood.hormone_weight': ['激素对心情的权重', ''],
+  'mood.success_amount': ['一次成功加多少', ''],
+  'mood.failure_amount': ['一次失败减多少', ''],
+  'mood.max_single_change': ['单件事最多影响多少', ''],
+  'mood.stress_weight': ['压力往下拉多少', ''],
+  'mood.cautious_below': ['低于多少变谨慎', ''],
+  'mood.recover_above': ['高于多少恢复', '要比上一项大'],
+  'people.affinity_enabled': ['好感', ''],
+  'people.user_initial_affinity': ['对你的初始好感', '满分 100；只在第一次用到时采用'],
+  'people.stranger_affinity': ['对陌生人的初始好感', ''],
+  'people.praise_amount': ['被夸奖涨多少', ''],
+  'people.offense_amount': ['被冒犯跌多少', ''],
+  'people.rejection_amount': ['被拒绝跌多少', ''],
+  'people.interaction_amount': ['每天聊过涨多少', ''],
+  'people.daily_rise_cap': ['每天最多涨多少', ''],
+  'people.daily_fall_cap': ['每天最多跌多少', ''],
+  'empathy.enabled': ['同理心', ''],
+  'empathy.base_amount': ['基础量', ''],
+  'empathy.affinity_floor': ['好感系数下限', '对讨厌的人共情变弱，但不会反过来'],
+  'judge.enabled': ['判断', ''],
+  'judge.organ': ['判断用的器官', '没配这个器官时跳过判断'],
+  'judge.timeout_seconds': ['最多等几秒', ''],
+  'judge.context_messages': ['再带之前几条对话', '0 表示只看这一条'],
+  'feedback.enabled': ['反馈', ''],
+  'feedback.window_size': ['看最近几次结果', ''],
+  'feedback.min_samples': ['至少几次才不算样本不足', '不能大于上一项'],
+  'agenda.enabled': ['日程', ''],
+  'agenda.max_open_per_person': ['每人最多几条没完成的', ''],
+  'agenda.max_due_days': ['到期最远几天后', ''],
+  'agenda.expire_grace_days': ['到期后几天算过期', ''],
+  'agenda.context_items': ['回复时列几条', ''],
+  'initiative.enabled': ['主动联系', '默认关闭'],
+  'initiative.max_per_day': ['每天最多几次', ''],
+  'initiative.min_interval_hours': ['最短间隔（小时）', '没回应就翻倍'],
+  'initiative.max_interval_hours': ['最长间隔（小时）', ''],
+  'initiative.answer_window_hours': ['等你回应多久（小时）', ''],
+  'initiative.give_up_after': ['连续几次没回应就停', '等你先开口'],
+  'interests.enabled': ['兴趣', ''],
+  'interests.max_active': ['最多几个兴趣', ''],
+  'interests.max_changes_per_day': ['每天自己最多改几次', ''],
+  'exploration.enabled': ['探索', '要先开兴趣'],
+  'exploration.organ': ['总结用的器官', ''],
+  'exploration.search_provider': ['搜索服务', '还没接真实搜索，只能选 none'],
+  'exploration.max_per_day': ['每天最多几次', ''],
+  'exploration.min_interval_hours': ['最短间隔（小时）', ''],
+  'exploration.max_results': ['每次最多看几条结果', ''],
+  'exploration.fetch_timeout_seconds': ['取网页超时（秒）', ''],
+  'exploration.max_page_bytes': ['网页最大字节数', ''],
+  'exploration.max_page_chars': ['网页最多读几个字', ''],
+  'exploration.share_within_days': ['几天内的发现会拿来聊', ''],
+  'memory.enabled': ['记忆索引', ''],
+  'memory.recall_enabled': ['回复时召回记忆', ''],
+  'memory.max_results': ['最多召回几条', ''],
+  'memory.index_batch': ['每次索引几条', ''],
+  'diary.enabled': ['日记', ''],
+  'diary.organ': ['写日记的器官', ''],
+  'diary.write_after_hour': ['几点以后写', '当地时间'],
+  'diary.max_input_chars': ['最多读几个字的经历', ''],
+  'diary.max_chars': ['日记最长几个字', ''],
+  'persona_growth.enabled': ['人设成长', '会改它自己的设定，默认关闭；锁定的层不会改'],
+  'persona_growth.organ': ['用的器官', ''],
+  'persona_growth.max_input_chars': ['最多读几个字的材料', ''],
+  'persona_growth.layer_cooldown_days': ['同一层至少隔几天才再改', ''],
+  'persona_growth.min_similarity': ['新旧至少多相似', '防止一次改太多'],
+  'persona_growth.max_chars_from_empty': ['空层第一次最多写几个字', ''],
+  'persona_growth.max_layer_chars': ['每层最长几个字', ''],
+  'time.timezone': ['时区', '比如 Asia/Shanghai；不写用这台电脑的时区'],
+  'time.day_start_hour': ['一天从几点开始', '每天的额度从这时重置'],
+  'snapshots.max_total_megabytes': ['快照最多占多少 MB', ''],
+  'web.enabled': ['网页', '关掉后网页打不开'],
+  'web.allow_remote': ['允许局域网访问', '局域网里是不加密的 HTTP'],
+  'web.port': ['端口', ''],
+  'web.session_days': ['登录保持几天', '从最后一次活动算起'],
+  'web.login_max_failures': ['登录失败几次就锁定', ''],
+  'web.login_window_seconds': ['统计失败的窗口（秒）', ''],
+  'web.login_lockout_seconds': ['锁定多少秒', ''],
+});
+// changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
+const cf = { data: null, schema: null, readonly: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '' };
+const cfKey = (sec, field) => sec ? sec + '.' + field : field;
+const cfResolve = node => (node && node.$ref ? cf.schema.$defs[node.$ref.split('/').pop()] : node) || {};
+const cfOriginal = (sec, field) => (sec ? (cf.data[sec] || {})[field] : cf.data[field]);
+
+// 可选字段的 schema 是 anyOf [某类型, null]；单值 Literal 是 const。
+function cfFieldInfo(prop) {
+  const variants = prop.anyOf || [prop];
+  const base = variants.find(v => v.type !== 'null') || {};
+  return {
+    type: base.type, nullable: variants.some(v => v.type === 'null'),
+    choices: base.enum || (base.const !== undefined ? [base.const] : null),
+    min: base.minimum ?? base.exclusiveMinimum, max: base.maximum ?? base.exclusiveMaximum,
+    def: prop.default,
+  };
+}
+// 每节有哪些字段；顶层的标量放在「通用」里（节名是空串）。
+function cfFields(sec) {
+  if (sec) return Object.keys(cfResolve(cf.schema.properties[sec]).properties || {});
+  return Object.keys(cf.schema.properties).filter(name => !cfResolve(cf.schema.properties[name]).properties);
+}
+function cfSectionList() {
+  const objectSections = Object.keys(cf.schema.properties).filter(name => cfResolve(cf.schema.properties[name]).properties);
+  const known = CFG_SECTIONS.filter(([key]) => key === '' || objectSections.includes(key));
+  const unknown = objectSections.filter(key => !CFG_SECTIONS.some(([k]) => k === key)).map(key => [key, key, '']);
+  return known.concat(unknown);
+}
+
+function cfSet(key, value, original) {
+  cf.invalid.delete(key);
+  if (value === original) delete cf.changes[key]; else cf.changes[key] = value;
+  refreshConfigDirty();
+}
+function refreshConfigDirty() {
+  const keys = Object.keys(cf.changes);
+  $('cf-save').disabled = !keys.length && !cf.invalid.size;
+  $('cf-reset').disabled = !keys.length && !cf.invalid.size;
+  const needPassword = keys.some(key => key.includes('.') && cf.pwSections.has(key.split('.')[0]));
+  $('cf-password-box').classList.toggle('hidden', !needPassword);
+  for (const tab of document.querySelectorAll('#cf-tabs .nav-item')) {
+    const sec = tab.dataset.sec;
+    const count = keys.filter(key => (sec ? key.startsWith(sec + '.') : !key.includes('.'))).length;
+    tab.querySelector('.count').textContent = count ? ' · 改了 ' + count + ' 项' : '';
+  }
+}
+
+function cfControl(sec, field, info, readonly) {
+  const key = cfKey(sec, field);
+  const original = cfOriginal(sec, field);
+  const current = key in cf.changes ? cf.changes[key] : original;
+  if (info.type === 'boolean') {
+    const box = el('input', { type: 'checkbox', checked: !!current, disabled: readonly });
+    box.addEventListener('change', () => cfSet(key, box.checked, original));
+    return el('label', { class: 'switch' }, box, el('span', { class: 'track' }));
+  }
+  if (info.choices) {
+    const select = el('select', { disabled: readonly }, info.choices.map(c => el('option', { value: c, text: c, selected: c === current })));
+    select.addEventListener('change', () => cfSet(key, select.value, original));
+    return select;
+  }
+  const numeric = info.type === 'integer' || info.type === 'number';
+  const input = el('input', { type: numeric ? 'number' : 'text', disabled: readonly, step: info.type === 'integer' ? '1' : 'any', min: info.min, max: info.max,
+    placeholder: current === null || current === undefined ? '不写（用默认）' : '' });
+  input.value = current === null || current === undefined ? '' : current;
+  input.addEventListener('input', () => {
+    // 页面不能把字段改回「不写」（null 不是合法的值），清空就当作没改。
+    if (input.value.trim() === '') { cfSet(key, original, original); return; }
+    const value = numeric ? Number(input.value) : input.value;
+    if (numeric && (!Number.isFinite(value) || (info.type === 'integer' && !Number.isInteger(value)))) {
+      delete cf.changes[key];
+      cf.invalid.add(key);
+      refreshConfigDirty();
+      return;
+    }
+    cfSet(key, value, original);
+  });
+  return input;
+}
+
+function cfRow(sec, field) {
+  const key = cfKey(sec, field);
+  const prop = sec ? cfResolve(cf.schema.properties[sec]).properties[field] : cf.schema.properties[field];
+  const info = cfFieldInfo(prop);
+  const readonly = cf.readonly.has(key);
+  const [name, desc] = CFG_LABELS[key] || [field, ''];
+  const notes = [];
+  if (desc) notes.push(desc);
+  if (info.def !== undefined && info.def !== null) notes.push('默认 ' + info.def);
+  if (readonly) notes.push('只能在本机直接编辑 aureus.toml：改错了会让你从网页上进不来');
+  else if (info.nullable) notes.push('要改回「不写」，请直接编辑 aureus.toml');
+  return el('div', { class: 'cfg-field' },
+    el('div', {}, el('div', { class: 'name' }, name, ' ', el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field })),
+      el('div', { class: 'desc', text: notes.join('。') })),
+    cfControl(sec, field, info, readonly));
+}
+function renderConfigSection(sec) {
+  const container = $('cf-section');
+  container.textContent = '';
+  const [_, title, subtitle] = CFG_SECTIONS.find(([k]) => k === sec) || [sec, sec, ''];
+  container.append(el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }), el('p', { class: 'muted', style: 'font-size:13px', text: subtitle }))));
+  for (const field of cfFields(sec)) container.append(cfRow(sec, field));
+}
+
+// 有没保存的改动时，切回这一页不重新读，免得改动丢掉。
+async function loadConfigPage(force) {
+  if (!force && cf.data && (Object.keys(cf.changes).length || cf.invalid.size)) return;
+  const res = await api('/api/config');
+  const missing = $('cf-missing');
+  if (notBuilt(res)) { missing.textContent = NOT_BUILT_TEXT; missing.classList.remove('hidden'); $('cf-content').classList.add('hidden'); return; }
+  if (!res.ok) { failApi(res); return; }
+  missing.classList.add('hidden');
+  $('cf-content').classList.remove('hidden');
+  cf.data = res.data.config;
+  cf.schema = res.data.schema;
+  cf.readonly = new Set(res.data.readonly);
+  cf.pwSections = new Set(res.data.password_sections);
+  cf.changes = {};
+  cf.invalid = new Set();
+  const tabs = $('cf-tabs');
+  tabs.textContent = '';
+  for (const [key, title] of cfSectionList()) {
+    tabs.append(el('button', { class: 'nav-item', 'data-sec': key },
+      el('span', { text: title }), el('span', { class: 'count', style: 'font-size:12px;color:var(--text-2)' })));
+  }
+  for (const btn of tabs.querySelectorAll('.nav-item')) {
+    btn.addEventListener('click', () => {
+      for (const b of tabs.querySelectorAll('.nav-item')) b.classList.remove('active');
+      btn.classList.add('active');
+      cf.tab = btn.dataset.sec;
+      renderConfigSection(cf.tab);
+    });
+  }
+  const current = [...tabs.querySelectorAll('.nav-item')].find(b => b.dataset.sec === cf.tab) || tabs.querySelector('.nav-item');
+  current.click();
+  refreshConfigDirty();
+}
+PAGES.config = { load: () => loadConfigPage(false) };
+
+$('cf-save').addEventListener('click', async () => {
+  if (cf.invalid.size) { toast('有的数字填得不对（' + [...cf.invalid].join('、') + '），改好再保存。', 'error'); return; }
+  const keys = Object.keys(cf.changes);
+  if (!keys.length) { toast('没有改动。', 'error'); return; }
+  // 整理成 {节: {字段: 值}} 和 {顶层字段: 值}。
+  const body = { changes: {} };
+  for (const key of keys) {
+    if (key.includes('.')) {
+      const [sec, field] = key.split('.');
+      if (!body.changes[sec]) body.changes[sec] = {};
+      body.changes[sec][field] = cf.changes[key];
+    } else body.changes[key] = cf.changes[key];
+  }
+  body.password = $('cf-password').value || undefined;
+  $('cf-password').value = '';
+  const res = await api('/api/config', 'PUT', body);
+  if (!res.ok) { failApi(res); return; }
+  cf.changes = {};
+  cf.invalid = new Set();
+  refreshConfigDirty();
+  toast('配置已保存（改了 ' + res.data.changed.length + ' 项），重启后生效。', 'ok');
+  showRestart();
+  await loadConfigPage(true);
+});
+
+$('cf-reset').addEventListener('click', () => { if (confirm('放弃所有没保存的改动？')) loadConfigPage(true); });
+// ---------- 启动：先问登录状态，再决定显示登录页、改口令页还是主界面 ----------
+enter();
 </script>
 </body>
 </html>
