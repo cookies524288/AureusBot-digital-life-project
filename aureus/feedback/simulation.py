@@ -41,6 +41,17 @@ class SimulatedAttempt:
     succeeded: bool
 
 
+@dataclass(frozen=True)
+class CalibrationBin:
+    """一组置信度相近的模拟行动及其校准统计。"""
+
+    lower: float
+    upper: float
+    count: int
+    mean_expected: float
+    success_rate: float
+
+
 def run_simulation(
     store: FeedbackStore, tasks: Sequence[SimulatedTask], rounds: int, seed: int
 ) -> list[SimulatedAttempt]:
@@ -74,16 +85,66 @@ def expected_calibration_error(attempts: Sequence[SimulatedAttempt]) -> float:
     """
     if not attempts:
         raise ValueError("没有行动，算不出校准误差")
-    bins: list[list[SimulatedAttempt]] = [[] for _ in range(CALIBRATION_BINS)]
+    bins = calibration_bins(attempts)
+    return sum(
+        abs(calibration_bin.mean_expected - calibration_bin.success_rate)
+        * calibration_bin.count
+        / len(attempts)
+        for calibration_bin in bins
+    )
+
+
+def calibration_bins(attempts: Sequence[SimulatedAttempt]) -> list[CalibrationBin]:
+    """按把握分箱，返回每个非空分箱的预期均值和实际成功率。
+
+    Args:
+        attempts: 一组行动前的把握和行动结果。
+
+    Returns:
+        按把握从低到高排列的非空分箱。
+
+    Raises:
+        ValueError: 没有行动可供分箱。
+    """
+    if not attempts:
+        raise ValueError("没有行动，算不出校准分箱")
+    members_by_bin: list[list[SimulatedAttempt]] = [[] for _ in range(CALIBRATION_BINS)]
     for attempt in attempts:
         # 预期恰好是 1.0 时放进最后一格。
         index = min(int(attempt.expected * CALIBRATION_BINS), CALIBRATION_BINS - 1)
-        bins[index].append(attempt)
-    error = 0.0
-    for members in bins:
+        members_by_bin[index].append(attempt)
+    result: list[CalibrationBin] = []
+    for index, members in enumerate(members_by_bin):
         if not members:
             continue
         mean_expected = sum(member.expected for member in members) / len(members)
         success_rate = sum(member.succeeded for member in members) / len(members)
-        error += abs(mean_expected - success_rate) * len(members) / len(attempts)
-    return error
+        result.append(
+            CalibrationBin(
+                lower=index / CALIBRATION_BINS,
+                upper=(index + 1) / CALIBRATION_BINS,
+                count=len(members),
+                mean_expected=mean_expected,
+                success_rate=success_rate,
+            )
+        )
+    return result
+
+
+def brier_score(attempts: Sequence[SimulatedAttempt]) -> float:
+    """计算把握概率与实际成败之间的平均平方误差。
+
+    Args:
+        attempts: 一组行动前的把握和行动结果。
+
+    Returns:
+        每次行动的 Brier 分数平均值，越低越准确。
+
+    Raises:
+        ValueError: 没有行动可供计算。
+    """
+    if not attempts:
+        raise ValueError("没有行动，算不出 Brier 分数")
+    return sum((attempt.expected - int(attempt.succeeded)) ** 2 for attempt in attempts) / len(
+        attempts
+    )

@@ -1,8 +1,11 @@
 """反馈 feedback：做事前记预期，做完记结果，用真实成功率算自信（D67）。"""
 
 from .simulation import (
+    CalibrationBin,
     SimulatedAttempt,
     SimulatedTask,
+    brier_score,
+    calibration_bins,
     expected_calibration_error,
     run_simulation,
 )
@@ -24,6 +27,7 @@ __all__ = [
     "PRIOR_CONFIDENCE",
     "PROACTIVE_CONTACT",
     "SIM_TASK_PREFIX",
+    "CalibrationBin",
     "Confidence",
     "FeedbackError",
     "FeedbackRecord",
@@ -31,6 +35,8 @@ __all__ = [
     "Outcome",
     "SimulatedAttempt",
     "SimulatedTask",
+    "brier_score",
+    "calibration_bins",
     "check_category",
     "expected_calibration_error",
     "run_simulation",

@@ -15,6 +15,8 @@ from aureus.feedback import (
     FeedbackStore,
     SimulatedAttempt,
     SimulatedTask,
+    brier_score,
+    calibration_bins,
     expected_calibration_error,
     run_simulation,
 )
@@ -125,6 +127,39 @@ def test_calibration_error_accepts_an_expectation_of_exactly_one() -> None:
 def test_calibration_error_needs_at_least_one_attempt() -> None:
     with pytest.raises(ValueError, match="没有行动"):
         expected_calibration_error([])
+
+
+def test_brier_score_of_known_attempts() -> None:
+    attempts = [
+        SimulatedAttempt("sim_task:x", 0.8, succeeded=True),
+        SimulatedAttempt("sim_task:x", 0.8, succeeded=False),
+        SimulatedAttempt("sim_task:x", 0.2, succeeded=False),
+    ]
+
+    assert brier_score(attempts) == pytest.approx(0.24)
+
+
+def test_brier_score_rejects_no_attempts() -> None:
+    with pytest.raises(ValueError, match="没有行动"):
+        brier_score([])
+
+
+def test_calibration_bins_match_the_ece() -> None:
+    attempts = [
+        SimulatedAttempt("sim_task:x", 0.21, succeeded=True),
+        SimulatedAttempt("sim_task:x", 0.24, succeeded=False),
+        SimulatedAttempt("sim_task:x", 0.81, succeeded=True),
+        SimulatedAttempt("sim_task:x", 1.0, succeeded=False),
+    ]
+    bins = calibration_bins(attempts)
+    expected_error = sum(
+        abs(calibration_bin.mean_expected - calibration_bin.success_rate)
+        * calibration_bin.count
+        / len(attempts)
+        for calibration_bin in bins
+    )
+
+    assert expected_calibration_error(attempts) == pytest.approx(expected_error)
 
 
 @pytest.mark.parametrize("rate", [-0.1, 1.1])
