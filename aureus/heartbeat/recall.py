@@ -7,8 +7,10 @@ https://github.com/Mai-with-u/MaiBot/blob/edf42446f123149c57fc79765dd5a8b004b852
 """
 
 import logging
+import re
 from collections.abc import Sequence
 from datetime import tzinfo
+from hashlib import sha256
 
 from aureus.agenda import FindingStore
 from aureus.common import MemoryConfig
@@ -21,6 +23,18 @@ logger = logging.getLogger(__name__)
 # D80 第 4 条：MaiBot 结果块上限；超过时只丢整条。
 MAX_RECALL_CHARS = 900
 REPLYER_MEMORY_REFERENCE_MARKER = "【长期记忆检索结果·内部参考】只供参考，不要原样念出来。"
+HEURISTIC_MEMORY_REFERENCE_MARKER = "【启发式记忆·内部参考】只供参考，不要原样念出来。"
+_RECALL_CUES = re.compile(r"还记得|记得|我说过|你说过|之前|上次|以前|最近")
+_QUERY_WORD = re.compile(r"[^\W_]{2,20}")
+
+
+def heuristic_keywords(messages: Sequence[TimelineRecord]) -> tuple[str, ...]:
+    """按本轮明确的回忆提示提取若干检索词，沿用 D80 的词数与长度限制。"""
+    newest = messages[-1].content
+    if not _RECALL_CUES.search(newest):
+        return ()
+    query = _RECALL_CUES.sub(" ", newest).rstrip("？?吗么呢。！! ")
+    return tuple(dict.fromkeys(_QUERY_WORD.findall(query)))[:3]
 
 
 def memory_entry(
@@ -30,16 +44,17 @@ def memory_entry(
     kind = record.event_type
     if kind == events.EVENT_MESSAGE:
         label = "某人"
+        person_id = record.metadata.get("person_id")
         if record.actor_type is ActorType.ME:
             label = "我"
         elif record.actor_type is ActorType.USER:
             label = "用户"
         elif record.actor_type is ActorType.PERSON and people is not None:
-            person_id = record.metadata.get("person_id")
             person = people.get(person_id) if type(person_id) is int else None
             if person is not None and person.name:
                 label = person.name
-        return MemoryEntry(label, record.content)
+        person_key = f"aureus:{person_id}" if type(person_id) is int else None
+        return MemoryEntry(label, record.content, person_key)
     if kind == events.EVENT_EXPLORATION_RESULT:
         if record.metadata.get("outcome") != "found" or findings is None:
             return None
@@ -58,15 +73,32 @@ def memory_entry(
 
 
 def format_recall(
-    keywords: Sequence[str], hits: Sequence[MemoryHit], timezone: tzinfo | None = None
+    keywords: Sequence[str],
+    hits: Sequence[MemoryHit],
+    timezone: tzinfo | None = None,
+    *,
+    heuristic: bool = False,
 ) -> str:
     """移植 MaiBot 的查询、命中数和编号行格式；从末尾删整条至 900 字内。"""
-    lines = [REPLYER_MEMORY_REFERENCE_MARKER, f"查询：{'、'.join(keywords)}"]
+    marker = HEURISTIC_MEMORY_REFERENCE_MARKER if heuristic else REPLYER_MEMORY_REFERENCE_MARKER
+    lines = [marker, f"查询：{'、'.join(keywords)}"]
     hit_lines: list[str] = []
     for index, hit in enumerate(hits, start=1):
         normalized_content = " ".join(hit.text.split())
-        stamp = hit.recorded_at.astimezone(timezone).strftime("%Y-%m-%d %H:%M")
-        hit_lines.append(f"{index}. {stamp} {hit.actor_label}：{normalized_content}")
+        stamp = (
+            hit.recorded_at.astimezone(timezone).strftime("%Y-%m-%d %H:%M")
+            if hit.recorded_at is not None
+            else "时间未记录"
+        )
+        if hit.time_precision:
+            stamp += f"（{hit.time_precision}）"
+        provenance = ""
+        if hit.source is not None:
+            digest = sha256(hit.source.encode().encode()).hexdigest()[:12]
+            linked = sum(item.source is not None and item.status is None for item in hit.evidence)
+            provenance = f" [来源 {hit.source.table}/{digest}，可追溯证据 {linked} 条]"
+        actor = " ".join(hit.actor_label.split())[:48] or "说话人未记录"
+        hit_lines.append(f"{index}. {stamp} {actor}：{normalized_content}{provenance}")
     while True:
         block = "\n".join(
             [*lines, f"命中：{len(hit_lines)} 条", *(hit_lines or ["没有找到相关的记忆。"])]

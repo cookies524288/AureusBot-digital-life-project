@@ -515,6 +515,7 @@ class MemoryConfig(BaseModel):
 
     enabled: bool = True
     recall_enabled: bool = True
+    heuristic_recall_enabled: bool = False
     max_results: int = Field(default=5, ge=1, le=20)
     index_batch: int = Field(default=200, ge=1, le=5000)
 
