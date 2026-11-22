@@ -387,13 +387,13 @@ class CortisolConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     enabled: bool = False
-    # 上升段参考应激实验的采样时程，半衰期参考内源性分泌估计。均为接线暂用值。
+    # 上升段参考应激实验的采样时程，半衰期参考内源性分泌估计。行为校准见任务 3.8。
     rise_seconds: float = Field(default=600.0, ge=1, le=86400)
     half_life_seconds: float = Field(default=3960.0, ge=1, le=86400)
-    # 无量纲软件参数，行为作用留到 3.7 后校准。
+    # 无量纲软件参数，行为门槛由 3.7 离线回放校准。
     baseline_span: float = Field(default=0.4, ge=0, le=1)
     failure_peak: float = Field(default=0.55, ge=0, le=1)
-    defer_at: float = Field(default=0.65, gt=0, le=1)
+    defer_at: float = Field(default=0.75, gt=0, le=1)
 
 
 class PeopleConfig(BaseModel):

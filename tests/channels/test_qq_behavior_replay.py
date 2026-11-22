@@ -15,6 +15,7 @@ from websockets.asyncio.server import ServerConnection, serve
 from aureus.common import AureusPaths, ManualClock
 from aureus.core import runtime
 from aureus.core.model_runtime import ModelRuntime
+from aureus.feedback import COMMITMENT_KEPT, Outcome
 from aureus.heartbeat import Perception, build_prompt_scenes, registered_templates
 from aureus.memory import HistoricalMemory, LanguageKind, LanguageStore, MemoryIndex, MemorySource
 from aureus.organs import (
@@ -113,6 +114,7 @@ async def open_replay(
     judge_enabled: bool = False,
     history_limit: int = 20,
     heuristic: bool = False,
+    cortisol: bool | None = None,
 ) -> AsyncIterator[Replay]:
     paths = AureusPaths(home)
     paths.ensure_directories()
@@ -136,6 +138,12 @@ async def open_replay(
 
     async with asyncio.timeout(15), serve(fake.handle, "127.0.0.1", 0) as server:
         port = server.sockets[0].getsockname()[1]
+        regulation = ""
+        if cortisol is not None:
+            regulation = (
+                "[initiative]\nenabled = true\n[time]\ntimezone = 'UTC'\n"
+                f"[cortisol]\nenabled = {str(cortisol).lower()}\n"
+            )
         paths.runtime_config_file.write_text(
             f"""[heartbeat]
 planning_enabled = true
@@ -162,7 +170,7 @@ enabled = false
 enabled = true
 account_id = "{ACCOUNT}"
 endpoint = "ws://127.0.0.1:{port}/onebot"
-""",
+{regulation}""",
             encoding="utf-8",
         )
         with monkeypatch.context() as patch:
@@ -181,6 +189,25 @@ endpoint = "ws://127.0.0.1:{port}/onebot"
 
                 patch.setattr(core.heartbeat, "submit", observe)
                 core.heartbeat.wake_up()
+                if cortisol is not None:
+                    # 让两组具有相同的已结算输入；日程真实结算另由主动联系专项覆盖。
+                    source = core.timeline.append(
+                        event_type="synthetic_commitment",
+                        content="回放约定",
+                        actor_type=ActorType.ME,
+                        visibility=VisibilityScope.PRIVATE,
+                    )
+                    feedback = core.feedback
+                    assert feedback is not None
+                    record = feedback.record_expectation(COMMITMENT_KEPT, 0.8, source.id)
+                    feedback.record_outcome(record, Outcome.FAILURE)
+                    clock.advance(timedelta(minutes=10))
+                    timing = core.heartbeat._cortisol
+                    if cortisol:
+                        assert timing is not None and timing.should_defer(clock.now())
+                    else:
+                        assert timing is None
+
                 try:
                     async with core.qq:
                         remote = await fake.connections.get()
@@ -202,10 +229,13 @@ endpoint = "ws://127.0.0.1:{port}/onebot"
     assert paths.identity_file.read_bytes() == IDENTITY
 
 
+@pytest.mark.parametrize("cortisol", [False, True])
 async def test_group_replay_silence_then_addressed_reply_with_quote(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cortisol: bool
 ) -> None:
-    async with open_replay(tmp_path, monkeypatch, ManualClock(START)) as replay:
+    async with open_replay(
+        tmp_path, monkeypatch, ManualClock(START - timedelta(minutes=10)), cortisol=cortisol
+    ) as replay:
         person = replay.core.people.meet("qq", "2300")
         replay.core.people.publish_history(
             [
@@ -283,15 +313,17 @@ async def test_group_replay_silence_then_addressed_reply_with_quote(
         assert "喜欢银杏" in reply.prompt
 
 
+@pytest.mark.parametrize("cortisol", [False, True])
 async def test_group_replay_hormone_state_changes_silence_and_delivery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cortisol: bool
 ) -> None:
     outcomes: dict[bool, tuple[list[TimelineRecord], list[TimelineRecord]]] = {}
     for enabled in (False, True):
         async with open_replay(
             tmp_path / str(enabled),
             monkeypatch,
-            ManualClock(START),
+            ManualClock(START - timedelta(minutes=10)),
+            cortisol=cortisol,
             hormones=enabled,
             judge_enabled=True,
         ) as replay:
@@ -321,11 +353,14 @@ async def test_group_replay_hormone_state_changes_silence_and_delivery(
 
 
 @pytest.mark.parametrize(("fatigue", "delay"), [(False, 0), (True, 20)])
+@pytest.mark.parametrize("cortisol", [False, True])
 async def test_group_replay_same_input_changes_timing_with_fatigue(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fatigue: bool, delay: int
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cortisol: bool, fatigue: bool, delay: int
 ) -> None:
-    clock = ManualClock(START)
-    async with open_replay(tmp_path, monkeypatch, clock, fatigue=fatigue) as replay:
+    clock = ManualClock(START - timedelta(minutes=10))
+    async with open_replay(
+        tmp_path, monkeypatch, clock, fatigue=fatigue, cortisol=cortisol
+    ) as replay:
         attempt = CallAttempt(
             model="test", provider="test", prompt_tokens=10, completion_tokens=5, succeeded=True
         )
