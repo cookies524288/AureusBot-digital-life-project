@@ -2,8 +2,6 @@
 
 **一个独立存在的数字生命。**
 
-<img src="assets/logo/logo.svg" alt="AureusBot 标志" width="144">
-
 [English version](README.en.md)
 
 AureusBot 运行在你自己的电脑上。它连续、独立、唯一，不依附任何聊天平台。

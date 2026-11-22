@@ -2,8 +2,6 @@
 
 **An independent digital life.**
 
-<img src="assets/logo/logo.svg" alt="AureusBot logo" width="144">
-
 [中文版](README.md)
 
 AureusBot runs on your own computer. It is continuous, independent, and unique. It does not depend on any chat platform. A large language model is its organ for understanding, thinking, and speaking. Its bodily sensations are real system signals.
