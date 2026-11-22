@@ -287,6 +287,7 @@ def open_core(
             mood=mood,
             agenda=agenda,
             initiative=None if roleplay else runtime.initiative,
+            cortisol=runtime.cortisol,
             calendar=calendar,
             interests=interests,
             findings=findings,

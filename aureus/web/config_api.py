@@ -29,7 +29,9 @@ from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
 from .config_files import (
     PASSWORD_SECTIONS,
     READONLY_CONFIG,
+    BiochemicalWriteError,
     ConfigService,
+    check_biochemical_write,
     models_require_password,
     runtime_field_names,
 )
@@ -48,6 +50,8 @@ def _translate_errors(service: ConfigService) -> Iterator[None]:
         raise HTTPException(429, detail=str(error), headers={"Retry-After": str(seconds)}) from None
     except LoginRejectedError:
         raise HTTPException(403, detail="密码不对。") from None
+    except BiochemicalWriteError as error:
+        raise HTTPException(403, detail=str(error)) from None
     except ConfigError as error:
         raise HTTPException(422, detail=str(error)) from None
     except VaultError as error:
@@ -102,6 +106,7 @@ def _runtime_changes(body: dict[str, Any]) -> dict[str, Any]:
     changes = body.get("changes")
     if not isinstance(changes, dict):
         raise HTTPException(422, detail="提交的配置改动必须是对象。")
+    check_biochemical_write(changes)
     for value in changes.values():
         fields = value.values() if isinstance(value, dict) else [value]
         if any(not isinstance(item, (bool, int, float, str)) for item in fields):

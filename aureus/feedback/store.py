@@ -165,6 +165,10 @@ class FeedbackStore:
             "CREATE INDEX IF NOT EXISTS idx_feedback_source"
             " ON feedback_records(category, source_id)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_feedback_category_outcome_at"
+            " ON feedback_records(category, outcome, outcome_at)"
+        )
         # 预期、类别、时间、来源写入后一个字都不许改；结果只能从 unknown 变成
         # success 或 failure 一次，已经有结果的不许再改，也不许改回 unknown。
         conn.execute(
@@ -296,6 +300,29 @@ class FeedbackStore:
                 (Outcome.UNKNOWN.value, _format_timestamp(moment)),
             )
             .fetchall()
+        )
+        return [_record_of(row) for row in rows]
+
+    def commitment_failures(self, since: datetime, until: datetime) -> list[FeedbackRecord]:
+        """按结算时间取承诺失败。同一来源只取最早一次失败，重放不会延长作用。"""
+        rows = self._require_open().execute(
+            """
+            SELECT f.* FROM feedback_records AS f
+            WHERE f.category = ? AND f.outcome = ? AND f.outcome_at BETWEEN ? AND ?
+              AND f.source_id IS NOT NULL AND NOT EXISTS (
+                  SELECT 1 FROM feedback_records AS earlier
+                  WHERE earlier.category = f.category AND earlier.source_id = f.source_id
+                    AND earlier.outcome = f.outcome
+                    AND (earlier.outcome_at, earlier.id) < (f.outcome_at, f.id)
+              )
+            ORDER BY f.outcome_at, f.id
+            """,
+            (
+                COMMITMENT_KEPT,
+                Outcome.FAILURE.value,
+                _format_timestamp(since),
+                _format_timestamp(until),
+            ),
         )
         return [_record_of(row) for row in rows]
 

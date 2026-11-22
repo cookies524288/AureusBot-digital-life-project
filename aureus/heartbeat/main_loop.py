@@ -40,6 +40,7 @@ from aureus.common import (
     PeopleConfig,
     PersonaGrowthConfig,
 )
+from aureus.common.config import CortisolConfig
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat import exploration_runner, interest_changes
@@ -59,6 +60,7 @@ from aureus.heartbeat.conversation import (
     _Thought,
     _ThoughtOutcome,
 )
+from aureus.heartbeat.cortisol import CortisolTiming
 from aureus.heartbeat.diary_runner import DiaryOutcome, DiaryTracker, write_diary
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.events import (
@@ -75,7 +77,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
-from aureus.heartbeat.initiative import decide
+from aureus.heartbeat.initiative import InitiativeDecision, decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import Judgment, TowardMeKind
 from aureus.heartbeat.perception import (
@@ -197,6 +199,7 @@ class Heartbeat:
         mood: Mood | None = None,
         agenda: AgendaStore | None = None,
         initiative: InitiativeConfig | None = None,
+        cortisol: CortisolConfig | None = None,
         calendar: BudgetCalendar | None = None,
         interests: InterestStore | None = None,
         findings: FindingStore | None = None,
@@ -234,6 +237,7 @@ class Heartbeat:
             feedback: 反馈存储，要已经打开；认知状态里的信心读它（D67）。不给就显示没有数据。
             judge: 判断器官的配置；不给或 enabled 为 False 就不调用判断（D68）。
             hormones: 激素的内存状态，醒来时从时间线还原；不给就没有激素（D69）。
+            cortisol: 以本地时相和承诺失败推迟可选主动联系的配置（3.8）。
             affinity: 好感账，要已经打开；判断过的对话据此记好感变化，好感写进上下文（D71）。
                 不给就没有好感。
             empathy: 同理心配置；不给或 enabled 为 False 就不共情（D72）。共情需要激素。
@@ -335,6 +339,11 @@ class Heartbeat:
             initiative_config = initiative_config.model_copy(update={"enabled": False})
         calendar = calendar or BudgetCalendar(timezone)
         self._initiative = InitiativeTracker(initiative_config, timeline, feedback, calendar)
+        self._cortisol = (
+            CortisolTiming(cortisol, calendar.timezone, feedback)
+            if cortisol is not None and cortisol.enabled and initiative_config.enabled
+            else None
+        )
         self._sinks: dict[str, MessageSink] = {}
         self._interests = None if config.roleplay_mode else interests
         self._findings = findings
@@ -1100,6 +1109,8 @@ class Heartbeat:
                 cautious=self._mood.cautious if self._mood is not None else False,
                 has_channel=target is not None,
             )
+            if decision.allowed and self._cortisol is not None and self._cortisol.should_defer(now):
+                decision = InitiativeDecision(False, "皮质醇调节读数达到延后门槛", ())
             if not tracker.consider(decision) or target is None:
                 return
             finding = self._exploration.finding_to_share(now)

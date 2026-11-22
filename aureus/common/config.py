@@ -342,6 +342,21 @@ class HormonesConfig(BaseModel):
         return self
 
 
+class CortisolConfig(BaseModel):
+    """皮质醇启发的主动联系调节（D89、D91 与 3.8）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = False
+    # 上升段参考应激实验的采样时程，半衰期参考内源性分泌估计。均为接线暂用值。
+    rise_seconds: float = Field(default=600.0, ge=1, le=86400)
+    half_life_seconds: float = Field(default=3960.0, ge=1, le=86400)
+    # 无量纲软件参数，行为作用留到 3.7 后校准。
+    baseline_span: float = Field(default=0.4, ge=0, le=1)
+    failure_peak: float = Field(default=0.55, ge=0, le=1)
+    defer_at: float = Field(default=0.65, gt=0, le=1)
+
+
 class PeopleConfig(BaseModel):
     """人际的配置（aureus.toml 的 [people]，好感的设计见 docs/10-decisions.md 的 D71）。
 
@@ -526,6 +541,7 @@ class RuntimeConfig(BaseModel):
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     hormones: HormonesConfig = Field(default_factory=HormonesConfig)
+    cortisol: CortisolConfig = Field(default_factory=CortisolConfig)
     people: PeopleConfig = Field(default_factory=PeopleConfig)
     empathy: EmpathyConfig = Field(default_factory=EmpathyConfig)
     mood: MoodConfig = Field(default_factory=MoodConfig)

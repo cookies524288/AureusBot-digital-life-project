@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 
 from aureus.common import RuntimeConfig
-from aureus.web.config_files import ConfigService
+from aureus.common.config import CortisolConfig, load_runtime_config
+from aureus.web.config_files import BiochemicalWriteError, ConfigService
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import GOOD
 
@@ -57,8 +58,65 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
     assert data["config"] == RuntimeConfig().model_dump(mode="json")
     assert data["schema"] == RuntimeConfig.model_json_schema()
     assert "$defs" in data["schema"]
-    assert data["readonly"] == ["config_version", "web.enabled", "web.allow_remote", "web.port"]
+    assert data["readonly"] == [
+        "config_version",
+        "web.enabled",
+        "web.allow_remote",
+        "web.port",
+        *(f"cortisol.{name}" for name in CortisolConfig.model_fields),
+    ]
     assert data["password_sections"] == ["safety", "web"]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"cortisol": {"enabled": True}},
+        {"cortisol": {"rise_seconds": 900.0}},
+        {"cortisol": {}},
+        {"cortisol": False},
+        {"cortisol.rise_seconds": 900.0},
+        {"cortisol.rise_seconds": None},
+        {"log_level": "DEBUG", "cortisol": {"enabled": False, "rise_seconds": 1000.0}},
+    ],
+)
+def test_biochemical_write_targets_are_rejected_atomically(
+    rig: ConfigRig, changes: dict[str, Any]
+) -> None:
+    path = rig.paths.runtime_config_file
+    before = b"[cortisol]\nenabled = true\nrise_seconds = 900.0\n"
+    path.write_bytes(before)
+    response = rig.client.put("/api/config", json={"changes": changes})
+    assert response.status_code == 403
+    assert "只能在 config/aureus.toml" in response.json()["detail"]
+    with pytest.raises(BiochemicalWriteError):
+        rig.service.write_runtime(changes)
+    assert not rig.service.restart_required
+    assert path.read_bytes() == before
+
+
+def test_toml_single_key_revert_uses_current_developer_default(rig: ConfigRig) -> None:
+    path = rig.paths.runtime_config_file
+    keep = b"[cortisol]\nenabled = true  # keep\n"
+    override = b"rise_seconds = 900.0\n"
+    path.write_bytes(keep + override)
+    config = load_runtime_config(rig.paths).cortisol
+    assert config.enabled is True and config.rise_seconds == 900.0
+    data = rig.client.get("/api/config").json()
+    assert data["config"]["cortisol"] == config.model_dump()
+    defaults = CortisolConfig()
+    schema = data["schema"]["$defs"]["CortisolConfig"]["properties"]
+    assert {key: field["default"] for key, field in schema.items()} == defaults.model_dump()
+
+    path.write_bytes(keep)
+    reloaded = load_runtime_config(rig.paths).cortisol
+    assert reloaded.enabled is True and reloaded.rise_seconds == defaults.rise_seconds
+    assert rig.client.get("/api/config").json()["config"]["cortisol"] == reloaded.model_dump()
+    assert (
+        rig.client.put("/api/config", json={"changes": {"log_level": "DEBUG"}}).status_code == 200
+    )
+    assert keep in path.read_bytes() and b"rise_seconds" not in path.read_bytes()
+    assert load_runtime_config(rig.paths).cortisol == reloaded
 
 
 @pytest.mark.parametrize(
