@@ -3,7 +3,15 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from aureus.organs import FakeReplyer, KeyResolver, LLMOrgan, ModelsConfig, Organ, OrganBus
+from aureus.organs import (
+    FakeReplyer,
+    KeyResolver,
+    LLMOrgan,
+    ModelsConfig,
+    Organ,
+    OrganBus,
+    PromptStore,
+)
 
 
 @dataclass(frozen=True)
@@ -24,9 +32,11 @@ class ModelRuntime:
         *,
         fake_organs: bool,
         fake_reply_organ: str | None = None,
+        prompts: PromptStore | None = None,
     ) -> None:
         self.bus = bus
         self._resolver = resolver
+        self.prompts = prompts
         # 来源是启动参数 --fake；热重载不能把假器官切换成真实调用。
         self._fake_organs = fake_organs
         self._fake_reply_organ = fake_reply_organ if fake_organs else None
@@ -55,7 +65,7 @@ class ModelRuntime:
             organs.append(
                 FakeReplyer(organ_id=name)
                 if self._fake_organs
-                else LLMOrgan(name, routes, self._resolver)
+                else LLMOrgan(name, routes, self._resolver, prompts=self.prompts)
             )
         # 启动时的假回复器来自心跳配置，models.toml 可以没有同名条目。
         if self._fake_reply_organ is not None and self._fake_reply_organ not in config.organs:

@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 from aureus.channels import WebChannel
 from aureus.common import AureusPaths, ManualClock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
-from aureus.organs import KeyResolver, OrganBus
+from aureus.heartbeat import registered_templates
+from aureus.identity import Identity
+from aureus.organs import KeyResolver, OrganBus, PromptStore
 from aureus.timeline import TimelineDatabase
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 from aureus.web.config_files import ConfigService
@@ -15,7 +17,9 @@ from tests.web.test_timeline_api import FAST_HASHER, GOOD, NOW, FakeHeartbeat
 
 
 class ConfigRig:
-    def __init__(self, tmp_path: Path, *, password_set: bool = True) -> None:
+    def __init__(
+        self, tmp_path: Path, *, password_set: bool = True, prompt_identity: Identity | None = None
+    ) -> None:
         self.paths = AureusPaths(tmp_path)
         self.paths.ensure_directories()
         self.clock = ManualClock(NOW)
@@ -31,8 +35,18 @@ class ConfigRig:
         self.heartbeat = FakeHeartbeat()
         self.service = ConfigService(self.paths)
         self.models = ModelRuntime(
-            OrganBus(), KeyResolver(self.paths.env_file, environ={}), fake_organs=True
+            OrganBus(),
+            KeyResolver(self.paths.env_file, environ={}),
+            fake_organs=True,
+            prompts=PromptStore(self.paths.home / "prompts.toml", registered_templates())
+            if prompt_identity is not None
+            else None,
         )
+
+        def read_identity() -> Identity:
+            assert prompt_identity is not None
+            return prompt_identity
+
         self.app = create_app(
             config=config,
             auth=self.auth,
@@ -43,6 +57,7 @@ class ConfigRig:
             clock=self.clock,
             config_files=self.service,
             model_runtime=self.models,
+            prompt_identity=read_identity if prompt_identity is not None else None,
         )
         self.client = TestClient(self.app, client=("127.0.0.1", 50000))
 

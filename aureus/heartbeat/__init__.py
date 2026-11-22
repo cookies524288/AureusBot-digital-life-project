@@ -47,6 +47,7 @@ from .perception import (
     VisibilityScope,
 )
 from .planning import Plan, ReplyLength, parse_plan
+from .prompt_preview import build_prompt_scenes, catalog_template_keys, registered_templates
 from .reply_strategy import ReplyStrategy, choose_strategy, judge_allowed
 
 __all__ = [
@@ -90,9 +91,12 @@ __all__ = [
     "TrustLevel",
     "VisibilityScope",
     "assess_downtime",
+    "build_prompt_scenes",
+    "catalog_template_keys",
     "choose_strategy",
     "judge_allowed",
     "parse_judgment",
     "parse_plan",
     "recent_dialogue",
+    "registered_templates",
 ]

@@ -33,6 +33,7 @@ from aureus.channels import WebChannel
 from aureus.common import Clock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
+from aureus.identity import Identity
 from aureus.organs import OrganResponse
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
@@ -47,6 +48,7 @@ from .auth import (
 )
 from .config_api import register_config_routes
 from .config_files import ConfigService
+from .prompt_api import register_prompt_routes
 from .session import SessionStore
 from .settings import SettingsService
 from .settings_api import register_settings_routes
@@ -202,6 +204,7 @@ def create_app(
     clock: Clock | None = None,
     config_files: ConfigService | None = None,
     model_runtime: ModelRuntime | None = None,
+    prompt_identity: Callable[[], Identity] | None = None,
     open_terminal: Callable[[], Awaitable[None]] | None = None,
     request_shutdown: Callable[[], None] | None = None,
     request_restart: Callable[[], None] | None = None,
@@ -438,6 +441,21 @@ def create_app(
         register_config_routes(
             app, config_files, auth, require_ready, model_runtime, run_model_test
         )
+        if (
+            model_runtime is not None
+            and model_runtime.prompts is not None
+            and prompt_identity is not None
+            and clock is not None
+        ):
+            register_prompt_routes(
+                app,
+                store=model_runtime.prompts,
+                files=config_files,
+                runtime=config_files.runtime,
+                identity=prompt_identity,
+                clock=clock,
+                require_ready=require_ready,
+            )
 
     # ---------- 网页本身 ----------
     # 和 API 一起加载，避免更新磁盘文件后旧进程提供依赖新接口的页面。
