@@ -13,8 +13,16 @@ from tomlkit.exceptions import TOMLKitError
 from aureus.common import ConfigError
 from aureus.common.vault import ENTRY_ID_PATTERN, MAX_SECRET_CHARS, VaultError
 from aureus.core.model_runtime import ModelRuntime
-from aureus.organs import API_KEY_ENV_PATTERN, BUILTIN_ORGANS, validate_models_config
+from aureus.organs import (
+    API_KEY_ENV_PATTERN,
+    BUILTIN_ORGANS,
+    OrganCallError,
+    OrganResponse,
+    validate_models_config,
+)
+from aureus.organs.llm_adapter import probe_model
 from aureus.organs.model_catalog import list_provider_models
+from aureus.safety import CallRejectedError
 
 from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
 from .config_files import (
@@ -106,6 +114,8 @@ def register_config_routes(
     auth: WebAuth,
     require_ready: Callable[..., Awaitable[str]],
     model_runtime: ModelRuntime | None = None,
+    run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
+    | None = None,
 ) -> None:
     """注册配置接口；统一要求已登录且已修改默认密码。"""
     if model_runtime is not None:
@@ -125,8 +135,39 @@ def register_config_routes(
             _, current = await asyncio.to_thread(service.read_models)
             provider = next((item for item in current.providers if item.name == name), None)
             if provider is None:
-                raise HTTPException(404, detail="请先保存厂商配置。")
+                raise HTTPException(404, detail="请先保存API供应商配置。")
             return {"models": await list_provider_models(provider, service.key_resolver)}
+
+    testing = asyncio.Lock()
+
+    @app.post("/api/models/test")
+    async def test_model(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, Any]:
+        if request.headers.get("origin") != f"{request.url.scheme}://{request.url.netloc}":
+            raise HTTPException(403, detail="请从当前网页发起模型测试。")
+        if model_runtime is None or not model_runtime.can_test_models or run_model_test is None:
+            raise HTTPException(403, detail="当前运行模式不可调用真实模型。")
+        if testing.locked():
+            raise HTTPException(409, detail="正在测试模型，请稍后再试。")
+        async with testing:
+            with _translate_errors(service):
+                name = (await _body(request)).get("model")
+                _, current = await asyncio.to_thread(service.read_models)
+                model = next((item for item in current.models if item.name == name), None)
+                if model is None:
+                    raise HTTPException(404, detail="请先保存模型配置。")
+                provider = next(item for item in current.providers if item.name == model.provider)
+                resolver = model_runtime.key_resolver
+                try:
+                    result = await run_model_test(lambda: probe_model(model, provider, resolver))
+                except OrganCallError as error:
+                    raise HTTPException(
+                        502, detail="模型测试失败：" + "；".join(error.failures)
+                    ) from None
+                except CallRejectedError as error:
+                    raise HTTPException(403, detail=str(error)) from None
+                return result.metadata
 
     @app.put("/api/models")
     async def edit_models(

@@ -12,6 +12,7 @@
 import asyncio
 import os
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import aclosing
 from typing import Any, Self
 
 from loguru import logger
@@ -27,7 +28,13 @@ from aureus.organs.interface import (
     sum_costs,
 )
 from aureus.organs.llm_usage import TokenUsage, compute_cost, extract_usage
-from aureus.organs.model_config import ModelRoute, ModelsConfig, ProviderProtocol
+from aureus.organs.model_config import (
+    ModelConfig,
+    ModelRoute,
+    ModelsConfig,
+    ProviderConfig,
+    ProviderProtocol,
+)
 
 # 调用大模型的函数。默认是 litellm.acompletion；测试时换成假的，不联网。
 CompletionFunction = Callable[..., Awaitable[Any]]
@@ -124,6 +131,26 @@ def _rejected_before_processing(error: Exception) -> bool:
     )
 
 
+def _provider_arguments(provider: ProviderConfig, resolver: KeyResolver) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"timeout": provider.timeout_seconds, "num_retries": 0}
+    if provider.base_url is not None:
+        kwargs["api_base"] = provider.base_url
+    if provider.api_key_ref is not None or provider.api_key_env is not None:
+        key = (
+            resolver.get_vault(provider.api_key_ref)
+            if provider.api_key_ref is not None
+            else resolver.get(provider.api_key_env or "")
+        )
+        if key is None:
+            raise _RouteFailureError(
+                "引用的 API key 不存在或类型不匹配"
+                if provider.api_key_ref is not None
+                else f"密钥缺失（{provider.api_key_env} 没有填写）"
+            )
+        kwargs["api_key"] = key.get_secret_value()
+    return kwargs
+
+
 def _retryable(error: Exception) -> bool:
     return any(error_class.__name__ in RETRYABLE_ERROR_NAMES for error_class in type(error).__mro__)
 
@@ -177,6 +204,93 @@ def _read_text(response: Any) -> str | None:
 def _load_litellm_completion() -> CompletionFunction:
     # 创建真实器官发生在启动阶段，不在心跳循环里，导入慢一点不要紧。
     return _import_litellm().acompletion
+
+
+_MODEL_TEST_INPUT = "Reply OK."
+_MODEL_TEST_MAX_TOKENS = 32
+
+
+async def probe_model(
+    model: ModelConfig, provider: ProviderConfig, resolver: KeyResolver
+) -> OrganResponse:
+    """测量首段可见文字或向量的返回时间，报告一次调用的用量。"""
+    organ_id = "model_test"
+    try:
+        params = _provider_arguments(provider, resolver)
+    except _RouteFailureError as error:
+        raise OrganCallError(organ_id, [error.reason]) from None
+    library = await asyncio.to_thread(_import_litellm)
+    embedding = model.kind == "embedding"
+    protocol = provider.protocol
+    if embedding:
+        if protocol == "anthropic":
+            raise OrganCallError(organ_id, ["Anthropic 协议没有嵌入接口。"])
+        if protocol == "openai_responses":
+            protocol = "openai"
+    params["model"] = LITELLM_PREFIX_BY_PROTOCOL[protocol] + model.identifier
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    latency = None
+    failure = None
+    messages = [{"role": "user", "content": _MODEL_TEST_INPUT}]
+    usage = TokenUsage(
+        prompt_tokens=len(_MODEL_TEST_INPUT.encode()) if embedding else _byte_length(messages),
+        completion_tokens=0 if embedding else _MODEL_TEST_MAX_TOKENS,
+        known=False,
+    )
+    try:
+        async with asyncio.timeout(provider.timeout_seconds):
+            if embedding:
+                result = await library.aembedding(input=[_MODEL_TEST_INPUT], **params)
+                if result.data and result.data[0].get("embedding"):
+                    latency = loop.time() - started
+                actual = extract_usage(result)
+                if actual.known:
+                    usage = actual
+            else:
+                stream = await library.acompletion(
+                    messages=messages,
+                    stream=True,
+                    max_tokens=_MODEL_TEST_MAX_TOKENS,
+                    **params,
+                )
+                async with aclosing(stream):
+                    async for chunk in stream:
+                        if chunk.choices and latency is None:
+                            content = getattr(chunk.choices[0].delta, "content", None)
+                            if isinstance(content, str) and content.strip():
+                                latency = loop.time() - started
+                        actual = extract_usage(chunk)
+                        if actual.known:
+                            usage = actual
+    except Exception as error:
+        failure = _failure_reason(error)
+        if _rejected_before_processing(error):
+            usage = TokenUsage()
+    if latency is None and failure is None:
+        failure = EMPTY_REPLY_REASON
+    attempt = CallAttempt(
+        model=model.name,
+        provider=provider.name,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cached_tokens=usage.cached_tokens,
+        estimated=not usage.known,
+        succeeded=failure is None,
+        failure_reason=failure,
+        cost=0.0
+        if usage.known and not (usage.prompt_tokens or usage.completion_tokens)
+        else compute_cost(model, usage),
+    )
+    if failure is not None:
+        raise OrganCallError(organ_id, [failure], [attempt])
+    assert latency is not None
+    return OrganResponse(
+        organ_id,
+        "",
+        metadata={"latency_ms": round(latency * 1000), "kind": model.kind},
+        attempts=[attempt],
+    )
 
 
 # 调用方没给背景时的系统提示词：有些服务商不收空的系统消息。
@@ -375,27 +489,10 @@ class LLMOrgan:
         """
         provider = route.provider
         kwargs: dict[str, Any] = {
+            **_provider_arguments(provider, self._key_resolver),
             "model": LITELLM_PREFIX_BY_PROTOCOL[provider.protocol] + route.model.identifier,
             "messages": messages,
-            "timeout": provider.timeout_seconds,
-            "num_retries": 0,
         }
-        if provider.base_url is not None:
-            kwargs["api_base"] = provider.base_url
-        if provider.api_key_ref is not None or provider.api_key_env is not None:
-            key = (
-                self._key_resolver.get_vault(provider.api_key_ref)
-                if provider.api_key_ref is not None
-                else self._key_resolver.get(provider.api_key_env or "")
-            )
-            if key is None:
-                # 调用前就拒绝，不发出空请求（见 15 号文档第 4 节）。
-                raise _RouteFailureError(
-                    "引用的 API key 不存在或类型不匹配"
-                    if provider.api_key_ref is not None
-                    else f"密钥缺失（{provider.api_key_env} 没有填写）"
-                )
-            kwargs["api_key"] = key.get_secret_value()
         if route.temperature is not None:
             kwargs["temperature"] = route.temperature
         if route.max_tokens is not None:

@@ -31,6 +31,11 @@ class ModelRuntime:
         """所有运行中器官共用的内存解析器，供网页刷新密钥快照。"""
         return self._resolver
 
+    @property
+    def can_test_models(self) -> bool:
+        """假器官模式下禁止发出真实模型测试。"""
+        return not self._fake_organs
+
     def prepare(self, config: ModelsConfig) -> PreparedModels:
         """只构造、不应用；可在线程中执行，失败时文件和原器官都不改变。"""
         organs: list[Organ] = []

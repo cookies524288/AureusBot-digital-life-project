@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol
 
 from aureus.common import Clock, SafetyConfig
@@ -111,9 +111,17 @@ class SafetyGateway:
         # 「到点后不再发起新调用」：最多只有检查通过时正在进行的那一次会超出（D48）。
         # 代价是同一时刻只有一个器官调用；Phase 0 的心跳本来就是串行的。
         async with self._call_lock:
-            return await self._call_serialized(request)
+            return await self._call_serialized(request, lambda: self._bus.send(request))
 
-    async def _call_serialized(self, request: OrganRequest) -> OrganResponse:
+    async def test_model(self, probe: Callable[[], Awaitable[OrganResponse]]) -> OrganResponse:
+        """手动测试走同一套预算和记账，独立于后台器官的失败计数。"""
+        request = OrganRequest(organ_id="model_test", prompt="", purpose=CallPurpose.USER_REPLY)
+        async with self._call_lock:
+            return await self._call_serialized(request, probe)
+
+    async def _call_serialized(
+        self, request: OrganRequest, invoke: Callable[[], Awaitable[OrganResponse]]
+    ) -> OrganResponse:
         """持有调用锁时的完整流程：检查 → 调用器官 → 收尾。"""
         organ_id = request.organ_id
         try:
@@ -128,7 +136,7 @@ class SafetyGateway:
             raise
 
         try:
-            response = await self._bus.send(request)
+            response = await invoke()
         except OrganCallError as failure:
             self._finish(organ_id, failure.attempts, succeeded=False, detail=str(failure))
             raise

@@ -72,6 +72,7 @@ def open_web(
             model_runtime=core.models,
             open_terminal=open_terminal,
             request_shutdown=core.heartbeat.request_stop,
+            run_model_test=core.gateway.test_model,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

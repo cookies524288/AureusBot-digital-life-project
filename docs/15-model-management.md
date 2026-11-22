@@ -15,8 +15,10 @@
 | 层 | 管什么 | 主要字段 |
 |---|---|---|
 | 服务商 `providers` | 去哪里调用、怎么认证 | `name`、`base_url`、`protocol`、`api_key_ref` / `api_key_env`、`timeout_seconds`、`max_retry` |
-| 模型 `models` | 服务商提供的某个具体模型 | `name`（自己起的名字）、`identifier`（服务商给的模型标识）、`provider`、`kind`（`llm` / `embedding` / `vision`）、`price_in`、`price_out`、`price_cache_in`（元 / 百万 token，可选，只用来显示估算费用，D37）、`temperature`、`max_tokens`、`reasoning_levels`（该模型支持的思考等级） |
+| 模型 `models` | API供应商提供的某个具体模型 | `name`（自己起的名字）、`identifier`（API供应商给的模型标识）、`provider`、`kind`（`llm` / `embedding`）、`vision`（仅 `llm` 可开启，默认关闭）、`price_in`、`price_out`、`price_cache_in`（元 / 百万 token，可选，只用来显示估算费用，D37）、`temperature`、`max_tokens`、`reasoning_levels`（该模型支持的思考等级） |
 | 器官 `organs` | 每个器官用哪些模型 | 器官名（`planner`、`replyer`、`judge`、`summarizer`、`vision`……）、`models`（按名字引用，有顺序）、`strategy`（`sequential` / `balance` / `random`）、`max_tokens`、`temperature`、`reasoning_effort`（可选的思考等级） |
+
+旧配置中的 `kind = "vision"` 会读成 `kind = "llm"` 加 `vision = true`。视觉字段记录模型能力，当前测速始终发送纯文本。
 
 换模型：只改 `organs` 里引用的名字。加新服务商：在 `providers` 加一项，并用 `aureus keys set` 录入密钥（D36）。
 
@@ -39,7 +41,8 @@
 
 - 预算档位（Phase 1）：器官的模型列表按「从贵到便宜」排列，精力低时改用靠后的模型，不需要新机制。已在 1.6 实现：正常档从第一个模型开始，节省档从第二个，低电量和透支保护从最后一个，不可用时先往更便宜的试、再往更贵的试（D59）。
 - 模型与器官配置热重载已按 D86 实现：网页自动保存后，后续调用立即使用新路线；进行中的调用沿用原器官，安全网关和账本不重建。热重载先在工作线程校验、构造与加载，文件写入成功才切换；失败保留原文件和原器官。D87 起网页密钥改动也刷新内存，无需重启；运行配置及 CLI 跨进程密钥改动仍需重启。
-- 服务商预设模板、从服务商接口拉取模型列表：用得上的时候再做（开发守则 2.5）。
+- 网页模型库会为已配置的 API供应商获取可选模型，支持手动刷新和填写模型标识符。
+- 模型库的闪电按钮为已保存模型发起一次测试。对话模型显示首字延迟，嵌入模型显示向量响应耗时。请求经过运行中的安全网关并记入用量，假器官模式禁用真实测速。
 - 导入 MaiBot 的模型配置：由 `tools/migrate/` 提供转换命令，用户自己运行。密钥由用户用 `aureus keys set` 自己录入，转换工具不搬运密钥。
 - MaiBot 控制台的公开模板源码里带有第三方预置的密钥，我们既不复制也不使用。
 

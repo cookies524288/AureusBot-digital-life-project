@@ -1,5 +1,6 @@
 """LLMOrgan（真实器官）的测试：全部用假的调用函数，不联网、不花钱。"""
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import pytest
 
 from aureus.common.config import ConfigError
+from aureus.organs import llm_adapter
 from aureus.organs.api_keys import KeyResolver
 from aureus.organs.interface import CallAttempt, OrganCallError, OrganRequest
 from aureus.organs.llm_adapter import (
@@ -17,6 +19,7 @@ from aureus.organs.llm_adapter import (
     RETRY_BACKOFF_SECONDS,
     LLMOrgan,
     count_prompt_tokens,
+    probe_model,
 )
 from aureus.organs.model_config import ModelsConfig
 
@@ -137,6 +140,80 @@ def make_organ(completion: FakeCompletion, keys: KeyResolver, **config_kwargs: A
 
 def ask() -> OrganRequest:
     return OrganRequest(organ_id="replyer", prompt="你好")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol", LITELLM_PREFIX_BY_PROTOCOL)
+async def test_model_probe_stream_records_visible_text_and_final_usage(
+    keys: KeyResolver, protocol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        yield SimpleNamespace(choices=[])
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=None)])
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="OK"))])
+        yield SimpleNamespace(choices=[], usage=make_response(None, 7, 1).usage)
+
+    completion = FakeCompletion(chunks())
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config(protocol=protocol)
+    result = await probe_model(config.models[0], config.providers[0], keys)
+    assert result.metadata["latency_ms"] >= 0
+    assert result.metadata["kind"] == "llm"
+    assert result.attempts[0].budget_tokens == 8
+    assert not result.attempts[0].estimated
+    assert completion.calls[0]["stream"] is True
+    assert completion.calls[0]["num_retries"] == 0
+    assert (
+        completion.calls[0]["model"]
+        == LITELLM_PREFIX_BY_PROTOCOL[config.providers[0].protocol] + "big-model"
+    )
+    assert len(completion.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_probe_closes_failed_stream_and_sanitizes_error(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed = False
+
+    async def chunks() -> AsyncIterator[Any]:
+        nonlocal closed
+        try:
+            yield SimpleNamespace(choices=[])
+            raise Timeout(CLOUD_SECRET)
+        finally:
+            closed = True
+
+    completion = FakeCompletion(chunks())
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    with pytest.raises(OrganCallError, match="超时") as error:
+        await probe_model(config.models[0], config.providers[0], keys)
+    assert CLOUD_SECRET not in str(error.value)
+    assert error.value.attempts[0].estimated
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_embedding_probe_returns_latency_and_requests_one_vector(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = SimpleNamespace(data=[{"embedding": [0.1]}], usage=make_response(None, 5, 0).usage)
+    embedding = FakeCompletion(result)
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(aembedding=embedding)
+    )
+    config = make_config(protocol="openai_responses", big_kind="embedding", organ_models=("small",))
+    response = await probe_model(config.models[0], config.providers[0], keys)
+    assert response.metadata["kind"] == "embedding"
+    assert response.metadata["latency_ms"] >= 0
+    assert response.attempts[0].budget_tokens == 5
+    assert embedding.calls[0]["model"] == "openai/big-model"
+    assert len(embedding.calls[0]["input"]) == 1
 
 
 @pytest.mark.asyncio

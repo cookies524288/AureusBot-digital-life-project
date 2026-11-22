@@ -9,3 +9,4 @@ $icon = Join-Path (Split-Path -Parent $PSScriptRoot) 'assets\logo\aureus.ico'
 if ($LASTEXITCODE -ne 0) {
     throw "Launcher compilation failed (exit $LASTEXITCODE)."
 }
+Copy-Item -LiteralPath $icon -Destination (Join-Path (Split-Path -Parent $PSScriptRoot) 'aureus\web\static\aureus.ico')

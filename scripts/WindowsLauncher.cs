@@ -53,10 +53,19 @@ internal static class WindowsLauncher
         using (var menu = new ContextMenuStrip())
         using (var timer = new System.Windows.Forms.Timer { Interval = 200 })
         {
+            Action openPage = delegate
+            {
+                string url = Volatile.Read(ref webUrl);
+                if (url != null && !process.HasExited)
+                    using (Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })) { }
+            };
+            var open = menu.Items.Add("打开主页面");
+            open.Click += delegate { openPage(); };
             var exit = menu.Items.Add("退出");
             exit.Click += delegate
             {
                 exit.Enabled = false;
+                open.Enabled = false;
                 process.StandardInput.Close();
             };
             tray.Icon = icon ?? SystemIcons.Application;
@@ -64,9 +73,8 @@ internal static class WindowsLauncher
             tray.ContextMenuStrip = menu;
             tray.MouseClick += delegate(object sender, MouseEventArgs args)
             {
-                string url = Volatile.Read(ref webUrl);
-                if (args.Button == MouseButtons.Left && exit.Enabled && url != null)
-                    using (Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })) { }
+                if (args.Button == MouseButtons.Left && open.Enabled)
+                    openPage();
             };
             process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs args)
             {

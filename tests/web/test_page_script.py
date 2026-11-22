@@ -52,6 +52,7 @@ const context = vm.createContext({
       return nodes.get(id);
     },
     querySelectorAll: () => [], createElement: element,
+    createElementNS: (_, tag) => element(tag),
     createTextNode: text => ({ nodeType: 3, textContent: text }),
     documentElement: { dataset: {} },
   },

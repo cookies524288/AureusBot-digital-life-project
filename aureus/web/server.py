@@ -25,13 +25,14 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
 from aureus.common import Clock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
+from aureus.organs import OrganResponse
 from aureus.timeline import TimelineDatabase, TimelineQuery
 
 from .auth import (
@@ -193,6 +194,8 @@ def create_app(
     model_runtime: ModelRuntime | None = None,
     open_terminal: Callable[[], Awaitable[None]] | None = None,
     request_shutdown: Callable[[], None] | None = None,
+    run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
+    | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -347,7 +350,9 @@ def create_app(
         )
 
     if config_files is not None:
-        register_config_routes(app, config_files, auth, require_ready, model_runtime)
+        register_config_routes(
+            app, config_files, auth, require_ready, model_runtime, run_model_test
+        )
 
     # ---------- 网页本身 ----------
     # 和 API 一起加载，避免更新磁盘文件后旧进程提供依赖新接口的页面。
@@ -357,5 +362,13 @@ def create_app(
     async def index() -> HTMLResponse:
         """登录前也要能打开页面，所以不检查登录；页面里没有数据，数据都要登录后从接口取。"""
         return HTMLResponse(index_html, headers={"Cache-Control": "no-store"})
+
+    @app.get("/assets/ark-pixel.woff2", include_in_schema=False)
+    async def pixel_font() -> FileResponse:
+        return FileResponse(INDEX_PAGE.with_name("ark-pixel.woff2"), media_type="font/woff2")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        return FileResponse(INDEX_PAGE.with_name("aureus.ico"), media_type="image/x-icon")
 
     return app

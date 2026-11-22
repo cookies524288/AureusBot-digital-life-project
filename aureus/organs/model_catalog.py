@@ -32,7 +32,7 @@ async def list_provider_models(
                 else resolver.get(provider.api_key_env or "")
             )
         if not key:
-            raise ConfigError("该厂商的 API key 尚未配置或已删除。")
+            raise ConfigError("该API供应商的 API key 尚未配置或已删除。")
         value = key.get_secret_value()
         if protocol == "anthropic":
             headers["x-api-key"] = value
@@ -53,7 +53,7 @@ async def list_provider_models(
             or base.query
             or base.fragment
         ):
-            raise ConfigError("厂商请求地址必须是 HTTP(S) 接口根地址。")
+            raise ConfigError("API供应商请求地址必须是 HTTP(S) 接口根地址。")
         path = base.path.rstrip("/")
         if protocol in {"anthropic", "gemini"} and not path.rsplit("/", 1)[-1].startswith("v1"):
             path += "/v1" if protocol == "anthropic" else "/v1beta"
@@ -64,7 +64,7 @@ async def list_provider_models(
             while True:
                 response = await client.get(url, headers=headers, params=params)
                 if not response.is_success:
-                    raise ConfigError(f"厂商模型目录请求失败（HTTP {response.status_code}）。")
+                    raise ConfigError(f"API供应商模型目录请求失败（HTTP {response.status_code}）。")
                 data = response.json()
                 rows = (
                     data.get("models" if protocol == "gemini" else "data")
@@ -72,7 +72,7 @@ async def list_provider_models(
                     else None
                 )
                 if not isinstance(rows, list):
-                    raise ConfigError("厂商返回了无法识别的模型目录。")
+                    raise ConfigError("API供应商返回了无法识别的模型目录。")
                 for row in rows:
                     identifier = (
                         row.get("name" if protocol == "gemini" else "id")
@@ -80,7 +80,7 @@ async def list_provider_models(
                         else None
                     )
                     if not isinstance(identifier, str) or not identifier.strip():
-                        raise ConfigError("厂商返回了无效的模型标识符。")
+                        raise ConfigError("API供应商返回了无效的模型标识符。")
                     identifiers[
                         identifier.removeprefix("models/") if protocol == "gemini" else identifier
                     ] = None
@@ -91,8 +91,8 @@ async def list_provider_models(
                 else:
                     return list(identifiers)
                 if not isinstance(cursor, str) or not cursor or cursor in seen or len(seen) >= 100:
-                    raise ConfigError("厂商目录分页异常。")
+                    raise ConfigError("API供应商目录分页异常。")
                 seen.add(cursor)
                 params = {cursor_name: cursor}
     except (httpx.HTTPError, httpx.InvalidURL, ValueError, UnicodeError):
-        raise ConfigError("无法读取厂商模型目录，请检查请求地址、网络和凭据。") from None
+        raise ConfigError("无法读取API供应商模型目录，请检查请求地址、网络和凭据。") from None

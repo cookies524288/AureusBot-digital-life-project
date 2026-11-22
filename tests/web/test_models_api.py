@@ -87,6 +87,57 @@ def test_get_supplies_defaults_and_key_status_is_boolean(rig: ConfigRig) -> None
     assert rig.client.get("/api/models").json()["key_status"] == {"AUREUS_KEY_D84_TEST": False}
 
 
+def test_legacy_vision_model_can_be_edited_as_llm(rig: ConfigRig) -> None:
+    rig.paths.models_config_file.write_text(
+        ORIGINAL.replace('identifier = "first-id"', 'identifier = "first-id"\nkind = "vision"'),
+        encoding="utf-8",
+    )
+    rig.log_in()
+    config = rig.client.get("/api/models").json()["config"]
+    model = config["models"][0]
+    assert model["kind"] == "llm"
+    assert model["vision"] is True
+    model["vision"] = False
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 200
+    saved = rig.client.get("/api/models").json()["config"]["models"][0]
+    assert saved["kind"] == "llm"
+    assert saved["vision"] is False
+    model["kind"] = "embedding"
+    model["vision"] = True
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 422
+
+
+def test_model_probe_requires_ready_session_and_is_blocked_in_fake_mode(tmp_path: Path) -> None:
+    rig = ConfigRig(tmp_path, password_set=False)
+    headers = {"Origin": str(rig.client.base_url)}
+    try:
+        endpoint = "/api/models/test"
+        assert rig.client.post(endpoint, headers=headers, json={}).status_code == 401
+        rig.log_in("admin")
+        assert rig.client.post(endpoint, headers=headers, json={}).status_code == 403
+        assert (
+            rig.client.post(
+                "/api/password", json={"old_password": "admin", "new_password": GOOD}
+            ).status_code
+            == 200
+        )
+        rig.log_in()
+        assert rig.client.post(endpoint, json={}).json()["detail"] == "请从当前网页发起模型测试。"
+        result = rig.client.post(endpoint, headers=headers, json={"model": "first"})
+        assert result.status_code == 403
+        assert "当前运行模式" in result.json()["detail"]
+    finally:
+        rig.close()
+
+
+def test_tab_icon_is_served_before_login(rig: ConfigRig) -> None:
+    assert 'rel="icon" href="/favicon.ico"' in rig.client.get("/").text
+    result = rig.client.get("/favicon.ico")
+    assert result.status_code == 200
+    assert result.headers["content-type"] == "image/x-icon"
+    assert result.content[:4] == b"\x00\x00\x01\x00"
+
+
 @pytest.mark.parametrize("models", [[], ["missing"]])
 def test_empty_and_missing_organ_models_are_saved_with_warnings(
     rig: ConfigRig, models: list[str]

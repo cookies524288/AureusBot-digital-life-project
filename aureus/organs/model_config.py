@@ -32,7 +32,7 @@ API_KEY_ENV_PATTERN = r"^AUREUS_KEY_[A-Z0-9_]+$"
 
 # D24 规定的四种协议。
 ProviderProtocol = Literal["openai", "openai_responses", "anthropic", "gemini"]
-ModelKind = Literal["llm", "embedding", "vision"]
+ModelKind = Literal["llm", "embedding"]
 # 目前只做“按顺序顺延”。D30 里的 balance、random 等用得上时再加（开发守则 2.5）；
 # 现在写别的值会直接报错，而不是悄悄当成顺序。
 OrganStrategy = Literal["sequential"]
@@ -76,6 +76,7 @@ class ModelConfig(BaseModel):
     identifier: str = Field(min_length=1)
     provider: str = Field(min_length=1)
     kind: ModelKind = "llm"
+    vision: bool = False
     # 价格单位：元 / 百万 token，可选（D37）。账本和预算按 token 计，不靠价格运作；
     # 填了价格只用来显示估算费用。不写就是“费用未知”，不会被当成免费。
     price_in: float | None = Field(default=None, ge=0)
@@ -86,6 +87,19 @@ class ModelConfig(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
     # 没列等级表示模型不声明支持思考等级（D84）。
     reasoning_levels: tuple[ReasoningLevel, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_vision(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("kind") == "vision":
+            return {**data, "kind": "llm", "vision": True}
+        return data
+
+    @model_validator(mode="after")
+    def _validate_vision(self) -> Self:
+        if self.vision and self.kind != "llm":
+            raise ValueError("只有 llm 模型可以开启视觉。")
+        return self
 
 
 class OrganConfig(BaseModel):
