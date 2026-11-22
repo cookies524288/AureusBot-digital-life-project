@@ -4,7 +4,9 @@
 
 ## 下一步
 
-切到 GPT 6.2 Astra，一次复审两项修复。评审意见分别记录在 [2.12 网页](tasks/2.12.md) 与 [模型诊断](tasks/provider-catalog-logo.md) 文末。两项通过后再规划 2.13。2.12b 已复审通过，修复提交 443bc0f。Windows 启动器和 2.12c 已完成。
+GPT 6.2 sol 按 [2.12 网页](tasks/2.12.md) 第 3 轮复审意见处理首次加载时用户自己的消息重复显示。完成后交回 Astra 复审，再规划 2.13。2.12b、2.12c、Windows 启动器与模型诊断已完成。
+
+本轮复审专项 16 通过。另用正式页面脚本确认一次发送与一条历史记录合并后产生两个用户气泡。实现轮全量结果见下文。
 
 本机访问 GitHub 时使用代理 `http://127.0.0.1:7897`。获得推送授权后运行 `git -c http.proxy=http://127.0.0.1:7897 push origin HEAD:main`，用 `git -c http.proxy=http://127.0.0.1:7897 ls-remote origin refs/heads/main` 核对远端提交号。`-c` 仅对该次命令生效。
 
