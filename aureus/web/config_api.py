@@ -187,7 +187,7 @@ def register_config_routes(
                     if isinstance(error, ModelProbeError):
                         row["reply"] = error.reply
                 except CallRejectedError as error:
-                    row["error"] = str(error)
+                    row.update(error=str(error), sent=error.sent)
                 else:
                     row.update(
                         sent=True, reply=result.suggestion, latency_ms=result.metadata["latency_ms"]

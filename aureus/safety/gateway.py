@@ -96,9 +96,8 @@ class SafetyGateway:
 
         Raises:
             ValueError: 器官没有注册（不算调用，不进失控拦截的统计）。
-            CallRejectedError: 被网关拒绝（它的三个子类：预算、失控拦截、账本不可用），
-                器官没有被调用。账本在调用之后写不进去时，这次的结果也作废，抛
-                LedgerUnavailableError。
+            CallRejectedError: 安全检查未通过，或调用后记账失败、结果作废。
+                记账失败时通过 sent 标记是否已有模型请求发出。
             OrganCallError: 器官的所有模型都失败。
         """
         organ_id = request.organ_id
@@ -225,7 +224,7 @@ class SafetyGateway:
                 reason,
                 {"organ_id": organ_id, "kind": "LedgerUnavailableError"},
             )
-            raise LedgerUnavailableError(organ_id, reason) from error
+            raise LedgerUnavailableError(organ_id, reason, sent=bool(attempts)) from error
 
     def _note_to_timeline(self, event_type: str, content: str, metadata: dict[str, str]) -> None:
         """把拒绝和失败记进时间线，只有自己可见。尽力而为：写不进去只记日志。"""

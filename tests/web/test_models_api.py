@@ -3,15 +3,29 @@
 import asyncio
 import threading
 import tomllib
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from datetime import UTC
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, get_args
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
-from aureus.common import ConfigError
-from aureus.core.model_runtime import PreparedModels
-from aureus.organs import ModelKind, ModelsConfig, OrganStrategy, ProviderProtocol, ReasoningLevel
+from aureus.channels import WebChannel
+from aureus.common import BudgetCalendar, ConfigError, SafetyConfig, WebConfig
+from aureus.core.model_runtime import ModelRuntime, PreparedModels
+from aureus.organs import (
+    ModelKind,
+    ModelsConfig,
+    OrganStrategy,
+    ProviderProtocol,
+    ReasoningLevel,
+    llm_adapter,
+)
+from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
+from aureus.web import create_app
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import GOOD
 
@@ -128,6 +142,81 @@ def test_model_probe_requires_ready_session_and_is_blocked_in_fake_mode(tmp_path
         assert "当前运行模式" in result.json()["detail"]
     finally:
         rig.close()
+
+
+def test_model_probe_distinguishes_ledger_write_failure_from_rejection(
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rig.paths.models_config_file.write_text(
+        ORIGINAL.replace('api_key_env = "AUREUS_KEY_D84_TEST"', ""), encoding="utf-8"
+    )
+    requests: list[httpx.Request] = []
+
+    def provider_reply(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"text": "OK"})
+
+    async def complete(**kwargs: Any) -> AsyncIterator[Any]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider_reply)) as client:
+            response = await client.post(kwargs["api_base"] + "/chat/completions", json=kwargs)
+            response.raise_for_status()
+
+        async def chunks() -> AsyncIterator[Any]:
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=response.json()["text"]))],
+                usage=SimpleNamespace(prompt_tokens=6, completion_tokens=1),
+            )
+
+        return chunks()
+
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=complete)
+    )
+    ledger = Ledger(rig.paths.database_file, rig.clock, calendar=BudgetCalendar(UTC))
+    ledger.open()
+    gateway = SafetyGateway(
+        rig.models.bus,
+        ledger,
+        rig.timeline,
+        rig.clock,
+        SafetyConfig(monthly_token_limit=100),
+        PermissionChecker(EmergencyStop(rig.paths.halt_file, rig.clock)),
+    )
+
+    def fail_write(*_args: object) -> None:
+        raise OSError("disk write failed")
+
+    monkeypatch.setattr(ledger, "record", fail_write)
+    app = create_app(
+        config=WebConfig(),
+        auth=rig.auth,
+        sessions=rig.sessions,
+        channel=WebChannel(rig.heartbeat),
+        timeline=rig.timeline,
+        config_files=rig.service,
+        model_runtime=ModelRuntime(rig.models.bus, rig.models.key_resolver, fake_organs=False),
+        run_model_test=gateway.test_model,
+    )
+    try:
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            assert client.post("/api/login", json={"password": GOOD}).status_code == 200
+            response = client.post(
+                "/api/models/test",
+                headers={"Origin": str(client.base_url)},
+                json={"model": "first"},
+            )
+        assert response.status_code == 200, response.text
+        text_check, tools_check = response.json()["checks"]
+        assert len(requests) == 1
+        assert text_check["capability"] == "text"
+        assert "账本写入失败，这次的结果作废" in text_check["error"]
+        assert text_check["reply"] == ""
+        assert "latency_ms" not in text_check
+        assert tools_check["capability"] == "tools"
+        assert "账本之前写入失败" in tools_check["error"]
+        assert [text_check["sent"], tools_check["sent"]] == [True, False]
+    finally:
+        ledger.close()
 
 
 def test_tab_icon_is_served_before_login(rig: ConfigRig) -> None:

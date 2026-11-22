@@ -5,14 +5,15 @@
 
 
 class CallRejectedError(Exception):
-    """网关拒绝了这次器官调用：请求没有发给器官，也没有花 token。
+    """网关拒绝启动器官调用，或在记账失败后作废调用结果。
 
     怎么降级由调用方决定，网关不编默认回复（D35）。
     """
 
-    def __init__(self, organ_id: str, reason: str) -> None:
+    def __init__(self, organ_id: str, reason: str, *, sent: bool = False) -> None:
         self.organ_id = organ_id
         self.reason = reason
+        self.sent = sent
         super().__init__(f"网关拒绝调用器官 {organ_id}：{reason}")
 
 
