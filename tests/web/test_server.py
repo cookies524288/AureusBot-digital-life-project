@@ -212,18 +212,26 @@ def test_the_project_logo_is_embedded_and_used_without_a_new_route(rig: Rig) -> 
         / "assets/logo/logo-no-ring-48x48-black-on-transparent.png"
     )
     html = client.get("/").text
-    match = re.search(r'<symbol id="aureus-logo"[^>]*>.*?</symbol>', html, re.DOTALL)
-    assert match is not None
-    embedded = ET.fromstring(match.group())
-    assert embedded.attrib["viewBox"] == "0 0 48 48"
-    image = embedded.find("image")
+    logos = {}
+    for name in ("login-logo", "aureus-logo"):
+        match = re.search(rf'<symbol id="{name}"[^>]*>.*?</symbol>', html, re.DOTALL)
+        assert match is not None
+        logo = ET.fromstring(match.group())
+        assert logo.attrib["viewBox"] == "0 0 64 64"
+        circle = logo.find("circle")
+        assert circle is not None
+        assert circle.attrib == {"class": "brand-mark-bg", "cx": "32", "cy": "32", "r": "30"}
+        logos[name] = logo
+    assert ".brand-mark-bg{fill:var(--brand-mark-bg,var(--bg))}" in html
+    assert "--bg:#fdf6e3" in html
+    assert ":root[data-theme='dark'] .brand-mark{--brand-mark-bg:transparent;" in html
+    image = logos["aureus-logo"].find("image")
     assert image is not None
     assert image.attrib["href"] == "data:image/png;base64," + base64.b64encode(
         source.read_bytes()
     ).decode("ascii")
     assert html.count('<use href="#aureus-logo"/>') == 2
     assert '<use href="#login-logo"/></svg>AureusBot</h1>' in html
-    assert '<symbol id="login-logo"' in html
     assert 'src="/logo.svg"' not in html
     assert ">A</span>" not in html
 

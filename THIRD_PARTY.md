@@ -12,3 +12,13 @@
 
 - MaiBot：2026-11-18 读了仓库根目录的 `LICENSE`，是 GNU GPL 第 3 版。GPL-3.0 第 13 条允许把它覆盖的作品和 AGPL-3.0 的作品合并成一个整体，本项目整体采用 AGPL-3.0（D12），所以可以移植。
 - 该仓库根目录还有 `EULA.md` 和 `PRIVACY.md`，没有读过，没有核对它们对源码有没有额外限制。
+
+## 协议参考
+
+SnowLuma 2.1.1 对接以本机安装的 snowluma-adapter 1.1.8 为基线，`_manifest.json` 标记 GPL-v3.0-or-later。Aureus 按下列接口行为独立编写通道，不随项目复制或打包适配器代码。
+
+| Aureus 文件 | snowluma-adapter 1.1.8 对照路径与函数 |
+|---|---|
+| `aureus/channels/onebot_transport.py` | `transport.py` 的 `QQTransportClient._build_connect_url`、`_build_headers`、`call_action`、`_receive_loop`，以及 `runtime/router.py` 的 `bootstrap_adapter_runtime_state`、`_extract_self_id_from_login_response` |
+| `aureus/channels/onebot.py` | `runtime/router.py` 的 `handle_transport_payload`、`handle_inbound_message`，`codecs/inbound/message_codec.py` 的 `build_message_dict`、`_require_message_segments`、`convert_segments_with_metadata` |
+| `aureus/channels/onebot.py` | `profile.py` 的 `SNOWLUMA_PROFILE`，`codecs/outbound/message_codec.py` 的 `_build_send_action`，以及 `codecs/outbound/segment_encoder.py` 的 `_build_at_segments`、`_build_reply_segments` |

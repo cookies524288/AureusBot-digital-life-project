@@ -204,7 +204,7 @@ class _Thought:
 def _reply_job(batch: Sequence[_Heard], conversation_job: Callable[..., _ReplyJob]) -> _ReplyJob:
     """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
     return conversation_job(
-        batch[0].perception,
+        batch[-1].perception,
         [heard.record for heard in batch],
         _person_id_of(batch[-1].record),
         viewer_is_user=batch[-1].is_user,

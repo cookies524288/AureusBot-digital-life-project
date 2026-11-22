@@ -143,6 +143,15 @@ config_version = 1
 
 # 网页通道（设计见 docs/10-decisions.md 的 D63、D53 第 5 条）。下面的值都是默认值，需要改再取消注释。
 # 第一次登录用默认密码 admin，登录后必须先改密码；密码还是默认的时候，只有本机能登录。
+[qq]
+# QQ 通道默认关闭。使用 SnowLuma 的正向 WebSocket 端点。
+# enabled = false
+# endpoint = ""
+# account_id = ""  # SnowLuma 登录的机器人 QQ 号，保留引号。
+# token_key = "AUREUS_KEY_QQ_ONEBOT"  # 通过 aureus keys set 写入令牌。
+# action_timeout_seconds = 10.0
+# reconnect_seconds = 5.0
+
 [web]
 # 网页通道的总开关。关掉后 aureus chat 不启动网页服务。
 # enabled = true
