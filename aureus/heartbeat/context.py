@@ -375,7 +375,15 @@ def _speaker(record: TimelineRecord, user_name: str) -> str:
 def _dialogue_line(record: TimelineRecord, user_name: str, timezone: tzinfo | None) -> str:
     # 对话可能跨好几天（中间停过机），所以带上日期。
     moment = record.timestamp.astimezone(timezone)
-    return f"[{moment:%m-%d %H:%M}] {_speaker(record, user_name)}：{_one_line(record.content)}"
+    labels = [f"{moment:%m-%d %H:%M}"]
+    # QQ 的引用编号指向原消息，和本次回复使用的时间线编号各有用途。
+    if isinstance(message_id := record.metadata.get("message_id"), str) and message_id:
+        labels.append(f"消息 {_one_line(message_id)}")
+    if isinstance(quoted_id := record.metadata.get("quoted_message_id"), str) and quoted_id:
+        labels.append(f"引用消息 {_one_line(quoted_id)}")
+    if record.metadata.get("mentioned") is True:
+        labels.append("点名你")
+    return f"[{' | '.join(labels)}] {_speaker(record, user_name)}：{_one_line(record.content)}"
 
 
 def _one_line(text: str) -> str:
