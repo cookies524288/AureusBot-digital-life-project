@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
+from aureus.memory.sparse import keyword_conditions, ranked_matches, relevance_expression
+
 type SourceValue = str | int | float | dict[str, str]
 type MemoryStatus = Literal[
     "active", "inactive", "conflicted", "superseded", "retracted", "deleted", "missing"
@@ -239,7 +241,7 @@ def search_history(
     person_key: str | None,
     since: datetime | None,
     before: datetime | None,
-) -> list[tuple[HistoricalMemory, int]]:
+) -> list[tuple[HistoricalMemory, int, float]]:
     """只查当前有效的资料。起始时间包含端点，截止时间排除端点。"""
     clauses, terms = keyword_conditions(keywords, "memory_history_fts", "id")
     if not clauses and person_key is None and since is None and before is None:
@@ -259,15 +261,18 @@ def search_history(
         return []
     _append_filters(where, parameters, person_key, since, before)
     parameters.append(limit)
+    rank_prefix, score, rank_parameters = ranked_matches(keywords, "memory_history_fts")
     rows = conn.execute(
-        "SELECT *, "
+        rank_prefix
+        + "SELECT *, "
         + relevance_expression(clauses)
-        + " AS relevance FROM memory_history WHERE "
+        + f" AS relevance, {score.format(row_id='memory_history.id')} AS sparse_score "
+        + "FROM memory_history WHERE "
         + " AND ".join(where)
-        + " ORDER BY relevance DESC, recorded_at DESC, source_key LIMIT ?",
-        [*terms, *parameters],
+        + " ORDER BY relevance DESC, recorded_at DESC, sparse_score, source_key LIMIT ?",
+        [*rank_parameters, *terms, *parameters],
     )
-    return [(_decode(row), row["relevance"]) for row in rows]
+    return [(_decode(row), row["relevance"], row["sparse_score"]) for row in rows]
 
 
 def _append_filters(
@@ -286,26 +291,3 @@ def _append_filters(
     if before is not None:
         where.append("recorded_at < ?")
         parameters.append(before.timestamp())
-
-
-def keyword_conditions(
-    keywords: Sequence[str], table: str, row_id: str
-) -> tuple[list[str], list[str]]:
-    """生成 D80 的字面搜索条件，表名和行列名须是调用侧常量。"""
-    clauses: list[str] = []
-    parameters: list[str] = []
-    for keyword in dict.fromkeys(keywords):
-        if len(keyword) >= 3:
-            # 分隔各个 MATCH，SQLite 才能和 LIKE 作 OR 运算。
-            clauses.append(f"{row_id} IN (SELECT rowid FROM {table} WHERE {table} MATCH ?)")
-            parameters.append('"' + keyword.replace('"', '""') + '"')
-        elif len(keyword) == 2:
-            clauses.append("content LIKE ? ESCAPE '!'")
-            escaped = keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_")
-            parameters.append(f"%{escaped}%")
-    return clauses, parameters
-
-
-def relevance_expression(clauses: Sequence[str]) -> str:
-    """按命中的不同词数排序，无查询词时只使用时间。"""
-    return " + ".join(f"({clause})" for clause in clauses) if clauses else "0"

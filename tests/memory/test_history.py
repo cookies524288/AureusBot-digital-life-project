@@ -55,8 +55,9 @@ def test_shared_history_person_date_active_status_and_rebuild(tmp_path: Path) ->
     ]
     filters = {"person_key": "qq:one", "since": THEN, "before": NOW}
     before = index.search(["木卫二"], (), 10, **filters)
-    assert [hit.source for hit in before] == [source(1), source(2), source(3)]
-    assert before[-1].evidence == (linked, orphan)
+    assert [hit.source for hit in before] == [source(3), source(1), source(2)]
+    assert before[0].evidence == (linked, orphan)
+    assert before[0].sparse_score < before[-1].sparse_score < 0
     assert all(hit.recorded_at == THEN for hit in before)
     index.close()
     with closing(sqlite3.connect(path)) as database:
