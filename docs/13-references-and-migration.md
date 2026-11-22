@@ -10,7 +10,7 @@
 
 | 借鉴什么 | 项目 | 许可证 | 怎么用 |
 |---|---|---|---|
-| 表达方式、黑话、拟人说话 | MaiBot | GPL-3.0 | 可以移植，移植时登记到 THIRD_PARTY.md |
+| 表达方式、黑话、拟人说话 | [MaiBot](https://github.com/Mai-with-u/MaiBot) | GPL-3.0 | 已移植回复分段与记忆引用格式，详见[第三方代码清单](../THIRD_PARTY.md) |
 | 记忆 | A_memorix | AGPL-3.0 | 作为依赖，外面包一层我们的接口（D4），Phase 3 接入 |
 | 自主行动 | OpenClaw | MIT | 可以移植；它是 TypeScript 项目，实际只参考设计 |
 | 自主行动（备选） | VCPToolBox | CC BY-NC-SA 4.0 | 有「非商业」限制，与 AGPL-3.0 不兼容：只读思路，不复制代码 |

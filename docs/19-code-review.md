@@ -1,10 +1,10 @@
 # 19 · Phase 0 代码审查记录
 
-> 审查日期：2026-11-18（第十五会话）
+> 审查日期：2026-11-18
 > 审查范围：Phase 0 全部代码（`aureus/`、`scripts/check.py`）、关键测试与设计文档中的承诺
 > 审查方式：**只读**逐行阅读 + 5 个可复现的验证实验；**本次没有修改任何代码**
 > 测试基线：`uv run python -m pytest -q` → 629 passed, 1 skipped（20.6 秒）
-> 后续修复任务见第 7 节；需要用户拍板的事项见第 8 节。
+> 后续修复见第 7 节，设计决定见第 8 节。
 
 ---
 
@@ -183,7 +183,7 @@ for name in files:
 3. `AllostasisModel.burnout_risk` 返回英文字符串和 `days_until_collapse`（「还有几天崩溃」）这种没有依据的数字（`biomodel.py:669-706`）；`emotion_label` / `mood_text` 没有调用方。
 4. `Secrets.llm_api_key` 是遗留字段，现在只用于日志脱敏（`aureus/common/config.py:151`）。
 5. 交接文档写 `aureus_home/config/model_config.toml`，代码读的是 `models.toml`（`aureus/common/paths.py:107`）——要么文档过时，要么本机文件名不对，需确认。
-6. ~~README 写计划 AGPL-3.0，仓库里没有 `LICENSE`~~：已在第十四会话解决（加入 AGPL-3.0 全文，GitHub 已识别）。
+6. ~~README 写计划 AGPL-3.0，仓库里没有 `LICENSE`~~：随后补入 AGPL-3.0 全文，GitHub 已识别。
 7. `CognitiveObserver` 里的激素基线硬编码 `0.5/0.4`，与 biomodel 默认值重复（`aureus/core/cognitive_layer.py:125-128`、`:167-172`），改一处忘另一处会悄悄漂移。
 
 ---
@@ -202,13 +202,13 @@ for name in files:
 
 ## 7. 修复任务（按建议顺序）
 
-> 每完成一项：补测试 → `uv run python scripts/check.py` 全绿 → 提交一次 git。
-> 修之前先读第 8 节需要拍板的三个问题，避免做完又返工。
+> 该轮修复逐项补充测试，`uv run python scripts/check.py` 通过后提交。
+> 第 8 节记录了修复任务涉及的三项设计决定。
 
 ### F1. 预算并发（对应 S1）——最高优先
 
 - 目标：并发调用时，本月的实际用量不允许超过 `monthly_token_limit`（允许最后一次调用带来的有限超出，并在文档写清楚）。
-- 做法（二选一，拍板后定）：
+- 审查提出两种做法，D48 采用方案乙：
   - 甲：`_admit` 里按 `route.max_tokens`（或配置的每次上限）**预留**额度，记进账本前不释放；`_finish` 按真实用量结算，退回差额。
   - 乙：给网关加一把 `asyncio.Lock`，让「读账本 → 判断 → 记账」串行；实现简单，代价是同一时刻只能有一个器官调用（Phase 0 心跳本来就是串行的，可以接受）。
 - 验收：新增测试——上限 100、先记 90、并发两个各 100 的调用，断言「最多一个成功」且最终用量 ≤ 100 + 允许量；且原有 629 条测试全绿。
@@ -249,14 +249,14 @@ for name in files:
 ### F6. 重试与记账（对应 H4）
 
 - 目标：重试产生的每一次真实请求都能进账本，或者至少不漏记。
-- 做法（拍板）：关掉 litellm 的 `num_retries`（设为 0），在 `LLMOrgan._call` 外面自己重试 `provider.max_retry` 次，每次生成独立 `CallAttempt`；或者在成功路径按 `max_retry` 补记估算并标记 `estimated=True`。
+- 审查提出两种做法。方案一关闭 litellm 的 `num_retries`，由适配器按 `provider.max_retry` 重试，每次生成独立 `CallAttempt`。方案二在成功路径按 `max_retry` 补记估算并标记 `estimated=True`。D50 采用方案一。
 - 验收：新增测试——第一次失败、第二次成功时，账本里有两条记录（一条失败、一条成功）。
 - 涉及：`aureus/organs/llm_adapter.py`、`tests/organs/test_llm_adapter.py`。
 
 ### F7. 密钥文件权限与竞态（对应 H5）
 
 - 目标：Windows 上主密钥也只有本人可读；并发 `keys set` 不丢数据。
-- 做法：Windows 上用 `icacls` 或 `pywin32` 设置仅当前用户可读（失败时警告，不静默）；`_save` 用单独的锁文件做互斥。**注意**：这会触碰 D36 的「不加口令」设计，改之前问用户。
+- 审查建议在 Windows 上用 `icacls` 或 `pywin32` 限制主密钥仅当前用户可读，权限设置失败时给出警告，并为 `_save` 加文件锁。维护者在 D52 中确认沿用原有访问控制并增加写锁。
 - 验收：测试并发两次 set，两个名字都在；权限测试在 Windows 上断言 ACL（可用 `icacls` 输出做断言，存在跳过分支时写明原因）。
 - 涉及：`aureus/common/vault.py`、`tests/common/test_vault.py`、`docs/15-model-management.md` 第 7 节。
 
@@ -278,11 +278,13 @@ for name in files:
 - 第 5 节：按「没有装饰」原则删除或接入未使用的状态；修正注释范围；`burnout_risk` 改成中文或删掉；`llm_api_key` 决定去留；确认 `models.toml` 文件名。
 
 > **完成情况（2026-11-18）**：F1–F8 已完成。F9 里 M1、M4–M8 已完成并有测试；第 5 节第 2 条（注释与实现不符）、第 5 条（`model_config.toml` 是用户本机的旧文件，代码读 `models.toml` 没有问题，不用改）、第 7 条（激素基线集中成常量）已完成。
-> **第 5 节第 1、3、4 条已按用户拍板（D52）完成（2026-11-18）**：`Secrets.llm_api_key` 和整个 `Secrets` 类已删；生物模型里没有调用方的接口和状态已删，稳态超载去掉睡眠债后重新归一，有测试。原先待拍板的说明如下：：删不删未接真实来源的生物模型接口（`on_*`、`consume_energy_for_*`、`burnout_risk`、`emotion_label`、`mood_text`、`circadian_factor_for_melatonin/alertness`，目前只有测试在调用），以及 `Secrets.llm_api_key` 去留。另外发现：`circadian_factor_for_alertness` 的实际曲线是午夜最高、中午最低，和它原来的说明「早晨高」相反；因为没有代码用它，没改行为，只改了说明。
+> **第 5 节第 1、3、4 条已按维护者确认的 D52 完成（2026-11-18）**：`Secrets.llm_api_key` 和整个 `Secrets` 类已删；生物模型里没有调用方的接口和状态已删，稳态超载去掉睡眠债后重新归一，有测试。审查时讨论了未接真实来源的生物模型接口是否应删除（`on_*`、`consume_energy_for_*`、`burnout_risk`、`emotion_label`、`mood_text`、`circadian_factor_for_melatonin/alertness`，当时只有测试在调用），以及是否应保留 `Secrets.llm_api_key`。另外发现：`circadian_factor_for_alertness` 的实际曲线是午夜最高、中午最低，和它原来的说明「早晨高」相反；因为没有代码用它，没改行为，只改了说明。
 
 ---
 
-## 8. 需要用户拍板的三件事
+## 8. 审查提出的三项设计取舍
+
+后续决定见 [D48 与 D52](10-decisions.md)。
 
 1. **预算超支怎么算**：
    - 甲：允许单次超额（实现简单，语义是「到点后不再发起新调用」）；

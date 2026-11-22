@@ -2,7 +2,7 @@
 
 **一个独立存在的数字生命。**
 
-> 代码主体由AI完成，本人暂时只参与了构思和拍板，如有漏洞，欢迎指出。
+<img src="assets/logo/logo.svg" alt="AureusBot 标志" width="144">
 
 [English version](README.en.md)
 
@@ -14,7 +14,7 @@ AureusBot 运行在你自己的电脑上。它连续、独立、唯一，不依�
 
 ## 当前状态
 
-第一部分（认知内核）的 Phase 0（地基）已完成：只有一个、一直在、重启不失忆的最小核心，可以在终端里和它聊天。下一步是 Phase 1（自我监控）。路线图见 [docs/08-roadmap.md](docs/08-roadmap.md)。
+认知内核的 Phase 0（地基）、Phase 1（自我监控）和 Phase 2（反馈驱动）均已完成。Phase 2 的八项整体验收已通过，下一阶段是内核验证。[路线图](docs/08-roadmap.md) · [阶段验收记录](docs/tasks/2.13.md)
 
 ## 快速开始
 
@@ -99,6 +99,10 @@ uv run aureus lab list                         # 列出可离线运行的实验
 
 为什么这样选，见 [docs/07-tech-stack.md](docs/07-tech-stack.md)。
 
+## 与 MaiBot 的关系
+
+AureusBot 是独立开发的 MaiBot 衍生项目。它移植了两部分 GPL-3.0 代码，分别用于回复分段与合并，以及记忆检索结果的引用格式化。移植范围、源文件和改动记录见第三方清单。项目整体采用 AGPL-3.0。[MaiBot 上游](https://github.com/Mai-with-u/MaiBot) · [上游许可证](https://github.com/Mai-with-u/MaiBot/blob/main/LICENSE) · [第三方代码清单](THIRD_PARTY.md) · [AureusBot 许可证](LICENSE)
+
 ## 文档
 
 ```text
@@ -121,6 +125,7 @@ docs/
 ├── 16-organ-architecture.md        器官架构草稿（早期设计，部分已被后来的决定取代）
 ├── 17-neuroscience-optimization.md 生物模型的设计依据（激素、精力等参数）
 ├── 18-neuroscience-completeness.md 神经科学对照（设计自评，未经实验验证）
+├── 19-code-review.md               Phase 0 代码审查与后续修复记录
 └── archive/                        已废弃的早期草稿，仅供对照
 ```
 
@@ -128,7 +133,7 @@ docs/
 
 ## 参与
 
-欢迎提 issue 指出问题，包括设计上的漏洞。设计文档目前只有中文版。
+代码主要由 AI 编写，维护者负责项目构思、设计取舍和验收。欢迎提 issue 指出问题，包括设计上的漏洞。设计文档目前只有中文版。
 
 ## 许可证
 

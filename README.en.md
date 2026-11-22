@@ -2,7 +2,7 @@
 
 **An independent digital life.**
 
-> The code is mostly written by AI. So far, I have only contributed ideas and decisions. If you find any flaws, please point them out.
+<img src="assets/logo/logo.svg" alt="AureusBot logo" width="144">
 
 [中文版](README.md)
 
@@ -12,7 +12,7 @@ It is first a companion. It talks with you in a human-like way and offers emotio
 
 ## Status
 
-Part 1 (the cognitive kernel) has finished Phase 0 (foundation). It is a minimal core that runs as a single instance, keeps its memory across restarts, and can chat with you in the terminal. The next step is Phase 1 (self-monitoring). See [docs/08-roadmap.md](docs/08-roadmap.md) (in Chinese).
+The cognitive kernel has completed Phase 0 (foundation), Phase 1 (self-monitoring), and Phase 2 (feedback-driven behavior). All eight Phase 2 acceptance criteria passed. Kernel validation is next. [Roadmap](docs/08-roadmap.md) · [Phase 2 acceptance record](docs/tasks/2.13.md) (in Chinese)
 
 ## Quick start
 
@@ -96,6 +96,10 @@ Two more tools: the **observation console** (`monitor`) shows its body signals, 
 
 For the reasons behind these choices, see [docs/07-tech-stack.md](docs/07-tech-stack.md) (in Chinese).
 
+## Relationship with MaiBot
+
+AureusBot is an independently developed derivative of MaiBot. It ports two pieces of GPL-3.0 code, one for splitting and merging replies and one for formatting references to retrieved memories. The third-party notice records the source files, scope, and changes. AureusBot as a whole is licensed under AGPL-3.0. [MaiBot upstream](https://github.com/Mai-with-u/MaiBot) · [Upstream license](https://github.com/Mai-with-u/MaiBot/blob/main/LICENSE) · [Third-party notice](THIRD_PARTY.md) · [AureusBot license](LICENSE)
+
 ## Documents
 
 The documents are in `docs/`. They are in Chinese.
@@ -120,6 +124,7 @@ docs/
 ├── 16-organ-architecture.md        Early organ architecture draft (partly superseded by later decisions)
 ├── 17-neuroscience-optimization.md Design basis of the biological model (hormones, energy, and parameters)
 ├── 18-neuroscience-completeness.md Neuroscience mapping (self-assessment, not experimentally validated)
+├── 19-code-review.md               Phase 0 code review and follow-up fixes
 └── archive/                        Abandoned early drafts, kept for reference only
 ```
 
@@ -127,7 +132,7 @@ Suggested reading order: 01, 02, 12, 08. To see how the code is organized, read 
 
 ## Contributing
 
-Issues are welcome, including design flaws. The design documents are only in Chinese for now.
+AI writes most of the code. The maintainer shapes the project, makes design decisions, and reviews the results. Issues are welcome, including design flaws. The design documents are only in Chinese for now.
 
 ## License
 
