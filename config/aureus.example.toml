@@ -238,6 +238,8 @@ log_level = "INFO"
 [people]
 # 好感的开关。关掉后不记变化、不写进上下文。
 # affinity_enabled = true
+# 迁入的人物资料是否作为正常回复的内部参考（3.3）
+# history_in_reply_enabled = true
 # 初值：用户和其他人。只在第一次用到时采用，之后改这里不会改已有的好感。要在 0 和 100 之间（不含两端）。
 # user_initial_affinity = 80.0
 # stranger_affinity = 30.0
