@@ -61,7 +61,7 @@ from aureus.hormones import (
 from aureus.identity import Identity, IdentityLayer
 from aureus.memory import LanguageStore, MemoryHit, MemoryIndex
 from aureus.mood import MoodReading
-from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
+from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse, join_prompt
 from aureus.people import AffinityBook, HistoricalEntry, PeopleDirectory
 from aureus.safety import (
     CallRejectedError,
@@ -583,7 +583,9 @@ class ConversationFlow:
         )
         if automatic is not None:
             words, hits = automatic
-            prompt += "\n\n" + format_recall(words, hits, self._timezone, heuristic=True)
+            prompt = join_prompt(
+                [prompt, format_recall(words, hits, self._timezone, heuristic=True)]
+            )
         request = _organ_request(
             job,
             organ_id=organ_id,
