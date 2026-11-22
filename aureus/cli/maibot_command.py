@@ -8,10 +8,12 @@ import zipfile
 from pathlib import Path
 
 from aureus.cli.inspect_commands import EXIT_FAILURE, EXIT_OK
+from aureus.common import SystemClock
 from aureus.tools.migrate.maibot import inspect_database
 from aureus.tools.migrate.maibot_catalog import BUSINESS_TABLES, MigrationError
 from aureus.tools.migrate.maibot_language import publish_language
 from aureus.tools.migrate.maibot_package import Source, export_package, preview_package
+from aureus.tools.migrate.maibot_people import publish_people
 from aureus.tools.migrate.maibot_staging import import_package, restore_snapshot
 
 
@@ -50,6 +52,10 @@ def configure_maibot_parser(parser: argparse.ArgumentParser) -> None:
     language.add_argument("--instance", required=True, help="导入时指定的逻辑实例名")
     language.add_argument("staging", type=Path, metavar="SQLite 暂存库")
     language.add_argument("target", type=Path, metavar="已有的 Aureus SQLite 运行库")
+    people = actions.add_parser("publish-people", help="将暂存的人际资料发布到已配置的 Aureus")
+    people.add_argument("--instance", required=True, help="暂存中显式选择的逻辑实例名")
+    people.add_argument("staging", type=Path, metavar="SQLite 暂存库")
+    people.add_argument("home", type=Path, metavar="独立的 Aureus 数据根目录")
 
 
 def run_maibot_command(args: argparse.Namespace) -> int:
@@ -59,6 +65,8 @@ def run_maibot_command(args: argparse.Namespace) -> int:
     try:
         if args.action == "publish-language":
             report = publish_language(args.instance, args.staging, args.target)
+        elif args.action == "publish-people":
+            report = publish_people(args.staging, args.instance, args.home, SystemClock())
         else:
             report = _run_package_command(args, Source(args.instance, args.role))
     except MigrationError as error:

@@ -188,6 +188,7 @@ class Heartbeat:
         timezone: tzinfo | None = None,
         body: Body | None = None,
         people: PeopleDirectory | None = None,
+        people_config: PeopleConfig | None = None,
         identity_history: IdentityHistory | None = None,
         samples: BodySampleStore | None = None,
         feedback: FeedbackStore | None = None,
@@ -230,6 +231,7 @@ class Heartbeat:
             body: 身体，提供精力读数；不给时精力记为「不限」。
             people: 人物档案，收感知时按（通道, 账号）认人；
                 不给就不认人，只按通道给的可信度分用户和别人。
+            people_config: 人际配置，控制回复是否附带历史资料。
             identity_history: 身份的版本历史，要已经和 identity.toml 对过；醒来时据此记下用户改了
                 哪几层设定（D62）。不给就不记。
             samples: 身体信号样本存储，要已经打开；心跳按 [body] sample_interval_seconds
@@ -310,6 +312,8 @@ class Heartbeat:
             memory_config=memory_config,
             language=language,
             language_config=self._language_config,
+            people=people,
+            people_config=people_config,
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._diary: DiaryTracker | None = None

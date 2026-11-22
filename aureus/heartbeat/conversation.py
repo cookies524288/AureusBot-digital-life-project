@@ -37,6 +37,7 @@ from aureus.heartbeat.events import (
 )
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
 from aureus.heartbeat.language_runner import speaker_key
+from aureus.heartbeat.people_context import format_people_context
 from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
@@ -48,7 +49,7 @@ from aureus.heartbeat.planning import (
     ReplyLength,
     parse_plan,
 )
-from aureus.heartbeat.recall import format_recall
+from aureus.heartbeat.recall import MAX_RECALL_CHARS, format_recall
 from aureus.heartbeat.reply_strategy import ReplyStrategy, judge_allowed
 from aureus.hormones import (
     HormoneEffects,
@@ -61,9 +62,7 @@ from aureus.identity import Identity, IdentityLayer
 from aureus.memory import LanguageStore, MemoryHit, MemoryIndex
 from aureus.mood import MoodReading
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
-from aureus.people import (
-    AffinityBook,
-)
+from aureus.people import AffinityBook, HistoricalEntry, PeopleDirectory
 from aureus.safety import (
     CallRejectedError,
 )
@@ -143,6 +142,7 @@ class _ReplyJob:
     effects: HormoneEffects | None = None
     with_interests: bool = False
     history_ids: tuple[int, ...] = ()
+    people_history: tuple[HistoricalEntry, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -256,6 +256,8 @@ class ConversationFlow:
         memory_config: MemoryConfig | None = None,
         language: LanguageStore | None = None,
         language_config: LanguageConfig | None = None,
+        people: PeopleDirectory | None = None,
+        people_config: PeopleConfig | None = None,
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
@@ -266,6 +268,8 @@ class ConversationFlow:
         self._memory_config = memory_config or MemoryConfig()
         self._language = language
         self._language_config = language_config or LanguageConfig()
+        self._people = people
+        self._people_config = people_config or PeopleConfig()
 
     def _conversation_job(
         self,
@@ -359,6 +363,14 @@ class ConversationFlow:
 
         judge_count = self._judge.context_messages if self._judge is not None else 0
         judge_history = list(history)[-judge_count:] if judge_count > 0 else []
+        people_history = (
+            tuple(self._people.history_for(person_id, limit=self._memory_config.max_results))
+            if messages
+            and person_id is not None
+            and self._people is not None
+            and self._people_config.history_in_reply_enabled
+            else ()
+        )
         job = _ReplyJob(
             strategy=strategy,
             history=history,
@@ -374,6 +386,7 @@ class ConversationFlow:
             build_contexts=build_contexts,
             with_interests=bool(interests_state),
             history_ids=tuple(record.id for record in [*history, *messages]),
+            people_history=people_history,
         )
         return self._apply_hormones(job, ())
 
@@ -671,6 +684,15 @@ class ConversationFlow:
                 recall=recall_text,
                 jargon=await self._jargon_reference(job) if plan is None else "",
                 expressions=await self._expression_reference(job, plan),
+                people_context=(
+                    format_people_context(
+                        job.people_history,
+                        job.person_id,
+                        MAX_RECALL_CHARS - len(recall_text) - (2 if recall_text else 0),
+                    )
+                    if job.person_id is not None
+                    else ""
+                ),
             ),
             system_context=system_context,
         )
