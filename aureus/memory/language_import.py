@@ -14,6 +14,10 @@ EXPRESSION_TABLE = "expressions"
 JARGON_TABLE = "jargons"
 FREQUENCY_TABLE = "high_frequency_terms"
 LANGUAGE_TABLES = (EXPRESSION_TABLE, JARGON_TABLE, FREQUENCY_TABLE)
+_LEGACY_EVIDENCE_REASONS = {
+    EXPRESSION_TABLE: frozenset({"missing_example"}),
+    JARGON_TABLE: frozenset({"missing_evidence", "evidence_unresolved"}),
+}
 IMPORT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS language_imports (
     instance TEXT PRIMARY KEY,
@@ -74,6 +78,37 @@ def _encode(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
+def _promote_legacy_row(connection: Connection, instance: str, row: ImportedLanguageRow) -> bool:
+    if row.reason not in _LEGACY_EVIDENCE_REASONS.get(row.table, ()):
+        return False
+    # 旧表达未写入可召回字段。旧黑话已有这些字段，应保留目标库中的值。
+    expression = row.table == EXPRESSION_TABLE
+    return (
+        connection.execute(
+            """UPDATE language_import_rows
+               SET status = 'received',
+                   text = CASE WHEN ? AND text = '' THEN ? ELSE text END,
+                   detail = CASE WHEN ? AND detail = '' THEN ? ELSE detail END,
+                   count = CASE WHEN ? AND count = 0 THEN ? ELSE count END
+               WHERE instance = ? AND table_name = ? AND source_key = ?
+                 AND status = 'pending' AND reason = ?""",
+            (
+                expression,
+                row.text,
+                expression,
+                row.detail,
+                expression,
+                row.count,
+                instance,
+                row.table,
+                row.key,
+                row.reason,
+            ),
+        ).rowcount
+        == 1
+    )
+
+
 def publish_rows(
     connection: Connection,
     instance: str,
@@ -81,7 +116,7 @@ def publish_rows(
     source_counts: dict[str, int],
     rows: Iterable[ImportedLanguageRow],
 ) -> dict[str, object]:
-    """事务内持久化一份快照，重复发布准确区分已有与待处理。"""
+    """事务内发布一份快照，并按 D92 提升已有快照中仅缺证据的行。"""
     previous = connection.execute(
         "SELECT manifest FROM language_imports WHERE instance = ?", (instance,)
     ).fetchone()
@@ -93,6 +128,7 @@ def publish_rows(
     counts = {table: Counter[str]() for table in LANGUAGE_TABLES}
     reasons = {table: Counter[str]() for table in LANGUAGE_TABLES}
     for row in rows:
+        status = row.status
         if previous is None:
             connection.execute(
                 """INSERT INTO language_import_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -111,9 +147,8 @@ def publish_rows(
                     _encode(row.evidence),
                 ),
             )
-        status = (
-            "already_exists" if previous is not None and row.status == "received" else row.status
-        )
+        elif row.status == "received" and not _promote_legacy_row(connection, instance, row):
+            status = "already_exists"
         counts[row.table][status] += 1
         counts[row.table]["unresolved_evidence"] += row.unresolved
         if row.reason:

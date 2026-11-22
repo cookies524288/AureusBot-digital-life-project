@@ -95,7 +95,7 @@ def _expressions(staged: StagedSource, source: Source) -> Iterator[ImportedLangu
             yield ImportedLanguageRow(EXPRESSION_TABLE, key, values, "skipped", "inactive")
         elif text in _PROMPT_EXAMPLES:
             yield ImportedLanguageRow(EXPRESSION_TABLE, key, values, "skipped", "prompt_example")
-        elif not text or not situation or not example:
+        elif not text or not situation:
             yield ImportedLanguageRow(EXPRESSION_TABLE, key, values, "pending", "missing_example")
         else:
             yield ImportedLanguageRow(
@@ -103,6 +103,7 @@ def _expressions(staged: StagedSource, source: Source) -> Iterator[ImportedLangu
                 key,
                 values,
                 "received",
+                "missing_example" if not example else "",
                 text=text,
                 detail=situation,
                 example=example,
@@ -133,7 +134,7 @@ def _jargons(staged: StagedSource, source: Source) -> Iterator[ImportedLanguageR
                 JARGON_TABLE,
                 key,
                 values,
-                "received" if evidence else "pending",
+                "received",
                 "evidence_unresolved"
                 if len(evidence) < len(references)
                 else ("missing_evidence" if not evidence else ""),
