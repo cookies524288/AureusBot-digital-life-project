@@ -100,7 +100,9 @@ def models_require_password(current: ModelsConfig, submitted: ModelsConfig) -> b
         if old is None:
             if provider.api_key_env is not None or provider.api_key_ref is not None:
                 return True
-        elif (old.base_url, old.api_key_env, old.api_key_ref) != (
+        elif (
+            old.protocol != provider.protocol and (provider.api_key_env or provider.api_key_ref)
+        ) or (old.base_url, old.api_key_env, old.api_key_ref) != (
             provider.base_url,
             provider.api_key_env,
             provider.api_key_ref,

@@ -14,6 +14,7 @@ from aureus.common import ConfigError
 from aureus.common.vault import ENTRY_ID_PATTERN, MAX_SECRET_CHARS, VaultError
 from aureus.core.model_runtime import ModelRuntime
 from aureus.organs import API_KEY_ENV_PATTERN, BUILTIN_ORGANS, validate_models_config
+from aureus.organs.model_catalog import list_provider_models
 
 from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
 from .config_files import (
@@ -114,6 +115,18 @@ def register_config_routes(
     async def view_models(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
         with _translate_errors(service):
             return await asyncio.to_thread(service.view_models)
+
+    @app.post("/api/models/catalog")
+    async def catalog(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, list[str]]:
+        with _translate_errors(service):
+            name = (await _body(request)).get("provider")
+            _, current = await asyncio.to_thread(service.read_models)
+            provider = next((item for item in current.providers if item.name == name), None)
+            if provider is None:
+                raise HTTPException(404, detail="请先保存厂商配置。")
+            return {"models": await list_provider_models(provider, service.key_resolver)}
 
     @app.put("/api/models")
     async def edit_models(

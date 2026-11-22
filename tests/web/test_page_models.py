@@ -3,6 +3,23 @@
 from tests.web.test_page_script import ROOT, run_page_script
 
 
+def test_late_close_event_preserves_reopened_model_editor() -> None:
+    run_page_script(
+        r"""
+        const dialog = $('editor-dialog');
+        openEditor('厂商', el('div'), false);
+        dialog.close();
+        const newForm = el('div');
+        openEditor('模型', newForm, false);
+        dialog.listeners.close[0]();
+        assert.equal($('editor-body').children[0], newForm);
+        dialog.close();
+        dialog.listeners.close[0]();
+        assert.equal($('editor-body').children.length, 0);
+        """
+    )
+
+
 def test_explanatory_copy_is_removed_from_the_page_and_cards() -> None:
     html = (ROOT / "aureus/web/static/index.html").read_text(encoding="utf-8")
     for text in (
