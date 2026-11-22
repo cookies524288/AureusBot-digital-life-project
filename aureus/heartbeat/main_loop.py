@@ -838,7 +838,7 @@ class Heartbeat:
             visibility=target.visibility,
             metadata=metadata,
         )
-        delivered = self._deliver_reply(target, text)
+        delivered = self._deliver_reply(target, reply_record)
         if delivered and target.trust is TrustLevel.VERIFIED_USER:
             self._last_conversation_at = self._clock.now()
         if delivered and outcome.plan is not None and person_id is not None:
@@ -854,12 +854,13 @@ class Heartbeat:
                     self._clock.now(),
                 )
 
-    def _deliver_reply(self, target: Perception, text: str) -> bool:
+    def _deliver_reply(self, target: Perception, record: TimelineRecord) -> bool:
         """把回复拆成几条短消息发出（D60）。
 
         时间线里仍然是完整的一条：它说的是一段话，拆开只是发出去的样子。
         关掉拆分、或者拆不出东西时，整段一条发出。
         """
+        text = record.content
         parts: list[str] = []
         if self._config.split_reply_enabled:
             parts = split_reply(
@@ -869,7 +870,7 @@ class Heartbeat:
             )
         delivered = False
         for part in parts or [text]:
-            delivered = self._deliver(target, part, MessageKind.REPLY) or delivered
+            delivered = self._deliver(target, part, MessageKind.REPLY, record) or delivered
         return delivered
 
     def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> TimelineRecord:
@@ -1570,7 +1571,13 @@ class Heartbeat:
             MessageKind.NOTICE,
         )
 
-    def _deliver(self, target: Perception, content: str, kind: MessageKind) -> bool:
+    def _deliver(
+        self,
+        target: Perception,
+        content: str,
+        kind: MessageKind,
+        record: TimelineRecord | None = None,
+    ) -> bool:
         """把消息交给通道。通道出错只记日志：任何通道出问题都不影响核心（03 号文档）。"""
         sender = self._identity.facts.name if kind is MessageKind.REPLY else NOTICE_SENDER
         message = OutgoingMessage(
@@ -1579,6 +1586,8 @@ class Heartbeat:
             content=content,
             kind=kind,
             sender_name=sender,
+            timeline_id=record.id if record is not None else None,
+            timestamp=record.timestamp if record is not None else self._clock.now(),
         )
         sink = self._sinks.get(message.channel)
         if sink is None:

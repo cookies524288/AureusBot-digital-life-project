@@ -27,14 +27,32 @@ function element(tag = 'div') {
         return enabled;
       },
     },
-    append(...children) { this.children.push(...children); },
-    replaceChildren(...children) { this.children = children; },
+    append(...children) { for (const child of children) this.insertBefore(child, null); },
+    insertBefore(child, next) {
+      if (child.parentElement) child.remove();
+      const index = next === null ? this.children.length : this.children.indexOf(next);
+      this.children.splice(index, 0, child);
+      child.parentElement = this;
+    },
+    replaceChildren(...children) {
+      for (const child of this.children.slice()) child.remove?.();
+      this.children = [];
+      this.append(...children);
+    },
     setAttribute(key, value) {
       this.attributes[key] = value;
       if (key === 'id') nodes.set(value, this);
     },
     addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
-    removeEventListener() {}, focus() {}, remove() { this.removed = true; },
+    removeEventListener() {}, focus() {},
+    remove() {
+      if (this.parentElement) {
+        const siblings = this.parentElement.children;
+        siblings.splice(siblings.indexOf(this), 1);
+        this.parentElement = null;
+      }
+      this.removed = true;
+    },
     querySelectorAll() { return []; },
     showModal() { this.open = true; }, close() { this.open = false; },
   };
@@ -53,7 +71,7 @@ const context = vm.createContext({
     },
     querySelectorAll: () => [], createElement: element,
     createElementNS: (_, tag) => element(tag),
-    createTextNode: text => ({ nodeType: 3, textContent: text }),
+    createTextNode: text => Object.assign(element(), { nodeType: 3, textContent: text }),
     documentElement: { dataset: {} },
   },
   window: { listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; } },
@@ -94,6 +112,64 @@ def run_page_script(code: str) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_initial_chat_history_keeps_a_live_notice() -> None:
+    run_page_script(
+        r"""
+        const log = $('chat-log');
+        Object.defineProperty(log, 'textContent', {set() { this.children = []; }});
+        let finishHistory;
+        api = () => new Promise(resolve => { finishHistory = resolve; });
+        state.loggedIn = true;
+        openSocket();
+        const loading = loadChatHistory();
+        sockets.at(-1).onmessage({data:JSON.stringify({
+          type:'notice', sender:'系统', channel:'web', content:'实时通知',
+        })});
+        const notice = log.children.at(-1);
+        assert.equal(notice.className, 'msg notice');
+        assert.equal(notice.children[0].textContent, '实时通知');
+        finishHistory({ok:true, data:[]});
+        await loading;
+        assert.ok(log.children.includes(notice), '首次历史响应覆盖了实时通知');
+        assert.equal(log.children.length, 2);
+        """
+    )
+
+
+def test_initial_chat_history_merges_live_reply_by_record_id() -> None:
+    run_page_script(
+        r"""
+        const log = $('chat-log');
+        Object.defineProperty(log, 'textContent', {set() { this.children = []; }});
+        let finishHistory;
+        api = () => new Promise(resolve => { finishHistory = resolve; });
+        state.loggedIn = true;
+        openSocket();
+        const loading = loadChatHistory();
+        const push = message => sockets.at(-1).onmessage({data:JSON.stringify(message)});
+        const time = '2026-11-22T12:00:00Z';
+        push({type:'reply', id:12, time, sender:'小绿', channel:'web', content:'收到'});
+        const liveReply = log.children.at(-1);
+        finishHistory({ok:true, data:[
+          {id:10, time:'2026-11-21T12:00:00Z', who:'user', channel:'terminal', content:'你好'},
+          {id:11, time:'2026-11-21T12:01:00Z', who:'me', channel:'web', content:'收到'},
+          {id:12, time, who:'me', channel:'web', content:'收到'},
+          {id:13, time:'2026-11-22T12:01:00Z', who:'me', channel:'web', content:'晚些收到'},
+        ]});
+        await loading;
+        push({type:'reply', id:13, time:'2026-11-22T12:01:00Z',
+          sender:'小绿', channel:'web', content:'晚些收到'});
+        const messages = Array.from(log.children).filter(node => node.className.startsWith('msg '));
+        assert.deepEqual(messages.map(node => node.children[0].textContent),
+          ['你好', '收到', '收到', '晚些收到']);
+        assert.equal(messages[2], liveReply);
+        assert.match(messages[0].children[1].textContent, /terminal/);
+        assert.match(messages[2].children[1].textContent, /小绿 · web/);
+        assert.equal(log.children.filter(node => node.className === 'chat-day').length, 2);
+        """
+    )
 
 
 def test_selected_task_keeps_its_text_until_the_selection_is_released() -> None:

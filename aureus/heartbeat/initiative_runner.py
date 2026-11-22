@@ -154,7 +154,7 @@ class InitiativeTracker:
         plan: InitiativePlan | None,
         response: OrganResponse | None,
         target: Perception | None,
-        send: Callable[[Perception, str], bool],
+        send: Callable[[Perception, TimelineRecord], bool],
         failure: str,
     ) -> int | None:
         """收器官建议后先记消息、再发出；独立尝试反馈和考虑记录，不缓存失败材料。"""
@@ -183,7 +183,7 @@ class InitiativeTracker:
                 )
                 metadata["message_id"] = message.id
                 message_id = message.id
-                sent = send(target, message.content)
+                sent = send(target, message)
                 feedback_id = self.record_sent(message, message.timestamp, delivered=sent)
                 failure = "通道发送失败" if not sent else ("反馈预期没记上" if self.failed else "")
             except Exception:

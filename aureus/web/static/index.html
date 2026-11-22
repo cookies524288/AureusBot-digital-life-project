@@ -1144,6 +1144,9 @@ PAGES.overview = { load: loadOverview };
 // 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
 const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
 let socket = null, socketWanted = false, lastDay = '';
+// 首次载入前保留现场气泡；历史已有的记录也可能稍后才通过 WebSocket 到达。
+let pendingChat = [];
+const renderedHistoryIds = new Set();
 
 function setConn(text, kind) {
   setLiveText($('conn-text'), text);
@@ -1151,36 +1154,75 @@ function setConn(text, kind) {
   $('conn-dot').className = 'dot' + (kind === 'ok' ? ' on' : kind === 'warn' ? ' off' : ' busy');
 }
 
-function addMessage(kind, sender, channel, text, iso, notice) {
+function chatDay(when) {
+  return el('div', {class:'chat-day', text:(when.getMonth() + 1) + '月' + when.getDate() + '日'});
+}
+
+function chatMessage({kind, sender, channel, content, time, notice, id}) {
+  const when = time ? new Date(time) : new Date();
+  const who = notice ? '系统通知' : sender;
+  const meta = who + ' · ' + (channel || '未标通道') + ' · ' + fmtTime(when.toISOString());
+  const node = el('div', {class:'msg ' + (notice ? 'notice' : kind)},
+    el('div', {class:'bubble', text:content}), el('div', {class:'meta', text:meta}));
+  return {node, when, id};
+}
+
+function addMessage(message) {
+  if (renderedHistoryIds.has(message.id)) return;
   const log = $('chat-log');
   const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   const empty = $('chat-empty');
   if (empty) empty.remove();
-  const when = iso ? new Date(iso) : new Date();
+  const entry = chatMessage(message);
+  const {when, node} = entry;
+  pendingChat?.push(entry);
   const day = when.toDateString();
   if (day !== lastDay) {
     lastDay = day;
-    log.append(el('div', { class: 'chat-day', text: (when.getMonth() + 1) + '月' + when.getDate() + '日' }));
+    log.append(chatDay(when));
   }
-  const who = notice ? '系统通知' : sender;
-  const meta = who + ' · ' + (channel || '未标通道') + ' · ' + fmtTime(when.toISOString());
-  log.append(el('div', { class: 'msg ' + (notice ? 'notice' : kind) },
-    el('div', { class: 'bubble', text }),
-    el('div', { class: 'meta', text: meta })));
+  log.append(node);
   if (stick && !selectionTouches(log)) log.scrollTop = log.scrollHeight;
 }
 
-async function loadChatHistory() {
-  if (state.loaded.chat) return;
-  const res = await api('/api/history');
-  if (!res.ok) { fail(res); return; }
-  state.loaded.chat = true;
+function mergeChatHistory(items) {
   const log = $('chat-log');
-  log.textContent = '';
+  const liveIds = new Set(pendingChat.map(entry => entry.id));
+  const history = [];
+  for (const item of items) {
+    if (liveIds.has(item.id)) continue;
+    renderedHistoryIds.add(item.id);
+    history.push(chatMessage({...item, kind:item.who, sender:WHO_NAME[item.who] || item.who}));
+  }
+  const entries = [...history, ...pendingChat].sort((a, b) =>
+    a.when - b.when || (a.id != null && b.id != null ? a.id - b.id : 0));
+  pendingChat = null;
+  for (const child of Array.from(log.children)) {
+    if (child.className === 'chat-day') child.remove();
+  }
   lastDay = '';
-  for (const item of res.data) addMessage(item.who, WHO_NAME[item.who] || item.who, item.channel, item.content, item.time, false);
-  if (!res.data.length) log.append(el('div', { class: 'empty', id: 'chat-empty', text: '还没有对话，说点什么吧。' }));
-  log.scrollTop = log.scrollHeight;
+  let position = 0;
+  for (const {when, node} of entries) {
+    const day = when.toDateString();
+    if (day !== lastDay) {
+      log.insertBefore(chatDay(when), log.children[position++] || null);
+      lastDay = day;
+    }
+    const next = log.children[position++];
+    if (next !== node) log.insertBefore(node, next || null);
+  }
+  if (!entries.length) log.append(el('div', {class:'empty', id:'chat-empty', text:'还没有对话，说点什么吧。'}));
+  if (!selectionTouches(log)) log.scrollTop = log.scrollHeight;
+}
+
+function loadChatHistory() {
+  const loaded = state.loaded;
+  loaded.chat ??= api('/api/history').then(res => {
+    if (state.loaded !== loaded) return;
+    if (!res.ok) { delete loaded.chat; fail(res); return; }
+    mergeChatHistory(res.data);
+  });
+  return loaded.chat;
 }
 PAGES.chat = { load: loadChatHistory };
 
@@ -1193,10 +1235,11 @@ function openSocket() {
   setConn('连接中', '');
   ws.onopen = () => setConn('已连接', 'ok');
   ws.onmessage = ev => {
+    if (socket !== ws) return;
     let m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === 'error') { toast(m.detail, 'error'); return; }
-    addMessage('me', m.sender, m.channel, m.content, null, m.type === 'notice');
+    addMessage({...m, kind:'me', notice:m.type === 'notice'});
   };
   ws.onclose = () => {
     if (socket !== ws) return;   // 主动关掉的，或者已经换了新连接
@@ -1210,6 +1253,10 @@ function closeSocket() {
   const old = socket;
   socket = null;
   if (old) old.close();
+  pendingChat = [];
+  renderedHistoryIds.clear();
+  lastDay = '';
+  $('chat-log').replaceChildren();
 }
 // 断线后隔 3 秒重连；先问一次登录状态，登录已经失效就不再连（api 会把页面带回登录）。
 function reconnectLater() {
@@ -1228,7 +1275,7 @@ function sendChat() {
   if (!text) return;
   if (!socket || socket.readyState !== 1) { toast('还没连上，稍等一下再发。', 'error'); return; }
   socket.send(JSON.stringify({ text }));
-  addMessage('user', '你', 'web', text, null, false);
+  addMessage({kind:'user', sender:'你', channel:'web', content:text});
   box.value = '';
   box.style.height = 'auto';
 }

@@ -224,7 +224,15 @@ async def test_a_message_is_recorded_and_answered(harness: Harness) -> None:
     assert reply.visibility is VisibilityScope.USER_ONLY
     assert reply.metadata["in_reply_to"] == [user.id]
     assert harness.sent == [
-        OutgoingMessage(CHANNEL, USER_ID, "早呀。", MessageKind.REPLY, sender_name="小绿")
+        OutgoingMessage(
+            CHANNEL,
+            USER_ID,
+            "早呀。",
+            MessageKind.REPLY,
+            sender_name="小绿",
+            timeline_id=reply.id,
+            timestamp=reply.timestamp,
+        )
     ]
 
 

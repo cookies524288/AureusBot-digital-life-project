@@ -7,6 +7,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 from aureus.timeline import VisibilityScope
@@ -66,6 +67,8 @@ class OutgoingMessage:
     content: str
     kind: MessageKind
     sender_name: str  # 显示的名字：回复是它的名字，通知是“系统”
+    timeline_id: int | None = None  # 同一历史回复拆出的各段共享序号
+    timestamp: datetime | None = None
 
 
 # 通道收消息的函数。必须很快返回、不能阻塞（心跳会直接调用它），出错只影响这个通道。

@@ -149,6 +149,8 @@ async def _push(
                         "sender": message.sender_name,
                         "content": message.content,
                         "channel": message.channel,
+                        **({"id": message.timeline_id} if message.timeline_id is not None else {}),
+                        **({"time": message.timestamp.isoformat()} if message.timestamp else {}),
                     }
                 )
     except Exception:

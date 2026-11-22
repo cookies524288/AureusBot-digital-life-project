@@ -116,6 +116,8 @@ async def test_the_timeline_keeps_the_whole_reply_as_one_record(
     records = rig.timeline.query(TimelineQuery(event_type=EVENT_MESSAGE, limit=100))
     mine = [r for r in records if r.actor_type is ActorType.ME]
     assert [r.content for r in mine] == [REPLY]
+    assert [message.timeline_id for message in rig.sent] == [mine[0].id] * len(PIECES)
+    assert all(message.timestamp == mine[0].timestamp for message in rig.sent)
 
 
 async def test_switching_splitting_off_sends_the_whole_reply(
