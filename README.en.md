@@ -10,7 +10,7 @@ It is first a companion. It talks with you in a human-like way and offers emotio
 
 ## Status
 
-The cognitive kernel has completed Phase 0 (foundation), Phase 1 (self-monitoring), and Phase 2 (feedback-driven behavior). All eight Phase 2 acceptance criteria passed. Kernel validation is next. [Roadmap](docs/08-roadmap.md) · [Phase 2 acceptance record](docs/tasks/2.13.md) (in Chinese)
+The cognitive kernel has completed Phase 0 (foundation), Phase 1 (self-monitoring), and Phase 2 (feedback-driven behavior). Phase 3 covers migration of MaiBot memories, expressions, and relationships, followed by QQ group chat integration. Kernel validation is scheduled for after Phase 3 or Phase 4. [Roadmap](docs/08-roadmap.md) · [Phase 2 acceptance record](docs/tasks/2.13.md) (in Chinese)
 
 ## Quick start
 

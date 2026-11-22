@@ -6,4 +6,4 @@ Phase 2 公开发布整理已提交本地（`35daf8b`），包括两份主页、
 
 ## 下一步
 
-[公开发布任务](tasks/phase-2-release.md)已通过复审。下一阶段为[内核验证](12-kernel.md)，实验 E1–E7 的设计见第 7 节。
+[公开发布任务](tasks/phase-2-release.md)已通过复审。按 D89 进入 [Phase 3](08-roadmap.md)，从本机 MaiBot 来源和已用功能的盘点开始。内核验证 E1–E7 延至 Phase 3 或 Phase 4 之后。

@@ -12,7 +12,7 @@ AureusBot 运行在你自己的电脑上。它连续、独立、唯一，不依�
 
 ## 当前状态
 
-认知内核的 Phase 0（地基）、Phase 1（自我监控）和 Phase 2（反馈驱动）均已完成。Phase 2 的八项整体验收已通过，下一阶段是内核验证。[路线图](docs/08-roadmap.md) · [阶段验收记录](docs/tasks/2.13.md)
+认知内核的 Phase 0（地基）、Phase 1（自我监控）和 Phase 2（反馈驱动）均已完成。接下来进入 Phase 3，迁移 MaiBot 的记忆、表达和人际关系，接入 QQ 群聊。内核验证安排在 Phase 3 或 Phase 4 之后。[路线图](docs/08-roadmap.md) · [阶段验收记录](docs/tasks/2.13.md)
 
 ## 快速开始
 
