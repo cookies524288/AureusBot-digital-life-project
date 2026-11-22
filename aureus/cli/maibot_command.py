@@ -8,9 +8,11 @@ import zipfile
 from pathlib import Path
 
 from aureus.cli.inspect_commands import EXIT_FAILURE, EXIT_OK
+from aureus.common import SystemClock
 from aureus.tools.migrate.maibot import inspect_database
 from aureus.tools.migrate.maibot_catalog import BUSINESS_TABLES, MigrationError
 from aureus.tools.migrate.maibot_package import Source, export_package, preview_package
+from aureus.tools.migrate.maibot_people import publish_people
 from aureus.tools.migrate.maibot_staging import import_package, restore_snapshot
 
 
@@ -25,7 +27,8 @@ def configure_maibot_parser(parser: argparse.ArgumentParser) -> None:
     """注册 MaiBot 迁移命令及其参数。"""
     parser.epilog = (
         "顺序：inspect 盘点 → export 导出私有包 → preview 预演 → "
-        "import 写入独立暂存库。restore 可从暂存库恢复源快照。"
+        "import 写入独立暂存库 → publish-people 发布人际资料。"
+        "restore 可从暂存库恢复源快照。"
     )
     actions = parser.add_subparsers(dest="action", required=True, metavar="操作")
     inspect = actions.add_parser("inspect", help="以 JSON 输出 SQLite 结构与记录数（只读）")
@@ -45,6 +48,23 @@ def configure_maibot_parser(parser: argparse.ArgumentParser) -> None:
     _add_source_arguments(restore)
     restore.add_argument("target", type=Path, metavar="SQLite 暂存库")
     restore.add_argument("output", type=Path, metavar="新 SQLite 文件")
+    people = actions.add_parser("publish-people", help="将暂存的人际资料发布到已配置的 Aureus")
+    people.add_argument("--instance", required=True, help="暂存中显式选择的逻辑实例名")
+    people.add_argument("staging", type=Path, metavar="SQLite 暂存库")
+    people.add_argument("home", type=Path, metavar="独立的 Aureus 数据根目录")
+
+
+def _run_migration(args: argparse.Namespace) -> dict[str, object]:
+    if args.action == "publish-people":
+        return publish_people(args.staging, args.instance, args.home, SystemClock())
+    source = Source(args.instance, args.role)
+    if args.action == "export":
+        return export_package(source, args.source, args.output).report("export")
+    if args.action == "preview":
+        return preview_package(source, args.package).report("preview")
+    if args.action == "import":
+        return import_package(source, args.package, args.target)
+    return restore_snapshot(source, args.target, args.output)
 
 
 def run_maibot_command(args: argparse.Namespace) -> int:
@@ -52,15 +72,7 @@ def run_maibot_command(args: argparse.Namespace) -> int:
     if args.action == "inspect":
         return run_maibot_inspect_command(args.source)
     try:
-        source = Source(args.instance, args.role)
-        if args.action == "export":
-            report = export_package(source, args.source, args.output).report("export")
-        elif args.action == "preview":
-            report = preview_package(source, args.package).report("preview")
-        elif args.action == "import":
-            report = import_package(source, args.package, args.target)
-        else:
-            report = restore_snapshot(source, args.target, args.output)
+        report = _run_migration(args)
     except MigrationError as error:
         details = {
             name: value

@@ -9,7 +9,7 @@ from aureus.common import ManualClock
 from aureus.core import runtime
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import Perception, TrustLevel
-from aureus.heartbeat.people_context import PEOPLE_CONTEXT_MARKER, format_people_context
+from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE, format_people_context
 from aureus.heartbeat.recall import MAX_RECALL_CHARS
 from aureus.organs import KeyResolver, OrganBus, OrganRequest
 from aureus.people import HistoricalEntry, HistoricalKind, HistoricalRecord, PeopleDirectory
@@ -39,7 +39,8 @@ def test_people_context_fits_remaining_recall_budget() -> None:
     context = format_people_context(entries, 1, available)
     assert len(context) <= available
     assert "[person_info #1]" in context and "[person_info #2]" not in context
-    assert format_people_context(entries, 1, len(PEOPLE_CONTEXT_MARKER)) == ""
+    header_size = len(PEOPLE_CONTEXT_TEMPLATE.format(people_records=""))
+    assert format_people_context(entries, 1, header_size) == ""
 
 
 @pytest.mark.asyncio
