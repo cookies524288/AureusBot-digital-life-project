@@ -277,6 +277,7 @@ def open_core(
             emergency_stop=emergency_stop,
             body=body,
             people=people,
+            people_config=runtime.people,
             identity_history=identity_history,
             samples=samples,
             feedback=feedback,

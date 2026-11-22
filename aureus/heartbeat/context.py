@@ -271,6 +271,7 @@ def build_reply_prompt(
     intent: str = "",
     length: ReplyLength | None = None,
     recall: str = "",
+    people_context: str = "",
 ) -> str:
     """拼出回复用的提示词：之前的对话，加上刚收到、还没回复的消息。
 
@@ -282,6 +283,7 @@ def build_reply_prompt(
         intent: 规划器想好的意思；空字符串表示没有规划（合并成一次调用）。
         length: 回复的长度要求；None 表示不限。
         recall: 按关键词查到的内部参考块；空字符串表示没查记忆（D80）。
+        people_context: 当前发言人的历史资料；空字符串表示不附人物资料（3.3）。
 
     Returns:
         提示词。
@@ -292,6 +294,8 @@ def build_reply_prompt(
     parts = _dialogue_sections(history, new_messages, user_name, timezone)
     if recall:
         parts.append(recall)
+    if people_context:
+        parts.append(people_context)
     if intent:
         parts.append(f"你已经想好要表达的意思：{_one_line(intent)}")
     if length is not None:
