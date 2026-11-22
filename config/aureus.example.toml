@@ -333,6 +333,14 @@ log_level = "INFO"
 # max_results = 5
 # 每拍最多处理几条新的时间线记录，1～5000。
 # index_batch = 200
+# 夜间空闲时整理派生候选，保留时间线与迁入原件。
+# consolidation_enabled = false
+# 累积到这一条数后，每批整理同样的条数，1～500。
+# consolidation_batch = 64
+# 派生候选的权重半衰期，以天计。
+# consolidation_half_life_days = 30.0
+# 允许总结器官从明确的用户私聊中提取带证据的事实和偏好候选。
+# consolidation_extract_enabled = false
 
 # 每日日记（D80）：失败当天不再试，不补写；与记忆开关相互独立。
 [diary]
