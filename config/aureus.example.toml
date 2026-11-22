@@ -343,6 +343,13 @@ log_level = "INFO"
 # index_batch = 200
 
 # 每日日记（D80）：失败当天不再试，不补写；与记忆开关相互独立。
+[language]
+recall_enabled = true
+# 可选调用，启用后配置的学习器官须可用。
+learning_enabled = false
+organ = "summarizer"
+reference_chars = 700
+
 [diary]
 # enabled = true
 # 没注册这个器官时跳过，启动时只记一次日志。

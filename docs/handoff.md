@@ -10,6 +10,8 @@ D89：旧 MaiBotData 排除；不迁人格或其他 MaiBot 配置；沿用当前
 
 3.6 离线实现 bcad3c9 已入主线并通过独立 11 项专项。3.8 的前置证据记录来自 1094881，校准依赖 3.7，网页只读、TOML 单项恢复仍须实测。
 
+集成工作树 `codex/phase3-integrate` 从 `d1a944b` 合入 3.4 首批交付 `95534cf`。3.4 任务文档记录了 `migrate-maibot publish-language`、新增提示词及注入点，并保留 D92 首轮返工要求。
+
 Logo 主线实现 d15b82f，复审通过，详见 [Logo 任务](tasks/phase3-logo.md)。Windows 正在运行的旧启动器在仓库根目录保留为 Aureus.previous-running.exe，原路径已安装新版。3.6 QQ 离线分支已交付 d80dfdd，待集成复审。3.4 缺证据回迁见语言分支 05c4417，Logo 子会话接续该返工。继续使用仓库外现有候选语言库复跑，验证旧行升为可用且再次重跑新增为零。
 
 D92 已确认缺少历史证据也照常发布与召回。已用 3.4 第一版向仓库外相邻的 candidate-language-review.sqlite3 发布：表达 6879 条接收，黑话 104 条接收、高频词 18834 条接收，重跑三者新增均为零。黑话中有释义但缺可定位聊天证据的 912 条（907 条证据为空、5 条为外部资料），应在同一候选库验证新版重跑恢复。3.3 实机列名不符已在原分支 ce0d477 交回修改。Logo 实现在 codex/phase3-logo；3.6b 工作树 codex/phase3-defaults 已交 James。

@@ -18,6 +18,9 @@ _MAX_INTEREST_REASON_CHARS = 100
 MAX_RECALL_KEYWORDS = 3
 MIN_RECALL_KEYWORD_CHARS = 2
 MAX_RECALL_KEYWORD_CHARS = 20
+_EXPRESSION_INTENT_FIELDS = ("focus", "reply_act", "scene", "tone", "prefer")
+_MAX_EXPRESSION_INTENT_CHARS = 80
+_MAX_EXPRESSION_INTENT_ITEMS = 3
 
 
 class ReplyLength(StrEnum):
@@ -118,6 +121,8 @@ class Plan:
     resolutions: tuple[Resolution, ...] = ()
     interest: "InterestChange | None" = None
     recall: tuple[str, ...] = ()
+    expression_focus: tuple[str, ...] = ()
+    expression_avoid: tuple[str, ...] = ()
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -169,6 +174,8 @@ def parse_plan(text: str) -> Plan | None:
     length = (
         _LENGTH_BY_TEXT.get(length_text.strip().lower()) if isinstance(length_text, str) else None
     )
+    expression_intent = data.get("expression_intent")
+    expression_intent = expression_intent if isinstance(expression_intent, dict) else {}
     return Plan(
         should_reply=should_reply,
         intent=intent,
@@ -178,7 +185,18 @@ def parse_plan(text: str) -> Plan | None:
         resolutions=_parse_resolutions(data.get("resolve")),
         interest=_parse_interest(data.get("interest")),
         recall=_parse_recall(data.get("recall")),
+        expression_focus=tuple(
+            item
+            for field in _EXPRESSION_INTENT_FIELDS
+            for item in _expression_terms(expression_intent.get(field))
+        ),
+        expression_avoid=_expression_terms(expression_intent.get("avoid")),
     )
+
+
+def _expression_terms(value: object) -> tuple[str, ...]:
+    items = value[:_MAX_EXPRESSION_INTENT_ITEMS] if isinstance(value, list) else [value]
+    return tuple(filter(None, (clean_text(item, _MAX_EXPRESSION_INTENT_CHARS) for item in items)))
 
 
 def _parse_recall(value: object) -> tuple[str, ...]:

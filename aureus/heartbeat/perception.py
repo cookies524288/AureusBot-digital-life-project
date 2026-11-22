@@ -59,6 +59,7 @@ class Perception:
     mentioned: bool = False
     quoted_message_id: str | None = None
     source_timestamp: int | None = None
+    source_message_id: str | None = None  # 通道提供的稳定入站消息键，用于语言学习去重。
 
     def __post_init__(self) -> None:
         if not self.channel.strip():

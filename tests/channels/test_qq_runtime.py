@@ -15,9 +15,14 @@ import httpx
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
-from aureus.common import AureusPaths, ManualClock, QQConfig
+from aureus.common import AureusPaths, HeartbeatConfig, ManualClock, QQConfig
+from aureus.core import runtime
+from aureus.core.model_runtime import ModelRuntime
+from aureus.memory import LanguageKind, LanguageStore
+from aureus.organs import KeyResolver, OrganBus, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
 from aureus.web import PasswordStore
+from tests.test_language_runtime import LanguageOrgan
 
 ACCOUNT = 9000
 GROUP = 8000
@@ -89,15 +94,23 @@ def available_port() -> int:
 
 
 @asynccontextmanager
-async def run_chat(paths: AureusPaths) -> AsyncIterator[asyncio.subprocess.Process]:
+async def run_chat(
+    paths: AureusPaths, *, request_log: Path | None = None
+) -> AsyncIterator[asyncio.subprocess.Process]:
+    arguments = ["--home", str(paths.home), "chat"]
+    command = ["-m", "aureus", *arguments, "--fake"]
+    if request_log is not None:
+        command = [
+            "-c",
+            "from tests.channels.test_qq_runtime import capture_language_requests; "
+            "from aureus.cli.main import main; "
+            "import sys; capture_language_requests(sys.argv.pop(1)); sys.exit(main())",
+            str(request_log),
+            *arguments,
+        ]
     process = await asyncio.create_subprocess_exec(
         sys.executable,
-        "-m",
-        "aureus",
-        "--home",
-        str(paths.home),
-        "chat",
-        "--fake",
+        *command,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -117,6 +130,47 @@ async def run_chat(paths: AureusPaths) -> AsyncIterator[asyncio.subprocess.Proce
             raise
         assert process.returncode == 0, output.decode("utf-8", errors="replace")
         assert TOKEN.encode() not in output
+
+
+def capture_language_requests(log_file: str) -> None:
+    """子进程保留 CLI 和器官网关，器官总线只注册本地替身。"""
+    path = Path(log_file)
+
+    class RecordingOrgan(LanguageOrgan):
+        async def process(self, request: OrganRequest) -> OrganResponse:
+            with path.open("a", encoding="utf-8") as output:
+                output.write(
+                    json.dumps(
+                        {
+                            "organ": self.organ_id,
+                            "task": request.context["task"],
+                            "prompt": request.prompt,
+                            "system_context": request.system_context,
+                            "source_ids": request.context.get("source_ids", []),
+                            "in_reply_to": request.context.get("in_reply_to", []),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+            if request.context["task"] == "language_learning" and "月兔冲线" not in request.prompt:
+                return OrganResponse(organ_id=self.organ_id, suggestion='{"proposals":[]}')
+            return await super().process(request)
+
+    def build_bus(
+        _paths: AureusPaths,
+        _heartbeat: HeartbeatConfig,
+        resolver: KeyResolver,
+        *,
+        fake_organs: bool,
+    ) -> ModelRuntime:
+        assert not fake_organs  # CLI 的 --fake 会把 Planner 路径关掉。
+        bus = OrganBus()
+        for organ_id in ("planner", "replyer", "summarizer"):
+            bus.register(RecordingOrgan(organ_id, []))
+        return ModelRuntime(bus, resolver, fake_organs=True)
+
+    runtime._build_organ_bus = build_bus
 
 
 async def login(client: httpx.AsyncClient) -> None:
@@ -246,6 +300,124 @@ action_timeout_seconds = 0.4
     assert inbound[0].metadata["source_timestamp"] == 1_795_360_000
     assert inbound[-1].actor_type is ActorType.USER
     assert command not in repr(messages)
+
+
+@pytest.mark.asyncio
+async def test_qq_chat_entry_learns_once_and_recalls_across_group_and_private(
+    tmp_path: Path,
+) -> None:
+    paths = AureusPaths(tmp_path / "home")
+    paths.ensure_directories()
+    paths.identity_file.write_bytes(IDENTITY)
+    fake = FakeOneBot()
+    fake.reply_with.clear()
+    store = LanguageStore(paths.database_file)
+    request_log = tmp_path / "organ-requests.jsonl"
+    samples = [
+        event(number, 2100, f"跑步第 {number} 场：GG，月兔冲线。", group=GROUP)
+        for number in range(101, 105)
+    ]
+    async with asyncio.timeout(60), serve(fake.handle, "127.0.0.1", 0) as server:
+        qq_port = server.sockets[0].getsockname()[1]
+        paths.runtime_config_file.write_text(
+            f"""[web]
+port = {available_port()}
+[heartbeat]
+planning_enabled = true
+split_reply_enabled = false
+tick_interval_seconds = 1
+[body]
+sleep_enabled = false
+[judge]
+enabled = false
+[language]
+learning_enabled = true
+[diary]
+enabled = false
+[qq]
+enabled = true
+account_id = "{ACCOUNT}"
+endpoint = "ws://127.0.0.1:{qq_port}/onebot"
+token_key = "{TOKEN_ENV}"
+""",
+            encoding="utf-8",
+        )
+        async with run_chat(paths, request_log=request_log):
+            remote = await fake.connections.get()
+            for sample in samples:
+                await fake.send(remote, **sample)
+                reply = await fake.messages.get()
+                assert reply["group_id"] == str(GROUP)
+                assert reply["message"][0]["data"]["id"] == str(sample["message_id"])
+            async with asyncio.timeout(10):
+                while sum(entry.count for entry in store.entries(LanguageKind.JARGON)) < 4:
+                    await asyncio.sleep(0.05)
+
+        async with run_chat(paths, request_log=request_log):
+            remote = await fake.connections.get()
+            await fake.send(remote, **samples[0])
+            assert (await fake.messages.get())["message"][0]["data"]["id"] == "101"
+            await fake.send(remote, **event(105, 2200, "gg，来聊跑步。"))
+            reply = await fake.messages.get()
+            assert reply == {
+                "message_type": "private",
+                "message": [
+                    {"type": "reply", "data": {"id": "105"}},
+                    {"type": "text", "data": {"text": "收到。"}},
+                ],
+                "user_id": "2200",
+            }
+            async with asyncio.timeout(10):
+                while not any(
+                    "gg，来聊跑步。" in line and '"task": "language_learning"' in line
+                    for line in request_log.read_text(encoding="utf-8").splitlines()
+                ):
+                    await asyncio.sleep(0.05)
+
+    assert paths.identity_file.read_bytes() == IDENTITY
+    timeline = TimelineDatabase(
+        paths.database_file, ManualClock(datetime(2026, 11, 22, tzinfo=UTC))
+    )
+    timeline.open()
+    try:
+        messages = timeline.query(TimelineQuery(event_type="message", limit=100))
+    finally:
+        timeline.close()
+    inbound = [message for message in messages if message.actor_type is ActorType.PERSON]
+    assert [message.metadata["source_message_id"] for message in inbound] == [
+        "9000:101",
+        "9000:102",
+        "9000:103",
+        "9000:104",
+        "9000:101",
+        "9000:105",
+    ]
+    evidence_ids = tuple(message.id for message in inbound[:4])
+    expression = store.entries(LanguageKind.EXPRESSION)
+    assert [(entry.text, entry.count, entry.evidence_ids) for entry in expression] == [
+        ("月兔冲线", 4, evidence_ids)
+    ]
+    jargon = store.entries(LanguageKind.JARGON)
+    assert [(entry.text, entry.detail, entry.count, entry.evidence_ids) for entry in jargon] == [
+        ("GG", "抵达终点", 4, evidence_ids)
+    ]
+
+    requests = [json.loads(line) for line in request_log.read_text(encoding="utf-8").splitlines()]
+    learned_ids = [
+        source_id
+        for request in requests
+        if request["task"] == "language_learning"
+        for source_id in request["source_ids"]
+    ]
+    assert learned_ids == [*evidence_ids, inbound[-1].id]
+    private_requests = {
+        request["organ"]: request
+        for request in requests
+        if request["task"] in ("plan", "reply") and request["in_reply_to"] == [inbound[-1].id]
+    }
+    assert "GG：抵达终点" in private_requests["planner"]["prompt"]
+    assert "当「庆祝跑步成绩」时，可用「月兔冲线」" in private_requests["replyer"]["prompt"]
+    assert "Preserve this personality." in private_requests["replyer"]["system_context"]
 
 
 @pytest.mark.asyncio
