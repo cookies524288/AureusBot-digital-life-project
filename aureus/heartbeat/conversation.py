@@ -49,7 +49,7 @@ from aureus.heartbeat.planning import (
     ReplyLength,
     parse_plan,
 )
-from aureus.heartbeat.recall import MAX_RECALL_CHARS, format_recall
+from aureus.heartbeat.recall import MAX_RECALL_CHARS, format_recall, heuristic_keywords
 from aureus.heartbeat.reply_strategy import ReplyStrategy, judge_allowed
 from aureus.hormones import (
     HormoneEffects,
@@ -175,6 +175,7 @@ class _ThoughtOutcome:
     initiative_plan: InitiativePlan | None = None
     recall_keywords: tuple[str, ...] = ()
     recall_record_ids: tuple[int, ...] = ()
+    recall_source_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -449,10 +450,15 @@ class ConversationFlow:
         if attempt is not None and attempt.triggers:
             job = self._apply_hormones(job, attempt.triggers)
         plan: Plan | None = None
+        automatic: tuple[tuple[str, ...], list[MemoryHit]] | None = None
         forced_reply = False
         if job.strategy.plan_first:
+            if self._memory_config.heuristic_recall_enabled and self._can_recall():
+                words = heuristic_keywords(job.messages)
+                if words and (hits := await self._retrieve(job, words)):
+                    automatic = words, hits
             try:
-                plan = await self._plan(job)
+                plan = await self._plan(job, automatic)
             except CallRejectedError as rejection:
                 # 网关的拒绝（月度上限、失控拦截）对回复器同样成立，不必再试一次。
                 return _ThoughtOutcome(
@@ -466,7 +472,7 @@ class ConversationFlow:
                 # 这场冲突里已经不回过一次：这次必须回，由回复器自己决定怎么回（D69 第 3 条）。
                 plan = None
                 forced_reply = True
-        outcome = await self._reply(job, plan)
+        outcome = await self._reply(job, plan, automatic)
         return replace(outcome, judge=attempt, effects=job.effects, forced_reply=forced_reply)
 
     async def _judge_emotion(self, job: _ReplyJob) -> _JudgeAttempt | None:
@@ -559,24 +565,30 @@ class ConversationFlow:
             return self._affinity.current(sender_id)
         return self._affinity.config.stranger_affinity
 
-    async def _plan(self, job: _ReplyJob) -> Plan | None:
+    async def _plan(
+        self, job: _ReplyJob, automatic: tuple[tuple[str, ...], list[MemoryHit]] | None
+    ) -> Plan | None:
         """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""
         organ_id = self._config.plan_organ
+        prompt = build_plan_prompt(
+            job.history,
+            job.messages,
+            job.user_name,
+            self._timezone,
+            with_agenda=self._agenda is not None,
+            with_interests=job.with_interests,
+            with_recall=self._can_recall(),
+            jargon=await self._jargon_reference(job),
+            with_expressions=self._can_recall_language(),
+        )
+        if automatic is not None:
+            words, hits = automatic
+            prompt += "\n\n" + format_recall(words, hits, self._timezone, heuristic=True)
         request = _organ_request(
             job,
             organ_id=organ_id,
             task="plan",
-            prompt=build_plan_prompt(
-                job.history,
-                job.messages,
-                job.user_name,
-                self._timezone,
-                with_agenda=self._agenda is not None,
-                with_interests=job.with_interests,
-                with_recall=self._can_recall(),
-                jargon=await self._jargon_reference(job),
-                with_expressions=self._can_recall_language(),
-            ),
+            prompt=prompt,
             system_context=job.full_context,
         )
         try:
@@ -643,7 +655,24 @@ class ConversationFlow:
             logger.exception("读取习得表达参考失败")
             return ""
 
-    async def _reply(self, job: _ReplyJob, plan: Plan | None) -> _ThoughtOutcome:
+    async def _retrieve(self, job: _ReplyJob, words: tuple[str, ...]) -> list[MemoryHit] | None:
+        """后台读取有上限的检索结果，保留查询失败与无命中的区别。"""
+        if self._memory is None:
+            return None
+        try:
+            return await asyncio.to_thread(
+                self._memory.search, words, job.history_ids, self._memory_config.max_results
+            )
+        except Exception:
+            logger.exception("记忆检索失败，这次检索不附记忆")
+            return None
+
+    async def _reply(
+        self,
+        job: _ReplyJob,
+        plan: Plan | None,
+        automatic: tuple[tuple[str, ...], list[MemoryHit]] | None,
+    ) -> _ThoughtOutcome:
         """调回复器。有规划就按规划的意图和长度写；没有就由它自己决定（合并的一次调用）。"""
         strategy = job.strategy
         if plan is None:
@@ -658,18 +687,14 @@ class ConversationFlow:
         recall_text = ""
         keywords: tuple[str, ...] = ()
         hits: list[MemoryHit] = []
-        if plan is not None and plan.recall and self._can_recall() and self._memory is not None:
-            try:
-                hits = await asyncio.to_thread(
-                    self._memory.search,
-                    plan.recall,
-                    job.history_ids,
-                    self._memory_config.max_results,
-                )
-                recall_text = format_recall(plan.recall, hits, self._timezone)
+        if plan is not None and plan.recall and self._can_recall():
+            if (explicit := await self._retrieve(job, plan.recall)) is not None:
+                hits = explicit
                 keywords = plan.recall
-            except Exception:
-                logger.exception("记忆检索失败，这次回复不附记忆")
+                recall_text = format_recall(keywords, hits, self._timezone)
+        elif automatic is not None:
+            keywords, hits = automatic
+            recall_text = format_recall(keywords, hits, self._timezone, heuristic=True)
         request = _organ_request(
             job,
             organ_id=self._config.reply_organ,
@@ -714,5 +739,6 @@ class ConversationFlow:
             response=response,
             plan=plan,
             recall_keywords=keywords,
-            recall_record_ids=tuple(hit.record_id for hit in hits),
+            recall_record_ids=tuple(hit.record_id for hit in hits if hit.record_id is not None),
+            recall_source_keys=tuple(hit.source.encode() for hit in hits if hit.source is not None),
         )

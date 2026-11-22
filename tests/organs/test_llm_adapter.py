@@ -12,9 +12,9 @@ from aureus.organs import llm_adapter
 from aureus.organs.api_keys import KeyResolver
 from aureus.organs.interface import CallAttempt, OrganCallError, OrganRequest
 from aureus.organs.llm_adapter import (
-    _EMPTY_SYSTEM_MESSAGE,
     ASSUMED_COMPLETION_TOKENS,
     EMPTY_REPLY_REASON,
+    EMPTY_SYSTEM_MESSAGE,
     LITELLM_PREFIX_BY_PROTOCOL,
     RETRY_BACKOFF_SECONDS,
     LLMOrgan,
@@ -390,7 +390,7 @@ async def test_without_system_context_a_neutral_system_message_is_sent(
 
     await make_organ(completion, keys).process(ask())
 
-    assert completion.calls[0]["messages"][0]["content"] == _EMPTY_SYSTEM_MESSAGE
+    assert completion.calls[0]["messages"][0]["content"] == EMPTY_SYSTEM_MESSAGE.default.template
 
 
 def test_organ_without_a_chat_model_fails_at_startup(keys: KeyResolver) -> None:

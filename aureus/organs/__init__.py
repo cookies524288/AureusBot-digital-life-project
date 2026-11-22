@@ -11,7 +11,7 @@ from .interface import (
     OrganRequest,
     OrganResponse,
 )
-from .llm_adapter import LLMOrgan, count_prompt_tokens
+from .llm_adapter import EMPTY_SYSTEM_MESSAGE, LLMOrgan, assemble_messages, count_prompt_tokens
 from .model_config import (
     API_KEY_ENV_PATTERN,
     BUILTIN_ORGANS,
@@ -25,10 +25,19 @@ from .model_config import (
     validate_models_config,
 )
 from .organ_bus import OrganBus
+from .prompts import (
+    PromptStore,
+    PromptTemplate,
+    PromptTemplateError,
+    join_prompt,
+    prompt_template_keys,
+)
+from .topology import organ_tasks
 
 __all__ = [
     "API_KEY_ENV_PATTERN",
     "BUILTIN_ORGANS",
+    "EMPTY_SYSTEM_MESSAGE",
     "CallAttempt",
     "CallPurpose",
     "FakePlanner",
@@ -45,9 +54,16 @@ __all__ = [
     "OrganRequest",
     "OrganResponse",
     "OrganStrategy",
+    "PromptStore",
+    "PromptTemplate",
+    "PromptTemplateError",
     "ProviderProtocol",
     "ReasoningLevel",
+    "assemble_messages",
     "count_prompt_tokens",
+    "join_prompt",
     "load_models_config",
+    "organ_tasks",
+    "prompt_template_keys",
     "validate_models_config",
 ]

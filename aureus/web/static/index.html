@@ -288,6 +288,18 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .lock-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
 .layer-card .field-label{margin-bottom:6px}
 
+/* ---------- Prompt 管理 ---------- */
+.prompt-layout{display:grid;grid-template-columns:minmax(180px,280px) minmax(0,1fr);gap:18px}
+.prompt-directory{max-height:64vh;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.prompt-directory .btn{text-align:left;white-space:normal;overflow-wrap:anywhere}
+.prompt-directory .btn[aria-pressed="true"]{border-color:currentColor}
+.prompt-source{min-height:18rem;resize:vertical;font-family:ui-monospace,monospace}
+.prompt-actions{display:flex;gap:8px;flex-wrap:wrap}
+#prompt-preview{width:min(850px,calc(100% - 24px))}
+.prompt-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 16px}
+.prompt-preview .dialog-body{max-height:70dvh;overflow:auto}
+.prompt-scene{padding:8px 22px 12px;margin:0;border-bottom:1px solid var(--border)}
+@media(max-width:700px){.prompt-layout{grid-template-columns:minmax(0,1fr)}.prompt-directory{max-height:24vh}.prompt-source{min-height:13rem}}
 /* ---------- 模型和器官 ---------- */
 .provider-card .card-head{align-items:flex-start}
 .model-row{display:grid;grid-template-columns:1.2fr 1.2fr auto;gap:10px;align-items:start;padding:12px 0;border-top:1px solid var(--border)}
@@ -520,6 +532,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button class="nav-item" data-page="models" aria-label="模型"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-model"/></svg><span class="nav-label" style="--i:6">模型</span></button>
 <button class="nav-item" data-page="organs" aria-label="器官"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-organ"/></svg><span class="nav-label" style="--i:7">器官</span></button>
 <button class="nav-item" data-page="keys" aria-label="密钥"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-key"/></svg><span class="nav-label" style="--i:8">密钥</span></button>
+<div class="nav-group"><span class="nav-label" style="--i:8">高级管理</span></div>
+<button class="nav-item" data-page="prompts" aria-label="Prompt 管理"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-persona"/></svg><span class="nav-label" style="--i:9">Prompt 管理</span></button>
 <button class="nav-item" data-page="config" aria-label="设置"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-sliders"/></svg><span class="nav-label" style="--i:9">设置</span></button>
 <div class="nav-spacer"></div>
 <div class="nav-foot">
@@ -667,6 +681,17 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 </div>
 </div></section>
+<section id="page-prompts" class="page wide"><div class="page-head"><h2>Prompt 管理</h2></div>
+<div class="page-body stack">
+<div id="prompt-banner" class="banner hidden" role="alert"></div>
+<div class="prompt-layout">
+<div class="stack">
+<label class="field"><span>器官</span><select id="prompt-organ"></select></label>
+<label class="field"><span>搜索模板</span><input id="prompt-search" type="search"></label>
+<div id="prompt-directory" class="prompt-directory" role="group" aria-label="提示词目录"></div>
+</div>
+<div id="prompt-editor" class="stack"></div>
+</div></div></section>
 <section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class='page-body stack'>
 <div id='mo-missing' class='empty hidden'></div>
@@ -687,6 +712,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
 <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg>关闭</button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title"><div class="dialog-shell">
+<header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" autofocus>关闭预览</button></form></header>
+<div id="prompt-preview-scene"></div><div id="prompt-preview-body" class="dialog-body" tabindex="0"></div></div></dialog>
 
 <script src="/assets/organ-graph.js"></script>
 <script>
@@ -2159,6 +2187,7 @@ function openOrganEditor(name) {
     ['models', chainActions, '模型顺序'], ['reasoning_effort', effortField, '思考等级'],
     ['temperature', temperature.node, '温度'], ['max_tokens', maxTokens.node, '单次回复 token 上限'],
   ]) addModelRestore(host, label, 'organs', name, field, () => openOrganEditor(name));
+  body.append(el('button', { class: 'btn', type: 'button', text: '预览完整提示词', onclick: () => openPromptPreview(name) }));
   openEditor(name.toUpperCase(), body, true); refreshList();
   notifyModelWarnings([name]);
 }
@@ -2170,6 +2199,110 @@ async function loadOrgansPage() {
   if (result === true) { renderOrgans(); notifyModelWarnings(); }
 }
 PAGES.organs = { load: loadOrgansPage };
+
+// ---------- 高级管理：按器官查找提示词及逐项恢复 ----------
+const promptCatalog = { organs: {}, templates: [], selected: '' };
+function renderPromptDirectory() {
+  const organ = $('prompt-organ').value;
+  const keys = promptCatalog.organs[organ];
+  const search = $('prompt-search').value.trim().toLowerCase();
+  const entries = promptCatalog.templates.filter(entry => (!keys || keys.includes(entry.key))
+    && [entry.label, entry.key, ...entry.variables].some(value => value.toLowerCase().includes(search)));
+  $('prompt-directory').replaceChildren(...entries.map(entry => el('button', {
+    class: 'btn small', type: 'button', text: entry.label,
+    'aria-pressed': String(entry.key === promptCatalog.selected),
+    onclick: () => {
+      promptCatalog.selected = entry.key;
+      renderPromptDirectory();
+      renderPromptEditor(entry, true);
+    },
+  })));
+  if (!entries.length) $('prompt-directory').append(el('p', { class: 'empty', text: '没有匹配的提示词。' }));
+}
+function renderPromptEditor(entry, focus = false) {
+  const editor = $('prompt-editor');
+  showBanner('prompt-banner', '');
+  const source = el('textarea', { id: 'prompt-source', class: 'prompt-source', readonly: !entry.editable });
+  source.value = entry.source;
+  const status = el('span', { class: 'muted', role: 'status',
+    text: entry.editable ? (entry.customized ? '自定义' : '默认') : '固定片段' });
+  const save = el('button', { class: 'btn primary', type: 'button', text: '保存',
+    onclick: () => update('PUT', { source: source.value }) });
+  const reset = el('button', { class: 'btn', type: 'button', text: '恢复默认',
+    disabled: !entry.editable,
+    onclick: () => update('DELETE') });
+  async function update(method, body) {
+    save.disabled = reset.disabled = true;
+    const response = await api('/api/prompts/' + encodeURIComponent(entry.key), method, body);
+    save.disabled = reset.disabled = false;
+    if (response.ok) {
+      promptCatalog.templates = promptCatalog.templates.map(item => item.key === entry.key ? response.data : item);
+    }
+    if (!editor.contains(source)) return;
+    if (!response.ok) { showBanner('prompt-banner', errorText(response)); return; }
+    renderPromptEditor(response.data, true);
+    toast(method === 'DELETE' ? '已恢复默认模板' : '已保存提示词', 'ok');
+  }
+  editor.replaceChildren(
+    el('label', { for: 'prompt-source', text: entry.label }), status,
+    el('div', { class: 'muted', text: entry.variables.length
+      ? '变量　' + entry.variables.map(value => '$' + value).join('、') : '无变量' }),
+    source, el('div', { class: 'prompt-actions' }, entry.editable ? save : null, reset));
+  if (focus) source.focus();
+}
+async function loadPromptPage() {
+  showBanner('prompt-banner', '');
+  const response = await api('/api/prompts');
+  if (!response.ok) { showBanner('prompt-banner', errorText(response)); return false; }
+  Object.assign(promptCatalog, response.data);
+  const filter = $('prompt-organ');
+  const previous = filter.value;
+  filter.replaceChildren(el('option', { value: '', text: '全部器官' }),
+    ...Object.keys(promptCatalog.organs).map(name => el('option', { value: name, text: name.toUpperCase() })));
+  if (Object.hasOwn(promptCatalog.organs, previous)) filter.value = previous;
+  const entry = promptCatalog.templates.find(item => item.key === promptCatalog.selected) || promptCatalog.templates[0];
+  if (entry) {
+    promptCatalog.selected = entry.key;
+    renderPromptEditor(entry);
+  }
+  renderPromptDirectory();
+  return true;
+}
+$('prompt-organ').addEventListener('change', renderPromptDirectory);
+$('prompt-search').addEventListener('input', renderPromptDirectory);
+PAGES.prompts = { load: loadPromptPage };
+
+async function openPromptPreview(organ) {
+  const dialog = $('prompt-preview');
+  const body = $('prompt-preview-body');
+  const scenePicker = $('prompt-preview-scene');
+  $('prompt-preview-title').textContent = organ.toUpperCase() + ' · 完整提示词';
+  const loading = el('p', { role: 'status', text: '正在加载…' });
+  scenePicker.replaceChildren();
+  body.replaceChildren(loading);
+  dialog.showModal();
+  const response = await api('/api/organs/' + encodeURIComponent(organ) + '/prompt-preview');
+  if (!dialog.open || !body.contains(loading)) return;
+  if (!response.ok) {
+    body.replaceChildren(el('p', { class: 'banner', role: 'alert', text: errorText(response) }));
+    return;
+  }
+  const scenes = response.data.scenes;
+  const select = el('select', { 'aria-label': '运行场景' },
+    ...scenes.map(scene => el('option', { value: scene.id, text: scene.label })));
+  const messages = el('div', { class: 'stack' });
+  function renderMessages() {
+    const scene = scenes.find(item => item.id === select.value);
+    messages.replaceChildren(...(scene.note ? [el('p', { class: 'muted', text: scene.note })] : []),
+      ...scene.messages.map(message => el('section', {},
+        el('h4', { text: message.role }), el('pre', { text: message.content }))));
+    body.scrollTop = 0;
+  }
+  select.addEventListener('change', renderMessages);
+  scenePicker.replaceChildren(el('label', { class: 'field prompt-scene' }, el('span', { text: '运行场景' }), select));
+  body.replaceChildren(messages);
+  renderMessages();
+}
 $('og-reset').addEventListener('click', () => organGraph?.reset());
 
 // ---------- 设置：QQ 账号关联 ----------

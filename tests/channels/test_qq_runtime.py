@@ -213,6 +213,7 @@ action_timeout_seconds = 0.4
 """,
             encoding="utf-8",
         )
+        runtime_config_bytes = paths.runtime_config_file.read_bytes()
         async with run_chat(paths), httpx.AsyncClient(base_url=url, trust_env=False) as web:
             remote = await fake.connections.get()
             await login(web)
@@ -248,6 +249,10 @@ action_timeout_seconds = 0.4
             link_path = "/api/qq-link"
             request = {"account_id": "2400"}
             assert (await web.post(link_path, json=request)).status_code == 403
+            assert (await web.post(link_path, json=request, headers=headers)).status_code == 200
+            revoked = await web.delete(link_path, headers=headers)
+            assert revoked.status_code == 200 and revoked.json() == {"ok": True}
+            assert (await web.post(f"{link_path}/confirm", headers=headers)).status_code == 409
             issued = await web.post(link_path, json=request, headers=headers)
             assert issued.status_code == 200
             assert issued.headers["Cache-Control"] == "no-store"
@@ -284,6 +289,7 @@ action_timeout_seconds = 0.4
             ] == [("user", "重启后用户私聊")]
 
     assert paths.identity_file.read_bytes() == IDENTITY
+    assert paths.runtime_config_file.read_bytes() == runtime_config_bytes
     timeline = TimelineDatabase(
         paths.database_file, ManualClock(datetime(2026, 11, 22, tzinfo=UTC))
     )

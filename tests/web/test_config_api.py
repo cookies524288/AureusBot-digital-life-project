@@ -109,6 +109,33 @@ def test_readonly_changes_are_rejected_before_password_checks_and_do_not_consume
 
 
 @pytest.mark.parametrize(
+    "field, value",
+    [
+        ("enabled", True),
+        ("endpoint", "ws://127.0.0.1:9000/onebot"),
+        ("account_id", "12345"),
+        ("token_key", "AUREUS_KEY_QQ_TEST"),
+        ("action_timeout_seconds", 12.0),
+        ("reconnect_seconds", 6.0),
+    ],
+)
+def test_qq_page_settings_reject_edit_and_restore_without_touching_config(
+    rig: ConfigRig, field: str, value: Any
+) -> None:
+    save_original(rig)
+    path = rig.paths.runtime_config_file
+    before = path.read_bytes()
+    key = f"qq.{field}"
+
+    edited = rig.client.put("/api/config", json={"changes": {"qq": {field: value}}})
+    restored = rig.client.post("/api/config/restore-default", json={"field": key})
+
+    assert edited.status_code == 403
+    assert restored.status_code == 403
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
     "changes", [{"safety": {"max_calls_per_minute": 21}}, {"web": {"session_days": 9}}]
 )
 def test_sensitive_sections_require_the_current_password(

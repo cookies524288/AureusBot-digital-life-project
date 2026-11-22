@@ -91,6 +91,54 @@ def test_runtime_restore_removes_only_that_override_and_restart_reads_new_defaul
         shutdown_logging()
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "memory.enabled",
+        "memory.recall_enabled",
+        "memory.heuristic_recall_enabled",
+        "memory.max_results",
+        "memory.index_batch",
+        "language.recall_enabled",
+        "language.learning_enabled",
+        "language.organ",
+        "language.reference_chars",
+    ],
+)
+def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, field: str) -> None:
+    changes = {
+        "memory": {
+            "enabled": False,
+            "recall_enabled": False,
+            "heuristic_recall_enabled": True,
+            "max_results": 12,
+            "index_batch": 321,
+        },
+        "language": {
+            "recall_enabled": False,
+            "learning_enabled": True,
+            "organ": "planner",
+            "reference_chars": 1500,
+        },
+    }
+    client = rig.client
+    assert client.put("/api/config", json={"changes": changes}).status_code == 200
+    path = rig.paths.runtime_config_file
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == changes
+    section, name = field.split(".")
+    default = RuntimeConfig().model_dump()[section][name]
+    assert changes[section].pop(name) != default
+    restored = client.post(RUNTIME_RESTORE, json={"field": field})
+    assert restored.status_code == 200
+    assert restored.json() == {"value": default, "changed": True, "restart_required": True}
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == changes
+    changes[section][name] = default
+    page_config = client.get("/api/config").json()["config"]
+    loaded = load_runtime_config(rig.paths).model_dump()
+    for group, values in changes.items():
+        assert page_config[group] == loaded[group] == values
+
+
 def test_model_restore_reloads_and_sparse_saves_follow_changed_defaults(
     rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -30,6 +30,7 @@ from aureus.organs import (
     OrganCallError,
     OrganRequest,
     OrganResponse,
+    assemble_messages,
 )
 from aureus.safety import BudgetExceededError, EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import (
@@ -201,6 +202,50 @@ async def test_normal_tier_plans_then_replies_with_the_planned_intent(
     assert reply.metadata["plan"]["intent"] == "安慰一下，问问细节"
     assert reply.metadata["strategy"]["plan_first"] is True
     assert [m.kind for m in rig.sent] == [MessageKind.REPLY]
+
+
+@pytest.mark.parametrize(
+    ("incoming", "plan", "expected"),
+    [
+        (
+            "小绿，雨还没停吗？",
+            '{"reply": true, "intent": "告诉对方还在下雨，提醒带伞", '
+            '"length": "短", "reason": "对方点名问天气"}',
+            ["还下着呢，记得带伞"],
+        ),
+        ("晚安，大家散了吧。", DECLINE, []),
+    ],
+)
+async def test_group_prompt_keeps_speaker_persona_and_silence(
+    made: list[Rig], tmp_path: Path, incoming: str, plan: str, expected: list[str]
+) -> None:
+    rig = make_rig(made, tmp_path, planner=[plan], replyer=[*expected])
+    rig.timeline.append(
+        EVENT_MESSAGE, "门外还在下。", ActorType.PERSON, "小雨", VisibilityScope.GROUP
+    )
+    assert rig.heartbeat.submit(
+        Perception(
+            CHANNEL, "group-member", incoming, VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT
+        )
+    )
+    rig.heartbeat.beat()
+    await rig.heartbeat.wait_for_thought()
+    rig.heartbeat.beat()
+
+    plan_messages = assemble_messages(rig.organs.requests[0])
+    assert "小雨：门外还在下。" in plan_messages[1]["content"]
+    assert "group-member：" + incoming in plan_messages[1]["content"]
+    assert "你是小绿。" in plan_messages[0]["content"]
+    assert "少打断。" in plan_messages[0]["content"]
+    assert "不要向对方透露" in plan_messages[0]["content"]
+    assert [item.content for item in rig.sent if item.kind is MessageKind.REPLY] == expected
+    if expected:
+        replyer_messages = assemble_messages(rig.organs.requests[1])
+        assert "句子短。" in replyer_messages[0]["content"]
+        assert "少打断。" not in replyer_messages[0]["content"]
+        assert "不要加名字或时间前缀" in replyer_messages[1]["content"]
+    else:
+        assert rig.organ_ids() == ["planner"]
 
 
 @pytest.mark.parametrize(
