@@ -36,13 +36,14 @@ from aureus.common import (
     HeartbeatConfig,
     InitiativeConfig,
     JudgeConfig,
+    LanguageConfig,
     MemoryConfig,
     PeopleConfig,
     PersonaGrowthConfig,
 )
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore, Outcome
-from aureus.heartbeat import exploration_runner, interest_changes
+from aureus.heartbeat import exploration_runner, interest_changes, language_runner
 from aureus.heartbeat import persona_growth_runner as growth
 from aureus.heartbeat.agenda_hooks import AgendaHooks
 from aureus.heartbeat.context import build_initiative_plan_prompt, build_initiative_reply_prompt
@@ -99,7 +100,7 @@ from aureus.hormones import (
     kind_enabled,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
-from aureus.memory import DiaryBook, MemoryIndex
+from aureus.memory import BATCH_SIZE, DiaryBook, LanguageSample, LanguageStore, MemoryIndex
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
 from aureus.organs import CallPurpose
 from aureus.people import (
@@ -206,6 +207,8 @@ class Heartbeat:
         has_exploration_organ: bool = True,
         memory: MemoryIndex | None = None,
         memory_config: MemoryConfig | None = None,
+        language: LanguageStore | None = None,
+        language_config: LanguageConfig | None = None,
         diary: DiaryBook | None = None,
         diary_config: DiaryConfig | None = None,
         has_diary_organ: bool = True,
@@ -251,6 +254,8 @@ class Heartbeat:
             has_exploration_organ: 总结器官是否已注册；运行时传入真实登记结果。
             memory: 已打开的记忆索引；不给就不召回（D80）。
             memory_config: 记忆索引和召回的开关及上限（D80）。
+            language: 统一的习得语言库（D89）。
+            language_config: 语言召回、增量学习和参考字数配置。
             diary: 日记文件写入接口；不给就不写日记（D80）。
             diary_config: 日记器官、写作时刻和长度限制（D80）。
             has_diary_organ: 总结器官是否已注册；缺少时只记一次日志（D68、D80）。
@@ -287,6 +292,9 @@ class Heartbeat:
         self._agenda = agenda
         self._feedback = feedback
         self._agenda_hooks = AgendaHooks(agenda, timeline, clock, feedback, timezone)
+        self._language = language
+        self._language_config = language_config or LanguageConfig()
+        self._language_samples: deque[LanguageSample] = deque()
         self._conversation = ConversationFlow(
             clock=clock,
             timeline=timeline,
@@ -300,6 +308,8 @@ class Heartbeat:
             agenda=agenda,
             memory=memory,
             memory_config=memory_config,
+            language=language,
+            language_config=self._language_config,
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._diary: DiaryTracker | None = None
@@ -686,6 +696,7 @@ class Heartbeat:
         self._check_stress()
         self._agenda_hooks._check_agenda()
         self._maybe_start_thought()
+        self._maybe_learn_language()
         self._maybe_start_initiative()
         self._maybe_start_exploration()
         self._maybe_start_diary()
@@ -772,6 +783,9 @@ class Heartbeat:
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
         outcome = thought.task.result()
+        if thought.task.get_name() == language_runner.TASK_NAME:
+            return
+        assert outcome is not None
         if isinstance(outcome, growth.PersonaReviewOutcome):
             assert self._persona_growth is not None
             self._identity = self._persona_growth.finish(outcome, self._identity) or self._identity
@@ -1005,6 +1019,8 @@ class Heartbeat:
             }
             if person is not None:
                 metadata["person_id"] = person.id
+            if perception.source_message_id:
+                metadata["source_message_id"] = perception.source_message_id
             record = self._timeline.append(
                 event_type=EVENT_MESSAGE,
                 content=perception.content,
@@ -1014,6 +1030,10 @@ class Heartbeat:
                 metadata=metadata,
             )
             self._pending.popleft()
+            if self._language is not None and self._language_config.learning_enabled:
+                self._language_samples.append(
+                    language_runner.language_sample(record, perception.source_message_id)
+                )
             priority = _priority_of(perception, person)
             if priority is None:
                 # 确认不了身份（或通道和档案对不上）就不回，朝安全方向倒。
@@ -1056,6 +1076,30 @@ class Heartbeat:
         task = asyncio.create_task(self._conversation._think(job), name="aureus-thought")
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task=task, replying_to=batch, strategy=job.strategy)
+
+    def _maybe_learn_language(self) -> None:
+        """回复优先。空闲时用同一个器官任务槽处理本次运行的新消息。"""
+        if (
+            self._language is None
+            or not self._language_samples
+            or self._thought is not None
+            or self._unanswered
+            or self._stop_requested
+            or not self._permissions.check(ACTION_CALL_ORGAN).allowed
+        ):
+            return
+        samples = [
+            self._language_samples.popleft()
+            for _ in range(min(BATCH_SIZE, len(self._language_samples)))
+        ]
+        task = asyncio.create_task(
+            language_runner.learn_language(
+                self._language, self._language_config.organ, self._organs.call, samples
+            ),
+            name=language_runner.TASK_NAME,
+        )
+        task.add_done_callback(self._on_thought_done)
+        self._thought = _Thought(task=task, replying_to=(), strategy=self._current_strategy())
 
     def _maybe_start_initiative(self) -> None:
         """只在这里读取主动需要的材料；失败就跳过这一拍（D78）。"""
@@ -1545,7 +1589,7 @@ class Heartbeat:
         """
         if thought.exploration is not None or thought.task.get_name() == "aureus-diary":
             return  # 取消探索或日记不写结果，也不补记（D79、D80）。
-        if thought.task.get_name() == "aureus-persona-review":
+        if thought.task.get_name() in ("aureus-persona-review", language_runner.TASK_NAME):
             return  # D81：取消不写结果，重启后允许再试。
         if thought.initiative is not None:
             self._collect_initiative(

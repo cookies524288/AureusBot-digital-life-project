@@ -41,7 +41,7 @@ from aureus.heartbeat import Heartbeat
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
-from aureus.memory import DiaryBook, MemoryIndex
+from aureus.memory import DiaryBook, LanguageStore, MemoryIndex
 from aureus.mood import Mood
 from aureus.organs import FakeReplyer, KeyResolver, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
@@ -266,6 +266,14 @@ def open_core(
         if roleplay:
             exploration = exploration.model_copy(update={"enabled": False})
             persona_growth = persona_growth.model_copy(update={"enabled": False})
+        language: LanguageStore | None = None
+        if runtime.language.recall_enabled or runtime.language.learning_enabled:
+            try:
+                language = LanguageStore(paths.database_file)
+                language.open()
+            except sqlite3.Error:
+                language = None
+                logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -296,6 +304,8 @@ def open_core(
             has_exploration_organ=exploration.organ in models.available_organs,
             memory=memory,
             memory_config=runtime.memory,
+            language=language,
+            language_config=runtime.language,
             diary=DiaryBook(paths.diary_dir),
             diary_config=runtime.diary,
             has_diary_organ=runtime.diary.organ in models.available_organs,

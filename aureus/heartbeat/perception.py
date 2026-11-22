@@ -43,6 +43,7 @@ class Perception:
     content: str
     visibility: VisibilityScope  # 私聊是 USER_ONLY，群聊是 GROUP
     trust: TrustLevel
+    source_message_id: str | None = None  # 通道提供的稳定入站消息键，用于语言学习去重。
 
     def __post_init__(self) -> None:
         if not self.channel.strip():

@@ -2,5 +2,26 @@
 
 from aureus.memory.diary import DiaryBook
 from aureus.memory.index import MemoryEntry, MemoryHit, MemoryIndex
+from aureus.memory.language import (
+    BATCH_SIZE,
+    MAX_DETAIL,
+    MAX_TEXT,
+    LanguageKind,
+    LanguageProposal,
+    LanguageSample,
+    LanguageStore,
+)
 
-__all__ = ["DiaryBook", "MemoryEntry", "MemoryHit", "MemoryIndex"]
+__all__ = [
+    "BATCH_SIZE",
+    "MAX_DETAIL",
+    "MAX_TEXT",
+    "DiaryBook",
+    "LanguageKind",
+    "LanguageProposal",
+    "LanguageSample",
+    "LanguageStore",
+    "MemoryEntry",
+    "MemoryHit",
+    "MemoryIndex",
+]
