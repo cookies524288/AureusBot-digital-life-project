@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-type SourceValue = str | int | float
+type SourceValue = str | int | float | dict[str, str]
 type MemoryStatus = Literal[
     "active", "inactive", "conflicted", "superseded", "retracted", "deleted", "missing"
 ]
@@ -51,6 +51,7 @@ class MemoryEvidence:
     kind: str
     reference: str
     source: MemorySource | None = None
+    status: MemoryStatus | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,11 @@ class HistoricalMemory:
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     evidence: tuple[MemoryEvidence, ...] = ()
+    received_at: datetime | None = None
+
+
+class MemorySnapshotConflictError(ValueError):
+    """已发布的实例快照与本次来源或时间规则不同。"""
 
 
 def _epoch(value: datetime | None) -> float | None:
@@ -85,7 +91,10 @@ def _decode(row: sqlite3.Row) -> HistoricalMemory:
             source["key"] = tuple(source["key"])
         evidence.append(
             MemoryEvidence(
-                item["kind"], item["reference"], MemorySource(**source) if source else None
+                item["kind"],
+                item["reference"],
+                MemorySource(**source) if source else None,
+                item.get("status"),
             )
         )
     return HistoricalMemory(
@@ -99,6 +108,7 @@ def _decode(row: sqlite3.Row) -> HistoricalMemory:
         _date(row["valid_from"]),
         _date(row["valid_to"]),
         tuple(evidence),
+        _date(row["received_at"]),
     )
 
 
@@ -118,12 +128,21 @@ def open_history(conn: sqlite3.Connection) -> None:
                 status TEXT NOT NULL,
                 valid_from REAL,
                 valid_to REAL,
-                evidence TEXT NOT NULL
+                evidence TEXT NOT NULL,
+                received_at REAL
             )
         """)
+        columns = conn.execute("PRAGMA table_info(memory_history)")
+        if not any(column[1] == "received_at" for column in columns):
+            conn.execute("ALTER TABLE memory_history ADD COLUMN received_at REAL")
         conn.execute("""
             CREATE INDEX IF NOT EXISTS memory_history_person_time
             ON memory_history(person_key, recorded_at)
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_history_snapshots (
+                instance TEXT PRIMARY KEY, fingerprint TEXT NOT NULL
+            )
         """)
         if (
             conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'memory_history_fts'").fetchone()
@@ -149,28 +168,41 @@ def open_history(conn: sqlite3.Connection) -> None:
         """)
 
 
-def publish_history(conn: sqlite3.Connection, records: Iterable[HistoricalMemory]) -> int:
+def publish_history(
+    conn: sqlite3.Connection,
+    records: Iterable[HistoricalMemory],
+    snapshot: tuple[str, str] | None,
+) -> int:
     """按来源原子发布一批，返回首次发布或更新的条数。"""
     written = 0
     with conn:
+        if snapshot is not None:
+            conn.execute("INSERT OR IGNORE INTO memory_history_snapshots VALUES (?, ?)", snapshot)
+            match = conn.execute(
+                "SELECT fingerprint FROM memory_history_snapshots WHERE instance = ?", snapshot[:1]
+            ).fetchone()
+            if match[0] != snapshot[1]:
+                raise MemorySnapshotConflictError
         for record in records:
             result = conn.execute(
                 """
                 INSERT INTO memory_history (
                     source_key, content, actor_label, person_key, recorded_at, time_precision,
-                    status, valid_from, valid_to, evidence
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, valid_from, valid_to, evidence, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_key) DO UPDATE SET
                     (content, actor_label, person_key, recorded_at, time_precision,
-                     status, valid_from, valid_to, evidence) =
+                     status, valid_from, valid_to, evidence, received_at) =
                     (excluded.content, excluded.actor_label, excluded.person_key,
                      excluded.recorded_at, excluded.time_precision, excluded.status,
-                     excluded.valid_from, excluded.valid_to, excluded.evidence)
+                     excluded.valid_from, excluded.valid_to, excluded.evidence,
+                     excluded.received_at)
                 WHERE (content, actor_label, person_key, recorded_at, time_precision,
-                       status, valid_from, valid_to, evidence) IS NOT
+                       status, valid_from, valid_to, evidence, received_at) IS NOT
                       (excluded.content, excluded.actor_label, excluded.person_key,
                        excluded.recorded_at, excluded.time_precision, excluded.status,
-                       excluded.valid_from, excluded.valid_to, excluded.evidence)
+                       excluded.valid_from, excluded.valid_to, excluded.evidence,
+                       excluded.received_at)
                 """,
                 (
                     record.source.encode(),
@@ -183,6 +215,7 @@ def publish_history(conn: sqlite3.Connection, records: Iterable[HistoricalMemory
                     _epoch(record.valid_from),
                     _epoch(record.valid_to),
                     json.dumps([asdict(item) for item in record.evidence], ensure_ascii=False),
+                    _epoch(record.received_at),
                 ),
             )
             written += result.rowcount
@@ -206,7 +239,7 @@ def search_history(
     person_key: str | None,
     since: datetime | None,
     before: datetime | None,
-) -> list[HistoricalMemory]:
+) -> list[tuple[HistoricalMemory, int]]:
     """只查当前有效的资料。起始时间包含端点，截止时间排除端点。"""
     clauses, terms = keyword_conditions(keywords, "memory_history_fts", "id")
     if not clauses and person_key is None and since is None and before is None:
@@ -227,12 +260,14 @@ def search_history(
     _append_filters(where, parameters, person_key, since, before)
     parameters.append(limit)
     rows = conn.execute(
-        "SELECT * FROM memory_history WHERE "
+        "SELECT *, "
+        + relevance_expression(clauses)
+        + " AS relevance FROM memory_history WHERE "
         + " AND ".join(where)
-        + " ORDER BY recorded_at DESC, source_key LIMIT ?",
-        parameters,
+        + " ORDER BY relevance DESC, recorded_at DESC, source_key LIMIT ?",
+        [*terms, *parameters],
     )
-    return [_decode(row) for row in rows]
+    return [(_decode(row), row["relevance"]) for row in rows]
 
 
 def _append_filters(
@@ -259,7 +294,7 @@ def keyword_conditions(
     """生成 D80 的字面搜索条件，表名和行列名须是调用侧常量。"""
     clauses: list[str] = []
     parameters: list[str] = []
-    for keyword in keywords:
+    for keyword in dict.fromkeys(keywords):
         if len(keyword) >= 3:
             # 分隔各个 MATCH，SQLite 才能和 LIKE 作 OR 运算。
             clauses.append(f"{row_id} IN (SELECT rowid FROM {table} WHERE {table} MATCH ?)")
@@ -269,3 +304,8 @@ def keyword_conditions(
             escaped = keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_")
             parameters.append(f"%{escaped}%")
     return clauses, parameters
+
+
+def relevance_expression(clauses: Sequence[str]) -> str:
+    """按命中的不同词数排序，无查询词时只使用时间。"""
+    return " + ".join(f"({clause})" for clause in clauses) if clauses else "0"

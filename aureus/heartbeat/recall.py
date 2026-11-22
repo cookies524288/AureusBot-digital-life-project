@@ -95,7 +95,7 @@ def format_recall(
         provenance = ""
         if hit.source is not None:
             digest = sha256(hit.source.encode().encode()).hexdigest()[:12]
-            linked = sum(item.source is not None for item in hit.evidence)
+            linked = sum(item.source is not None and item.status is None for item in hit.evidence)
             provenance = f" [来源 {hit.source.table}/{digest}，可追溯证据 {linked} 条]"
         actor = " ".join(hit.actor_label.split())[:48] or "说话人未记录"
         hit_lines.append(f"{index}. {stamp} {actor}：{normalized_content}{provenance}")

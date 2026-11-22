@@ -16,6 +16,7 @@ from aureus.memory.history import (
     open_history,
     publish_history,
     read_history,
+    relevance_expression,
     search_history,
 )
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
@@ -44,6 +45,7 @@ class MemoryHit:
     source: MemorySource | None = None
     time_precision: str | None = None
     evidence: tuple[MemoryEvidence, ...] = ()
+    relevance: int = 0
 
 
 class MemoryIndex:
@@ -127,11 +129,13 @@ class MemoryIndex:
             )
         return len(records)
 
-    def publish(self, records: Iterable[HistoricalMemory]) -> int:
+    def publish(
+        self, records: Iterable[HistoricalMemory], *, snapshot: tuple[str, str] | None = None
+    ) -> int:
         """写入长期记忆原件及派生索引，保留归档记录。"""
         if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
-        return publish_history(self._conn, records)
+        return publish_history(self._conn, records, snapshot)
 
     def get_history(self, source: MemorySource) -> HistoricalMemory | None:
         """读指定来源的原文及证据，包括归档记录。"""
@@ -173,10 +177,12 @@ class MemoryIndex:
         conn = open_connection(self._db_path)
         try:
             rows = conn.execute(
-                "SELECT record_id, recorded_at, actor_label, content FROM memory_index WHERE "
+                "SELECT record_id, recorded_at, actor_label, content, "
+                + relevance_expression(clauses)
+                + " AS relevance FROM memory_index WHERE "
                 + " AND ".join(where)
-                + " ORDER BY CAST(record_id AS INTEGER) DESC LIMIT ?",
-                parameters,
+                + " ORDER BY relevance DESC, CAST(record_id AS INTEGER) DESC LIMIT ?",
+                [*terms, *parameters],
             ).fetchall()
             hits = [
                 MemoryHit(
@@ -184,6 +190,7 @@ class MemoryIndex:
                     datetime.fromisoformat(r["recorded_at"]),
                     r["actor_label"],
                     r["content"][:MAX_HIT_CHARS],
+                    relevance=r["relevance"],
                 )
                 for r in rows
             ]
@@ -209,11 +216,15 @@ class MemoryIndex:
                 record.source,
                 record.time_precision,
                 record.evidence,
+                score,
             )
-            for record in history
+            for record, score in history
         )
         hits.sort(
-            key=lambda hit: hit.recorded_at.timestamp() if hit.recorded_at else float("-inf"),
+            key=lambda hit: (
+                hit.relevance,
+                hit.recorded_at.timestamp() if hit.recorded_at else float("-inf"),
+            ),
             reverse=True,
         )
         return hits[:limit]
