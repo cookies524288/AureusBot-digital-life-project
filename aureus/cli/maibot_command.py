@@ -5,13 +5,18 @@ import json
 import sqlite3
 import sys
 import zipfile
+from contextlib import closing
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aureus.cli.inspect_commands import EXIT_FAILURE, EXIT_OK
-from aureus.common import SystemClock
-from aureus.tools.migrate.maibot import inspect_database
+from aureus.common import AureusPaths, SystemClock
+from aureus.memory import MemoryIndex
+from aureus.timeline import TimelineDatabase
+from aureus.tools.migrate.maibot import inspect_database, open_readonly_database
 from aureus.tools.migrate.maibot_catalog import BUSINESS_TABLES, MigrationError
 from aureus.tools.migrate.maibot_language import publish_language
+from aureus.tools.migrate.maibot_memory import publish_maibot_memory
 from aureus.tools.migrate.maibot_package import Source, export_package, preview_package
 from aureus.tools.migrate.maibot_people import publish_people
 from aureus.tools.migrate.maibot_staging import import_package, restore_snapshot
@@ -56,6 +61,15 @@ def configure_maibot_parser(parser: argparse.ArgumentParser) -> None:
     people.add_argument("--instance", required=True, help="暂存中显式选择的逻辑实例名")
     people.add_argument("staging", type=Path, metavar="SQLite 暂存库")
     people.add_argument("home", type=Path, metavar="独立的 Aureus 数据根目录")
+    memory = actions.add_parser("publish-memory", help="将已暂存的主库和记忆库发布到指定 Aureus")
+    memory.add_argument("staging", type=Path, metavar="SQLite 暂存库")
+    memory.add_argument("--instance", required=True, help="暂存时使用的逻辑实例名")
+    memory.add_argument("--source-timezone", required=True, help="源库本地时间的 IANA 时区")
+    memory.add_argument("--main-media-root", type=Path, help="MaiBot 主库附件根目录")
+    memory.add_argument("--memory-media-root", type=Path, help="A_Memorix 图片资产根目录")
+    memory.add_argument(
+        "--target-home", required=True, type=Path, help="独立 Aureus 目标数据根目录"
+    )
 
 
 def run_maibot_command(args: argparse.Namespace) -> int:
@@ -67,6 +81,8 @@ def run_maibot_command(args: argparse.Namespace) -> int:
             report = publish_language(args.instance, args.staging, args.target)
         elif args.action == "publish-people":
             report = publish_people(args.staging, args.instance, args.home, SystemClock())
+        elif args.action == "publish-memory":
+            report = _publish_memory(args)
         else:
             report = _run_package_command(args, Source(args.instance, args.role))
     except MigrationError as error:
@@ -99,6 +115,37 @@ def _run_package_command(args: argparse.Namespace, source: Source) -> dict[str, 
     if args.action == "import":
         return import_package(source, args.package, args.target)
     return restore_snapshot(source, args.target, args.output)
+
+
+def _publish_memory(args: argparse.Namespace) -> dict[str, object]:
+    try:
+        zone = ZoneInfo(args.source_timezone)
+    except (ValueError, ZoneInfoNotFoundError) as error:
+        raise MigrationError("invalid_source_timezone") from error
+    paths = AureusPaths(args.target_home.resolve())
+    stage = args.staging.resolve(strict=True)
+    target = paths.database_file
+    if target.exists() and target.samefile(stage):
+        raise MigrationError("staging_is_memory_target")
+    if target.exists():
+        with closing(open_readonly_database(target)) as database:
+            if (
+                database.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                    "AND name IN ('timeline', 'memory_history')"
+                ).fetchone()
+                is None
+            ):
+                raise MigrationError("not_aureus_memory_target")
+    roots = {"main": args.main_media_root, "memory": args.memory_media_root}
+    for root in roots.values():
+        if root is not None and root.resolve().is_relative_to(paths.home):
+            raise MigrationError("media_root_is_in_memory_target")
+    for location in (paths.data_dir, target, paths.memory_dir):
+        if not location.resolve().is_relative_to(paths.home):
+            raise MigrationError("memory_target_outside_home")
+    index = MemoryIndex(target, TimelineDatabase(target))
+    return publish_maibot_memory(stage, args.instance, zone, index, roots, paths.memory_dir)
 
 
 def run_maibot_inspect_command(source: Path) -> int:
