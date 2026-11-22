@@ -65,6 +65,7 @@ def test_loading_models_does_not_replace_newer_edits() -> None:
     run_page_script(
         r"""
         mdl.cfg = {providers: [], models: [], organs: {}};
+        mdl.defaults = {organs: {models: []}};
         const oldConfig = clone(mdl.cfg);
         let release;
         api = async (path, method) => method === 'PUT'

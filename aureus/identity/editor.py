@@ -9,7 +9,7 @@
 是否允许改、要不要再输密码，由调用方（网页服务）决定；这里只管改。
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +47,7 @@ class IdentityEdit:
     facts: Facts | None = None  # 身份事实：名字、昵称、性别、生日
     user: User | None = None  # 用户的称呼和账号，和身份事实记在同一层
     locks: PersonaLocks | None = None  # 三层的锁定开关
+    restore_lock: IdentityLayer | None = None
 
     def requires_password(self) -> bool:
         """改的是底线（身份事实、不变人格）吗？是的话，调用方要先让用户再输一次密码。"""
@@ -129,7 +130,7 @@ def _table(document: Any, name: str) -> Any:
 
 def _apply_to_document(document: Any, edit: IdentityEdit) -> None:
     """把修改请求落到 TOML 文档上；只动涉及的键。"""
-    if edit.text or edit.locks is not None:
+    if edit.text or edit.locks is not None or edit.restore_lock is not None:
         persona = _table(document, "persona")
         for layer, content in edit.text.items():
             if layer not in TEXT_LAYERS:
@@ -138,6 +139,13 @@ def _apply_to_document(document: Any, edit: IdentityEdit) -> None:
             persona[layer.value] = tomlkit.string(content.strip() + "\n", multiline=True)
         if edit.locks is not None:
             _apply_locks(persona, edit.locks)
+        if edit.restore_lock is not None:
+            name = edit.restore_lock.value
+            if name not in _LOCKABLE_LAYERS:
+                raise IdentityEditError("这一层没有可恢复的锁定开关。")
+            table = persona.get("locks")
+            if isinstance(table, MutableMapping):
+                table.pop(name, None)
     if edit.facts is not None:
         facts = _table(document, "facts")
         facts["name"] = edit.facts.name
@@ -152,11 +160,17 @@ def _apply_to_document(document: Any, edit: IdentityEdit) -> None:
 
 def _apply_locks(persona: Any, locks: PersonaLocks) -> None:
     table = persona.get("locks")
-    if table is None:
-        table = tomlkit.table()
-        persona["locks"] = table
+    try:
+        current = PersonaLocks.model_validate(table if table is not None else {})
+    except ValidationError as error:
+        raise IdentityValidationError(error) from error
     for name in _LOCKABLE_LAYERS:
-        table[name] = bool(getattr(locks, name))
+        value = getattr(locks, name)
+        if value != getattr(current, name):
+            if table is None:
+                table = tomlkit.table()
+                persona["locks"] = table
+            table[name] = value
 
 
 def _accounts_array(user: User) -> Any:

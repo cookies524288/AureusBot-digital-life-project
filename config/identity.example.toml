@@ -66,6 +66,6 @@ expression_style = """
 
 # 用户可以锁定后三层中的任意一层，锁定后它就不能再改这一层。
 [persona.locks]
-mutable = false
-behavior_style = false
-expression_style = false
+# mutable = false
+# behavior_style = false
+# expression_style = false

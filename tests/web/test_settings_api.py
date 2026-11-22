@@ -126,6 +126,8 @@ def test_the_settings_api_needs_a_login(rig: Rig) -> None:
     assert rig.client.put("/api/settings", json={}).status_code == 401
     rollback = {"layer": "mutable", "version_id": 1}
     assert rig.client.post("/api/settings/rollback", json=rollback).status_code == 401
+    restore = {"layer": "mutable"}
+    assert rig.client.post("/api/settings/locks/restore-default", json=restore).status_code == 401
     assert rig.file_text() == ORIGINAL
 
 
@@ -135,6 +137,10 @@ def test_the_settings_api_is_blocked_while_the_password_is_the_default(tmp_path:
         rig.log_in("admin")
         assert rig.client.get("/api/settings").status_code == 403
         assert rig.client.put("/api/settings", json={"text": {"mutable": "x"}}).status_code == 403
+        restore = {"layer": "mutable"}
+        assert (
+            rig.client.post("/api/settings/locks/restore-default", json=restore).status_code == 403
+        )
         assert rig.file_text() == ORIGINAL
         assert rig.heartbeat.applied == []
     finally:
@@ -151,6 +157,25 @@ def test_the_view_returns_the_current_settings(rig: Rig) -> None:
     assert data["layers"]["expression_style"].strip() == "句子短。"
     assert data["locks"] == {"mutable": False, "behavior_style": False, "expression_style": False}
     assert set(data["history"]) == {"mutable", "behavior_style", "expression_style"}
+
+
+def test_restoring_one_lock_deletes_its_override_and_preserves_persona_history(rig: Rig) -> None:
+    rig.log_in()
+    path = "/api/settings/locks/restore-default"
+    edit = {"locks": {"mutable": True, "behavior_style": True, "expression_style": False}}
+    assert rig.client.put("/api/settings", json=edit).status_code == 200
+    before = rig.client.get("/api/settings").json()
+    assert rig.client.post(path, json={"layer": "immutable"}).status_code == 422
+    assert rig.client.post(path, json={"layer": "mutable"}).json() == {"value": False}
+    assert rig.client.post(path, json={"layer": "mutable"}).json() == {"value": False}
+    edit["locks"].update(mutable=False, behavior_style=False)
+    assert rig.client.put("/api/settings", json=edit).status_code == 200
+    raw = tomllib.loads(rig.file_text())
+    assert raw["persona"]["locks"] == {"behavior_style": False, "expression_style": False}
+    assert Identity.model_validate(raw).persona.locks.mutable is False
+    after = rig.client.get("/api/settings").json()
+    assert after["layers"] == before["layers"]
+    assert after["history"] == before["history"]
 
 
 def test_a_free_layer_is_saved_without_the_password_and_takes_effect(rig: Rig) -> None:
