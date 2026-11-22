@@ -499,7 +499,9 @@ async def test_full_day_runs_exploration_and_unanswered_initiative_before_diary(
         [request] = [r for r in organs.requests if r.context.get("task") == "diary"]
         assert "最近怎么样" in request.prompt and "主动联系后一直没有回应" in request.prompt
         assert "（网页资料）木星的卫星有冰下海洋。" in request.prompt
-        assert (tmp_path / "diary" / "2026-11-17.md").is_file()
+        diary = (tmp_path / "diary" / "2026-11-17.md").read_text(encoding="utf-8")
+        assert "主动问候了阿明，没有回应" in diary
+        assert "木卫二有海洋" in diary
         assert rig.records("diary_written")
     finally:
         await rig.heartbeat.shut_down()

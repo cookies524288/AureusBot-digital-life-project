@@ -1,5 +1,6 @@
 """实验台命令的参数、输出和结果保留测试（D82）。"""
 
+import json
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import timedelta
@@ -26,6 +27,31 @@ def test_lab_list_prints_the_two_registered_experiments(capsys: pytest.CaptureFi
     assert len(lines) == 2
     assert lines[0].startswith("calibration  E4  ")
     assert lines[1].startswith("energy  E2  ")
+
+
+def test_lab_runs_calibration_and_writes_charts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pytest.importorskip("matplotlib")
+    image = pytest.importorskip("PIL.Image")
+    paths = AureusPaths(tmp_path)
+
+    assert main(["lab", "run", "calibration", "--home", str(paths.home)], environ={}) == 0
+
+    run_dir = paths.experiments_dir / "calibration" / "20261101-000000"
+    output = capsys.readouterr().out
+    assert f"运行目录：{run_dir}" in output
+    assert "已画图 2 张" in output
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["attempts"] == 600
+    assert metrics["feedback.ece"] < metrics["prior.ece"]
+    assert metrics["feedback.brier"] < metrics["prior.brier"]
+    charts = sorted(run_dir.glob("*.png"))
+    assert [path.name for path in charts] == ["ece_by_round.png", "reliability.png"]
+    for path in charts:
+        with image.open(path) as chart:
+            assert chart.format == "PNG"
+            assert chart.convert("RGB").getcolors(2) is None
 
 
 def test_lab_runs_calibration_without_matplotlib(
