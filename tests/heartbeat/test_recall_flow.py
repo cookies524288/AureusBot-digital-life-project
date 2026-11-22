@@ -10,7 +10,8 @@ import pytest
 import pytest_asyncio
 
 from aureus.agenda import FindingStore
-from aureus.common import BudgetCalendar, HeartbeatConfig, ManualClock, MemoryConfig
+from aureus.body import Body
+from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, ManualClock, MemoryConfig
 from aureus.heartbeat import Heartbeat, OutgoingMessage, Perception, TrustLevel
 from aureus.heartbeat.context import build_initiative_plan_prompt
 from aureus.heartbeat.planning import parse_plan
@@ -19,7 +20,7 @@ from aureus.identity import Identity
 from aureus.memory import HistoricalMemory, MemoryEntry, MemoryHit, MemoryIndex, MemorySource
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
-from aureus.safety import EmergencyStop, PermissionChecker
+from aureus.safety import EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import (
     ActorType,
     TimelineDatabase,
@@ -85,12 +86,15 @@ class MemoryEnv:
         self,
         config: MemoryConfig | None = None,
         heartbeat: HeartbeatConfig | None = None,
+        *,
+        body: Body | None = None,
     ) -> Heartbeat:
         stop = EmergencyStop(self.path / "halt.json", self.clock)
         rig = Heartbeat(
             clock=self.clock,
             timeline=self.timeline,
             organs=self.organs,
+            body=body,
             identity=Identity.model_validate(
                 {
                     "facts": {"name": "小绿", "birthday": "2008-01-01"},
@@ -150,6 +154,81 @@ async def env(tmp_path: Path) -> AsyncIterator[MemoryEnv]:
         await rig.shut_down()
     for store in (opened.index, opened.findings, opened.people, opened.timeline):
         store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled,extract", [(False, True), (True, False), (True, True)])
+async def test_sleep_consolidation_threshold_and_extraction(
+    env: MemoryEnv, enabled: bool, extract: bool
+) -> None:
+    class SummaryOrgans(RecallOrgans):
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            self.requests.append(request)
+            assert request.organ_id == "summarizer" and "合成材料" in request.prompt
+            return OrganResponse(
+                request.organ_id,
+                json.dumps(
+                    [
+                        {"kind": "fact", "text": "越界", "item": 99},
+                        {"kind": "preference", "text": "非法编号", "item": "1"},
+                        {"kind": "fact", "text": "合成事实", "item": 1},
+                        {"kind": "preference", "text": "合成偏好", "item": 2},
+                    ]
+                ),
+            )
+
+    env.organs = SummaryOrgans()
+    config = MemoryConfig(
+        consolidation_enabled=enabled, consolidation_batch=2, consolidation_extract_enabled=extract
+    )
+    ledger = Ledger(env.path / "aureus.db", env.clock, calendar=env.calendar)
+    ledger.open()
+    try:
+        body = Body(
+            BodyConfig(sleep_enabled=True, night_start_hour=23, night_end_hour=7),
+            None,
+            ledger,
+            env.clock,
+            env.calendar,
+        )
+        rig = env.build(config, body=body)
+        rig.update_available_organs(frozenset({"summarizer"}))
+        first = env.timeline.append(
+            "message", "合成材料", ActorType.USER, visibility=VisibilityScope.USER_ONLY
+        )
+        rig.beat()
+        assert not rig.is_thinking
+        env.clock.advance(timedelta(hours=3))
+        rig.beat()
+        await rig.wait_for_thought()
+        rig.beat()
+        assert env.index.consolidated_candidates(10) == [] and not env.organs.requests
+        second = env.timeline.append(
+            "message", "合成材料", ActorType.USER, visibility=VisibilityScope.USER_ONLY
+        )
+        env.clock.advance(timedelta(minutes=1))
+        rig.beat()
+        await rig.wait_for_thought()
+        candidates = {c.kind: c for c in env.index.consolidated_candidates(10)}
+        expected = {"experience"} if enabled else set()
+        if enabled and extract:
+            expected.update(("fact", "preference"))
+            assert candidates["fact"].evidence == (f"timeline:{first.id}",)
+            assert candidates["preference"].evidence == (f"timeline:{second.id}",)
+            assert {c.text for c in env.index.consolidated_candidates(10)} == {
+                "合成材料",
+                "合成事实",
+                "合成偏好",
+            }
+        assert set(candidates) == expected
+        if enabled:
+            assert set(candidates["experience"].evidence) == {
+                f"timeline:{first.id}",
+                f"timeline:{second.id}",
+            }
+        assert len(env.organs.requests) == int(enabled and extract)
+    finally:
+        ledger.close()
 
 
 @pytest.mark.asyncio

@@ -28,12 +28,11 @@ def message_components(row: StagedRow) -> list[object]:
         content = json.loads(packed)
     elif isinstance(packed, dict):
         payload = b64decode(packed["blob_base64"], validate=True)
-        try:
-            content = msgpack.unpackb(payload, strict_map_key=False)
-        except msgpack.ExtraData:
-            if not payload.lstrip().startswith(b"["):
-                raise
+        # JSON 数组以 ASCII 左方括号开头，MessagePack 数组有独立的类型标记。
+        if payload.lstrip().startswith(b"["):
             content = json.loads(payload)
+        else:
+            content = msgpack.unpackb(payload, strict_map_key=False)
     else:
         raise ValueError("invalid_message_components")
     if not isinstance(content, list) or any(

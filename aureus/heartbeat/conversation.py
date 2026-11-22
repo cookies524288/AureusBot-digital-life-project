@@ -37,6 +37,7 @@ from aureus.heartbeat.events import (
 )
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
 from aureus.heartbeat.language_runner import speaker_key
+from aureus.heartbeat.memory_consolidation import ConsolidationOutcome
 from aureus.heartbeat.people_context import format_people_context
 from aureus.heartbeat.perception import (
     Perception,
@@ -199,6 +200,7 @@ class _Thought:
         | asyncio.Task[DiaryOutcome]
         | asyncio.Task[PersonaReviewOutcome]
         | asyncio.Task[None]
+        | asyncio.Task[ConsolidationOutcome]
     )
     replying_to: Sequence[_Heard]
     strategy: ReplyStrategy

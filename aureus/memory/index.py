@@ -2,12 +2,23 @@
 
 import sqlite3
 from collections.abc import Callable, Collection, Iterable, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from aureus.common import Clock, SystemClock
+from aureus.common import Clock, MemoryConfig, SystemClock
 from aureus.common.sqlite import open_connection
+from aureus.memory.consolidation import (
+    CandidateKind,
+    ConsolidationBatch,
+    ConsolidationItem,
+    DerivedCandidate,
+    open_consolidation,
+    read_batch,
+    read_candidates,
+    save_batch,
+)
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -22,6 +33,48 @@ from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
 
 # D80 第 4 条：单条记忆交给回复器时的正文上限。
 MAX_HIT_CHARS = 180
+_LIVE_INDEX_SCHEMA = """
+    CREATE VIRTUAL TABLE IF NOT EXISTS memory_index USING fts5(
+        content, actor_label UNINDEXED, record_id UNINDEXED,
+        recorded_at UNINDEXED, visibility UNINDEXED, person_key UNINDEXED,
+        tokenize = 'trigram'
+    )
+"""
+
+
+def _open_live_index(conn: sqlite3.Connection) -> None:
+    """让全文条目的行号等于时间线序号，整理游标可跨重建使用。"""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(memory_index)")}
+        state_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(memory_index_state)")
+        }
+        if "person_key" not in columns or not state_columns:
+            # 派生表从时间线重建，已提交的整理游标随原件保留。
+            conn.execute("DROP TABLE IF EXISTS memory_index")
+            conn.execute("DROP TABLE IF EXISTS memory_index_state")
+            conn.execute(_LIVE_INDEX_SCHEMA)
+            conn.execute("""
+                CREATE TABLE memory_index_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1), indexed_through INTEGER NOT NULL,
+                    stable_rowid INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            conn.execute("INSERT INTO memory_index_state(id, indexed_through) VALUES (1, 0)")
+        elif "stable_rowid" not in state_columns:
+            conn.execute("ALTER TABLE memory_index RENAME TO memory_index_previous")
+            conn.execute(_LIVE_INDEX_SCHEMA)
+            conn.execute("""
+                INSERT INTO memory_index(rowid, content, actor_label, record_id,
+                                         recorded_at, visibility, person_key)
+                SELECT record_id, content, actor_label, record_id,
+                       recorded_at, visibility, person_key FROM memory_index_previous
+            """)
+            conn.execute("DROP TABLE memory_index_previous")
+            conn.execute(
+                "ALTER TABLE memory_index_state ADD COLUMN stable_rowid INTEGER NOT NULL DEFAULT 1"
+            )
 
 
 @dataclass(frozen=True)
@@ -52,10 +105,16 @@ class MemoryIndex:
     """可重建的 FTS5 trigram 索引；不解释事件、不改时间线。"""
 
     def __init__(
-        self, db_path: Path, timeline: TimelineDatabase, clock: Clock | None = None
+        self,
+        db_path: Path,
+        timeline: TimelineDatabase,
+        clock: Clock | None = None,
+        *,
+        config: MemoryConfig | None = None,
     ) -> None:
         self._db_path, self._timeline = db_path, timeline
         self._clock = clock if clock is not None else SystemClock()
+        self._config = config or MemoryConfig()
         self._conn: sqlite3.Connection | None = None
 
     def open(self) -> None:
@@ -66,24 +125,8 @@ class MemoryIndex:
         conn = open_connection(self._db_path)
         try:
             open_history(conn)
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(memory_index)")}
-            if "person_key" not in columns:
-                # D80 派生内容从追加时间线回填，旧表或缺表均从头开始。
-                conn.executescript("""
-                    DROP TABLE IF EXISTS memory_index;
-                    DROP TABLE IF EXISTS memory_index_state;
-                """)
-            conn.executescript("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS memory_index USING fts5(
-                    content, actor_label UNINDEXED, record_id UNINDEXED,
-                    recorded_at UNINDEXED, visibility UNINDEXED, person_key UNINDEXED,
-                    tokenize = 'trigram'
-                );
-                CREATE TABLE IF NOT EXISTS memory_index_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1), indexed_through INTEGER NOT NULL
-                );
-                INSERT OR IGNORE INTO memory_index_state VALUES (1, 0);
-            """)
+            _open_live_index(conn)
+            open_consolidation(conn)
         except BaseException:
             conn.close()
             raise
@@ -112,9 +155,11 @@ class MemoryIndex:
                 if entry is not None:
                     conn.execute(
                         "INSERT INTO memory_index "
-                        "(content, actor_label, record_id, recorded_at, visibility, person_key) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        "(rowid, content, actor_label, record_id, recorded_at, "
+                        "visibility, person_key) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (
+                            record.id,
                             entry.text,
                             entry.actor_label,
                             record.id,
@@ -142,6 +187,30 @@ class MemoryIndex:
         if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
         return read_history(self._conn, source)
+
+    def consolidation_batch(self, size: int) -> ConsolidationBatch | None:
+        """在后台连接中查是否累积满一批待整理的原件。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return read_batch(conn, size)
+
+    def save_consolidation(
+        self,
+        batch: ConsolidationBatch,
+        extracted: Iterable[tuple[CandidateKind, str, ConsolidationItem]],
+    ) -> bool:
+        """在后台连接中原子提交整理结果。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return save_batch(conn, batch, extracted, self._clock.now().timestamp())
+
+    def consolidated_candidates(self, limit: int) -> list[DerivedCandidate]:
+        """读取带原件指针的派生候选及当前权重。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return read_candidates(
+                conn,
+                self._clock.now().timestamp(),
+                self._config.consolidation_half_life_days,
+                limit,
+            )
 
     def search(
         self,

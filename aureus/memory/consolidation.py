@@ -1,0 +1,234 @@
+"""睡眠整理的原件游标、去重和派生候选。
+
+淡化公式适配自 A_Memorix 2.0.0 的
+core/utils/memory_lifecycle_policy.py::retention_at（AGPL-3.0）。
+权重只用于派生候选，原件仍可通过全文索引取得。
+"""
+
+import json
+import sqlite3
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime
+from hashlib import sha256
+from itertools import chain, groupby
+from typing import Literal
+
+type CandidateKind = Literal["experience", "fact", "preference"]
+
+
+@dataclass(frozen=True)
+class ConsolidationItem:
+    """单条候选材料及可读回原文的指针。"""
+
+    reference: str
+    scope: tuple[str, ...]
+    text: str
+    timestamp: float | None
+    can_extract: bool = False
+
+
+@dataclass(frozen=True)
+class ConsolidationBatch:
+    """工作开始和结束时的两个游标。"""
+
+    start: tuple[int, int]
+    end: tuple[int, int]
+    items: tuple[ConsolidationItem, ...]
+
+
+@dataclass(frozen=True)
+class DerivedCandidate:
+    """仍需核查证据的整理结果。"""
+
+    kind: CandidateKind
+    text: str
+    evidence: tuple[str, ...]
+    weight: float
+
+
+def open_consolidation(conn: sqlite3.Connection) -> None:
+    """初始化候选和游标。"""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS memory_consolidation_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            history_cursor INTEGER NOT NULL, timeline_cursor INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO memory_consolidation_state VALUES (1, 0, 0);
+        CREATE TABLE IF NOT EXISTS memory_candidates (
+            fingerprint TEXT PRIMARY KEY,
+            kind TEXT NOT NULL, content TEXT NOT NULL, last_seen REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS memory_candidates_recency
+        ON memory_candidates(last_seen DESC, fingerprint);
+        CREATE TABLE IF NOT EXISTS memory_candidate_evidence (
+            fingerprint TEXT NOT NULL, reference TEXT NOT NULL,
+            PRIMARY KEY(fingerprint, reference)
+        );
+    """)
+
+
+def _cursor(conn: sqlite3.Connection) -> tuple[int, int]:
+    row = conn.execute(
+        "SELECT history_cursor, timeline_cursor FROM memory_consolidation_state WHERE id = 1"
+    ).fetchone()
+    return row[0], row[1]
+
+
+def read_batch(conn: sqlite3.Connection, size: int) -> ConsolidationBatch | None:
+    """从新经历和历史原件各按行号增量取材。"""
+    conn.execute("BEGIN")
+    start = _cursor(conn)
+    timeline = conn.execute(
+        """
+        SELECT m.rowid, t.id, t.timestamp, t.actor_type, t.actor_id, t.event_type,
+               t.visibility, m.person_key, m.content,
+               CASE WHEN json_valid(t.metadata) THEN json_extract(t.metadata, '$.channel') END
+                   AS channel,
+               CASE WHEN json_valid(t.metadata)
+                    THEN json_extract(t.metadata, '$.conversation_id') END AS conversation
+        FROM memory_index m JOIN timeline t ON t.id = m.record_id
+        WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?
+        """,
+        (start[1], size),
+    ).fetchall()
+    history = conn.execute(
+        """
+        SELECT id, source_key, person_key, recorded_at, content
+        FROM memory_history
+        WHERE id > ? AND status = 'active'
+        ORDER BY id LIMIT ?
+        """,
+        (start[0], size - len(timeline)),
+    ).fetchall()
+    if len(timeline) + len(history) < size:
+        return None
+    items = []
+    for row in timeline:
+        scope = (
+            "timeline",
+            row["visibility"],
+            row["actor_type"],
+            row["person_key"] or row["actor_id"],
+            str(row["conversation"] or ""),
+            str(row["channel"] or ""),
+        )
+        items.append(
+            ConsolidationItem(
+                f"timeline:{row['id']}",
+                scope,
+                row["content"],
+                datetime.fromisoformat(row["timestamp"]).timestamp(),
+                row["visibility"] == "user_only"
+                and row["actor_type"] == "user"
+                and row["event_type"] == "message",
+            )
+        )
+    for row in history:
+        instance, role, table, _ = json.loads(row["source_key"])
+        items.append(
+            ConsolidationItem(
+                row["source_key"],
+                ("history", instance, role, table, row["person_key"] or ""),
+                row["content"],
+                row["recorded_at"],
+            )
+        )
+    end = (
+        history[-1]["id"] if history else start[0],
+        timeline[-1]["rowid"] if timeline else start[1],
+    )
+    return ConsolidationBatch(start, end, tuple(items))
+
+
+def save_batch(
+    conn: sqlite3.Connection,
+    batch: ConsolidationBatch,
+    extracted: Iterable[tuple[CandidateKind, str, ConsolidationItem]],
+    now: float,
+) -> bool:
+    """原子更新游标和候选。两个工作者读到同一批时只接受一个。"""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if _cursor(conn) != batch.start:
+            return False
+        experiences: Iterable[tuple[CandidateKind, str, ConsolidationItem]] = (
+            ("experience", item.text, item) for item in batch.items
+        )
+        for candidates in (experiences, extracted):
+            for kind, text, item in candidates:
+                normalized = " ".join(text.split())
+                if normalized:
+                    _merge(conn, kind, normalized, item, now)
+        conn.execute(
+            "UPDATE memory_consolidation_state SET history_cursor=?, timeline_cursor=? WHERE id=1",
+            batch.end,
+        )
+        return True
+
+
+def _merge(
+    conn: sqlite3.Connection,
+    kind: CandidateKind,
+    text: str,
+    item: ConsolidationItem,
+    now: float,
+) -> None:
+    fingerprint = sha256(json.dumps((kind, item.scope, text)).encode()).hexdigest()
+    last_seen = item.timestamp if item.timestamp is not None else now
+    conn.execute(
+        """
+        INSERT INTO memory_candidates VALUES (?, ?, ?, ?)
+        ON CONFLICT(fingerprint) DO UPDATE SET last_seen = max(last_seen, excluded.last_seen)
+        """,
+        (fingerprint, kind, text, last_seen),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO memory_candidate_evidence VALUES (?, ?)",
+        (fingerprint, item.reference),
+    )
+
+
+def read_candidates(
+    conn: sqlite3.Connection, now: float, half_life_days: float, limit: int
+) -> list[DerivedCandidate]:
+    """读取最近的派生候选并按证据时间计算当前权重。"""
+    if limit <= 0:
+        return []
+    rows = conn.execute(
+        """
+        SELECT c.*, e.reference, h.content AS history_content
+        FROM memory_candidates c
+        JOIN memory_candidate_evidence e USING (fingerprint)
+        LEFT JOIN memory_history h ON h.source_key = e.reference
+        WHERE e.reference LIKE 'timeline:%'
+           OR (h.status = 'active'
+               AND (h.valid_from IS NULL OR h.valid_from <= ?)
+               AND (h.valid_to IS NULL OR h.valid_to > ?))
+        ORDER BY c.last_seen DESC, c.fingerprint, e.reference
+        """,
+        (now, now),
+    )
+    results: list[DerivedCandidate] = []
+    for _, group in groupby(rows, key=lambda row: row["fingerprint"]):
+        row = next(group)
+        evidence = tuple(
+            item["reference"]
+            for item in chain((row,), group)
+            if item["history_content"] is None
+            or " ".join(item["history_content"].split()) == row["content"]
+        )
+        if not evidence:
+            continue
+        elapsed_days = max(0.0, now - row["last_seen"]) / 86400
+        results.append(
+            DerivedCandidate(
+                row["kind"],
+                row["content"],
+                evidence,
+                2.0 ** (-elapsed_days / half_life_days),
+            )
+        )
+        if len(results) == limit:
+            break
+    return results
