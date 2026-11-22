@@ -27,11 +27,12 @@ D91 已列入 3.6a、[3.6b](tasks/3.6b.md)、3.8 与 3.9。设定有项目默认
 | 步骤 | 分支 | 子会话 |
 |---|---|---|
 | 3.3 人物与关系 | codex/phase3-people | Helmholtz，修订实机通过，待集成 |
-| 3.4 表达黑话与学习 | codex/phase3-language | 01a202be-117d-7982-843d-4081f775f5fe 接续 D92 |
+| 3.4 表达黑话与学习 | codex/phase3-language | D92 实现 49c0594，实机通过，交 Bohr 联测 |
 | 3.5 长期记忆 | codex/phase3-memory | Plato |
 | QQ 与语言集成 | codex/phase3-integrate | Bohr 01a20312-de7f-7b42-bd57-b023d40bea90，QQ 离线已入主线 |
 | 3.6a 高级 Prompt 管理 | codex/phase3-prompts | Avicenna |
 | 3.6b 配置逐项恢复 | codex/phase3-defaults | James 01a20335-846e-7273-b0ae-2e33ec2d82b0 |
-| 3.8 人体研究证据核对 | codex/phase3-physiology | Kierkegaard，证据表已入主线 |
+| 3.7 群聊行为回放 | codex/phase3-behavior | 01a202be-117d-7982-843d-4081f775f5fe，从 9913337 开始 |
+| 3.8 生理调节 | codex/phase3-physiology | Kierkegaard，证据表已入主线，已派离线输入与行为接线 |
 
 3.3–3.5 已获告知稳定暂存接口，合入 `5b03635` 后走正常命令联测。3.6a 整合后逐器官比对预览与实际请求，尤其核对新增记忆、习得表达和人际材料。3.7 在集成后对照已启用的 MaiBot 行为；3.8 最终校准在功能整合后；3.9 用同一快照对账并验收真实群。真实模型费用、群内发送、生产切换与推送须另获维护者授权。
