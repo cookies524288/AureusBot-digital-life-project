@@ -8,13 +8,17 @@ D89：旧 MaiBotData 排除；不迁人格或其他 MaiBot 配置；沿用当前
 
 ## 下一步
 
+三个发布器已在同一个 candidate-memory-review/data/aureus.db 完成真实数据联测。见 [3.9 首次跨发布器结果](tasks/3.9.md)。3.5 修订、画像补齐后在此候选继续对账。3.8 接线任务已交原研究子会话，3.7 基线之后才做最终校准。
+
+3.5 实机发布使用 97c632d、现有 staging.sqlite3、独立目标 candidate-memory-review。按源机器 China Standard Time 用 Asia/Shanghai 解释无偏移时间。已核对源媒体根：主库相对活动 MaiBot 程序目录（路径带 data/）；记忆库相对 XiaoDou/Data/a-memorix/images/assets。98629 条原消息、9583 段落、946 个事件摘要、7829 条事实及 6224 条图片观察均已发布。主库 3928 个附件、记忆库 3244 个附件归档；主库另有 1994 条源标志明确缺文件。消息有 234 条组件解码诊断，须由原记忆子会话分析。8192 条自动人物画像暂存行转交 3.3；连同人工画像和别名覆盖一起核对。候选库中的归档记录与可用于当前回答的记录分开计数。
+
 3.6 离线实现 bcad3c9 已入主线并通过独立 11 项专项。3.8 的前置证据记录来自 1094881，校准依赖 3.7，网页只读、TOML 单项恢复仍须实测。
 
-集成工作树 `codex/phase3-integrate` 从 `d1a944b` 合入 3.4 首批交付 `95534cf`。3.4 任务文档记录了 `migrate-maibot publish-language`、新增提示词及注入点，并保留 D92 首轮返工要求。
+Logo 主线实现 d15b82f，复审通过，详见 [Logo 任务](tasks/phase3-logo.md)。Windows 正在运行的旧启动器在仓库根目录保留为 Aureus.previous-running.exe，原路径已安装新版。
 
-Logo 主线实现 d15b82f，复审通过，详见 [Logo 任务](tasks/phase3-logo.md)。Windows 正在运行的旧启动器在仓库根目录保留为 Aureus.previous-running.exe，原路径已安装新版。3.6 QQ 离线分支已交付 d80dfdd，待集成复审。3.4 缺证据回迁见语言分支 05c4417，Logo 子会话接续该返工。继续使用仓库外现有候选语言库复跑，验证旧行升为可用且再次重跑新增为零。
+D92 实机复验已通过。3.4 第一版向 E:/WorkShopE/Aureus-Phase3-XiaoDou/candidate-language-review.sqlite3 发布了 6879 条表达、104 条黑话和 18834 条高频词。在同一目标使用 D92 修订的正常 CLI 重跑，新增可召回黑话 912 条、表达 1 条；通过 LanguageStore 按来源键读回 913/913。再跑一遍，三个表新增均为零，已存在分别为 6880、1016、18834。907 条黑话证据为空，5 条有外部资料；原始证据随源行保留。语言分支以 05c4417 为返工起点，等最终提交并联测。
 
-D92 已确认缺少历史证据也照常发布与召回。已用 3.4 第一版向仓库外相邻的 candidate-language-review.sqlite3 发布：表达 6879 条接收，黑话 104 条接收、高频词 18834 条接收，重跑三者新增均为零。黑话中有释义但缺可定位聊天证据的 912 条（907 条证据为空、5 条为外部资料），应在同一候选库验证新版重跑恢复。3.3 实机列名不符已在原分支 ce0d477 交回修改。Logo 实现在 codex/phase3-logo；3.6b 工作树 codex/phase3-defaults 已交 James。
+3.3 真实字段映射返工 83dd00b、交付 3feb949。通过正常 CLI 将同一私有暂存库发布到相邻的 candidate-people-review，使用仓库公开示例作为隔离测试身份。人物 1189、状态 667、关系 8、事件 5315、线程 11 全部转换，待解析零；重跑全部已存在。两份候选均为独立验证目录，生产目录和真实身份尚未切换。
 
 D91 已列入 3.6a、[3.6b](tasks/3.6b.md)、3.8 与 3.9。设定有项目默认值的网页参数和模板支持逐项恢复，后续开发直接改项目默认；生化参数在 TOML 删除单项覆盖来恢复。
 
@@ -22,11 +26,13 @@ D91 已列入 3.6a、[3.6b](tasks/3.6b.md)、3.8 与 3.9。设定有项目默认
 
 | 步骤 | 分支 | 子会话 |
 |---|---|---|
-| 3.3 人物与关系 | codex/phase3-people | Helmholtz |
-| 3.4 表达黑话与学习 | codex/phase3-language | Socrates |
+| 3.3 人物与关系 | codex/phase3-people | Helmholtz，修订实机通过，待集成 |
+| 3.4 表达黑话与学习 | codex/phase3-language | D92 实现 49c0594，实机通过，交 Bohr 联测 |
 | 3.5 长期记忆 | codex/phase3-memory | Plato |
-| 3.6 QQ 离线接入 | codex/phase3-qq | Bohr |
+| QQ 与语言集成 | codex/phase3-integrate | Bohr 01a20312-de7f-7b42-bd57-b023d40bea90，QQ 离线已入主线 |
 | 3.6a 高级 Prompt 管理 | codex/phase3-prompts | Avicenna |
-| 3.8 人体研究证据核对 | codex/phase3-physiology | Kierkegaard |
+| 3.6b 配置逐项恢复 | codex/phase3-defaults | James 01a20335-846e-7273-b0ae-2e33ec2d82b0 |
+| 3.7 群聊行为回放 | codex/phase3-behavior | 01a202be-117d-7982-843d-4081f775f5fe，从 9913337 开始 |
+| 3.8 生理调节 | codex/phase3-physiology | Kierkegaard，证据表已入主线，已派离线输入与行为接线 |
 
 3.3–3.5 已获告知稳定暂存接口，合入 `5b03635` 后走正常命令联测。3.6a 整合后逐器官比对预览与实际请求，尤其核对新增记忆、习得表达和人际材料。3.7 在集成后对照已启用的 MaiBot 行为；3.8 最终校准在功能整合后；3.9 用同一快照对账并验收真实群。真实模型费用、群内发送、生产切换与推送须另获维护者授权。

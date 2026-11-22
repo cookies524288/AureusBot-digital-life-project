@@ -8,10 +8,12 @@ import zipfile
 from pathlib import Path
 
 from aureus.cli.inspect_commands import EXIT_FAILURE, EXIT_OK
+from aureus.common import SystemClock
 from aureus.tools.migrate.maibot import inspect_database
 from aureus.tools.migrate.maibot_catalog import BUSINESS_TABLES, MigrationError
 from aureus.tools.migrate.maibot_language import publish_language
 from aureus.tools.migrate.maibot_package import Source, export_package, preview_package
+from aureus.tools.migrate.maibot_people import publish_people
 from aureus.tools.migrate.maibot_staging import import_package, restore_snapshot
 
 
@@ -26,7 +28,8 @@ def configure_maibot_parser(parser: argparse.ArgumentParser) -> None:
     """注册 MaiBot 迁移命令及其参数。"""
     parser.epilog = (
         "顺序：inspect 盘点 → export 导出私有包 → preview 预演 → "
-        "import 写入独立暂存库。restore 可恢复源快照，publish-language 可发布习得语言。"
+        "import 写入独立暂存库。restore 可恢复源快照，"
+        "publish-people 和 publish-language 分别发布人际资料和习得语言。"
     )
     actions = parser.add_subparsers(dest="action", required=True, metavar="操作")
     inspect = actions.add_parser("inspect", help="以 JSON 输出 SQLite 结构与记录数（只读）")
@@ -50,6 +53,18 @@ def configure_maibot_parser(parser: argparse.ArgumentParser) -> None:
     language.add_argument("--instance", required=True, help="导入时指定的逻辑实例名")
     language.add_argument("staging", type=Path, metavar="SQLite 暂存库")
     language.add_argument("target", type=Path, metavar="已有的 Aureus SQLite 运行库")
+    people = actions.add_parser("publish-people", help="将暂存的人际资料发布到已配置的 Aureus")
+    people.add_argument("--instance", required=True, help="暂存中显式选择的逻辑实例名")
+    people.add_argument("staging", type=Path, metavar="SQLite 暂存库")
+    people.add_argument("home", type=Path, metavar="独立的 Aureus 数据根目录")
+
+
+def _run_migration(args: argparse.Namespace) -> dict[str, object]:
+    if args.action == "publish-people":
+        return publish_people(args.staging, args.instance, args.home, SystemClock())
+    if args.action == "publish-language":
+        return publish_language(args.instance, args.staging, args.target)
+    return _run_package_command(args, Source(args.instance, args.role))
 
 
 def run_maibot_command(args: argparse.Namespace) -> int:
@@ -57,10 +72,7 @@ def run_maibot_command(args: argparse.Namespace) -> int:
     if args.action == "inspect":
         return run_maibot_inspect_command(args.source)
     try:
-        if args.action == "publish-language":
-            report = publish_language(args.instance, args.staging, args.target)
-        else:
-            report = _run_package_command(args, Source(args.instance, args.role))
+        report = _run_migration(args)
     except MigrationError as error:
         details = {
             name: value

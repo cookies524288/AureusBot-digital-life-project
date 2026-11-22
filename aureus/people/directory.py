@@ -14,12 +14,16 @@ from pathlib import Path
 
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
+from aureus.people import history
+from aureus.people.history import (
+    HistoricalEntry,
+    HistoricalKind,
+    HistoricalPublication,
+    HistoricalRecord,
+    PeopleError,
+)
 
 _TIMESTAMP_PRECISION = "microseconds"
-
-
-class PeopleError(Exception):
-    """人物档案出了问题。消息是中文。"""
 
 
 class PersonKind(StrEnum):
@@ -98,6 +102,7 @@ class PeopleDirectory:
             )
             """
         )
+        history.init_schema(conn)
         conn.commit()
 
     def _require_open(self) -> sqlite3.Connection:
@@ -184,18 +189,38 @@ class PeopleDirectory:
         """按账号找人；没见过的账号建一份新的联系人档案（新账号就是新的人）。"""
         conn = self._require_open()
         with conn:
-            row = conn.execute(
-                "SELECT person_id FROM accounts WHERE platform = ? AND account_id = ?",
-                (platform, account_id),
-            ).fetchone()
-            if row is not None:
-                return self._load(conn, int(row["person_id"]))
-            person_id = self._new_person(conn, PersonKind.CONTACT, "")
-            conn.execute(
-                "INSERT INTO accounts (platform, account_id, person_id) VALUES (?, ?, ?)",
-                (platform, account_id, person_id),
-            )
-            return self._load(conn, person_id)
+            return self._load(conn, self._meet_id(conn, platform, account_id))
+
+    def _meet_id(self, conn: sqlite3.Connection, platform: str, account_id: str) -> int:
+        row = conn.execute(
+            "SELECT person_id FROM accounts WHERE platform = ? AND account_id = ?",
+            (platform, account_id),
+        ).fetchone()
+        if row is not None:
+            return int(row["person_id"])
+        person_id = self._new_person(conn, PersonKind.CONTACT, "")
+        conn.execute(
+            "INSERT INTO accounts (platform, account_id, person_id) VALUES (?, ?, ?)",
+            (platform, account_id, person_id),
+        )
+        return person_id
+
+    def publish_history(self, records: Sequence[HistoricalRecord]) -> list[HistoricalPublication]:
+        """发布历史资料，按来源键对账，已有账号保持原有身份。"""
+        conn = self._require_open()
+        return history.publish(
+            conn, records, lambda platform, account: self._meet_id(conn, platform, account)
+        )
+
+    def history_for(self, person_id: int, *, limit: int | None = None) -> list[HistoricalEntry]:
+        """按人物取历史资料，可使用当前发言人账号查到的人物编号。"""
+        return history.for_person(self._require_open(), person_id, limit)
+
+    def historical_record(
+        self, instance: str, kind: HistoricalKind, source_key: str
+    ) -> HistoricalEntry | None:
+        """按来源取资料原值和解析结果，包括尚未关联的人物与关系。"""
+        return history.get_record(self._require_open(), instance, kind, source_key)
 
     def accounts_of(self, person_id: int) -> list[tuple[str, str]]:
         """这个人的全部（平台，账号 ID），按平台和账号排序。"""
