@@ -19,6 +19,7 @@ from typing import Any, Self
 from loguru import logger
 
 from aureus.common.config import ConfigError
+from aureus.common.prompt_text import PromptTemplate, render_prompt
 from aureus.organs.api_keys import KeyResolver
 from aureus.organs.interface import (
     CallAttempt,
@@ -36,7 +37,7 @@ from aureus.organs.model_config import (
     ProviderConfig,
     ProviderProtocol,
 )
-from aureus.organs.prompts import PromptStore, PromptTemplate, render_prompt
+from aureus.organs.prompts import PromptStore
 
 # 调用大模型的函数。默认是 litellm.acompletion；测试时换成假的，不联网。
 CompletionFunction = Callable[..., Awaitable[Any]]

@@ -14,6 +14,7 @@ from hashlib import sha256
 
 from aureus.agenda import FindingStore
 from aureus.common import MemoryConfig
+from aureus.common.prompt_text import PromptTemplate, join_prompt
 from aureus.heartbeat import events
 from aureus.memory import MemoryEntry, MemoryHit, MemoryIndex
 from aureus.people import PeopleDirectory
@@ -22,8 +23,16 @@ from aureus.timeline import ActorType, TimelineRecord
 logger = logging.getLogger(__name__)
 # D80 第 4 条：MaiBot 结果块上限；超过时只丢整条。
 MAX_RECALL_CHARS = 900
-REPLYER_MEMORY_REFERENCE_MARKER = "【长期记忆检索结果·内部参考】只供参考，不要原样念出来。"
-HEURISTIC_MEMORY_REFERENCE_MARKER = "【启发式记忆·内部参考】只供参考，不要原样念出来。"
+REPLYER_MEMORY_REFERENCE_MARKER = PromptTemplate(
+    "replyer_memory_reference",
+    "按需记忆召回标题",
+    "【长期记忆检索结果·内部参考】只供参考，不要原样念出来。",
+)
+HEURISTIC_MEMORY_REFERENCE_MARKER = PromptTemplate(
+    "heuristic_memory_reference",
+    "启发式记忆召回标题",
+    "【启发式记忆·内部参考】只供参考，不要原样念出来。",
+)
 _RECALL_CUES = re.compile(r"还记得|记得|我说过|你说过|之前|上次|以前|最近")
 _QUERY_WORD = re.compile(r"[^\W_]{2,20}")
 
@@ -80,8 +89,7 @@ def format_recall(
     heuristic: bool = False,
 ) -> str:
     """移植 MaiBot 的查询、命中数和编号行格式；从末尾删整条至 900 字内。"""
-    marker = HEURISTIC_MEMORY_REFERENCE_MARKER if heuristic else REPLYER_MEMORY_REFERENCE_MARKER
-    lines = [marker, f"查询：{'、'.join(keywords)}"]
+    query = f"查询：{'、'.join(keywords)}"
     hit_lines: list[str] = []
     for index, hit in enumerate(hits, start=1):
         normalized_content = " ".join(hit.text.split())
@@ -100,12 +108,19 @@ def format_recall(
         actor = " ".join(hit.actor_label.split())[:48] or "说话人未记录"
         hit_lines.append(f"{index}. {stamp} {actor}：{normalized_content}{provenance}")
     while True:
-        block = "\n".join(
-            [*lines, f"命中：{len(hit_lines)} 条", *(hit_lines or ["没有找到相关的记忆。"])]
+        body = "\n".join(
+            [query, f"命中：{len(hit_lines)} 条", *(hit_lines or ["没有找到相关的记忆。"])]
         )
+        block = recall_reference(body, heuristic=heuristic)
         if len(block) <= MAX_RECALL_CHARS:
             return block
         hit_lines.pop()
+
+
+def recall_reference(body: str, *, heuristic: bool = False) -> str:
+    """在同一召回标题下放入查询结果或预览占位。"""
+    marker = HEURISTIC_MEMORY_REFERENCE_MARKER if heuristic else REPLYER_MEMORY_REFERENCE_MARKER
+    return join_prompt([marker.fill(), body], "\n")
 
 
 class MemoryTracker:

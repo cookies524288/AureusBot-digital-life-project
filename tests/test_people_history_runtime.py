@@ -39,7 +39,7 @@ def test_people_context_fits_remaining_recall_budget() -> None:
     context = format_people_context(entries, 1, available)
     assert len(context) <= available
     assert "[person_info #1]" in context and "[person_info #2]" not in context
-    header_size = len(PEOPLE_CONTEXT_TEMPLATE.format(people_records=""))
+    header_size = len(PEOPLE_CONTEXT_TEMPLATE.fill(people_records=""))
     assert format_people_context(entries, 1, header_size) == ""
 
 

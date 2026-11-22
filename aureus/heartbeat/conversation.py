@@ -570,6 +570,11 @@ class ConversationFlow:
     ) -> Plan | None:
         """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""
         organ_id = self._config.plan_organ
+        heuristic_recall = (
+            format_recall(*automatic, self._timezone, heuristic=True)
+            if automatic is not None
+            else ""
+        )
         prompt = build_plan_prompt(
             job.history,
             job.messages,
@@ -580,10 +585,8 @@ class ConversationFlow:
             with_recall=self._can_recall(),
             jargon=await self._jargon_reference(job),
             with_expressions=self._can_recall_language(),
+            heuristic_recall=heuristic_recall,
         )
-        if automatic is not None:
-            words, hits = automatic
-            prompt += "\n\n" + format_recall(words, hits, self._timezone, heuristic=True)
         request = _organ_request(
             job,
             organ_id=organ_id,
