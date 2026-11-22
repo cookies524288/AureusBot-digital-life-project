@@ -50,3 +50,18 @@ digital-life-core 值得借鉴的设计：用 `genome.json` 声明每种激素�
 - 以只读方式打开 MaiBot 的数据库（SQLite 的 `mode=ro`），并建议用户先停掉 MaiBot 或对副本操作。
 - 先预览（条数、来源分布），用户确认后才写入。可以重复运行，按来源 ID 去重；每条记录标明来源 `maibot-import`。
 - 工具放在 `tools/migrate/`；动手前先更新 11 号文档的目录图。
+
+### 2.5 Phase 3 目标部署基线（2026-11-22）
+
+维护者确认，目标实例为 XiaoDou（南北绿豆）。只取活动 MaiBot 主库、活动 A_Memorix 库和属于这个实例的附属数据。旧 MaiBotData 在此次范围之外。活动主库采用 WAL，统计与导出均需要包含已提交的 WAL 记录。主库版本标记为 45，A_Memorix 迁移标记为 27，两者独立于软件发布版本。
+
+部署版本为 MaiBot 1.3.15、A_Memorix 2.0.0、snowluma-adapter 1.1.8 和 SnowLuma 2.1.1。部分运行文件带本地改动。行为以安装版本为准，移植前逐文件核对来源与许可。群聊适配器使用本机 WebSocket，已有客户端正在收发，最终接管需另行确定测试群及切换窗口。
+
+| 功能 | 活动部署的调用路径 | 对照内容 |
+|---|---|---|
+| 规划和回复 | `maisaka/reasoning_engine.py::run_loop` → `chat_loop_service.py::chat_loop_step` → `builtin_tool/reply.py::handle_tool` → `get_replyer` → `MaisakaReplyGenerator.generate_reply_with_context` | 当前选显式 reply；保留目标消息、reply_reference 与 expression_intent；测试沉默与多人插话 |
+| 记忆 | Planner 启发式 `build_injection_message` 和显式 `query_memory.handle_tool` 均经 `MemoryService.search` 接入 A_Memorix | 分别验证主动注入、按需查询和 Replyer 可见的引用；记忆库的段落、事实和 episode 保留来源与证据链 |
+| 黑话 | `_refresh_jargon_reference_message` → `jargon_context_matcher.build_jargon_reference_message` → `match_jargons_for_context` | 结合 jargons、会话高频词和近期消息，按作用域选词供 Planner 使用；学习入口为 jargon_learner |
+| 表达 | Replyer 构造上下文时调用 `maisaka_expression_selector.select_for_reply`、`expression_vector_index.select_candidates` 和表达选择器 | 先限定会话，以表达意图检索，再选择并写入回复上下文；学习入口为 expression_learner |
+
+当前部署关闭 retro prompt，Replyer 的即时消息历史不直接包含 Planner 的全部工具输出。功能验证需要检查 Replyer 真正收到的证据。核心库还包括 person_info、chat_sessions、mai_messages，会话映射应保留平台、账号、类型和会话标识。附属人际状态、关系边、图片记忆与插件效果分别核对。原部署允许跨会话分享，导入后依 Aureus 的私聊与群可见范围检索。
