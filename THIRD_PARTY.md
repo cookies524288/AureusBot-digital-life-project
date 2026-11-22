@@ -20,7 +20,7 @@
 
 | MaiBot 1.3.15 源码 | 对照结果 |
 |---|---|
-| `src/maisaka/jargon_context_matcher.py` 的 `_load_scoped_jargon_candidates`、`_load_high_frequency_terms` | 上游要求正向黑话标记和非空释义，匹配时无需等最终推断完成。统一库的本地候选要达到首次推断的证据门槛，导入候选需要至少一条可定位的源消息。词频按规范化词合计次数、取最小正排名。 |
-| `src/chat/replyer/maisaka_expression_selector.py::select_for_reply`、`_build_expression_query_text` 和 `src/maisaka/builtin_tool/reply.py` | 保留 Planner 的六个意图字段和在 Replyer 组装材料时注入参考的顺序。统一库按当前话题与意图重合度排序，用说话人和观察次数决胜，允许单条有证据的候选。选择是确定性的，无需额外的向量或选择器官调用。 |
+| `src/maisaka/jargon_context_matcher.py` 的 `_load_scoped_jargon_candidates`、`_load_high_frequency_terms` | 上游要求正向黑话标记和非空释义，匹配时无需等最终推断完成。统一库的本地候选仍要达到首次推断的证据门槛，已标为黑话且有词和释义的导入候选可在没有可定位源消息时参与匹配（D92）。词频按规范化词合计次数、取最小正排名。 |
+| `src/chat/replyer/maisaka_expression_selector.py::select_for_reply`、`_build_expression_query_text` 和 `src/maisaka/builtin_tool/reply.py` | 保留 Planner 的六个意图字段和在 Replyer 组装材料时注入参考的顺序。统一库按当前话题与意图重合度排序，用说话人和观察次数决胜。有情景和正文的表达可在原库缺例句时参与选择（D92）。选择是确定性的，无需额外的向量或选择器官调用。 |
 | `src/learners/expression_learner.py::_filter_expressions`、`_upsert_expression_to_db` | 只从人类的本次入站材料学习，按消息编号核验证据，过滤自身和媒体标记，按相同情景和表达保存，原样重现追加证据。Aureus 的建议只接收在原始消息中实际出现的短语。 |
 | `src/learners/jargon_learner.py::_extract_learning_sources_from_context`、`src/learners/jargon_miner.py::_should_infer_meaning` | 保留来自真实用户样本、排除参考文本和首次四条证据的规则。Aureus 按词和释义分别累积有编号的证据，可同时保留多义。后续推断阈值和上游会话暂存不在独立运行链中。 |
