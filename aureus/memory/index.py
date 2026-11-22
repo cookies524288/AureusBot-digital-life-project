@@ -12,13 +12,12 @@ from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
     MemorySource,
-    keyword_conditions,
     open_history,
     publish_history,
     read_history,
-    relevance_expression,
     search_history,
 )
+from aureus.memory.sparse import keyword_conditions, ranked_matches, relevance_expression
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
 
 # D80 第 4 条：单条记忆交给回复器时的正文上限。
@@ -46,6 +45,7 @@ class MemoryHit:
     time_precision: str | None = None
     evidence: tuple[MemoryEvidence, ...] = ()
     relevance: int = 0
+    sparse_score: float = 0.0
 
 
 class MemoryIndex:
@@ -174,15 +174,19 @@ class MemoryIndex:
             where.append("record_id NOT IN (" + ",".join("?" for _ in exclude_ids) + ")")
             parameters.extend(exclude_ids)
         parameters.append(limit)
+        rank_prefix, score, rank_parameters = ranked_matches(keywords, "memory_index")
         conn = open_connection(self._db_path)
         try:
             rows = conn.execute(
-                "SELECT record_id, recorded_at, actor_label, content, "
+                rank_prefix
+                + "SELECT record_id, recorded_at, actor_label, content, "
                 + relevance_expression(clauses)
-                + " AS relevance FROM memory_index WHERE "
+                + f" AS relevance, {score.format(row_id='memory_index.rowid')} AS sparse_score "
+                + "FROM memory_index WHERE "
                 + " AND ".join(where)
-                + " ORDER BY relevance DESC, CAST(record_id AS INTEGER) DESC LIMIT ?",
-                [*terms, *parameters],
+                + " ORDER BY relevance DESC, recorded_at DESC, sparse_score, "
+                + "CAST(record_id AS INTEGER) DESC LIMIT ?",
+                [*rank_parameters, *terms, *parameters],
             ).fetchall()
             hits = [
                 MemoryHit(
@@ -191,6 +195,7 @@ class MemoryIndex:
                     r["actor_label"],
                     r["content"][:MAX_HIT_CHARS],
                     relevance=r["relevance"],
+                    sparse_score=r["sparse_score"],
                 )
                 for r in rows
             ]
@@ -217,8 +222,9 @@ class MemoryIndex:
                 record.time_precision,
                 record.evidence,
                 score,
+                sparse_score,
             )
-            for record, score in history
+            for record, score, sparse_score in history
         )
         hits.sort(
             key=lambda hit: (

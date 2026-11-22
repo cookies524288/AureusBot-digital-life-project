@@ -141,6 +141,11 @@ class ConfigService:
         exists, raw = _read_toml(self.paths.models_config_file, "models.toml")
         return exists, validate_models_config(raw, "models.toml")
 
+    @property
+    def runtime(self) -> RuntimeConfig:
+        """当前进程生效的运行设置。"""
+        return self._runtime
+
     def view_models(self) -> dict[str, Any]:
         """模型配置、由 Literal 得到的选项和当前密钥状态，不返回密钥原文。"""
         exists, config = self.read_models()
