@@ -822,6 +822,8 @@ class Heartbeat:
         if outcome.recall_keywords:
             metadata["recall_keywords"] = list(outcome.recall_keywords)
             metadata["recall_record_ids"] = list(outcome.recall_record_ids)
+        if outcome.recall_source_keys:
+            metadata["recall_source_keys"] = list(outcome.recall_source_keys)
         if outcome.effects is not None:
             metadata["hormones"] = outcome.effects.to_metadata()
             if outcome.forced_reply:

@@ -257,7 +257,7 @@ def open_core(
         memory: MemoryIndex | None = None
         if runtime.memory.enabled:
             try:
-                memory = MemoryIndex(paths.database_file, timeline)
+                memory = MemoryIndex(paths.database_file, timeline, clock)
                 memory.open()
                 stack.callback(memory.close)
             except sqlite3.Error:
