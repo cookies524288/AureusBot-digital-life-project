@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import (
     Depends,
@@ -194,6 +195,7 @@ def create_app(
     model_runtime: ModelRuntime | None = None,
     open_terminal: Callable[[], Awaitable[None]] | None = None,
     request_shutdown: Callable[[], None] | None = None,
+    request_restart: Callable[[], None] | None = None,
     run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
     | None = None,
 ) -> FastAPI:
@@ -201,6 +203,7 @@ def create_app(
     # 接口文档会把所有接口列给没登录的人看，关掉。
     app = FastAPI(title="AureusBot", docs_url=None, redoc_url=None, openapi_url=None)
     max_age = config.session_days * SECONDS_PER_DAY
+    instance = uuid4().hex
 
     # 同步依赖会被 FastAPI 放进工作线程，不能和事件循环并发使用同一个 SQLite 连接。
     async def require_session(request: Request) -> str:
@@ -251,11 +254,24 @@ def create_app(
             request_shutdown()
             return {"ok": True}
 
+    if request_restart is not None:
+
+        @app.post("/api/restart")
+        async def restart(
+            request: Request, _token: Annotated[str, Depends(require_ready)]
+        ) -> dict[str, str]:
+            if not _same_http_origin(request):
+                raise HTTPException(403, detail="请在当前网页上确认重启。")
+            request_restart()
+            return {"instance": instance}
+
     @app.get("/api/status")
     async def status(
         request: Request, _token: Annotated[str, Depends(require_session)]
-    ) -> dict[str, bool]:
-        result = {"must_change_password": auth.password_is_default}
+    ) -> dict[str, bool | str]:
+        result: dict[str, bool | str] = {"must_change_password": auth.password_is_default}
+        if request_restart is not None and not auth.password_is_default:
+            result["restart_instance"] = instance
         if open_terminal is not None and not auth.password_is_default:
             result["can_open_terminal"] = _local_terminal_request(request)
         return result
@@ -357,11 +373,23 @@ def create_app(
     # ---------- 网页本身 ----------
     # 和 API 一起加载，避免更新磁盘文件后旧进程提供依赖新接口的页面。
     index_html = INDEX_PAGE.read_bytes()
+    organ_graph = INDEX_PAGE.with_name("organ-graph.js").read_bytes()
+    organ_tile = INDEX_PAGE.with_name("organ-tile.png").read_bytes()
 
     @app.get("/", include_in_schema=False)
     async def index() -> HTMLResponse:
         """登录前也要能打开页面，所以不检查登录；页面里没有数据，数据都要登录后从接口取。"""
         return HTMLResponse(index_html, headers={"Cache-Control": "no-store"})
+
+    @app.get("/assets/organ-graph.js", include_in_schema=False)
+    async def organ_graph_asset() -> Response:
+        return Response(
+            organ_graph, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/assets/organ-tile.png", include_in_schema=False)
+    async def organ_tile_asset() -> Response:
+        return Response(organ_tile, media_type="image/png", headers={"Cache-Control": "no-store"})
 
     @app.get("/assets/ark-pixel.woff2", include_in_schema=False)
     async def pixel_font() -> FileResponse:

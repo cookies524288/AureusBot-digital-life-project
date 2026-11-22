@@ -32,6 +32,7 @@ COMMAND_STATE = "/state"
 COMMAND_HALT = "/halt"
 COMMAND_RESUME = "/resume"
 COMMAND_QUIT = "/quit"
+COMMAND_RESTART = "/restart"
 QUIT_COMMANDS = frozenset({COMMAND_QUIT, "/exit"})
 
 HELP_TEXT = (
@@ -83,6 +84,7 @@ class TerminalChannel:
         write_line: WriteLine = print,
         *,
         close_on_interrupt: bool = True,
+        request_restart: Callable[[], None] | None = None,
     ) -> None:
         """创建终端通道。
 
@@ -91,11 +93,15 @@ class TerminalChannel:
             read_line: 读一行输入的函数，读到结尾时抛 EOFError；默认是 input，测试时传假的。
             write_line: 打印一行的函数，默认是 print，测试时传假的。
             close_on_interrupt: 结束输入或 Ctrl+C 是否关闭 Aureus。
+            request_restart: 请求关闭当前实例并重新启动。
         """
         self._heartbeat = heartbeat
         self._read_line = read_line
         self._write_line = write_line
         self._close_on_interrupt = close_on_interrupt
+        self._restart = request_restart
+        self._restart_finished = threading.Event()
+        self._input_ended = False
         self._reader: threading.Thread | None = None
         # 已经请心跳停下来了：之后输入结束时不再重复提示。
         self._stop_requested = False
@@ -121,6 +127,11 @@ class TerminalChannel:
             self._halt(text[len(COMMAND_HALT) :].strip())
         elif command == COMMAND_RESUME:
             self._resume()
+        elif command == COMMAND_RESTART and self._restart is not None:
+            if not self._stop_requested:
+                self._stop_requested = True
+                self._write_line("正在重启……")
+                self._restart()
         elif command in QUIT_COMMANDS:
             self._request_stop("正在关闭……")
         elif command.startswith("/"):
@@ -161,11 +172,25 @@ class TerminalChannel:
 
     def handle_end_of_input(self) -> None:
         """输入结束（Ctrl+D、Windows 上的 Ctrl+Z 回车，或者输入被关掉）：请心跳停下来。"""
+        self._input_ended = True
         if self._close_on_interrupt:
             self._request_stop("输入结束，正在关闭……")
 
     def _help_text(self) -> str:
-        return HELP_TEXT + (STOP_SHORTCUTS if self._close_on_interrupt else WINDOW_SHORTCUTS)
+        restart_help = f"\n  {COMMAND_RESTART}  重启 Aureus" if self._restart else ""
+        return (
+            HELP_TEXT
+            + restart_help
+            + (STOP_SHORTCUTS if self._close_on_interrupt else WINDOW_SHORTCUTS)
+        )
+
+    def reconnect(self, heartbeat: HeartbeatHandle) -> None:
+        """重启后接到新心跳，继续使用同一个键盘输入线程。"""
+        self._heartbeat = heartbeat
+        self._stop_requested = False
+        self._restart_finished.set()
+        if self._input_ended:
+            self.handle_end_of_input()
 
     def _request_stop(self, announcement: str) -> None:
         """请心跳停下来；只提示一次。"""
@@ -202,8 +227,20 @@ class TerminalChannel:
                 logger.exception("读终端输入时出错，不再读取")
                 self._call_in_loop(loop, self.handle_end_of_input)
                 return
-            if not self._call_in_loop(loop, self.handle_line, line):
+            if self._restart is not None and line.strip().lower() == COMMAND_RESTART:
+                # 等新心跳接线后再读取下一行，避免把重启后的命令交给旧实例。
+                self._restart_finished.clear()
+                if not self._call_in_loop(loop, self._restart_from_input, line):
+                    return
+                self._restart_finished.wait()
+            elif not self._call_in_loop(loop, self.handle_line, line):
                 return
+
+    def _restart_from_input(self, line: str) -> None:
+        if self._stop_requested:
+            self._restart_finished.set()
+        else:
+            self.handle_line(line)
 
     @staticmethod
     def _call_in_loop(

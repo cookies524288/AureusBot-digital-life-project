@@ -22,7 +22,11 @@ from .settings import SettingsService
 
 @contextmanager
 def open_web(
-    core: Core, clock: Clock, *, open_terminal: Callable[[], Awaitable[None]] | None = None
+    core: Core,
+    clock: Clock,
+    *,
+    open_terminal: Callable[[], Awaitable[None]] | None = None,
+    request_restart: Callable[[], None] | None = None,
 ) -> Iterator[WebServer | None]:
     """组装网页服务；退出 with 块时关闭它用到的数据库连接。
 
@@ -33,6 +37,7 @@ def open_web(
         core: 组装好的核心，心跳还没有开始跳也可以。
         clock: 时钟，要和核心用的是同一个。
         open_terminal: 启动器提供的本机终端打开操作。
+        request_restart: 启动入口提供的正常重启请求。
 
     Yields:
         网页服务，或者 None。
@@ -68,10 +73,11 @@ def open_web(
             settings=settings,
             heartbeat=core.heartbeat,
             clock=clock,
-            config_files=ConfigService(core.paths),
+            config_files=ConfigService(core.paths, core.settings.runtime),
             model_runtime=core.models,
             open_terminal=open_terminal,
             request_shutdown=core.heartbeat.request_stop,
+            request_restart=request_restart,
             run_model_test=core.gateway.test_model,
         )
         yield WebServer(app, config, home=core.paths.home)

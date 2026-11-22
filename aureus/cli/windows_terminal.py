@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from aureus.channels import CHANNEL_NAME, TerminalChannel
@@ -15,8 +16,13 @@ from aureus.heartbeat import Heartbeat
 class WindowsTerminal:
     """管理可重复打开的终端窗口。窗口关闭后，心跳继续运行。"""
 
-    def __init__(self, heartbeat: Heartbeat) -> None:
-        self._channel = TerminalChannel(heartbeat, write_line=self._write, close_on_interrupt=False)
+    def __init__(self, heartbeat: Heartbeat, request_restart: Callable[[], None]) -> None:
+        self._channel = TerminalChannel(
+            heartbeat,
+            write_line=self._write,
+            close_on_interrupt=False,
+            request_restart=request_restart,
+        )
         heartbeat.attach_channel(CHANNEL_NAME, self._channel.show)
         self._opening = asyncio.Lock()
         self._process: asyncio.subprocess.Process | None = None

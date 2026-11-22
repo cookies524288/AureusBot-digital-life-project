@@ -1,5 +1,7 @@
 """按已保存的服务商协议读取模型目录。只请求模型元数据。"""
 
+import asyncio
+
 import httpx
 
 from aureus.common.config import ConfigError
@@ -12,6 +14,39 @@ DEFAULT_BASE = {
     "anthropic": "https://api.anthropic.com/v1",
     "gemini": "https://generativelanguage.googleapis.com/v1beta",
 }
+
+
+def _provider_base(provider: ProviderConfig) -> httpx.URL:
+    base = httpx.URL(provider.base_url or DEFAULT_BASE[provider.protocol])
+    if (
+        base.scheme not in {"http", "https"}
+        or not base.host
+        or base.userinfo
+        or base.query
+        or base.fragment
+    ):
+        raise ConfigError("API供应商请求地址必须是 HTTP(S) 接口根地址。")
+    return base
+
+
+async def probe_provider(
+    provider: ProviderConfig, *, transport: httpx.AsyncBaseTransport | None = None
+) -> dict[str, int]:
+    """用不带凭据的 HEAD 请求测到响应头的往返耗时，任何 HTTP 状态都表示可达。"""
+    try:
+        base = _provider_base(provider)
+        async with httpx.AsyncClient(
+            transport=transport, timeout=provider.timeout_seconds
+        ) as client:
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            response = await client.head(base)
+            return {
+                "latency_ms": round((loop.time() - started) * 1000),
+                "status": response.status_code,
+            }
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+        raise ConfigError("未收到供应商响应，请检查地址和网络连接。") from None
 
 
 async def list_provider_models(
@@ -45,15 +80,7 @@ async def list_provider_models(
     params: dict[str, str] = {}
     seen: set[str] = set()
     try:
-        base = httpx.URL(provider.base_url or DEFAULT_BASE[protocol])
-        if (
-            base.scheme not in {"http", "https"}
-            or not base.host
-            or base.userinfo
-            or base.query
-            or base.fragment
-        ):
-            raise ConfigError("API供应商请求地址必须是 HTTP(S) 接口根地址。")
+        base = _provider_base(provider)
         path = base.path.rstrip("/")
         if protocol in {"anthropic", "gemini"} and not path.rsplit("/", 1)[-1].startswith("v1"):
             path += "/v1" if protocol == "anthropic" else "/v1beta"

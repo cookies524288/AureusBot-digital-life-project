@@ -29,6 +29,7 @@ from aureus.organs import (
     ReasoningLevel,
     validate_models_config,
 )
+from aureus.organs.topology import organ_connections
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +115,9 @@ def models_require_password(current: ModelsConfig, submitted: ModelsConfig) -> b
 class ConfigService:
     """配置文件与密钥快照；文件方法放进线程，不接触 SQLite 或心跳。"""
 
-    def __init__(self, paths: AureusPaths) -> None:
+    def __init__(self, paths: AureusPaths, runtime: RuntimeConfig | None = None) -> None:
         self.paths = paths
+        self._runtime = runtime if runtime is not None else RuntimeConfig()
         self._vault = SecretVault(paths.vault_file, paths.master_key_file)
         self.key_resolver: KeyResolver | None = None
         # 来源是本进程成功的网页写入，只影响重启提示；进程重启清零（D84）。
@@ -145,6 +147,7 @@ class ConfigService:
             "key_status": self.key_status(names, refs),
             "key_entries": self.view_keys()["entries"],
             "builtin_organs": list(BUILTIN_ORGANS),
+            "organ_connections": organ_connections(config.organs, self._runtime),
             "warnings": config.warnings(),
         }
 

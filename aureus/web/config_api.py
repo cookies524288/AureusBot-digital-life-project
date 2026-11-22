@@ -5,6 +5,7 @@ import math
 import re
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -20,8 +21,8 @@ from aureus.organs import (
     OrganResponse,
     validate_models_config,
 )
-from aureus.organs.llm_adapter import probe_model
-from aureus.organs.model_catalog import list_provider_models
+from aureus.organs.llm_adapter import ModelProbeError, model_probe_inputs, probe_model
+from aureus.organs.model_catalog import list_provider_models, probe_provider
 from aureus.safety import CallRejectedError
 
 from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
@@ -138,7 +139,19 @@ def register_config_routes(
                 raise HTTPException(404, detail="请先保存API供应商配置。")
             return {"models": await list_provider_models(provider, service.key_resolver)}
 
-    testing = asyncio.Lock()
+    @app.post("/api/models/provider-test")
+    async def test_provider(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, int]:
+        if request.headers.get("origin") != f"{request.url.scheme}://{request.url.netloc}":
+            raise HTTPException(403, detail="请从当前网页发起网络测试。")
+        with _translate_errors(service):
+            name = (await _body(request)).get("provider")
+            _, current = await asyncio.to_thread(service.read_models)
+            provider = next((item for item in current.providers if item.name == name), None)
+            if provider is None:
+                raise HTTPException(404, detail="请先保存API供应商配置。")
+            return await probe_provider(provider)
 
     @app.post("/api/models/test")
     async def test_model(
@@ -148,26 +161,45 @@ def register_config_routes(
             raise HTTPException(403, detail="请从当前网页发起模型测试。")
         if model_runtime is None or not model_runtime.can_test_models or run_model_test is None:
             raise HTTPException(403, detail="当前运行模式不可调用真实模型。")
-        if testing.locked():
-            raise HTTPException(409, detail="正在测试模型，请稍后再试。")
-        async with testing:
-            with _translate_errors(service):
-                name = (await _body(request)).get("model")
-                _, current = await asyncio.to_thread(service.read_models)
-                model = next((item for item in current.models if item.name == name), None)
-                if model is None:
-                    raise HTTPException(404, detail="请先保存模型配置。")
-                provider = next(item for item in current.providers if item.name == model.provider)
-                resolver = model_runtime.key_resolver
+        with _translate_errors(service):
+            name = (await _body(request)).get("model")
+            _, current = await asyncio.to_thread(service.read_models)
+            model = next((item for item in current.models if item.name == name), None)
+            if model is None:
+                raise HTTPException(404, detail="请先保存模型配置。")
+            provider = next(item for item in current.providers if item.name == model.provider)
+            checks: list[dict[str, Any]] = []
+            for capability, inputs in model_probe_inputs(model).items():
+                row: dict[str, Any] = {
+                    "capability": capability,
+                    "input": inputs,
+                    "reply": "",
+                    "sent": False,
+                }
                 try:
-                    result = await run_model_test(lambda: probe_model(model, provider, resolver))
+                    result = await run_model_test(
+                        partial(
+                            probe_model, model, provider, model_runtime.key_resolver, capability
+                        )
+                    )
                 except OrganCallError as error:
-                    raise HTTPException(
-                        502, detail="模型测试失败：" + "；".join(error.failures)
-                    ) from None
+                    row.update(error="；".join(error.failures), sent=bool(error.attempts))
+                    if isinstance(error, ModelProbeError):
+                        row["reply"] = error.reply
                 except CallRejectedError as error:
-                    raise HTTPException(403, detail=str(error)) from None
-                return result.metadata
+                    row["error"] = str(error)
+                else:
+                    row.update(
+                        sent=True, reply=result.suggestion, latency_ms=result.metadata["latency_ms"]
+                    )
+                checks.append(row)
+            return {
+                "model": model.name,
+                "provider": provider.name,
+                "kind": model.kind,
+                "checks": checks,
+                "latency_ms": checks[0].get("latency_ms"),
+            }
 
     @app.put("/api/models")
     async def edit_models(
@@ -183,8 +215,11 @@ def register_config_routes(
                 _, current = await asyncio.to_thread(service.read_models)
                 submitted = submitted.model_copy(update={"config_version": current.config_version})
                 removed = set(current.organs) - set(submitted.organs)
-                if removed.intersection(BUILTIN_ORGANS):
-                    raise HTTPException(422, detail="默认器官不可删除，可以清空它使用的模型。")
+                if removed:
+                    kind = "默认" if removed.intersection(BUILTIN_ORGANS) else "已有"
+                    raise HTTPException(422, detail=f"{kind}器官不可删除，可以清空它使用的模型。")
+                if set(submitted.organs).difference(current.organs, BUILTIN_ORGANS):
+                    raise HTTPException(422, detail="器官由程序登记，不能在配置页新增。")
                 if models_require_password(current, submitted):
                     _confirm(auth, body, request)
                 if current != submitted or list(current.organs) != list(submitted.organs):

@@ -37,11 +37,17 @@ async def _serve_web(web: WebServer, config: WebConfig, write_line: WriteLine) -
 
 
 async def _chat(
-    core: Core, web: WebServer | None, read_line: ReadLine, write_line: WriteLine
+    core: Core,
+    web: WebServer | None,
+    terminal: TerminalChannel,
+    write_line: WriteLine,
+    *,
+    first: bool,
 ) -> None:
     """先让心跳跳起来，再接上终端和网页；心跳停下（/quit、输入结束或出错）时返回。"""
     heartbeat = core.heartbeat
-    terminal = TerminalChannel(heartbeat, read_line=read_line, write_line=write_line)
+    if not first:
+        terminal.reconnect(heartbeat)
     heartbeat.attach_channel(CHANNEL_NAME, terminal.show)
     # 心跳先醒来再接终端：醒来时要先读时间线算停机多久，用户敲的第一句话才不会抢在前面。
     beating = asyncio.create_task(heartbeat.run(), name="aureus-heartbeat")
@@ -53,7 +59,8 @@ async def _chat(
         serving = asyncio.create_task(
             _serve_web(web, core.settings.runtime.web, write_line), name="aureus-web"
         )
-    terminal.start()
+    if first:
+        terminal.start()
     try:
         await beating
     finally:
@@ -82,12 +89,30 @@ def run_chat_command(
     """
     if args.fake:
         write_line("用的是假器官：不调用模型，不花钱。")
+
+    async def run() -> None:
+        terminal: TerminalChannel | None = None
+        while True:
+            restarting = False
+            with open_core(paths, fake_organs=args.fake) as core:
+
+                def request_restart() -> None:
+                    nonlocal restarting
+                    restarting = True
+                    core.heartbeat.request_stop()
+
+                first = terminal is None
+                if terminal is None:
+                    terminal = TerminalChannel(
+                        core.heartbeat, read_line, write_line, request_restart=request_restart
+                    )
+                with open_web(core, SystemClock(), request_restart=request_restart) as web:
+                    await _chat(core, web, terminal, write_line, first=first)
+            if not restarting:
+                return
+
     try:
-        with (
-            open_core(paths, fake_organs=args.fake) as core,
-            open_web(core, SystemClock()) as web,
-        ):
-            asyncio.run(_chat(core, web, read_line, write_line))
+        asyncio.run(run())
     except (ConfigError, VaultError, IdentityError) as error:
         # 启动前就发现的问题：说清楚原因就退出，不带一大段追踪信息。
         print(f"错误：{error}", file=sys.stderr)

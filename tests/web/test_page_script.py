@@ -56,7 +56,7 @@ const context = vm.createContext({
     createTextNode: text => ({ nodeType: 3, textContent: text }),
     documentElement: { dataset: {} },
   },
-  window: { addEventListener() {} },
+  window: { listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; } },
   localStorage: { getItem: () => null },
   location: { protocol: 'http:', host: 'localhost', hash: '' },
   history: { replaceState() {} },
@@ -94,6 +94,25 @@ def run_page_script(code: str) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_selected_task_keeps_its_text_until_the_selection_is_released() -> None:
+    run_page_script(
+        r"""
+        const task = $('ov-task');
+        showOverviewSignal({thinking:false, current_task:'原任务'});
+        let selected = true;
+        window.getSelection = () => ({isCollapsed:!selected, rangeCount:1,
+          getRangeAt:() => ({intersectsNode:node => node === task})});
+        showOverviewSignal({thinking:true, current_task:'中间任务'});
+        showOverviewSignal({thinking:true, current_task:'最新任务'});
+        assert.equal(task.textContent, '原任务');
+        assert.equal($('ov-thinking').textContent, '正在想');
+        selected = false;
+        window.listeners.selectionchange();
+        assert.equal(task.textContent, '最新任务');
+        """
+    )
 
 
 def test_shutdown_request_is_only_sent_after_confirming() -> None:

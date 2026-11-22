@@ -15,12 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from aureus.common.config import ConfigError
 from aureus.common.paths import AureusPaths
 from aureus.common.vault import ENTRY_ID_PATTERN
+from aureus.organs.topology import BUILTIN_ORGANS as BUILTIN_ORGANS
 
 # 当前软件认识的模型配置格式版本。以后改了格式就加一，并写迁移说明。
 MODELS_CONFIG_FORMAT_VERSION = 1
-
-# 项目自带的器官；网页不能删除，模型可以暂时留空（D86）。
-BUILTIN_ORGANS = ("replyer", "planner", "judge", "summarizer")
 
 # 服务商没写超时和重试次数时的默认值。
 DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -90,7 +88,10 @@ class ModelConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_legacy_vision(cls, data: Any) -> Any:
+    def _normalize_legacy_options(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "tool_calls" in data:
+            # 旧版保存过工具调用开关；现在每个 LLM 都会测试工具调用。
+            data = {key: value for key, value in data.items() if key != "tool_calls"}
         if isinstance(data, dict) and data.get("kind") == "vision":
             return {**data, "kind": "llm", "vision": True}
         return data

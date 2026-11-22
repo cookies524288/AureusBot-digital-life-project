@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import json
 import os
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
@@ -209,9 +210,60 @@ def _load_litellm_completion() -> CompletionFunction:
 _MODEL_TEST_INPUT = "Reply OK."
 _MODEL_TEST_MAX_TOKENS = 32
 
+# 固定的红色 PNG，测速不需要读取用户图片。
+_PROBE_IMAGE = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+
+
+def model_probe_inputs(model: ModelConfig) -> dict[str, dict[str, Any]]:
+    """列出已声明的每项能力及其实际测试输入。"""
+    if model.kind == "embedding":
+        return {"embedding": {"input": [_MODEL_TEST_INPUT]}}
+    message = {"role": "user", "content": _MODEL_TEST_INPUT}
+    probes: dict[str, dict[str, Any]] = {"text": {"messages": [message]}}
+    if model.vision:
+        probes["vision"] = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Name the color of this image in one English word.",
+                        },
+                        {"type": "image_url", "image_url": {"url": _PROBE_IMAGE}},
+                    ],
+                }
+            ]
+        }
+    probes["tools"] = {
+        "messages": [{"role": "user", "content": "Call echo with value OK."}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "echo",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                },
+            }
+        ],
+    }
+    for level in model.reasoning_levels:
+        probes["reasoning/" + level] = {"messages": [message], "reasoning_effort": level}
+    return probes
+
 
 async def probe_model(
-    model: ModelConfig, provider: ProviderConfig, resolver: KeyResolver
+    model: ModelConfig,
+    provider: ProviderConfig,
+    resolver: KeyResolver,
+    capability: str | None = None,
 ) -> OrganResponse:
     """测量首段可见文字或向量的返回时间，报告一次调用的用量。"""
     organ_id = "model_test"
@@ -221,6 +273,9 @@ async def probe_model(
         raise OrganCallError(organ_id, [error.reason]) from None
     library = await asyncio.to_thread(_import_litellm)
     embedding = model.kind == "embedding"
+    capability = capability or ("embedding" if embedding else "text")
+    inputs = model_probe_inputs(model)[capability]
+    reply = ""
     protocol = provider.protocol
     if embedding:
         if protocol == "anthropic":
@@ -232,34 +287,63 @@ async def probe_model(
     started = loop.time()
     latency = None
     failure = None
-    messages = [{"role": "user", "content": _MODEL_TEST_INPUT}]
     usage = TokenUsage(
-        prompt_tokens=len(_MODEL_TEST_INPUT.encode()) if embedding else _byte_length(messages),
+        prompt_tokens=len(json.dumps(inputs).encode()),
         completion_tokens=0 if embedding else _MODEL_TEST_MAX_TOKENS,
         known=False,
     )
     try:
         async with asyncio.timeout(provider.timeout_seconds):
             if embedding:
-                result = await library.aembedding(input=[_MODEL_TEST_INPUT], **params)
+                result = await library.aembedding(**inputs, **params)
                 if result.data and result.data[0].get("embedding"):
                     latency = loop.time() - started
+                    reply = json.dumps(result.data[0]["embedding"])
                 actual = extract_usage(result)
                 if actual.known:
                     usage = actual
+            elif capability == "tools":
+                result = await library.acompletion(
+                    **inputs, max_tokens=_MODEL_TEST_MAX_TOKENS, **params
+                )
+                latency = loop.time() - started
+                actual = extract_usage(result)
+                if actual.known:
+                    usage = actual
+                message = result.choices[0].message
+                calls = getattr(message, "tool_calls", None) or []
+                reply = (
+                    json.dumps(
+                        [
+                            {"name": call.function.name, "arguments": call.function.arguments}
+                            for call in calls
+                        ],
+                        ensure_ascii=False,
+                    )
+                    if calls
+                    else (message.content or "")
+                )
+                if (
+                    len(calls) != 1
+                    or calls[0].function.name != "echo"
+                    or json.loads(calls[0].function.arguments) != {"value": "OK"}
+                ):
+                    failure = "工具调用名称或参数与测试要求不符。"
             else:
                 stream = await library.acompletion(
-                    messages=messages,
+                    **inputs,
                     stream=True,
                     max_tokens=_MODEL_TEST_MAX_TOKENS,
                     **params,
                 )
                 async with aclosing(stream):
                     async for chunk in stream:
-                        if chunk.choices and latency is None:
+                        if chunk.choices:
                             content = getattr(chunk.choices[0].delta, "content", None)
-                            if isinstance(content, str) and content.strip():
-                                latency = loop.time() - started
+                            if isinstance(content, str):
+                                reply += content
+                                if latency is None and content.strip():
+                                    latency = loop.time() - started
                         actual = extract_usage(chunk)
                         if actual.known:
                             usage = actual
@@ -269,6 +353,12 @@ async def probe_model(
             usage = TokenUsage()
     if latency is None and failure is None:
         failure = EMPTY_REPLY_REASON
+    if (
+        capability == "vision"
+        and latency is not None
+        and reply.strip().rstrip(".!").casefold() != "red"
+    ):
+        failure = failure or "未识别出测试图片的红色。"
     attempt = CallAttempt(
         model=model.name,
         provider=provider.name,
@@ -283,14 +373,22 @@ async def probe_model(
         else compute_cost(model, usage),
     )
     if failure is not None:
-        raise OrganCallError(organ_id, [failure], [attempt])
+        raise ModelProbeError(failure, attempt, reply)
     assert latency is not None
     return OrganResponse(
         organ_id,
-        "",
+        reply,
         metadata={"latency_ms": round(latency * 1000), "kind": model.kind},
         attempts=[attempt],
     )
+
+
+class ModelProbeError(OrganCallError):
+    """保留已收到的测试回复，网关仍按失败尝试记账。"""
+
+    def __init__(self, reason: str, attempt: CallAttempt, reply: str) -> None:
+        super().__init__("model_test", [reason], [attempt])
+        self.reply = reply
 
 
 # 调用方没给背景时的系统提示词：有些服务商不收空的系统消息。

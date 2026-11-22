@@ -18,6 +18,8 @@
 --ease:cubic-bezier(.22,.72,.24,1);--dur:.48s;--dur-fast:.28s;--dur-reveal:.64s;--dur-out:.42s;
 --font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
 --mono:ui-monospace,'Cascadia Mono',Consolas,monospace;
+--thread-warp:rgb(116 89 53 / 6%);--thread-weft:rgb(116 89 53 / 4%);--thread-glint:rgb(255 255 255 / 42%);
+--stitch:color-mix(in srgb,var(--accent-strong) 24%,var(--border));
 color-scheme:light;
 }
 /* 默认亮色，不跟随系统；深色只在用户点「切换主题」后生效（data-theme=dark） */
@@ -29,6 +31,7 @@ color-scheme:light;
 --accent:#edd400;--accent-strong:#fce94f;--accent-soft:#48421f;--on-accent:#2e3436;
 --danger:#ef7676;--danger-soft:#4d2828;--ok:#8ae234;--ok-soft:#303f23;--warn:#fcaf3e;--warn-soft:#493521;
 --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);
+--thread-warp:rgb(211 215 207 / 3.5%);--thread-weft:rgb(0 0 0 / 7%);--thread-glint:rgb(211 215 207 / 4%);
 color-scheme:dark;}
 
 @font-face{font-family:'Ark Pixel';src:url('/assets/ark-pixel.woff2') format('woff2');font-display:swap}
@@ -57,8 +60,8 @@ nav.side:is(:hover,:has(:focus-visible)) .brand-content,#app:has(.nav-trigger:ho
 .catalog-row select{flex:1;min-width:0}
 .brand-mark{flex:none;width:32px;height:32px;object-fit:contain;display:block}
 :root[data-theme='dark'] .brand-mark{filter:invert(1)}
-.ico{fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-.nav-icon{flex:none;width:20px;height:20px;transition:transform var(--dur) var(--ease)}
+.ico{display:block;flex:none;width:16px;height:16px;fill:currentColor;fill-rule:evenodd;shape-rendering:crispEdges}
+.nav-icon{width:20px;height:20px}
 /* 文字平时藏着，展开时同时滑出（同一栏的标签一起出现，不错开）；收回时不延迟，一起淡出 */
 .nav-label{opacity:0;transform:translateX(-8px);transition:opacity var(--dur-fast) ease,transform var(--dur) var(--ease)}
 nav.side:hover .nav-label,nav.side:has(:focus-visible) .nav-label{opacity:1;transform:none;transition-delay:55ms}
@@ -71,12 +74,18 @@ nav.side:hover .nav-group::after,nav.side:has(:focus-visible) .nav-group::after{
 .nav-item:hover{background:var(--surface-2);color:var(--text)}
 .nav-item.active{background:var(--accent-soft);color:var(--accent-strong);font-weight:600}
 nav.side .nav-item{position:relative;flex:none;gap:12px;height:40px;padding:0 10px;white-space:nowrap}
-nav.side .nav-item:hover .nav-icon{transform:scale(1.12)}
 nav.side .nav-item::before{content:'';position:absolute;left:-8px;top:50%;width:3px;height:18px;margin-top:-9px;border-radius:0 3px 3px 0;background:var(--accent);transform:scaleY(0);transition:transform var(--dur) var(--ease)}
 nav.side .nav-item.active::before{transform:scaleY(1)}
 .nav-spacer{flex:1}
-.nav-foot{display:flex;flex-direction:column;gap:2px;padding-top:8px;border-top:1px solid var(--border)}
+.nav-foot{display:flex;flex-direction:column;gap:2px;padding-top:8px;border-top:1px dashed var(--stitch)}
 #pages{position:relative;grid-column:2;min-width:0;min-height:0;overflow:hidden;margin:8px 8px 8px 0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+/* 两排错开的亮线模拟纱线交叠。纹理直接画在底面，随内容滚动时保持静止。 */
+#pages,.auth{
+--thread-crossing:conic-gradient(at 4px 1px,transparent 75%,var(--thread-glint) 0);
+background-image:var(--thread-crossing),var(--thread-crossing),linear-gradient(90deg,var(--thread-warp) 1px,transparent 1px),linear-gradient(var(--thread-weft) 1px,transparent 1px);
+background-size:12px 12px,12px 12px,6px 6px,6px 6px;
+background-position:0 0,6px 6px,0 0,0 0;
+}
 /* 左侧图标栏悬停展开时会盖住页面最左边一段：内容两侧各留出同样宽的空白并居中，展开时就不会挡住文字 */
 :root{--gutter:calc(var(--nav-open) - var(--nav-w) + 8px)}
 section.page{display:none;height:100%;overflow-y:auto;padding:28px calc(var(--gutter) - 24px) 40px calc(var(--gutter) + 24px)}
@@ -90,6 +99,10 @@ section.page.active{display:flex;flex-direction:column}
 /* 页头和内容区同宽、同样水平居中，页头不再贴着左边 */
 .page-head{width:100%;max-width:960px;margin-inline:auto}
 .page.wide .page-head{max-width:1240px}
+.page-head{position:relative}
+.page-head::after{content:'';position:absolute;inset-inline:0;bottom:-8px;height:2px;pointer-events:none;
+background:linear-gradient(90deg,var(--stitch) 16px,transparent 16px 19px,var(--stitch) 19px) left bottom/22px 2px no-repeat,
+linear-gradient(90deg,var(--border),transparent 85%) left bottom/100% 1px no-repeat}
 .stack{display:flex;flex-direction:column;gap:16px}
 .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
@@ -186,26 +199,44 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-2)}
 .dot.on{background:var(--ok);animation:ping 3.4s ease-out infinite}.dot.busy{background:var(--accent)}.dot.off{background:var(--danger)}
 @keyframes ping{0%{box-shadow:0 0 0 0 rgba(114,131,0,.45)}100%{box-shadow:0 0 0 7px rgba(114,131,0,0)}}
-.hero{display:flex;flex-wrap:wrap;align-items:center;gap:20px 24px;padding:22px 28px;background:linear-gradient(120deg,var(--accent-soft),var(--surface) 65%)}
-.hero .label{font-size:12px;color:var(--text-2)}
-.hero .value{font-size:26px;font-weight:700;line-height:1.3}
-.hero-energy{flex:0 1 260px;margin-left:auto;min-width:180px}
-.hero-energy .value{font-size:22px}
-@media (max-width:820px){.hero{padding:18px}.hero-energy{margin-left:0;flex-basis:100%}}
 .meter>i{background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,white));transition:width 1.05s var(--ease)}
-.orb{position:relative;flex:none;width:56px;height:56px;border-radius:50%;background:radial-gradient(circle at 35% 30%,color-mix(in srgb,var(--accent) 45%,white),var(--accent) 58%,var(--accent-strong));box-shadow:0 4px 16px rgba(181,137,0,.32);animation:breathe 5.6s ease-in-out infinite}
-.hero .orb{margin-left:24px}
-.orb::after{content:'';position:absolute;inset:-8px;border-radius:50%;border:2px solid var(--accent);opacity:0;animation:ripple 5.6s ease-out infinite}
-.orb.busy,.orb.busy::after{animation-duration:2s}
-@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
-@keyframes ripple{0%{transform:scale(.85);opacity:.5}100%{transform:scale(1.35);opacity:0}}
 .state-line{padding:7px 0;border-top:1px solid var(--border)}
 .state-line:first-child{border-top:0}
-/* 总览顶部的版本号和日期小字条（参考 MaiBot 主页的「MAIBOT V1.3.15」） */
-.masthead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 22px;margin-bottom:18px;font-size:12px;letter-spacing:1.5px;color:var(--text-2)}
-.masthead b{color:var(--text);font-weight:700;letter-spacing:2px}
-.masthead .sep{width:1px;height:12px;background:var(--border)}
-.masthead .spacer{flex:1}
+/* 九宫格只负责块面的轮廓和厚度。两套主题给同一张底纹着色，文字保持独立。 */
+:root{--tile-finish:sepia(.42) saturate(1.45) brightness(.96);--tile-ink:#465a57;--tile-muted:#626c5c;--tile-rule:#c5b995;--tile-shadow:rgb(90 77 43 / 18%);--signal:#aa7916;--signal-glint:#ffe295;--signal-edge:#796023;--signal-track:#ded1a7}
+:root[data-theme='dark']{--tile-finish:grayscale(1) sepia(.17) hue-rotate(43deg) brightness(.75);--tile-ink:#293430;--tile-muted:#414e45;--tile-rule:#929c8d;--tile-shadow:rgb(9 14 13 / 42%);--signal:#785c0d;--signal-glint:#fce94f;--signal-edge:#4f421d;--signal-track:#9ca999}
+.ov-face,.og-tile{isolation:isolate;color:var(--tile-ink)}
+.ov-face::before,.og-tile::before{content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;border:solid transparent;border-width:7px 7px 11px;border-image:url('/assets/organ-tile.png') 7 7 11 fill / 7px 7px 11px stretch;image-rendering:pixelated;filter:var(--tile-finish)}
+.ov-head{align-items:center;margin-bottom:24px}.ov-head h2{font-size:26px;line-height:1.25}
+.ov-meta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px;color:var(--text-2);font-size:12px}.ov-meta b{color:var(--text);letter-spacing:.06em}.ov-meta time{padding-left:12px;border-left:1px solid var(--stitch)}
+.ov-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px;align-items:stretch}.ov-slot{position:relative;min-width:0;perspective:1100px}
+.ov-face{position:relative;height:100%;padding:20px 22px 25px;filter:drop-shadow(0 4px 1px var(--tile-shadow));transform:var(--ov-tilt,none);transition:transform .22s var(--ease),translate .22s var(--ease)}
+.ov-label,.ov-card-head{display:flex;align-items:center;gap:9px}.ov-label{color:var(--tile-muted);font-size:14px;font-weight:600}.ov-card-head{justify-content:space-between;margin-bottom:12px}
+.ov-status-body{display:flex;align-items:center;gap:clamp(16px,2.5vw,32px)}.ov-emitter{display:block;flex:none;width:160px;height:auto;shape-rendering:crispEdges;color:var(--signal)}
+/* 所有轮廓和位移都落在 32 格画布的整格上；四象限复用同一块像素图形。 */
+.ov-idle-arc{fill:var(--signal);animation:ov-wave-travel 4.8s steps(5,end) infinite,ov-wave-fade 4.8s ease-out infinite}
+.ov-thought-stars,.ov-unknown-arc{display:none}
+.ov-emitter:not([data-state='idle']) .ov-idle-arc{display:none;animation:none}
+.ov-emitter[data-state='thinking'] .ov-thought-stars{display:inline;fill:var(--signal)}
+.ov-emitter[data-state='thinking'] .ov-thought-star{animation:ov-twinkle var(--spark-period) steps(4,end) var(--spark-phase) infinite}
+.ov-emitter[data-state='unknown'] .ov-unknown-arc{display:inline;fill:var(--tile-muted);animation:ov-seek 4s steps(1,end) infinite}
+@keyframes ov-wave-travel{from{transform:translateY(0)}to{transform:translateY(-5px)}}
+@keyframes ov-wave-fade{0%,100%{opacity:0}16%{opacity:.82}80%{opacity:.16}95%{opacity:0}}
+@keyframes ov-twinkle{0%,64%,100%{opacity:0}12%{opacity:.55}24%{opacity:1}44%{opacity:.78}}
+@keyframes ov-seek{0%,72%,100%{opacity:.52}78%,90%{opacity:.88}}
+.ov-readout{font-size:clamp(28px,3.1vw,44px);font-weight:700;line-height:1.25;overflow-wrap:anywhere}.ov-status-body .ov-label{margin-bottom:5px}
+.ov-task{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:baseline;margin-top:12px;padding-top:10px;border-top:1px dashed var(--tile-rule);font-size:14px;overflow-wrap:anywhere}.ov-task span{color:var(--tile-muted)}
+.ov-energy>.ov-face{display:flex;flex-direction:column;justify-content:space-between;gap:12px}.ov-energy-line{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.ov-tier,.ov-period,.ov-activity time{color:var(--tile-muted);font-size:12px}
+.ov-gauge{position:relative;height:14px;margin:2px 4px 4px 0;border:2px solid var(--tile-muted);padding:2px}.ov-gauge::after{content:'';position:absolute;right:-5px;top:2px;bottom:2px;width:3px;background:var(--tile-muted)}
+.ov-cells{height:100%;background:var(--signal-track);mask-image:repeating-linear-gradient(90deg,#000 0 calc(8.33333% - 2px),transparent calc(8.33333% - 2px) 8.33333%)}.ov-cells i{display:block;height:100%;background:var(--signal);transition:width .85s var(--ease)}.ov-gauge.unlimited .ov-cells{background:repeating-linear-gradient(135deg,var(--signal-track) 0 3px,transparent 3px 6px)}
+.ov-state,.ov-activity{font-size:14px;line-height:1.7;overflow-wrap:anywhere}.ov-state .state-line{border:0;padding:0}.ov-state .state-line+.state-line{margin-top:4px}.ov-state details{margin-top:7px}.ov-state summary{cursor:pointer;color:var(--tile-muted);width:fit-content;font-size:13px}.ov-state summary:focus-visible{outline:2px solid var(--signal)}
+.ov-activity{list-style:none;padding:0;margin:0}.ov-activity li{display:flex;justify-content:space-between;gap:10px;align-items:baseline}.ov-activity li+li{margin-top:5px;padding-top:5px;border-top:1px dashed var(--tile-rule)}.ov-activity time{flex:none;font-variant-numeric:tabular-nums}.ov-empty{color:var(--tile-muted);font-size:14px}
+.ov-links{display:grid;grid-column:1/-1;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.ov-link{border:0;background:transparent;padding:0;text-align:left;cursor:pointer}.ov-link>.ov-face{display:flex;align-items:center;gap:9px;padding:14px 13px 19px;line-height:1.4;font-size:14px;font-weight:600}.ov-link .ico{color:var(--tile-muted)}.ov-link .ov-arrow{margin-left:auto;width:12px;height:12px;opacity:.75}.ov-link:focus-visible{outline:2px solid var(--accent-strong);outline-offset:4px}
+@media(hover:hover) and (prefers-reduced-motion:no-preference){.ov-tracking .ov-slot:hover>.ov-face{translate:0 2px}.ov-tracking .ov-link:active>.ov-face{translate:0 4px}}
+@media(min-width:821px) and (max-width:1100px){#page-overview{padding-inline:clamp(36px,9vw,105px)}}
+@media(max-width:620px){.ov-grid{grid-template-columns:minmax(0,1fr);gap:14px}.ov-face{padding:16px 17px 21px}.ov-emitter{width:128px}.ov-links{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.ov-link>.ov-face{padding:13px 12px 18px}.ov-head{margin-bottom:20px}.ov-energy>.ov-face{gap:9px}}
+@media(max-width:360px){.ov-emitter{width:96px}}
+@media(prefers-reduced-motion:reduce){.ov-emitter :is(.ov-idle-arc,.ov-thought-star,.ov-unknown-arc){animation:none;transform:none}.ov-slot>.ov-face{transform:none;translate:none}}
 
 /* ---------- 私聊 ---------- */
 #page-chat{padding:0;overflow:hidden}
@@ -222,7 +253,8 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .msg.person .bubble,.msg.system .bubble{background:var(--surface-2);border-bottom-left-radius:8px}
 .msg.notice{align-self:center;max-width:90%;align-items:center}
 .msg.notice .bubble{background:none;border:1px dashed var(--warn);color:var(--warn);font-size:13px;border-radius:var(--radius-sm)}
-.chat-day{align-self:center;font-size:12px;color:var(--text-2);padding:4px 0}
+.chat-day{align-self:center;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2);padding:4px 0}
+.chat-day::before,.chat-day::after{content:'';width:15px;height:1px;background:repeating-linear-gradient(90deg,var(--stitch) 0 3px,transparent 3px 6px)}
 .composer{display:flex;gap:10px;align-items:flex-end;padding:12px 24px calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--surface)}
 .composer textarea{min-height:44px;max-height:160px;resize:none;border-radius:22px;padding:10px 18px}
 .composer .btn{flex:none;height:44px;border-radius:22px;padding:0 20px}
@@ -263,16 +295,13 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .provider-card .form-grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}
 .model-row .name{font-weight:600}
 .levels{display:flex;gap:6px;flex-wrap:wrap}
-.organ-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
-.organ-card .role{font-size:13px;color:var(--text-2)}
-.organ-grid .empty{grid-column:1/-1}
-.organ-card,.provider-card{transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
-.organ-card:hover,.provider-card:hover{border-color:var(--accent);box-shadow:0 6px 22px rgba(88,110,117,.12)}
+.provider-card{transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
+.provider-card:hover{border-color:var(--accent);box-shadow:0 6px 22px rgba(88,110,117,.12)}
 .chain{display:flex;flex-direction:column;gap:6px;margin:10px 0}
 .chain-step{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2)}
 .chain-step .order{width:20px;height:20px;border-radius:50%;background:var(--accent-soft);color:var(--accent-strong);font-size:12px;display:grid;place-items:center;flex:none}
 .chain-step .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-@media (max-width:820px){.model-row{grid-template-columns:1fr}.model-row>.btn{margin-top:0;justify-self:start}.organ-grid{grid-template-columns:1fr}}
+@media (max-width:820px){.model-row{grid-template-columns:1fr}.model-row>.btn{margin-top:0;justify-self:start}}
 
 /* ---------- 设置 ---------- */
 .cfg-layout{display:grid;gap:20px;grid-template-columns:180px 1fr;align-items:start}
@@ -340,15 +369,17 @@ nav.side .nav-label{text-align:center}
 .vision-field{display:flex;align-items:center;gap:8px;width:max-content;cursor:pointer}
 .vision-field input{width:16px;height:16px;margin:0;accent-color:#358238}
 .model-type{display:inline-flex;gap:6px;align-items:center}
-.model-test-notice{position:fixed;z-index:52;top:max(20px,env(safe-area-inset-top));right:18px;
-width:min(320px,calc(100vw - 36px));padding:12px 28px;color:#292d2e;pointer-events:none;
+#model-test-status{position:fixed;z-index:52;top:max(20px,env(safe-area-inset-top));right:18px;display:grid;gap:6px;max-height:75dvh;overflow:auto}
+.probe-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+.model-test-notice{width:min(320px,calc(100vw - 36px));padding:12px 28px;color:#292d2e;overflow-wrap:anywhere;
 background:linear-gradient(90deg,transparent,rgba(255,255,255,.95) 15%,rgba(255,255,255,.95) 85%,transparent);
 animation:focus-in var(--dur-reveal) var(--ease)}
 .model-test-notice strong,.model-test-notice small{display:block}
 .model-test-notice small{color:#4d5659}
-.organ-tile{text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:12px;color:var(--text);transition:border-color var(--dur-fast),transform var(--dur-fast)}
-.organ-tile:hover{border-color:var(--accent);transform:translateY(-2px)}
-.organ-tile h3{flex:1}.organ-summary{font-family:var(--mono);overflow-wrap:anywhere;font-size:13px}
+.model-test-notice{display:flex;align-items:center;gap:10px;padding-right:14px}
+.probe-copy{flex:1;min-width:0}
+.probe-actions{display:flex;align-items:center;gap:4px;flex:none;margin-left:auto}
+.btn[data-probe][aria-pressed="true"]{opacity:1;cursor:wait;translate:0 2px;box-shadow:inset 0 2px 3px #0004;background:var(--border)}
 dialog{color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:20px;box-shadow:0 16px 64px rgba(0,0,0,.16);padding:0;max-height:calc(100dvh - 32px)}
 dialog::backdrop{background:rgba(0,20,25,.28);backdrop-filter:blur(2px)}
 dialog[open]{animation:focus-in var(--dur-reveal) var(--ease)}
@@ -369,28 +400,67 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 @media(max-width:1100px){.model-library{grid-template-columns:1fr}.model-vendors{position:static}.provider-list{flex-direction:row;flex-wrap:wrap}.provider-row{flex:1 1 100px}.model-price,.model-owners{display:none}}
 @media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
 
+/* 器官关系图：颜色表示连线方向，所有器官共用一张像素块面。 */
+.og-board{--og-call:#a77e2f;--og-return:#4e847a;--og-relay:#817499}
+:root[data-theme='dark'] .og-board{--og-call:#d3b65e;--og-return:#86b8a8;--og-relay:#ad9ac6}
+.og-toolbar,.og-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:10px 16px;font-size:12px;color:var(--text-2)}
+.og-toolbar{border-bottom:1px solid var(--border)}.og-footer{border-top:1px solid var(--border)}
+.og-legend{display:flex;flex-wrap:wrap;gap:6px 16px}.og-legend span{display:inline-flex;align-items:center;gap:6px}
+.og-legend i{width:16px;border-top:2px solid var(--og-call)}.og-legend .return{border-color:var(--og-return)}.og-legend .relay{border-color:var(--og-relay);border-top-style:dashed}
+.og-stage{position:relative;isolation:isolate;width:100%;height:410px;background-color:var(--bg);background-image:radial-gradient(circle,color-mix(in srgb,var(--text-2) 17%,transparent) 1px,transparent 1px);background-size:16px 16px}
+.og-cables{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.og-edge{fill:none;color:var(--og-call);transition:opacity var(--dur)}.og-edge.return{color:var(--og-return)}.og-edge.relay{color:var(--og-relay)}.og-edge.quiet{opacity:.21}
+.og-wire,.og-pulse{stroke:currentColor;stroke-linecap:round}.og-wire{pointer-events:stroke;stroke-width:1.6;stroke-opacity:.73}.relay .og-wire{stroke-dasharray:4 4}.og-pulse{stroke-width:3;stroke-dasharray:2 98;animation:organ-flow 4s linear infinite}@keyframes organ-flow{to{stroke-dashoffset:-100}}
+.og-node{position:absolute;width:min(144px,32%);height:56px;padding:0;border:0;appearance:none;background:transparent;color:#313b37;perspective:340px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.og-core{width:min(84px,24%);height:auto;aspect-ratio:1}
+.og-node::before{content:'';position:absolute;inset:4px 3px 0;border-radius:6px;background:rgb(33 44 38 / 16%);filter:blur(2px);translate:0 3px;pointer-events:none}
+:root[data-theme='dark'] .og-node::before{background:rgb(0 0 0 / 40%)}
+.og-node:focus-visible{outline:2px dashed var(--accent);outline-offset:4px}.og-node.dragging{cursor:grabbing;z-index:2}
+.og-tile{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  padding:7px 7px 11px;
+  pointer-events:none;transform:var(--og-tilt,none)}
+@media(prefers-reduced-motion:no-preference){
+  .og-tile{transition:transform 150ms var(--ease),translate 190ms var(--ease)}
+  .og-node::before{transition:translate 190ms var(--ease),scale 190ms var(--ease),opacity 190ms var(--ease)}
+  .og-tracking .og-node:hover .og-tile{translate:0 3px -6px}
+  .og-tracking .og-node:hover::before{translate:0 1px;scale:.97;opacity:.7}
+}
+.og-node strong,.og-caption{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.og-node strong{font:700 16px/1.1 var(--font);letter-spacing:0}.og-core strong{font-size:18px}
+.og-caption{color:var(--tile-muted);font:400 12px/1.15 var(--font)}.og-caption.danger-text{color:#9d292c}
+.og-details{padding:11px 16px;border-top:1px solid var(--border)}.og-details summary{cursor:pointer;color:var(--text-2);font-size:13px}.og-details ul{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:10px 20px;list-style:none;padding:0;margin:14px 0 2px}.og-details li{display:grid;gap:2px;padding-inline-start:9px;border-inline-start:2px solid var(--og-call);font-size:12px}.og-details li.return{border-color:var(--og-return)}.og-details li.relay{border-color:var(--og-relay)}.og-details b{font-family:var(--mono);overflow-wrap:anywhere}.og-details li span{color:var(--text-2)}
+@media(max-width:600px){.og-toolbar,.og-footer{padding:8px 10px}.og-node{width:min(106px,32%);height:50px}.og-core{width:min(68px,24%);height:auto}.og-node strong{font-size:14px}.og-core strong{font-size:16px}.og-caption{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.og-pulse{display:none}.og-tile{transform:none;transition:none}}
+#ov-content.ov-status-only .ov-slot:not(:has(#ov-emitter)){display:none}
+.setting-term{position:relative;cursor:help;text-decoration:underline dotted var(--border);text-underline-offset:4px}
+.setting-help{position:absolute;z-index:8;left:0;bottom:100%;display:none;align-items:baseline;gap:7px;width:max-content;max-width:min(270px,68vw);padding:8px 11px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:6px;box-shadow:0 3px 9px #0002;font-size:13px;font-weight:400;line-height:1.5}
+.setting-term:is(:hover,:focus)>.setting-help{display:flex}.setting-help b{font-family:serif}
 </style>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
-<symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7l-4.5 3.5V17H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M8 9.5h8M8 12.5h5"/></symbol>
-<symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
-<symbol id="i-timeline" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v3M6 14v3M12 5h8M12 12h6M12 19h8"/></symbol>
-<symbol id="i-persona" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.9-3.7 3.6-5.6 7-5.6s6.1 1.9 7 5.6"/></symbol>
-<symbol id="i-model" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
-<symbol id="i-organ" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.6"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="6" r="1.8"/><circle cx="12" cy="20" r="1.8"/><path d="M6.4 7.2l3.6 3.4M17.6 7.2l-3.6 3.4M12 14.6v3.6"/></symbol>
-<symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
-<symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></symbol>
-<symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/><path d="M15 8l4 4-4 4M19 12H9"/></symbol>
-<symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6m8 14h8"/></symbol>
-<symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3L10 14M21 3l-7 18-4-8-8-4z"/></symbol>
-<!-- Lucide key-round, pencil, trash and zap. See lucide-LICENSE.txt. -->
-<symbol id="i-key" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
-<symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></symbol>
-<symbol id="i-trash" viewBox="0 0 24 24"><path d="M10 11v6M14 11v6M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
-<symbol id="i-zap" viewBox="0 0 24 24"><path d="M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z"/></symbol>
-<symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/></symbol>
-<symbol id="aureus-logo" viewBox="3 3 58 58">
+<!-- Square cells and stepped edges share a 16-pixel grid. -->
+<symbol id="i-chat" viewBox="0 0 16 16"><path d="M3 2h10v1h1v8h-1v1H8v1H7v1H6v1H4v-3H3v-1H2V3h1zm1 2v6h2v2h1v-1h1v-1h4V4zm1 1h6v1H5zm0 2h4v1H5z"/></symbol>
+<symbol id="i-pulse" viewBox="0 0 16 16"><path d="M1 8h3V6h1V4h1V2h2v3h1v3h1v3h1V9h1V7h3v2h-2v2h-1v3h-2v-2H9v-3H8V6H7V5H6v3H5v2H1z"/></symbol>
+<symbol id="i-timeline" viewBox="0 0 16 16"><path d="M2 1h3v3H4v2h1v4H4v2h1v3H2v-3h1v-2H2V6h1V4H2zm5 1h7v1H7zm0 5h5v2H7zm0 6h7v1H7z"/></symbol>
+<symbol id="i-persona" viewBox="0 0 16 16"><path d="M6 1h4v1h1v1h1v4h-1v1h-1v1H6V8H5V7H4V3h1V2h1zm0 3v2h1v1h2V6h1V4H9V3H7v1zm-1 6h6v1h2v2h1v2H2v-2h1v-2h2zm1 2v1H4v1h8v-1h-2v-1z"/></symbol>
+<symbol id="i-model" viewBox="0 0 16 16"><path d="M7 1h2v1h2v1h2v1h1v8h-1v1h-2v1H9v1H7v-1H5v-1H3v-1H2V4h1V3h2V2h2zm0 2v1H5v1h2v1h2V5h2V4H9V3zM4 7v4h1v1h2V8H5V7zm7 0v1H9v4h2v-1h1V7z"/></symbol>
+<symbol id="i-organ" viewBox="0 0 16 16"><path d="M1 1h4v1h1v4h1v1h2V6h1V2h1V1h4v1h1v4h-4v1h-1v1h-1v3h1v4H5v-4h2V9H6V8H5V7H4V6H0V2h1zm1 2v1h2V3zm10 0v1h2V3zM7 12v1h2v-1z"/></symbol>
+<symbol id="i-sliders" viewBox="0 0 16 16"><path d="M8 2h4v1h1v1h2v2h-2v1h-1v1H8V7H7V6H1V4h6V3h1zm1 2v2h2V4zM4 9h4v1h1v1h6v2H9v1H8v1H4v-1H3v-1H1v-2h2v-1h1zm1 2v2h2v-2z"/></symbol>
+<symbol id="i-theme" viewBox="0 0 16 16"><path d="M5 1h6v1h2v1h1v2h1v6h-1v2h-1v1h-2v1H5v-1H3v-1H2v-2H1V5h1V3h1V2h2zm0 2v1H4v1H3v6h1v1h1v1h3V3z"/></symbol>
+<symbol id="i-logout" viewBox="0 0 16 16"><path d="M2 1h6v2H3v10h5v2H2v-1H1V2h1zm8 3h2v1h1v1h1v1h1v2h-1v1h-1v1h-1v1h-2v-2h1V9H6V7h5V6h-1z"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 16 16"><path d="M2 3h2v1h1v1h1v1h1v1h1v2H7v1H6v1H5v1H4v1H2v-2h1v-1h1V9h1V7H4V6H3V5H2zm7 8h5v2H9z"/></symbol>
+<symbol id="i-send" viewBox="0 0 16 16"><path d="M12 1h3v3h-1v3h-1v3h-1v3h-1v2H9v-2H8v-2H7v-1H5V9H3V8H1V6h3V5h3V4h2V3h3zm0 3h-1v1h-2v1H6v1H4v1h3v1h1V8h1V7h1V6h1V5h1zm-2 5H9v2h1v-1h1V8h-1z"/></symbol>
+<symbol id="i-key" viewBox="0 0 16 16"><path d="M9 1h4v1h1v1h1v5h-1v1H9v1H8v2H6v2H4v1H1v-4h1v-1h1V9h1V8h1V7h1V4h1V2h2zm1 2v1H8v3h1v1h3V7h1V4h-1V3zm0 1h2v2h-2z"/></symbol>
+<symbol id="i-pencil" viewBox="0 0 16 16"><path d="M11 1h2v1h1v1h1v2h-1v1h-1v1h-1v1h-1v1h-1v1H9v1H8v1H7v1H6v1H3v1H1v-2h1v-3h1V9h1V8h1V7h1V6h1V5h1V4h1V3h1V2h1zm0 3h-1v1h1v1h1V5h1V4h-1V3h-1zM5 10H4v2h2v-1H5z"/></symbol>
+<symbol id="i-trash" viewBox="0 0 16 16"><path d="M6 1h4v2h5v2H1V3h5zM3 6h2v6h1v1h4v-1h1V6h2v7h-1v1h-1v1H5v-1H4v-1H3zm3 0h1v5H6zm3 0h1v5H9z"/></symbol>
+<symbol id="i-zap" viewBox="0 0 16 16"><path d="M9 1h3v2h-1v2h-1v2h4v2h-2v2h-2v2H8v2H5v-2h1v-2h1V9H2V7h2V5h2V3h3z"/></symbol>
+<symbol id="i-home" viewBox="0 0 16 16"><path d="M7 1h2v1h1v1h1v1h1v1h1v1h1v1h1v2h-2v5h-3v-4H6v4H3V9H1V7h1V6h1V5h1V4h1V3h1V2h1z"/></symbol>
+<symbol id="i-plus" viewBox="0 0 16 16"><path d="M7 2h2v5h5v2H9v5H7V9H2V7h5z"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 16 16"><path d="M5 2h6v1h2V1h2v6H9V5h2V4H5v1H4v1H3v2H1V5h1V4h1V3h2zM1 9h6v2H5v1h6v-1h1v-1h1V8h2v3h-1v1h-1v1h-2v1H5v-1H3v2H1z"/></symbol>
+<symbol id="i-close" viewBox="0 0 16 16"><path d="M3 2h1v1h1v1h1v1h1v1h2V5h1V4h1V3h1V2h2v2h-1v1h-1v1h-1v1h-1v2h1v1h1v1h1v1h1v2h-2v-1h-1v-1h-1v-1H9v-1H7v1H6v1H5v1H4v1H2v-2h1v-1h1v-1h1V9h1V7H5V6H4V5H3V4H2V2z"/></symbol>
+<symbol id="i-up" viewBox="0 0 16 16"><path d="M7 2h2v1h1v1h1v1h1v1h1v2h-2V7h-1V6H9v8H7V6H6v1H5v1H3V6h1V5h1V4h1V3h1z"/></symbol>
+<symbol id="i-down" viewBox="0 0 16 16"><use href="#i-up" transform="translate(0 16) scale(1 -1)"/></symbol>
+<symbol id="login-logo" viewBox="3 3 58 58">
   <path fill="#000" fill-rule="evenodd" d="M32 9.5C24.5 9.5 18.1 10.7 15.2 13.7C13.3 15.7 13.1 19.1 13 21.9C12.92 24.14 12.47 24.91 11.2 26.6L7 32.1C4.7 35.2 5.3 38.2 7.8 39.7C10.2 41.2 13.3 40.2 15.5 38.2C16.4 40.4 18.6 42.2 21 43.35L22 41.45C17.3 39.1 16 36.8 17.6 32.6C20.8914 23.96 43.1086 23.96 46.4 32.6C48 36.8 46.7 39.1 42 41.45L43 43.35C45.4 42.2 47.6 40.4 48.5 38.2C50.7 40.2 53.8 41.2 56.2 39.7C58.7 38.2 59.3 35.2 57 32.1L52.8 26.6C51.53 24.91 51.08 24.14 51 21.9C50.9 19.1 50.7 15.7 48.8 13.7C45.9 10.7 39.5 9.5 32 9.5ZM32 11.5C38.7 11.5 44.7 12.6 47.1 15C48.7 16.6 48.8 19.4 48.95 22.3C49.08 24.8 49.54 25.68 51 27.65L55.5 33.8Q56.8 35.7 56 36.5Q55.5 36.9 55 35.9L47.4 25.5C47 25 46.9 24.5 46.9 23.9C46.7 19.9 46.8 17.6 45.6 16.3C43.7 14.4 38.6 13.4 32 13.4S20.3 14.4 18.4 16.3C17.2 17.6 17.3 19.9 17.1 23.9Q17.1 24.8 16.6 25.5L9 35.9Q8.5 36.9 8 36.5Q7.2 35.7 8.5 33.8L13 27.65C14.46 25.68 14.92 24.8 15.05 22.3C15.2 19.4 15.3 16.6 16.9 15C19.3 12.6 25.3 11.5 32 11.5Z"/>
   <g fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round">
     <path stroke-width="2.2" d="M21.5 42.4C18.1 44.8 15.7 48.8 14 54.4M42.5 42.4C45.9 44.8 48.3 48.8 50 54.4"/>
@@ -398,13 +468,14 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
   </g>
   <path fill="#000" d="M29.8 32.1C29.8 31.3 34.2 31.3 34.2 32.1C34.2 32.9 32.8 34.3 32 34.3S29.8 32.9 29.8 32.1Z"/>
 </symbol>
+<symbol id="aureus-logo" viewBox="0 0 48 48"><image width="48" height="48" style="image-rendering:pixelated" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAE+SURBVGhD7ZDLbgMxDAPz/z/dXopAmUh+iUxz8AA87C49NPbxuFwuF/AzydfAi3XzMTh8egGeP/Us4x5y+0sxh3dDqvctKOUlVKFfRhRyVB3uSYgyDqqTbbbIxM5wpw1FHFSHO20o4qA63GlDEQfV4U4bijioDndaUMIxV+Jei0w4ywz2s7B7BA9zJBvchZ7MyecleIhyfu9CL/18nhIPULol2oQ7vMMSLFO4LDqAO9k9hrBEWZaK014WdktigRIe5nPGSYd78Tu7L/AjBVVG7HRmYf+N+IGHmRns8bmCO0zsvMFylRlVr3pPuFclhaUsbriXZcioXL1XULlH9zlCKvvD4RyiHFS6llGOKl1LuMZc3hecf8vpfuIesPqt8oBtxyYGlh2LdIB8Ty6cIN2TyjaQ7cpEm/zX7uVy+SS/J8BgvLpp8jwAAAAASUVORK5CYII="/></symbol>
 </svg>
 <div id="toasts" popover="manual" aria-live="polite"></div>
 <div id="model-test-status" role="status" aria-live="polite"></div>
 
 <section id="login" class="auth hidden">
 <div class="card auth-card">
-<h1><svg class="brand-mark" aria-hidden="true"><use href="#aureus-logo"/></svg>AureusBot</h1>
+<h1><svg class="brand-mark" aria-hidden="true"><use href="#login-logo"/></svg>AureusBot</h1>
 
 <div id="login-error" class="banner danger hidden" role="alert"></div>
 <div class="field"><label for="password">密码</label>
@@ -445,26 +516,45 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="nav-spacer"></div>
 <div class="nav-foot">
 <button id="theme-btn" class="nav-item" aria-label="切换主题"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-theme"/></svg><span class="nav-label" style="--i:9">切换主题</span></button>
+<button id="restart-btn" class="nav-item hidden" aria-label="重启程序" title="重启程序"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-refresh"/></svg><span class="nav-label" style="--i:10">重启</span></button>
 <button id="shutdown-btn" class="nav-item" aria-label="退出程序" title="退出程序"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-logout"/></svg><span class="nav-label" style="--i:10">退出</span></button>
 <button id="terminal-btn" class="nav-item hidden" aria-label="打开 CLI 窗口" title="打开 CLI 窗口"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-terminal"/></svg><span class="nav-label" style="--i:11">打开 CLI</span></button>
 </div>
 </nav>
 <main id="pages">
-<section id="page-overview" class="page"><div class="page-body masthead"><span><b>AUREUS</b> <span id="ov-version" class="mono"></span></span><span class="sep"></span><span id="ov-date" class="mono"></span></div>
-<div class="page-head"><div><h2>总览</h2></div><button id="ov-refresh" class="btn small">刷新</button></div>
-<div class="page-body stack">
-<div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div>
-<div id="ov-missing" class="empty hidden"></div>
-<div id="ov-content" class="stack hidden">
-<div class="panel"><div class="panel-bar"><span class="en">STATUS</span></div><div class="panel-body hero">
-<div id="ov-orb" class="orb"></div>
-<div class="hero-main"><div class="label">此刻</div><div class="value" id="ov-thinking"></div><div class="muted" style="font-size:14px">当前任务：<span id="ov-task"></span></div></div>
-<div class="hero-energy"><div class="label">精力</div><div class="value" id="ov-energy"></div><div class="meter"><i id="ov-meter" style="width:0"></i></div></div>
-</div></div>
-<div class="panel"><div class="panel-bar"><span class="en">STATE</span></div><div class="panel-body"><div id="ov-state" class="state-text"></div></div></div>
-<div class="panel"><div class="panel-bar"><span class="en">LINKS</span></div><div class="panel-body row"><button class="btn" data-go="monitor">看它的内部状态</button><button class="btn" data-go="chat">和它说话</button><button class="btn" data-go="timeline">翻时间线</button><button class="btn" data-go="persona">看人设</button></div></div>
-</div>
-</div></section>
+<section id="page-overview" class="page">
+<div class="page-head ov-head"><div><h2>总览</h2><div class="ov-meta"><b>AUREUS <span id="ov-version" class="mono"></span></b><time id="ov-date"></time></div></div><button id="ov-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
+<div class="page-body stack"><div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div><div id="ov-missing" class="empty hidden"></div>
+<div id="ov-content" class="ov-grid hidden">
+<article class="ov-slot"><div class="ov-face"><div class="ov-status-body">
+<svg id="ov-emitter" class="ov-emitter" data-state="idle" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+<defs>
+<path id="ov-star" d="M15 6h2v4h1v2h2v2h2v1h4v2h-4v1h-2v2h-2v2h-1v4h-2v-4h-1v-2h-2v-2h-2v-1H6v-2h4v-1h2v-2h2v-2h1Z"/>
+<path id="ov-rest-rail" d="M8 8h2V7h2V6h2V5h4v1h2v1h2v1h2v1h-2V8h-2V7h-2V6h-4v1h-2v1h-2v1H8Z"/>
+<path id="ov-spark" d="M1 0h1v2H1zM0 2h1v1H0zM2 2h1v1H2zM1 3h1v2H1z"/>
+<path id="ov-broken-rail" d="M22 4h4v2h-4zM27 7h2v4h-2z"/>
+</defs>
+<g transform="rotate(0 16 16)"><use class="ov-idle-arc" href="#ov-rest-rail"/><use class="ov-unknown-arc" href="#ov-broken-rail"/></g>
+<g transform="rotate(90 16 16)"><use class="ov-idle-arc" href="#ov-rest-rail"/><use class="ov-unknown-arc" href="#ov-broken-rail"/></g>
+<g transform="rotate(180 16 16)"><use class="ov-idle-arc" href="#ov-rest-rail"/><use class="ov-unknown-arc" href="#ov-broken-rail"/></g>
+<g transform="rotate(270 16 16)"><use class="ov-idle-arc" href="#ov-rest-rail"/><use class="ov-unknown-arc" href="#ov-broken-rail"/></g>
+<g class="ov-thought-stars">
+  <use class="ov-thought-star" href="#ov-spark" x="3" y="3" style="--spark-period:3.2s;--spark-phase:-.7s"/>
+  <use class="ov-thought-star" href="#ov-spark" x="27" y="18" style="--spark-period:3.7s;--spark-phase:-1.6s"/>
+  <use class="ov-thought-star" href="#ov-spark" x="10" y="26" style="--spark-period:4.3s;--spark-phase:-3.3s"/>
+</g>
+<use href="#ov-star" y="1" fill="var(--signal-edge)"/><use href="#ov-star" fill="currentColor"/><path fill="var(--signal-glint)" d="M15 11h1v4h-1v1h-4v-1h3v-1h1Z"/>
+</svg>
+<div><h3 class="ov-label">运行状态</h3><div id="ov-thinking" class="ov-readout" role="status" aria-atomic="true"></div></div></div>
+<div class="ov-task"><span>当前任务</span><strong id="ov-task"></strong></div></div></article>
+<article class="ov-slot ov-energy"><div class="ov-face"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-zap"/></svg>精力</h3><div class="ov-energy-line"><strong id="ov-energy" class="ov-readout"></strong><span id="ov-tier" class="ov-tier"></span></div><div class="ov-gauge" aria-hidden="true"><div class="ov-cells"><i id="ov-meter"></i></div></div></div></article>
+<article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg>状态摘要</h3></div><div id="ov-state" class="ov-state"></div></div></article>
+<article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-timeline"/></svg>最近动态</h3><span class="ov-period">近 24 小时</span></div><ul id="ov-activity" class="ov-activity"></ul></div></article>
+<div class="ov-links"><button type="button" class="ov-slot ov-link" data-go="chat"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg><span>私聊</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
+<button type="button" class="ov-slot ov-link" data-go="monitor"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg><span>内部状态</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
+<button type="button" class="ov-slot ov-link" data-go="timeline"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-timeline"/></svg><span>时间线</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
+<button type="button" class="ov-slot ov-link" data-go="persona"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-persona"/></svg><span>人设</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button></div>
+</div></div></section>
 <section id="page-chat" class="page"><div class="chat-wrap">
 <div class="chat-head">
 <div><h2 style="font-size:17px">私聊</h2></div>
@@ -476,7 +566,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button id="chat-send" class="btn primary"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-send"/></svg>发送</button>
 </div>
 </div></section>
-<section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small">刷新</button></div>
+<section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class="page-body">
 <div class="card summary-card">
 <div class="card-head"><h3>滚动摘要</h3><span class="tag">还没有这个功能</span></div>
@@ -527,17 +617,20 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="md-restart" class="banner hidden">运行设置已修改，重启后生效。</div>
 <div id="md-missing" class="empty hidden"></div>
 <div id="md-content" class="model-library hidden">
-<aside class="model-vendors" aria-label="API供应商"><h3>API供应商</h3><div id="md-providers" class="provider-list"></div><button id="md-add-provider" class="btn">＋ 添加供应商</button></aside>
-<div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或供应商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option><option value="llm">llm</option><option value="embedding">embedding</option></select><button id="md-edit-provider" class="btn" disabled>编辑供应商</button><button id="md-add-model" class="btn primary">＋ 添加模型</button></div>
-<div id="md-catalog"></div>
+<aside class="model-vendors" aria-label="API供应商"><h3>API供应商</h3><div id="md-providers" class="provider-list"></div><button id="md-add-provider" class="btn"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加供应商</button></aside>
+<div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或供应商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option><option value="llm">llm</option><option value="embedding">embedding</option></select><button id="md-test-provider" class="btn" disabled>网络测速</button><button id="md-edit-provider" class="btn" disabled>编辑供应商</button><button id="md-add-model" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加模型</button></div>
+<div id="md-results" style="display:grid;gap:inherit;min-width:0"><div id="md-catalog"></div>
 <div class="model-table-wrap"><table class="model-table" aria-label="模型列表"><thead><tr><th>模型</th><th>API供应商</th><th>类型</th><th class="model-price">价格（输入/输出）</th><th class="model-owners">负责的工作</th><th>操作</th></tr></thead><tbody id="md-models"></tbody></table></div>
-<div id="md-cards" class="model-cards"></div><div id="md-empty" class="empty hidden">没有匹配的模型。先添加供应商，再添加模型。</div>
+<div id="md-cards" class="model-cards"></div><div id="md-empty" class="empty hidden">没有匹配的模型。先添加供应商，再添加模型。</div></div>
 </div></div></div></section>
 <section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2></div><span id="og-status" class="tag" role="status">已自动保存</span></div>
-<div class="page-body stack"><div id="og-missing" class="empty hidden"></div><div id="og-content" class="stack hidden"><div id="og-grid" class="organ-grid"></div>
-<div class="row"><input id="og-new-name" type="text" placeholder="自定义器官名称" aria-label="自定义器官名称" style="max-width:260px"><button id="og-add" class="btn">＋ 添加器官</button></div>
-</div></div></section>
-<section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small">刷新</button><button id="ky-add" class="btn primary">＋ 添加密钥</button></div></div>
+<div class="page-body stack"><div id="og-missing" class="empty hidden"></div><div id="og-content" class="hidden"><div class="og-board">
+<div class="og-toolbar"><div class="og-legend" aria-label="逻辑流向图例"><span><i></i>核心调用</span><span><i class="return"></i>器官返回</span><span><i class="relay"></i>经 CORE 衔接</span></div><button id="og-reset" type="button" class="btn small">复位布局</button></div>
+<div id="og-grid" class="og-stage" role="group" aria-label="器官逻辑流向" aria-describedby="og-help"></div>
+<div class="og-footer" id="og-help">拖动模块调整布局，也可聚焦后用方向键移动。点击器官配置模型。</div>
+<details class="og-details"><summary>查看流程说明</summary><ul id="og-routes"></ul></details>
+</div></div></div></section>
+<section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
 <div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
@@ -552,7 +645,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 </div>
 </div></section>
-<section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'>刷新</button></div>
+<section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class='page-body stack'>
 <div id='mo-missing' class='empty hidden'></div>
 <div id='mo-content' class='stack hidden'>
@@ -571,8 +664,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
-<dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑">关闭</button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg>关闭</button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
 
+<script src="/assets/organ-graph.js"></script>
 <script>
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
@@ -622,6 +716,7 @@ function errorText(res) {
 const notBuilt = res => res.status === 404 || res.status === 405;
 const NOT_BUILT_TEXT = '这项功能的后端还没做好（路线图 2.12b），所以这里暂时没有内容。';
 
+const NOTICE_DURATION_MS = 2000;
 function toast(text, kind) {
   const host = $('toasts');
   // 提示也要在原生编辑对话框之上；manual popover 不抢焦点，不阻挡操作。
@@ -633,7 +728,7 @@ function toast(text, kind) {
   setTimeout(() => {
     node.classList.add('leaving');
     Promise.allSettled(node.getAnimations().map(animation => animation.finished)).then(() => node.remove());
-  }, kind === 'error' ? 6000 : 3500);
+  }, NOTICE_DURATION_MS);
 }
 const fail = res => toast(errorText(res), 'error');
 
@@ -686,71 +781,114 @@ function fmtTime(iso, full) {
 // ---------- 页面切换 ----------
 const PAGES = {};   // 页面名 -> {load}，各页在下面登记
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-const PAGE_ROWS = [
-  '.masthead', 'h2', 'h3', '.panel-bar', '.field-label', '.field > label', 'p',
-  '.tl-item', '.msg', '.chat-day', '.model-table tr', '.model-compact', '.provider-row',
-  '.organ-tile', '.key-card', '.state-text', '.hero-main > *', '.hero-energy > *',
-  '.cfg-tabs button', '.banner', '.empty', '.composer'
-].join(',');
+// 普通文字按所在元素入场。表格行、消息和按钮等复合控件作为整体，避免内部文字重复播放。
+const REVEAL_GROUP = 'tr, .msg, .tl-item, .model-compact, .provider-row, .key-card, .composer, .banner, .empty';
 let pageEntrance = null;
 
 function stopPageEntrance() {
-  for (const animation of pageEntrance?.animations || []) animation.cancel();
+  pageEntrance?.stop();
   pageEntrance = null;
 }
 reducedMotion.addEventListener('change', event => { if (event.matches) stopPageEntrance(); });
 
-function revealPageRows(entrance) {
-  if (entrance !== pageEntrance) return;
-  const page = entrance.page;
-  const viewport = page.getBoundingClientRect();
-  const chat = page.querySelector('.chat-log')?.getBoundingClientRect();
-  const rows = [];
-  for (const node of page.querySelectorAll(PAGE_ROWS)) {
-    const bounds = node.getBoundingClientRect();
-    const clip = chat && node.closest('.chat-log') ? chat : viewport;
-    if (!bounds.height || bounds.bottom <= clip.top || bounds.top >= clip.bottom) continue;
-    if (node.parentElement.closest(PAGE_ROWS)) continue;
-    rows.push({node, top: Math.max(bounds.top, clip.top)});
-  }
-  rows.sort((a, b) => a.top - b.top);
-  let line = -1;
-  let lineTop = -Infinity;
-  for (const {node, top} of rows.slice(0, 30)) {
-    if (top - lineTop > 12) {
-      line++;
-      lineTop = top;
-    }
-    if (entrance.seen.has(node)) continue;
-    entrance.seen.add(node);
-    entrance.animations.push(node.animate([
-      {opacity: 0, filter: 'blur(4px)', translate: '0 5px'},
-      {opacity: 1, filter: 'none', translate: 'none'}
-    ], {
-      duration: 570, delay: Math.min(line * 44, 264), fill: 'backwards',
-      easing: 'cubic-bezier(.22,.72,.24,1)'
-    }));
-  }
+// 正在选取的文字保留原节点。只有与选区相交的区域延后，取消选中后应用最新读数。
+const pendingLiveUpdates = new Map();
+function selectionTouches(node) {
+  const selection = window.getSelection?.();
+  return selection && !selection.isCollapsed && selection.rangeCount && selection.getRangeAt(0).intersectsNode(node);
+}
+function updateLiveRegion(node, render) {
+  if (selectionTouches(node)) pendingLiveUpdates.set(node, render);
+  else { pendingLiveUpdates.delete(node); render(); }
+}
+window.addEventListener('selectionchange', () => {
+  for (const [node, render] of pendingLiveUpdates) updateLiveRegion(node, render);
+}, true);
+function setLiveText(node, value) {
+  if (node.textContent === value) pendingLiveUpdates.delete(node);
+  else updateLiveRegion(node, () => { node.textContent = value; });
 }
 
-function showPage(name) {
+function startPageEntrance(scope) {
+  if (reducedMotion.matches) return;
+  const page = scope.closest('.page');
+  if (!page?.classList.contains('active')) return;
+  stopPageEntrance();
+  const watched = new WeakSet();
+  const animations = new Set();
+  function play(node, frames, timing) {
+    const animation = node.animate(frames, timing);
+    animations.add(animation);
+    animation.onfinish = animation.oncancel = () => animations.delete(animation);
+  }
+  const visible = new IntersectionObserver(entries => {
+    if (pageEntrance !== entrance) return;
+    const rows = entries.filter(entry => entry.isIntersecting && entry.boundingClientRect.height &&
+      entry.boundingClientRect.width && scope.contains(entry.target));
+    rows.sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+    let lineTop = -Infinity, delay = -54;
+    for (const {target, boundingClientRect} of rows) {
+      visible.unobserve(target);
+      if (boundingClientRect.top - lineTop > 12) {
+        lineTop = boundingClientRect.top;
+        delay = Math.min(delay + 54, 324);
+      }
+      // 拖动和鼠标测距使用模块的命中框，入场时保持它的位置。
+      const rise = target.matches('.ov-slot, .og-cables, .og-node') ? 'none' : '0 5px';
+      play(target, [{opacity:0, filter:'blur(5px)', translate:rise}, {opacity:1, filter:'none', translate:'none'}],
+        {duration:720, delay, fill:'backwards', easing:'cubic-bezier(.22,.72,.24,1)'});
+    }
+  }, {root:page});
+  function watch(node) {
+    if (!node || node === scope || !scope.contains(node) || watched.has(node) || !node.getClientRects().length) return;
+    watched.add(node);
+    visible.observe(node);
+  }
+  function watchContent(element) {
+    if (element && !element.closest('script, style, template, svg')) {
+      watch(element.closest(REVEAL_GROUP) || element.closest('button, label, select, textarea, summary, p, h1, h2, h3, h4') || element);
+    }
+  }
+  function discover(root) {
+    if (root.nodeType === Node.TEXT_NODE) {
+      if (root.data.trim()) watchContent(root.parentElement);
+      return;
+    }
+    if (root.nodeType !== Node.ELEMENT_NODE) return;
+    // 表单值、占位符和纯图形没有可遍历的文字节点。
+    const controls = 'input:not([type="hidden"]), select, textarea, button, .ov-slot, .og-cables';
+    function watchControl(control) {
+      if (control.matches('.ov-slot, .og-cables')) watch(control);
+      else watchContent(control);
+    }
+    if (root.matches(controls)) watchControl(root);
+    root.querySelectorAll(controls).forEach(watchControl);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) if (walker.currentNode.data.trim()) watchContent(walker.currentNode.parentElement);
+  }
+  const entrance = {scan: () => discover(scope), stop() {
+    visible.disconnect();
+    for (const animation of animations) animation.cancel();
+  }};
+  pageEntrance = entrance;
+  entrance.scan();
+  play(scope, [{opacity:0}, {opacity:1}], {duration:520, easing:'ease-out'});
+  return entrance;
+}
+
+async function showPage(name) {
   if (!PAGES[name]) name = 'overview';   // 总览是主页（D85）
   const page = $('page-' + name);
-  const entering = !page.classList.contains('active');
+  if (state.page === name && page.classList.contains('active')) return;
+  pendingLiveUpdates.clear();
   state.page = name;
   for (const sec of document.querySelectorAll('section.page')) sec.classList.toggle('active', sec === page);
   for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.classList.toggle('active', btn.dataset.page === name);
-  const loaded = PAGES[name].load?.();
-  if (entering) {
-    stopPageEntrance();
-    if (!reducedMotion.matches) {
-      const entrance = {page, seen: new WeakSet(), animations: []};
-      pageEntrance = entrance;
-      revealPageRows(entrance);
-      Promise.resolve(loaded).then(() => revealPageRows(entrance));
-    }
-  }
+  const entrance = startPageEntrance(page);
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  await PAGES[name].load?.();
+  // 补上本次导航异步读到的内容，后续状态更新无需入场。
+  if (entrance && pageEntrance === entrance) entrance.scan();
 }
 for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.addEventListener('click', () => showPage(btn.dataset.page));
 window.addEventListener('hashchange', () => { if (state.loggedIn) showPage(location.hash.slice(1)); });
@@ -772,6 +910,7 @@ $('theme-btn').addEventListener('click', () => {
 // 默认密码时只能进改密码页（D63 第 6 条）。
 function showAuth(view, message) {
   state.loggedIn = false;
+  pendingLiveUpdates.clear();
   catalogs.clear();
   state.loaded = {};
   stopPageEntrance();
@@ -798,6 +937,7 @@ async function enter() {
   }
   state.loggedIn = true;
   $('terminal-btn').classList.toggle('hidden', !res.data?.can_open_terminal);
+  $('restart-btn').classList.toggle('hidden', !res.data?.restart_instance);
   $('login').classList.add('hidden');
   $('change').classList.add('hidden');
   $('shutdown').classList.add('hidden');
@@ -842,6 +982,27 @@ $('shutdown-btn').addEventListener('click', async () => {
   if (res.ok) showAuth('shutdown');
   else fail(res);
 });
+$('restart-btn').addEventListener('click', async () => {
+  if (!await confirmAction('确定要重启程序吗')) return;
+  const button = $('restart-btn');
+  button.disabled = true;
+  const res = await api('/api/restart', 'POST');
+  button.disabled = false;
+  if (!res.ok) { fail(res); return; }
+  const title = $('shutdown-title');
+  title.textContent = '程序正在重启';
+  showAuth('shutdown');
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const status = await api('/api/status');
+    if (status.status === 401 || (status.data?.restart_instance &&
+        status.data.restart_instance !== res.data.instance)) {
+      location.reload();
+      return;
+    }
+  }
+  title.textContent = '暂未连上 Aureus，请稍后刷新页面';
+});
 $('terminal-btn').addEventListener('click', async () => {
   const button = $('terminal-btn');
   button.disabled = true;
@@ -850,31 +1011,131 @@ $('terminal-btn').addEventListener('click', async () => {
   if (!res.ok) fail(res);
 });
 // ---------- 总览：读 /api/overview（2.12b 的接口，没做好时如实说明） ----------
-async function loadOverview() {
-  const res = await api('/api/overview');
-  const missing = $('ov-missing');
-  if (notBuilt(res)) {
-    $('ov-content').classList.add('hidden');
-    missing.textContent = NOT_BUILT_TEXT;
-    missing.classList.remove('hidden');
-    return;
+let overviewField, overviewRequest = 0;
+function attachOverviewField() {
+  const page = $('page-overview');
+  const blocks = [...page.querySelectorAll('.ov-slot')];
+  return new PixelField(page, pointer => {
+    page.classList.toggle('ov-tracking', !!pointer);
+    for (const block of blocks) {
+      const rect = block.getBoundingClientRect();
+      const bounds = {x:rect.x + rect.width / 2, y:rect.y + rect.height / 2,
+        halfWidth:rect.width / 2, halfHeight:rect.height / 2};
+      // 宽面板少转几度，边缘起伏时中心的字仍能读清。
+      const tilt = pointer && rect.width && rect.height ? PixelField.tiltAt(bounds, pointer.x, pointer.y,
+        Math.min(8, 1800 / rect.width)) : '';
+      block.firstElementChild.style.setProperty('--ov-tilt', tilt);
+    }
+  });
+}
+// 候选位置是 32 格画布上的左上角坐标，为每颗 3 × 5 格的小星留出空隙。
+const OVERVIEW_SPARK_POSITIONS = [
+  [3,3], [9,1], [18,0], [25,3], [28,9], [27,18],
+  [25,25], [19,27], [10,26], [3,24], [1,17], [1,10],
+];
+function placeOverviewSpark(star) {
+  const stars = Array.from(star.parentElement.children);
+  const available = OVERVIEW_SPARK_POSITIONS.filter(([x, y]) =>
+    !stars.some(other => other.x.baseVal.value === x && other.y.baseVal.value === y));
+  const [x, y] = available[Math.floor(Math.random() * available.length)];
+  star.setAttribute('x', x);
+  star.setAttribute('y', y);
+}
+$('ov-emitter').addEventListener('animationiteration', event => {
+  if (event.animationName === 'ov-twinkle') placeOverviewSpark(event.target);
+});
+function showOverviewSignal(snapshot) {
+  const thinking = snapshot?.thinking;
+  const signal = thinking === true ? 'thinking' : thinking === false ? 'idle' : 'unknown';
+  const indicator = $('ov-emitter');
+  if (indicator.dataset.state !== signal) {
+    indicator.dataset.state = signal;
+    if (signal === 'thinking') indicator.querySelectorAll('.ov-thought-star').forEach(placeOverviewSpark);
   }
-  if (!res.ok) { fail(res); return; }
-  const d = res.data;
-  missing.classList.add('hidden');
-  $('ov-content').classList.remove('hidden');
+  const label = {idle:'空闲', thinking:'正在想', unknown:'状态未知'}[signal];
+  const task = snapshot ? snapshot.current_task || '待机' : '—';
+  setLiveText($('ov-thinking'), label);
+  setLiveText($('ov-task'), task);
+}
+
+// 只在登录后的总览前台采样；每次读完再计时，以免慢响应叠加或重播整页动效。
+const OVERVIEW_SIGNAL_INTERVAL_MS = 2000;
+let overviewSignalTimer;
+function renderOverview(d) {
+  $('ov-content').classList.remove('hidden', 'ov-status-only');
+  $('ov-missing').classList.add('hidden');
   $('ov-restart').classList.toggle('hidden', !d.restart_required);
-  $('ov-version').textContent = d.version ? 'V' + d.version : '';
-  $('ov-date').textContent = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
-  $('ov-thinking').textContent = d.thinking ? '正在想' : '空闲';
-  $('ov-orb').classList.toggle('busy', !!d.thinking);
-  $('ov-task').textContent = d.current_task || '待机';
-  const level = d.energy_level;
-  $('ov-energy').textContent = level === null || level === undefined ? '不限' : Math.round(level * 100) + '%' + (d.energy_tier ? '（' + d.energy_tier + '档）' : '');
-  $('ov-meter').style.width = (level === null || level === undefined ? 100 : Math.round(level * 100)) + '%';
-  const stateBox = $('ov-state');
-  stateBox.textContent = '';
-  for (const line of (d.state_text || '').split('\n')) if (line.trim()) stateBox.append(el('div', { class: 'state-line', text: line }));
+  setLiveText($('ov-version'), d.version ? 'V' + d.version : '');
+  setLiveText($('ov-date'), new Date().toLocaleDateString('zh-CN', {year:'numeric', month:'long', day:'numeric', weekday:'long'}));
+  showOverviewSignal(d);
+  const limited = d.energy_level != null;
+  const percent = limited ? Math.round(d.energy_level * 100) : 0;
+  setLiveText($('ov-energy'), limited ? percent + '%' : '不限');
+  setLiveText($('ov-tier'), limited && d.energy_tier ? d.energy_tier + '档' : '');
+  $('ov-meter').style.width = percent + '%';
+  $('ov-meter').closest('.ov-gauge').classList.toggle('unlimited', !limited);
+  const box = $('ov-state');
+  updateLiveRegion(box, () => {
+    const expanded = box.querySelector('details')?.open;
+    const lines = (d.state_text || '').split('\n').map(line => line.trim()).filter(Boolean);
+    const row = line => el('div', {class:'state-line', text:line});
+    box.replaceChildren(...lines.slice(0, 3).map(row));
+    if (!lines.length) box.append(el('span', {class:'ov-empty', text:'暂无状态记录'}));
+    if (lines.length > 3) {
+      const more = el('details', {}, el('summary', {text:'更多状态（' + (lines.length - 3) + '）'}), ...lines.slice(3).map(row));
+      more.open = !!expanded;
+      box.append(more);
+    }
+  });
+  overviewField ??= attachOverviewField();
+  if (overviewField.pointer) overviewField.refresh();
+}
+function loadOverview() {
+  clearTimeout(overviewSignalTimer);
+  const request = ++overviewRequest;
+  let needsSnapshot = true;
+  const current = () => request === overviewRequest && state.loggedIn && state.page === 'overview';
+  const schedule = () => { overviewSignalTimer = setTimeout(sample, OVERVIEW_SIGNAL_INTERVAL_MS); };
+  async function sample(reportFailure = false) {
+    if (!current()) return;
+    if (document.hidden) { schedule(); return; }
+    const res = await api('/api/overview');
+    if (!current()) return;
+    if (notBuilt(res)) {
+      $('ov-content').classList.add('hidden');
+      $('ov-restart').classList.add('hidden');
+      showBanner('ov-missing', NOT_BUILT_TEXT);
+      return;
+    }
+    schedule();
+    if (document.hidden) return;
+    if (!res.ok) {
+      $('ov-content').classList.replace('hidden', 'ov-status-only');
+      $('ov-missing').classList.add('hidden');
+      showOverviewSignal(null);
+      if (reportFailure) fail(res);
+    } else if (needsSnapshot) {
+      needsSnapshot = false;
+      renderOverview(res.data);
+      await loadOverviewActivity(request);
+    } else {
+      showOverviewSignal(res.data);
+    }
+  }
+  return sample(true);
+}
+async function loadOverviewActivity(request) {
+  const activity = $('ov-activity');
+  if (!activity.childElementCount) activity.append(el('li', {class:'ov-empty', text:'读取中…'}));
+  const recent = await api('/api/timeline?hours=24&limit=3');
+  if (request !== overviewRequest) return;
+  const records = recent.ok ? recent.data.records.slice().reverse() : [];
+  updateLiveRegion(activity, () => {
+    activity.replaceChildren(...records.map(record => el('li', {},
+      el('span', {text:EVENT_NAMES[record.event_type] || record.event_type}),
+      el('time', {datetime:record.time, text:fmtTime(record.time, true)}))));
+    if (!records.length) activity.append(el('li', {class:'ov-empty', text:recent.ok ? '近 24 小时没有动态' : '暂时无法读取动态'}));
+  });
 }
 $('ov-refresh').addEventListener('click', loadOverview);
 for (const btn of document.querySelectorAll('[data-go]')) btn.addEventListener('click', () => showPage(btn.dataset.go));
@@ -885,7 +1146,7 @@ const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
 let socket = null, socketWanted = false, lastDay = '';
 
 function setConn(text, kind) {
-  $('conn-text').textContent = text;
+  setLiveText($('conn-text'), text);
   $('conn-tag').className = 'tag' + (kind ? ' ' + kind : '');
   $('conn-dot').className = 'dot' + (kind === 'ok' ? ' on' : kind === 'warn' ? ' off' : ' busy');
 }
@@ -906,7 +1167,7 @@ function addMessage(kind, sender, channel, text, iso, notice) {
   log.append(el('div', { class: 'msg ' + (notice ? 'notice' : kind) },
     el('div', { class: 'bubble', text }),
     el('div', { class: 'meta', text: meta })));
-  if (stick) log.scrollTop = log.scrollHeight;
+  if (stick && !selectionTouches(log)) log.scrollTop = log.scrollHeight;
 }
 
 async function loadChatHistory() {
@@ -1004,7 +1265,12 @@ function renderTimelineChips() {
   const box = $('tl-chips');
   box.textContent = '';
   for (const [label, types] of TL_FILTERS) {
-    box.append(el('button', { class: 'chip' + (tl.filter === types ? ' on' : ''), text: label, onclick: () => { tl.filter = types; renderTimelineChips(); loadTimeline(false); } }));
+    box.append(el('button', { class: 'chip' + (tl.filter === types ? ' on' : ''), text: label, onclick: event => {
+      if (tl.filter === types) return;
+      tl.filter = types;
+      for (const chip of box.children) chip.classList.toggle('on', chip === event.currentTarget);
+      loadTimeline(false, true);
+    } }));
   }
 }
 
@@ -1043,11 +1309,14 @@ function tlDivider() {
   return el('div', { class: 'tl-divider', text: '↑ 当前上下文（回复时会带上最近 ' + limit + ' 条对话）  ↓ 历史（不会带上）' });
 }
 
-async function loadTimeline(more) {
+let timelineRequest = 0;
+async function loadTimeline(more, switching = false) {
+  const request = ++timelineRequest;
   const query = new URLSearchParams({ hours: $('tl-hours').value, limit: '100' });
   if (tl.filter) query.set('types', tl.filter);
   if (more && tl.next) query.set('before_id', String(tl.next));
   const res = await api('/api/timeline?' + query);
+  if (request !== timelineRequest) return;
   const missing = $('tl-missing');
   if (notBuilt(res)) {
     missing.textContent = NOT_BUILT_TEXT;
@@ -1062,7 +1331,12 @@ async function loadTimeline(more) {
   tl.next = res.data.next_before_id;
   tl.context = res.data.context;
   $('tl-more').classList.toggle('hidden', !tl.next);
-  renderTimeline();
+  const list = $('tl-list');
+  if (switching) {
+    pendingLiveUpdates.delete(list);
+    renderTimeline();
+    startPageEntrance(list);
+  } else updateLiveRegion(list, renderTimeline);
 }
 $('tl-hours').addEventListener('change', () => loadTimeline(false));
 $('tl-refresh').addEventListener('click', () => loadTimeline(false));
@@ -1163,15 +1437,14 @@ $('ps-save-baseline').addEventListener('click', async () => {
 PAGES.persona = { load: loadPersona };
 // ---------- 模型库与器官分工（D86）：参考 MaiBot 公开界面交互，保留本页视觉 ----------
 // 参考提交及文件见 docs/tasks/2.12.md 第 2 轮；只参考交互，未复制代码。
-const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], provider: '',
+const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], connections: [], provider: '',
   dirty: false, revision: 0, saved: 0, pending: 0, queue: Promise.resolve() };
 const clone = value => JSON.parse(JSON.stringify(value));
-const ORGAN_NAMES = { replyer: 'Replyer', planner: 'Planner', judge: 'Judge', summarizer: 'Summarizer' };
 const emptyOrgan = () => ({ models: [], strategy: 'sequential', temperature: null, max_tokens: null, reasoning_effort: null });
 
 function refreshDirty() {
   const text = mdl.pending ? '正在自动保存…' : mdl.dirty ? '有改动未保存' : '已自动保存';
-  for (const id of ['md-status', 'og-status']) $(id).textContent = text;
+  for (const id of ['md-status', 'og-status']) setLiveText($(id), text);
 }
 function modelWarnings(names) {
   const known = new Set(mdl.cfg.models.map(model => model.name));
@@ -1216,7 +1489,8 @@ async function loadModelsConfig() {
   if (!res.ok) { fail(res); return false; }
   mdl.cfg = clone(res.data.config); mdl.baseline = clone(mdl.cfg);
   mdl.choices = res.data.choices || {}; mdl.keys = res.data.key_status || {}; mdl.entries = res.data.key_entries || [];
-  mdl.builtin = res.data.builtin_organs || Object.keys(ORGAN_NAMES);
+  mdl.builtin = res.data.builtin_organs || [];
+  mdl.connections = res.data.organ_connections || [];
   refreshDirty();
   return true;
 }
@@ -1262,7 +1536,7 @@ function mountCatalog(host, name, choose) {
   const key = catalogKey(saved);
   if (!catalogs.has(key)) refreshCatalog(saved);
   const select = el('select', { 'aria-label': 'API供应商可选模型' });
-  const refresh = el('button', { class: 'btn small', text: '刷新', 'aria-label': '刷新可选模型' });
+  const refresh = el('button', { class: 'btn small', 'aria-label': '刷新可选模型' }, pixelIcon('refresh'), '刷新');
   const status = el('div', { class: 'muted', role: 'status' });
   const row = el('div', { class: 'row catalog-row' }, select, refresh);
   row.dataset.catalog = key;
@@ -1297,11 +1571,29 @@ function renderModels() {
   sidebar.textContent = '';
   if (mdl.provider && !cfg.providers.some(provider => provider.name === mdl.provider)) mdl.provider = '';
   const providerButton = (name, label, count) => el('button', { class: 'provider-row' + (mdl.provider === name ? ' active' : ''),
-    text: label + ' · ' + count, 'aria-pressed': mdl.provider === name, onclick: () => { mdl.provider = name; renderModels(); } });
+    text: label + ' · ' + count, 'aria-pressed': mdl.provider === name, onclick: event => {
+      if (mdl.provider === name) return;
+      mdl.provider = name;
+      for (const button of sidebar.children) {
+        const active = button === event.currentTarget;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      }
+      renderProviderModels();
+      startPageEntrance($('md-results'));
+    } });
   sidebar.append(providerButton('', '全部供应商', cfg.models.length));
   for (const provider of cfg.providers) sidebar.append(providerButton(provider.name, provider.name, cfg.models.filter(model => model.provider === provider.name).length));
+  renderProviderModels();
+}
+function renderProviderModels() {
   $('md-edit-provider').disabled = !mdl.provider;
+  configureProbeButton($('md-test-provider'), 'provider', mdl.provider);
   mountCatalog($('md-catalog'), mdl.provider, id => openModelEditor(null, id));
+  renderModelRows();
+}
+function renderModelRows() {
+  const cfg = mdl.cfg;
   const search = $('md-search').value.trim().toLowerCase();
   const kind = $('md-kind').value;
   const models = cfg.models.filter(model => (!mdl.provider || model.provider === mdl.provider)
@@ -1309,7 +1601,7 @@ function renderModels() {
   const table = $('md-models'); table.textContent = '';
   const mobile = $('md-cards'); mobile.textContent = '';
   for (const model of models) {
-    const owners = Object.entries(cfg.organs).filter(([, organ]) => organ.models.includes(model.name)).map(([name]) => ORGAN_NAMES[name] || name);
+    const owners = Object.entries(cfg.organs).filter(([, organ]) => organ.models.includes(model.name)).map(([name]) => name.toUpperCase());
     const actions = () => el('div', { class: 'model-actions' },
       modelAction('zap', '测速', model, () => testModel(model)),
       modelAction('pencil', '编辑', model, () => openModelEditor(model)),
@@ -1328,27 +1620,58 @@ function renderModels() {
   $('md-empty').classList.toggle('hidden', models.length > 0);
   $('md-add-model').disabled = !cfg.providers.length;
 }
-function modelAction(icon, title, model, onclick) {
+function pixelIcon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('class', 'ico');
   svg.setAttribute('aria-hidden', 'true');
   const use = document.createElementNS(svg.namespaceURI, 'use');
-  use.setAttribute('href', '#i-' + icon);
+  use.setAttribute('href', '#i-' + name);
   svg.append(use);
-  return el('button', { class: 'btn model-action' + (icon === 'trash' ? ' delete' : ''),
-    title, 'aria-label': title + '模型 ' + model.name,
-    'data-model-test': icon === 'zap' ? true : null, disabled: icon === 'zap' && modelTestPending, onclick }, svg);
+  return svg;
 }
-let modelTestPending = false;
-function setModelTestPending(pending) {
-  modelTestPending = pending;
-  for (const button of document.querySelectorAll('[data-model-test]')) button.disabled = pending;
+function modelAction(icon, title, model, onclick) {
+  const button = el('button', { class: 'btn model-action' + (icon === 'trash' ? ' delete' : ''),
+    title, 'aria-label': title + '模型 ' + model.name,
+    onclick }, pixelIcon(icon));
+  if (icon === 'zap') configureProbeButton(button, 'model', model.name);
+  return button;
+}
+const pendingProbes = new Set();
+function configureProbeButton(button, kind, name) {
+  button.dataset.probe = kind + ':' + name;
+  const pending = pendingProbes.has(button.dataset.probe);
+  button.disabled = !name || pending;
+  button.setAttribute('aria-pressed', String(pending));
+}
+async function runProbe(kind, name, send) {
+  const key = kind + ':' + name;
+  if (!name || pendingProbes.has(key)) return;
+  const refresh = () => {
+    for (const button of document.querySelectorAll('[data-probe]')) {
+      if (button.dataset.probe === key) configureProbeButton(button, kind, name);
+    }
+  };
+  pendingProbes.add(key);
+  try {
+    refresh();
+    await send();
+  } finally {
+    pendingProbes.delete(key);
+    refresh();
+  }
+}
+function probeNotice(title, summary, details) {
+  const actions = el('div', {class:'probe-actions'});
+  const notice = el('div', {class:'model-test-notice'}, el('div', {class:'probe-copy'},
+    title ? el('strong', {text:title}) : null, el('small', {text:summary})), actions);
+  if (details) actions.append(el('button', {class:'btn small', text:'详情', onclick:details}));
+  actions.append(el('button', {class:'btn small', text:'×', 'aria-label':'关闭提示', onclick:() => notice.remove()}));
+  $('model-test-status').append(notice);
+  setTimeout(() => notice.remove(), NOTICE_DURATION_MS);
 }
 async function testModel(model) {
-  if (modelTestPending) return;
   const savedModel = clone(model);
-  setModelTestPending(true);
-  try {
+  await runProbe('model', savedModel.name, async () => {
     await mdl.queue;
     if (!mdl.baseline?.models.some(row => row.name === savedModel.name
         && row.identifier === savedModel.identifier && row.provider === savedModel.provider
@@ -1357,17 +1680,35 @@ async function testModel(model) {
       return;
     }
     const res = await api('/api/models/test', 'POST', {model: savedModel.name});
-    if (!res.ok) { fail(res); return; }
-    const label = res.data.kind === 'llm' ? '首字延迟' : '响应耗时';
-    const notice = el('div', { class: 'model-test-notice' },
-      el('strong', { text: '模型测试通过' }),
-      el('small', { text: label + ' ' + res.data.latency_ms + ' ms' }));
-    $('model-test-status').replaceChildren(notice);
-    setTimeout(() => notice.remove(), 4500);
-  } finally {
-    setModelTestPending(false);
-  }
+    if (!res.ok) { probeNotice('模型测试失败', savedModel.name + ' · ' + errorText(res)); return; }
+    const data = res.data, passed = data.checks.filter(check => !check.error).length;
+    const label = data.kind === 'llm' ? '首字延迟' : '向量响应耗时';
+    const latency = data.latency_ms == null ? '' : ' · ' + label + ' ' + data.latency_ms + ' ms';
+    probeNotice(passed === data.checks.length ? '模型测试通过' : '模型测试 ' + passed + '/' + data.checks.length + ' 通过',
+      data.model + ' · ' + data.provider + latency, () => showProbeDetails(data));
+  });
 }
+function showProbeDetails(data) {
+  const labels = {text:'文本', vision:'视觉', tools:'工具调用', embedding:'Embedding'};
+  const body = el('div', {class:'probe-detail'});
+  for (const check of data.checks) {
+    const name = labels[check.capability] || check.capability.replace('reasoning/', '思考等级 · ');
+    body.append(el('section', {class:'card'}, el('h3', {text:name}),
+      el('p', {text:check.error || '通过 · ' + check.latency_ms + ' ms'}),
+      el('strong', {text:check.sent ? '发送内容' : '预定输入（未确认发出）'}),
+      el('pre', {text:JSON.stringify(check.input, null, 2)}),
+      el('strong', {text:'收到的回复'}), el('pre', {text:check.reply || '未收到回复'})));
+  }
+  openEditor('测速详情 · ' + data.model + ' · ' + data.provider, body);
+}
+$('md-test-provider').addEventListener('click', async () => {
+  const provider = mdl.provider;
+  await runProbe('provider', provider, async () => {
+    await mdl.queue;
+    const res = await api('/api/models/provider-test', 'POST', {provider});
+    probeNotice('', provider + ' · ' + (res.ok ? res.data.latency_ms + ' ms' : errorText(res)));
+  });
+});
 async function loadModelsPage() {
   const result = await loadModelsConfig();
   $('md-missing').classList.toggle('hidden', result !== 'missing');
@@ -1376,8 +1717,8 @@ async function loadModelsPage() {
   if (result === true) renderModels();
 }
 PAGES.models = { load: loadModelsPage };
-$('md-search').addEventListener('input', renderModels);
-$('md-kind').addEventListener('change', renderModels);
+$('md-search').addEventListener('input', renderModelRows);
+$('md-kind').addEventListener('change', renderModelRows);
 $('md-add-provider').addEventListener('click', () => openProviderEditor(null));
 $('md-edit-provider').addEventListener('click', () => openProviderEditor(mdl.cfg.providers.find(provider => provider.name === mdl.provider)));
 $('md-add-model').addEventListener('click', () => openModelEditor(null));
@@ -1455,7 +1796,7 @@ function openModelEditor(model, identifier = '') {
   const fields = {
     provider: editorField('API供应商', model.provider, { values: mdl.cfg.providers.map(provider => provider.name) }),
     identifier: editorField('模型标识符', model.identifier, { required: true }),
-    name: editorField('模型名称', model.name, { hint: '留空使用模型标识符' }),
+    name: editorField('模型名称', model.name, { hint: '留空使用 [供应商名称]模型标识符' }),
     kind: editorField('模型类型', model.kind, { values: ['llm', 'embedding'] }),
     price_in: editorField('输入价格（元 / 百万 token）', model.price_in, { type: 'number', min: 0, step: 'any' }),
     price_out: editorField('输出价格（元 / 百万 token）', model.price_out, { type: 'number', min: 0, step: 'any' }),
@@ -1464,6 +1805,11 @@ function openModelEditor(model, identifier = '') {
     max_tokens: editorField('单次回复 token 上限', model.max_tokens, { type: 'number', min: 1, step: 1 }),
   };
   const levels = new Set(model.reasoning_levels || []);
+  const defaultName = () => '[' + fields.provider.input.value + ']' + fieldText(fields.identifier);
+  const updateName = () => { fields.name.input.placeholder = defaultName(); };
+  updateName();
+  fields.identifier.input.addEventListener('input', updateName);
+  fields.provider.input.addEventListener('change', updateName);
   const vision = el('input', { type: 'checkbox', checked: model.vision });
   const visionField = el('label', { class: 'vision-field' }, vision, '视觉');
   fields.kind.node.append(visionField);
@@ -1477,7 +1823,7 @@ function openModelEditor(model, identifier = '') {
   vision.addEventListener('change', () => { if (!isNew) apply(); });
   const apply = () => {
     if (!validFields(fields)) return;
-    const name = fieldText(fields.name) || fieldText(fields.identifier);
+    const name = fieldText(fields.name) || defaultName();
     if (mdl.cfg.models.some(item => item !== original && item.name === name)) { toast('模型名称已存在。', 'error'); return; }
     const next = { name, identifier: fieldText(fields.identifier), provider: fields.provider.input.value, kind: fields.kind.input.value,
       vision: fields.kind.input.value === 'llm' && !!vision.checked,
@@ -1496,6 +1842,7 @@ function openModelEditor(model, identifier = '') {
   fields.identifier.node.append(catalogHost);
   const loadChoices = () => mountCatalog(catalogHost, fields.provider.input.value, id => {
     fields.identifier.input.value = id;
+    updateName();
     if (!isNew) apply();
   });
   fields.provider.input.addEventListener('change', loadChoices);
@@ -1581,19 +1928,20 @@ $('ky-refresh').addEventListener('click', loadKeysPage);
 PAGES.keys = {load:loadKeysPage};
 
 // ---------- 器官工作卡片：选择卡片后，在右侧抽屉里编辑；模型选择立即自动保存 ----------
+let organGraph;
 function organCard(name, organ) {
   const missing = organ.models.some(model => !mdl.cfg.models.some(item => item.name === model));
-  const configured = organ.models.length > 0 && !missing;
-  return el('button', { class: 'card organ-tile', 'data-organ': name, onclick: () => openOrganEditor(name) },
-    el('div', { class: 'row' }, el('span', { class: 'dot' + (configured ? ' on' : ' off') }),
-      el('h3', { text: ORGAN_NAMES[name] || name }), mdl.builtin.includes(name) ? el('span', { class: 'tag', text: '默认' }) : null),
-    el('div', { class: 'organ-summary', text: organ.models.join(' → ') || '＋ 安排模型' }),
-    el('span', { class: missing ? 'danger-text' : 'muted', text: missing ? '引用了不存在的模型' : configured ? organ.models.length + ' 个模型' : '未配置模型' }));
+  const binding = organ.models.join(' → ') || '未配置模型';
+  return el('button', { type: 'button', class: 'og-node', 'data-organ': name, title: name.toUpperCase() + ' · ' + binding },
+    el('strong', { text: name.toUpperCase() }),
+    el('span', { class: 'og-caption' + (missing ? ' danger-text' : ''), text: missing ? '模型引用失效' : binding }));
 }
 function renderOrgans() {
-  const grid = $('og-grid'); grid.textContent = '';
+  if (!$('page-organs').classList.contains('active')) return;
+  if (!organGraph) organGraph = new OrganFlowView($('og-grid'), $('og-routes'), openOrganEditor);
   const names = [...new Set([...mdl.builtin, ...Object.keys(mdl.cfg.organs)])];
-  for (const name of names) grid.append(organCard(name, mdl.cfg.organs[name] || emptyOrgan()));
+  const cards = names.map(id => ({ id, element: organCard(id, mdl.cfg.organs[id] || emptyOrgan()) }));
+  organGraph.update(cards, mdl.connections);
 }
 function allowedEfforts(organ) {
   const rows = organ.models.map(name => mdl.cfg.models.find(model => model.name === name)).filter(Boolean);
@@ -1619,8 +1967,8 @@ function openOrganEditor(name) {
       const row = el('div', { class: 'chain-step', draggable: true },
         el('span', { class: 'order', text: index + 1 }),
         el('span', { class: 'label' + (mdl.cfg.models.some(item => item.name === model) ? '' : ' danger-text'), text: model }),
-        el('button', { class: 'btn small', text: '↑', disabled: index === 0, 'aria-label': '上移 ' + model, onclick: () => move(index, index - 1) }),
-        el('button', { class: 'btn small', text: '↓', disabled: index === organ.models.length - 1, 'aria-label': '下移 ' + model, onclick: () => move(index, index + 1) }),
+        el('button', { class: 'btn small', disabled: index === 0, 'aria-label': '上移 ' + model, onclick: () => move(index, index - 1) }, pixelIcon('up')),
+        el('button', { class: 'btn small', disabled: index === organ.models.length - 1, 'aria-label': '下移 ' + model, onclick: () => move(index, index + 1) }, pixelIcon('down')),
         el('button', { class: 'btn small danger', text: '移除', 'aria-label': '移除 ' + model, onclick: () => { organ.models.splice(index, 1); changed(); } }));
       row.addEventListener('dragstart', () => { dragIndex = index; });
       row.addEventListener('dragover', event => event.preventDefault());
@@ -1650,11 +1998,7 @@ function openOrganEditor(name) {
   body.append(list, search, picker,
     el('button', { class: 'btn small', text: '清空模型', onclick: () => { organ.models = []; changed(); } }),
     el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort), temperature.node, maxTokens.node);
-  if (!mdl.builtin.includes(name)) body.append(el('button', { class: 'btn danger', text: '删除器官', onclick: async () => {
-    if (!await confirmAction('确定要删除器官「' + name + '」吗？')) return;
-    delete mdl.cfg.organs[name]; markDirty(); renderOrgans(); $('editor-dialog').close();
-  } }));
-  openEditor(ORGAN_NAMES[name] || name, body, true); refreshList();
+  openEditor(name.toUpperCase(), body, true); refreshList();
   notifyModelWarnings([name]);
 }
 async function loadOrgansPage() {
@@ -1665,13 +2009,7 @@ async function loadOrgansPage() {
   if (result === true) { renderOrgans(); notifyModelWarnings(); }
 }
 PAGES.organs = { load: loadOrgansPage };
-$('og-add').addEventListener('click', () => {
-  const name = $('og-new-name').value.trim();
-  if (!name) { toast('先写器官的名字。', 'error'); return; }
-  if (mdl.cfg.organs[name] || mdl.builtin.includes(name)) { toast('已经有这个器官了。', 'error'); return; }
-  mdl.cfg.organs[name] = emptyOrgan(); $('og-new-name').value = '';
-  markDirty(); renderOrgans(); openOrganEditor(name);
-});
+$('og-reset').addEventListener('click', () => organGraph?.reset());
 
 // ---------- 设置：运行配置（/api/config，2.12b 的接口） ----------
 // 字段的类型、范围、默认值都从后端给的 schema 读；这里只写中文名和说明。不认识的节和字段照原名显示。
@@ -1697,155 +2035,155 @@ const CFG_SECTIONS = [
   ['safety', '安全'],
   ['web', '网页'],
 ];
-const CFG_LABELS = {
-  'log_level': '日志级别',
-  'config_version': '配置格式版本',
-  'safety.monthly_token_limit': '每月 token 上限',
-  'safety.runaway_guard_enabled': '失控拦截',
-  'safety.max_calls_per_minute': '每分钟最多调用几次',
-  'safety.max_consecutive_failures': '连续失败几次就暂停',
-  'safety.failure_pause_seconds': '暂停多少秒',
-  'heartbeat.tick_interval_seconds': '心跳间隔（秒）',
-  'heartbeat.advance_biomodel': '旧神经递质模型',
-  'heartbeat.broadcast_cognitive_state': '状态变化写进时间线',
-  'heartbeat.shutdown_grace_seconds': '关机时最多等几秒',
-  'heartbeat.recent_message_limit': '回复时带上最近几条对话',
-  'heartbeat.saving_message_limit': '节省档带几条',
-  'heartbeat.low_message_limit': '低电量带几条',
-  'heartbeat.reply_organ': '回复用的器官',
-  'heartbeat.planning_enabled': '先规划再回复',
-  'heartbeat.plan_organ': '规划用的器官',
-  'heartbeat.split_reply_enabled': '拆成几条短消息发',
-  'heartbeat.max_reply_messages': '最多拆成几条',
-  'heartbeat.min_message_chars': '每条至少几个字',
-  'heartbeat.identity_changes_in_prompt': '告诉它哪几层设定被你改过',
-  'heartbeat.roleplay_mode': '扮演模式',
-  'body.energy_enabled': '精力',
-  'body.user_reserve_fraction': '留给你的额度比例',
-  'body.state_in_prompt_enabled': '把身体状态告诉它',
-  'body.saving_below': '低于多少进节省档',
-  'body.low_below': '低于多少进低电量',
-  'body.overdraft_below': '低于多少进透支保护',
-  'body.fatigue_enabled': '疲劳',
-  'body.fatigue_window_minutes': '疲劳看最近几分钟',
-  'body.fatigue_full_calls': '调用多少次算满疲劳',
-  'body.fatigue_high_at': '疲劳偏高线',
-  'body.fatigue_batch_seconds': '疲劳时攒几秒再回',
-  'body.stress_enabled': '压力',
-  'body.stress_window_calls': '压力看最近几次调用',
-  'body.stress_backlog_full': '排队几条算满压力',
-  'body.stress_high_at': '压力偏高线',
-  'body.stress_lowers_tier': '压力高时回复降一档',
-  'body.social_need_enabled': '社交需求',
-  'body.social_need_time_constant_hours': '社交需求上涨快慢（小时）',
-  'body.social_need_high_at': '社交需求偏高线',
-  'body.sleep_enabled': '睡眠',
-  'body.night_start_hour': '夜里从几点开始',
-  'body.night_end_hour': '夜里到几点结束',
-  'body.night_tick_interval_seconds': '夜里心跳间隔（秒）',
-  'body.sample_enabled': '记录身体样本',
-  'body.sample_interval_seconds': '样本间隔（秒）',
-  'body.sample_retention_days': '样本留几天',
+const CFG_FIELDS = {
+  'log_level': ['日志级别', '控制日志记录的详细程度。'],
+  'config_version': ['配置版本', '标记程序应按哪个版本的格式读取这份配置。'],
+  'safety.monthly_token_limit': ['月度Token额度', '每月能用多少模型额度。用完后暂停新的模型调用。'],
+  'safety.runaway_guard_enabled': ['失控保护', '调用过密或连续失败时，暂停新的调用。'],
+  'safety.max_calls_per_minute': ['每分钟调用上限', '一分钟内最多允许发起多少次模型调用。'],
+  'safety.max_consecutive_failures': ['连续失败上限', '连续失败达到多少次后暂停调用。'],
+  'safety.failure_pause_seconds': ['失败暂停时长（秒）', '触发失败保护后，等多少秒才允许再试。'],
+  'heartbeat.tick_interval_seconds': ['心跳间隔（秒）', '程序每隔多少秒检查一次待处理的事。'],
+  'heartbeat.advance_biomodel': ['旧神经递质模型', '心跳时是否推进旧版身体模拟。'],
+  'heartbeat.broadcast_cognitive_state': ['状态变化记录', '是否把认知状态的变化记进时间线。'],
+  'heartbeat.shutdown_grace_seconds': ['关机等待上限（秒）', '关机时最多给正在执行的任务多少秒收尾。'],
+  'heartbeat.recent_message_limit': ['常规对话条数', '平时回复时可以参考最近多少条对话。'],
+  'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
+  'heartbeat.low_message_limit': ['低电量对话条数', '低电量时可以参考最近多少条对话。'],
+  'heartbeat.reply_organ': ['回复器官', '选择负责生成回复的器官。'],
+  'heartbeat.planning_enabled': ['回复前规划', '回复之前是否先制定计划。'],
+  'heartbeat.plan_organ': ['规划器官', '选择负责制定计划的器官。'],
+  'heartbeat.split_reply_enabled': ['分条回复', '允许把一次回复拆成多条消息发出。'],
+  'heartbeat.max_reply_messages': ['回复条数上限', '一次回复最多拆成多少条。'],
+  'heartbeat.min_message_chars': ['分条字数下限', '拆分时每条至少保留多少个字。'],
+  'heartbeat.identity_changes_in_prompt': ['设定变更提示', '回复时提醒模型你修改过哪些人设层。'],
+  'heartbeat.roleplay_mode': ['扮演模式', '是否按照角色扮演模式回复。'],
+  'body.energy_enabled': ['精力调节', '是否根据剩余额度调节活动。'],
+  'body.user_reserve_fraction': ['用户预留比例', '留出多大比例的额度供用户对话使用。'],
+  'body.state_in_prompt_enabled': ['身体状态提示', '回复前是否把当下的身体状态告诉模型。'],
+  'body.saving_below': ['节省档门槛', '剩余精力低于这个比例时进入节省档。'],
+  'body.low_below': ['低电量门槛', '剩余精力低于这个比例时进入低电量档。'],
+  'body.overdraft_below': ['透支保护门槛', '剩余精力低于这个比例时启动透支保护。'],
+  'body.fatigue_enabled': ['疲劳调节', '是否根据近期调用情况计算疲劳。'],
+  'body.fatigue_window_minutes': ['疲劳统计时段（分钟）', '计算疲劳时回看最近多少分钟。'],
+  'body.fatigue_full_calls': ['满疲劳调用数', '统计时段内调用多少次算达到满疲劳。'],
+  'body.fatigue_high_at': ['高疲劳门槛', '疲劳值达到多少算偏高。'],
+  'body.fatigue_batch_seconds': ['疲劳合并等待（秒）', '疲劳时等多少秒，把收到的消息合在一起回。'],
+  'body.stress_enabled': ['压力调节', '是否根据调用和消息积压情况计算压力。'],
+  'body.stress_window_calls': ['压力统计次数', '计算压力时参考最近多少次调用。'],
+  'body.stress_backlog_full': ['满压力积压数', '积压多少条消息时，积压这一项算满压力。'],
+  'body.stress_high_at': ['高压力门槛', '压力值达到多少算偏高。'],
+  'body.stress_lowers_tier': ['高压力降档', '压力偏高时是否降低回复档位。'],
+  'body.social_need_enabled': ['社交需求', '是否随独处时间累计社交需求。'],
+  'body.social_need_time_constant_hours': ['社交积累时间（小时）', '时间越长，独处时社交需求上升得越慢。'],
+  'body.social_need_high_at': ['高社交需求门槛', '社交需求达到多少算偏高。'],
+  'body.sleep_enabled': ['睡眠节律', '是否采用夜间作息。'],
+  'body.night_start_hour': ['夜间开始时间', '每天几点开始夜间作息。'],
+  'body.night_end_hour': ['夜间结束时间', '每天几点结束夜间作息。'],
+  'body.night_tick_interval_seconds': ['夜间心跳间隔（秒）', '夜里每隔多少秒检查一次待办。'],
+  'body.sample_enabled': ['身体采样', '是否定期记录身体状态。'],
+  'body.sample_interval_seconds': ['采样间隔（秒）', '两次身体状态采样之间相隔多少秒。'],
+  'body.sample_retention_days': ['样本保留期（天）', '身体状态的历史读数保存多少天。'],
+  'hormones.enabled': ['激素调节', '是否启用整套激素反应。'],
+  'hormones.anger_enabled': ['怒气反应', '是否允许事件引起怒气变化。'],
+  'hormones.joy_enabled': ['愉悦反应', '是否允许事件引起愉悦变化。'],
+  'hormones.hurt_enabled': ['低落反应', '是否允许事件引起低落变化。'],
+  'hormones.surprise_enabled': ['惊讶反应', '是否允许事件引起惊讶变化。'],
+  'hormones.anger_half_life_seconds': ['怒气半衰期（秒）', '没有新刺激时，怒气降到一半需要多少秒。'],
+  'hormones.joy_half_life_seconds': ['愉悦半衰期（秒）', '没有新刺激时，愉悦降到一半需要多少秒。'],
+  'hormones.hurt_half_life_seconds': ['低落半衰期（秒）', '没有新刺激时，低落降到一半需要多少秒。'],
+  'hormones.surprise_half_life_seconds': ['惊讶半衰期（秒）', '没有新刺激时，惊讶降到一半需要多少秒。'],
+  'hormones.base_amount': ['基础增量', '计算一次激素反应时采用的起始增量。'],
+  'hormones.max_single_rise': ['单次增幅上限', '一个事件最多让激素值上涨多少。'],
+  'hormones.min_confidence': ['判断把握下限', '判断的把握达到多少才会触发反应。'],
+  'hormones.repeat_decay': ['重复触发系数', '同类刺激重复出现时，后续反应按多大比例减弱。'],
+  'hormones.repeat_window_seconds': ['重复统计时段（秒）', '相隔多少秒以内的同类刺激算重复触发。'],
+  'hormones.calm_below': ['怒气平息门槛', '怒气降到多少以下算冲突平息。'],
+  'hormones.retaliate_at': ['回击门槛', '怒气达到多少时允许回击。'],
+  'hormones.cold_shoulder_at': ['冷处理门槛', '怒气达到多少时开始冷处理。'],
+  'hormones.max_retaliations': ['回击次数上限', '同一场冲突中最多允许回击多少次。'],
+  'hormones.hurt_shorten_at': ['低落短回复门槛', '低落达到多少时缩短回复。'],
+  'hormones.surprise_at': ['惊讶即时回复门槛', '惊讶达到多少时触发即时回复。'],
+  'hormones.surprise_gap': ['预期偏差门槛', '实际结果和预期相差多少才算意外。'],
+  'mood.enabled': ['心情调节', '是否让近期经历影响心情。'],
+  'mood.half_life_seconds': ['心情半衰期（秒）', '心情偏离平常水平的幅度减半需要多少秒。'],
+  'mood.hormone_weight': ['激素影响权重', '激素变化对心情有多大影响。'],
+  'mood.success_amount': ['成功增量', '一次成功让心情提高多少。'],
+  'mood.failure_amount': ['失败减量', '一次失败让心情降低多少。'],
+  'mood.max_single_change': ['单次变化上限', '一件事最多能让心情改变多少。'],
+  'mood.stress_weight': ['压力影响权重', '压力对心情的下拉作用有多强。'],
+  'mood.cautious_below': ['谨慎门槛', '心情低于多少时进入谨慎状态。'],
+  'mood.recover_above': ['恢复门槛', '心情回升到多少时退出谨慎状态。'],
+  'people.affinity_enabled': ['好感调节', '是否根据互动经历调整好感。'],
+  'people.user_initial_affinity': ['用户初始好感', '首次建立用户资料时采用的好感值。'],
+  'people.stranger_affinity': ['陌生人初始好感', '初次遇到陌生人时采用的好感值。'],
+  'people.praise_amount': ['夸奖增量', '受到夸奖后好感增加多少。'],
+  'people.offense_amount': ['冒犯减量', '受到冒犯后好感减少多少。'],
+  'people.rejection_amount': ['拒绝减量', '被拒绝后好感减少多少。'],
+  'people.interaction_amount': ['日常互动增量', '当天有过交流时好感增加多少。'],
+  'people.daily_rise_cap': ['每日增幅上限', '一天内好感最多可以增加多少。'],
+  'people.daily_fall_cap': ['每日降幅上限', '一天内好感最多可以减少多少。'],
+  'empathy.enabled': ['同理心', '是否根据对方的感受产生共情反应。'],
+  'empathy.base_amount': ['共情基础量', '计算一次共情反应时采用的起始强度。'],
+  'empathy.affinity_floor': ['好感系数下限', '好感很低时，计算共情至少使用这个系数。'],
+  'judge.enabled': ['事件判断', '是否让判断器官解读事件。'],
+  'judge.organ': ['判断器官', '选择负责解读事件的器官。'],
+  'judge.timeout_seconds': ['判断超时（秒）', '一次判断最多等多少秒。'],
+  'judge.context_messages': ['判断参考消息数', '判断时额外参考最近多少条对话。'],
+  'feedback.enabled': ['反馈统计', '是否根据过去的结果统计反馈。'],
+  'feedback.window_size': ['反馈统计窗口', '统计时最多参考最近多少次结果。'],
+  'feedback.min_samples': ['样本下限', '至少积累多少次结果，系统才认为样本足够。'],
+  'agenda.enabled': ['日程管理', '是否记录并跟进承诺和待办。'],
+  'agenda.max_open_per_person': ['每人待办上限', '同一个人名下最多同时保留多少条未完成事项。'],
+  'agenda.max_due_days': ['最远到期日（天）', '新事项的截止日期最远能定在多少天后。'],
+  'agenda.expire_grace_days': ['逾期宽限期（天）', '到期后再等多少天才标为过期。'],
+  'agenda.context_items': ['回复待办条数', '回复时最多带上多少条相关待办。'],
+  'initiative.enabled': ['主动联系', '是否允许主动发起联系。'],
+  'initiative.max_per_day': ['每日联系上限', '一天最多主动联系多少次。'],
+  'initiative.min_interval_hours': ['最短联系间隔（小时）', '两次主动联系至少相隔多少小时。'],
+  'initiative.max_interval_hours': ['最长联系间隔（小时）', '调整联系频率时，间隔最多延长到多少小时。'],
+  'initiative.answer_window_hours': ['回应等待时间（小时）', '主动联系后，多久以内的回复算作这次联系的回应。'],
+  'initiative.give_up_after': ['未回应次数上限', '连续多少次联系没有收到回应后停止尝试。'],
+  'interests.enabled': ['兴趣管理', '是否允许记录和调整兴趣。'],
+  'interests.max_active': ['活跃兴趣上限', '同时可以保留多少个活跃兴趣。'],
+  'interests.max_changes_per_day': ['每日兴趣变更上限', '一天最多自行调整兴趣多少次。'],
+  'exploration.enabled': ['自主探索', '是否允许围绕兴趣主动查找资料。'],
+  'exploration.organ': ['探索总结器官', '选择负责整理探索资料的器官。'],
+  'exploration.search_provider': ['搜索服务', '探索时使用哪个搜索服务。'],
+  'exploration.max_per_day': ['每日探索上限', '一天最多发起多少次探索。'],
+  'exploration.min_interval_hours': ['探索间隔下限（小时）', '两次探索至少相隔多少小时。'],
+  'exploration.max_results': ['搜索结果上限', '一次探索最多查看多少条搜索结果。'],
+  'exploration.fetch_timeout_seconds': ['网页读取超时（秒）', '读取一个网页最多等待多少秒。'],
+  'exploration.max_page_bytes': ['网页体积上限（字节）', '读取一个网页时最多接收多少字节。'],
+  'exploration.max_page_chars': ['网页字数上限', '每个网页最多提取多少字符作为资料。'],
+  'exploration.share_within_days': ['发现分享期限（天）', '多少天以内的探索发现可以在对话中分享。'],
+  'memory.enabled': ['记忆索引', '是否为记忆建立可搜索的索引。'],
+  'memory.recall_enabled': ['回复记忆检索', '回复前是否查找相关旧记忆。'],
+  'memory.max_results': ['记忆检索上限', '一次最多找回多少条相关记忆。'],
+  'memory.index_batch': ['索引批量条数', '每次最多把多少条记录加入索引。'],
+  'diary.enabled': ['日记', '是否根据当天的经历写日记。'],
+  'diary.organ': ['日记器官', '选择负责写日记的器官。'],
+  'diary.write_after_hour': ['日记起写时间', '每天几点以后可以开始写日记。'],
+  'diary.max_input_chars': ['经历字数上限', '写日记时最多参考多少字符的经历。'],
+  'diary.max_chars': ['日记字数上限', '单篇日记最多保留多少字符。'],
+  'persona_growth.enabled': ['人设成长', '是否允许根据经历调整可成长的人设层。'],
+  'persona_growth.organ': ['人设成长器官', '选择负责提出人设调整建议的器官。'],
+  'persona_growth.max_input_chars': ['材料字数上限', '提出建议前最多参考多少字符的材料。'],
+  'persona_growth.layer_cooldown_days': ['同层调整间隔（天）', '同一层人设两次调整至少相隔多少天。'],
+  'persona_growth.min_similarity': ['新旧相似度下限', '新内容和原内容至少要有多相似才允许采用。'],
+  'persona_growth.max_chars_from_empty': ['空层首写字数上限', '首次填写空白人设层时最多可以写多少字符。'],
+  'persona_growth.max_layer_chars': ['单层字数上限', '一层人设最多可以保留多少字符。'],
+  'time.timezone': ['时区', '程序按哪个地区的当地时间运行。'],
+  'time.day_start_hour': ['换日时间', '每天从几点开始算新的一天。'],
+  'snapshots.max_total_megabytes': ['快照容量上限（MB）', '所有快照加起来最多能占用多少兆字节。'],
+  'web.enabled': ['网页服务', '是否启动网页管理界面。'],
+  'web.allow_remote': ['局域网访问', '是否允许同一局域网内的其他设备访问网页。'],
+  'web.port': ['网页端口', '浏览器使用哪个端口连接网页服务。'],
+  'web.session_days': ['登录有效期（天）', '登录后最多多少天需要重新验证。'],
+  'web.login_max_failures': ['登录失败上限', '统计时段内失败多少次后暂时锁定登录。'],
+  'web.login_window_seconds': ['失败统计时段（秒）', '统计登录失败次数时回看最近多少秒。'],
+  'web.login_lockout_seconds': ['登录锁定时长（秒）', '触发锁定后等待多少秒才能重新登录。'],
 };
-Object.assign(CFG_LABELS, {
-  'hormones.enabled': '激素总开关',
-  'hormones.anger_enabled': '怒气', 'hormones.joy_enabled': '愉悦',
-  'hormones.hurt_enabled': '低落', 'hormones.surprise_enabled': '惊讶',
-  'hormones.anger_half_life_seconds': '怒气半衰期（秒）',
-  'hormones.joy_half_life_seconds': '愉悦半衰期（秒）',
-  'hormones.hurt_half_life_seconds': '低落半衰期（秒）',
-  'hormones.surprise_half_life_seconds': '惊讶半衰期（秒）',
-  'hormones.base_amount': '基础上涨量',
-  'hormones.max_single_rise': '单次最多涨多少',
-  'hormones.min_confidence': '判断把握至少多少才算',
-  'hormones.repeat_decay': '反复触发的递减系数',
-  'hormones.repeat_window_seconds': '反复触发的窗口（秒）',
-  'hormones.calm_below': '怒气平息线',
-  'hormones.retaliate_at': '怒气回击线',
-  'hormones.cold_shoulder_at': '怒气冷处理线',
-  'hormones.max_retaliations': '一场冲突最多回击几次',
-  'hormones.hurt_shorten_at': '低落到多少回复变短',
-  'hormones.surprise_at': '惊讶到多少马上回',
-  'hormones.surprise_gap': '结果和预期差多少算惊讶',
-  'mood.enabled': '心情',
-  'mood.half_life_seconds': '心情回落半衰期（秒）',
-  'mood.hormone_weight': '激素对心情的权重',
-  'mood.success_amount': '一次成功加多少',
-  'mood.failure_amount': '一次失败减多少',
-  'mood.max_single_change': '单件事最多影响多少',
-  'mood.stress_weight': '压力往下拉多少',
-  'mood.cautious_below': '低于多少变谨慎',
-  'mood.recover_above': '高于多少恢复',
-  'people.affinity_enabled': '好感',
-  'people.user_initial_affinity': '对你的初始好感',
-  'people.stranger_affinity': '对陌生人的初始好感',
-  'people.praise_amount': '被夸奖涨多少',
-  'people.offense_amount': '被冒犯跌多少',
-  'people.rejection_amount': '被拒绝跌多少',
-  'people.interaction_amount': '每天聊过涨多少',
-  'people.daily_rise_cap': '每天最多涨多少',
-  'people.daily_fall_cap': '每天最多跌多少',
-  'empathy.enabled': '同理心',
-  'empathy.base_amount': '基础量',
-  'empathy.affinity_floor': '好感系数下限',
-  'judge.enabled': '判断',
-  'judge.organ': '判断用的器官',
-  'judge.timeout_seconds': '最多等几秒',
-  'judge.context_messages': '再带之前几条对话',
-  'feedback.enabled': '反馈',
-  'feedback.window_size': '看最近几次结果',
-  'feedback.min_samples': '至少几次才不算样本不足',
-  'agenda.enabled': '日程',
-  'agenda.max_open_per_person': '每人最多几条没完成的',
-  'agenda.max_due_days': '到期最远几天后',
-  'agenda.expire_grace_days': '到期后几天算过期',
-  'agenda.context_items': '回复时列几条',
-  'initiative.enabled': '主动联系',
-  'initiative.max_per_day': '每天最多几次',
-  'initiative.min_interval_hours': '最短间隔（小时）',
-  'initiative.max_interval_hours': '最长间隔（小时）',
-  'initiative.answer_window_hours': '等你回应多久（小时）',
-  'initiative.give_up_after': '连续几次没回应就停',
-  'interests.enabled': '兴趣',
-  'interests.max_active': '最多几个兴趣',
-  'interests.max_changes_per_day': '每天自己最多改几次',
-  'exploration.enabled': '探索',
-  'exploration.organ': '总结用的器官',
-  'exploration.search_provider': '搜索服务',
-  'exploration.max_per_day': '每天最多几次',
-  'exploration.min_interval_hours': '最短间隔（小时）',
-  'exploration.max_results': '每次最多看几条结果',
-  'exploration.fetch_timeout_seconds': '取网页超时（秒）',
-  'exploration.max_page_bytes': '网页最大字节数',
-  'exploration.max_page_chars': '网页最多读几个字',
-  'exploration.share_within_days': '几天内的发现会拿来聊',
-  'memory.enabled': '记忆索引',
-  'memory.recall_enabled': '回复时召回记忆',
-  'memory.max_results': '最多召回几条',
-  'memory.index_batch': '每次索引几条',
-  'diary.enabled': '日记',
-  'diary.organ': '写日记的器官',
-  'diary.write_after_hour': '几点以后写',
-  'diary.max_input_chars': '最多读几个字的经历',
-  'diary.max_chars': '日记最长几个字',
-  'persona_growth.enabled': '人设成长',
-  'persona_growth.organ': '用的器官',
-  'persona_growth.max_input_chars': '最多读几个字的材料',
-  'persona_growth.layer_cooldown_days': '同一层至少隔几天才再改',
-  'persona_growth.min_similarity': '新旧至少多相似',
-  'persona_growth.max_chars_from_empty': '空层第一次最多写几个字',
-  'persona_growth.max_layer_chars': '每层最长几个字',
-  'time.timezone': '时区',
-  'time.day_start_hour': '一天从几点开始',
-  'snapshots.max_total_megabytes': '快照最多占多少 MB',
-  'web.enabled': '网页',
-  'web.allow_remote': '允许局域网访问',
-  'web.port': '端口',
-  'web.session_days': '登录保持几天',
-  'web.login_max_failures': '登录失败几次就锁定',
-  'web.login_window_seconds': '统计失败的窗口（秒）',
-  'web.login_lockout_seconds': '锁定多少秒',
-});
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
 const cf = { data: null, schema: null, readonly: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '' };
 const cfKey = (sec, field) => sec ? sec + '.' + field : field;
@@ -1889,7 +2227,7 @@ function refreshConfigDirty() {
   for (const tab of document.querySelectorAll('#cf-tabs .nav-item')) {
     const sec = tab.dataset.sec;
     const count = keys.filter(key => (sec ? key.startsWith(sec + '.') : !key.includes('.'))).length;
-    tab.querySelector('.count').textContent = count ? ' · 改了 ' + count + ' 项' : '';
+    setLiveText(tab.querySelector('.count'), count ? ' · 改了 ' + count + ' 项' : '');
   }
 }
 
@@ -1926,14 +2264,19 @@ function cfControl(sec, field, info, readonly) {
   return input;
 }
 
+function settingTerm(name, hint, key) {
+  const id = 'cf-help-' + key;
+  return el('span', {class:'setting-term', tabindex:0, 'aria-describedby':id}, name,
+    el('span', {id, class:'setting-help', role:'tooltip'}, el('b', {'aria-hidden':'true', text:'i'}), hint));
+}
 function cfRow(sec, field) {
   const key = cfKey(sec, field);
   const prop = sec ? cfResolve(cf.schema.properties[sec]).properties[field] : cf.schema.properties[field];
   const info = cfFieldInfo(prop);
   const readonly = cf.readonly.has(key);
-  const name = CFG_LABELS[key] || field;
+  const [name, hint] = CFG_FIELDS[key] || [field, prop.description || field];
   return el('div', { class: 'cfg-field' },
-    el('div', { class: 'name' }, name, ' ',
+    el('div', { class: 'name' }, settingTerm(name, hint, key), ' ',
       el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field }),
       readonly ? el('span', { class: 'tag', text: '只读' }) : null),
     cfControl(sec, field, info, readonly));
@@ -1952,7 +2295,7 @@ function renderConfigSection(sec) {
       document.documentElement.dataset.font = font.value;
       try { localStorage.setItem('aureus-font', font.value); } catch (e) { /* 当前页面仍可切换 */ }
     });
-    container.append(el('div', { class: 'cfg-field' }, el('label', {class:'name', for:'cf-font', text:'界面字体'}), font));
+    container.append(el('div', { class: 'cfg-field' }, el('label', {class:'name', for:'cf-font'}, settingTerm('界面字体', '选择这台浏览器显示 Aureus 时使用的字体。', 'font')), font));
   }
   for (const field of cfFields(sec)) container.append(cfRow(sec, field));
 }
@@ -1978,16 +2321,18 @@ async function loadConfigPage(force) {
     tabs.append(el('button', { class: 'nav-item', 'data-sec': key },
       el('span', { text: title }), el('span', { class: 'count', style: 'font-size:12px;color:var(--text-2)' })));
   }
-  for (const btn of tabs.querySelectorAll('.nav-item')) {
-    btn.addEventListener('click', () => {
-      for (const b of tabs.querySelectorAll('.nav-item')) b.classList.remove('active');
-      btn.classList.add('active');
-      cf.tab = btn.dataset.sec;
-      renderConfigSection(cf.tab);
-    });
+  const buttons = [...tabs.querySelectorAll('.nav-item')];
+  function selectSection(button) {
+    for (const tab of buttons) tab.classList.toggle('active', tab === button);
+    cf.tab = button.dataset.sec;
+    renderConfigSection(cf.tab);
   }
-  const current = [...tabs.querySelectorAll('.nav-item')].find(b => b.dataset.sec === cf.tab) || tabs.querySelector('.nav-item');
-  current.click();
+  for (const button of buttons) button.addEventListener('click', () => {
+    if (button.classList.contains('active')) return;
+    selectSection(button);
+    startPageEntrance($('cf-section'));
+  });
+  selectSection(buttons.find(button => button.dataset.sec === cf.tab) || buttons[0]);
   refreshConfigDirty();
 }
 PAGES.config = { load: () => loadConfigPage(false) };
@@ -2022,40 +2367,67 @@ $('cf-reset').addEventListener('click', async () => { if (await confirmAction('�
 const MONITOR_REFRESH_MS = 10000;
 function monitorList(id, res, emptyText) {
   const box = $(id);
-  box.textContent = '';
-  if (!res.ok) { box.append(el('div', { class: 'empty', text: errorText(res) })); return; }
-  const items = res.data.records.slice().reverse();
-  if (!items.length) { box.append(el('div', { class: 'empty', text: emptyText })); return; }
-  for (const rec of items) box.append(timelineItem(rec, false));
+  const records = res.ok ? res.data.records.slice().reverse() : [];
+  updateLiveRegion(box, () => {
+    if (!records.length) {
+      const message = res.ok ? emptyText : errorText(res);
+      if (box.firstElementChild?.classList.contains('empty') && box.firstElementChild.textContent === message) return;
+      box.replaceChildren(el('div', {class:'empty', text:message}));
+      return;
+    }
+    // 时间线只追加，按记录 ID 复用已有行，保留展开状态。
+    const rows = new Map(Array.from(box.children, row => [row.dataset.recordId, row]));
+    let next = box.firstElementChild;
+    for (const record of records) {
+      const key = String(record.id);
+      const row = rows.get(key) || timelineItem(record, false);
+      if (row !== next) { row.dataset.recordId = key; box.insertBefore(row, next); }
+      next = row.nextElementSibling;
+    }
+    while (next) { const old = next; next = next.nextElementSibling; old.remove(); }
+  });
 }
+let monitorRequest = 0;
 async function loadMonitor() {
+  const request = ++monitorRequest;
   const [ov, hormones, recent, persona] = await Promise.all([
     api('/api/overview'),
     api('/api/timeline?hours=72&limit=10&types=hormone_triggered,judgment'),
     api('/api/timeline?hours=24&limit=12'),
     api('/api/timeline?hours=720&limit=6&types=persona_changed,identity_changed'),
   ]);
+  if (request !== monitorRequest || !state.loggedIn || state.page !== 'monitor') return;
   const missing = $('mo-missing');
-  if (!ov.ok) {
-    missing.textContent = notBuilt(ov) ? NOT_BUILT_TEXT : errorText(ov);
-    missing.classList.remove('hidden');
-    $('mo-content').classList.add('hidden');
-    return;
-  }
-  missing.classList.add('hidden');
-  $('mo-content').classList.remove('hidden');
+  updateLiveRegion(missing, () => {
+    if (!ov.ok) {
+      const message = notBuilt(ov) ? NOT_BUILT_TEXT : errorText(ov);
+      if (missing.textContent !== message) missing.textContent = message;
+    }
+    missing.classList.toggle('hidden', ov.ok);
+  });
+  const content = $('mo-content');
+  if (!ov.ok) { updateLiveRegion(content, () => content.classList.add('hidden')); return; }
+  pendingLiveUpdates.delete(content);
+  content.classList.remove('hidden');
   const d = ov.data;
   $('mo-dot').className = 'dot ' + (d.thinking ? 'busy' : 'on');
-  $('mo-thinking').textContent = d.thinking ? '正在想' : '空闲';
-  $('mo-task').textContent = d.current_task || '待机';
+  setLiveText($('mo-thinking'), d.thinking ? '正在想' : '空闲');
+  setLiveText($('mo-task'), d.current_task || '待机');
   const level = d.energy_level;
   const unlimited = level === null || level === undefined;
-  $('mo-energy').textContent = unlimited ? '不限' : Math.round(level * 100) + '%';
+  setLiveText($('mo-energy'), unlimited ? '不限' : Math.round(level * 100) + '%');
   $('mo-meter').style.width = (unlimited ? 100 : Math.round(level * 100)) + '%';
-  $('mo-tier').textContent = d.energy_tier || '无';
+  setLiveText($('mo-tier'), d.energy_tier || '无');
   const stateBox = $('mo-state');
-  stateBox.textContent = '';
-  for (const line of (d.state_text || '').split('\n')) if (line.trim()) stateBox.append(el('div', { class: 'state-line', text: line }));
+  const lines = (d.state_text || '').split('\n').filter(line => line.trim());
+  updateLiveRegion(stateBox, () => {
+    lines.forEach((line, index) => {
+      const row = stateBox.children[index];
+      if (!row) stateBox.append(el('div', {class:'state-line', text:line}));
+      else if (row.textContent !== line) row.textContent = line;
+    });
+    while (stateBox.childElementCount > lines.length) stateBox.lastElementChild.remove();
+  });
   monitorList('mo-hormones', hormones, '最近 3 天没有激素触发或判断记录。');
   monitorList('mo-recent', recent, '最近 24 小时没有记录。');
   monitorList('mo-persona', persona, '最近 30 天人设没有变化。');

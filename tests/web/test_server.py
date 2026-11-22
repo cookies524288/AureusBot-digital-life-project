@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import base64
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Iterator
@@ -173,36 +174,56 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
 ) -> None:
     page = tmp_path / "index.html"
     page.write_text("<p>first</p>", encoding="utf-8")
+    graph = tmp_path / "organ-graph.js"
+    tile = tmp_path / "organ-tile.png"
+    graph.write_text("first()", encoding="utf-8")
+    tile.write_bytes(b"first tile")
     monkeypatch.setattr("aureus.web.server.INDEX_PAGE", page)
     running = Rig(tmp_path)
     try:
         page.write_text("<p>second</p>", encoding="utf-8")
-        assert running.client().get("/").text == "<p>first</p>"
+        graph.write_text("second()", encoding="utf-8")
+        tile.write_bytes(b"second tile")
+        client = running.client()
+        assert client.get("/").text == "<p>first</p>"
+        assert client.get("/assets/organ-graph.js").text == "first()"
+        assert client.get("/assets/organ-tile.png").content == b"first tile"
     finally:
         running.close()
 
     restarted = Rig(tmp_path)
     try:
-        response = restarted.client().get("/")
+        client = restarted.client()
+        response = client.get("/")
         assert response.text == "<p>second</p>"
         assert response.headers["Cache-Control"] == "no-store"
+        assert client.get("/assets/organ-graph.js").text == "second()"
+        image = client.get("/assets/organ-tile.png")
+        assert image.headers["Content-Type"] == "image/png"
+        assert image.content == b"second tile"
     finally:
         restarted.close()
 
 
 def test_the_project_logo_is_embedded_and_used_without_a_new_route(rig: Rig) -> None:
     client = rig.client()
-    source = Path(__file__).resolve().parents[2] / "assets/logo/logo-black-no-ring.svg"
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "assets/logo/logo-no-ring-48x48-black-on-transparent.png"
+    )
     html = client.get("/").text
     match = re.search(r'<symbol id="aureus-logo"[^>]*>.*?</symbol>', html, re.DOTALL)
     assert match is not None
     embedded = ET.fromstring(match.group())
-    original = ET.fromstring(source.read_bytes())
-    assert embedded.attrib["viewBox"] == original.attrib["viewBox"]
-    expected = [(node.tag.split("}")[-1], node.attrib) for node in original.iter()][1:]
-    actual = [(node.tag.split("}")[-1], node.attrib) for node in embedded.iter()][1:]
-    assert actual == expected
-    assert html.count('<use href="#aureus-logo"/>') == 3
+    assert embedded.attrib["viewBox"] == "0 0 48 48"
+    image = embedded.find("image")
+    assert image is not None
+    assert image.attrib["href"] == "data:image/png;base64," + base64.b64encode(
+        source.read_bytes()
+    ).decode("ascii")
+    assert html.count('<use href="#aureus-logo"/>') == 2
+    assert '<use href="#login-logo"/></svg>AureusBot</h1>' in html
+    assert '<symbol id="login-logo"' in html
     assert 'src="/logo.svg"' not in html
     assert ">A</span>" not in html
 

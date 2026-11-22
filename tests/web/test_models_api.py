@@ -394,7 +394,7 @@ def test_failed_reload_preserves_the_file_active_organs_and_restart_flag(
     else:
         monkeypatch.setattr("aureus.common.toml_edit.os.replace", fail_replace)
     config["models"][0]["identifier"] = "changed-id"
-    config["organs"]["custom"] = {"models": ["first"]}
+    config["organs"]["planner"] = {"models": ["first"]}
     response = rig.client.put("/api/models", json={"config": config})
     assert response.status_code == (422 if failure == "prepare" else 500)
     expected = "新器官构造失败" if failure == "prepare" else "写不进配置文件。"
@@ -453,13 +453,13 @@ def test_successful_reload_prepares_then_writes_then_applies_on_the_event_loop(
     monkeypatch.setattr(rig.service, "write_models", write)
     monkeypatch.setattr(rig.models, "apply", apply)
     config["models"][0]["identifier"] = "changed-id"
-    config["organs"]["custom"] = {"models": ["first"]}
+    config["organs"]["planner"] = {"models": ["first"]}
     response = rig.client.put("/api/models", json={"config": config})
     assert response.status_code == 200
     assert calls == ["prepared", "written", "applied"]
     assert len(worker_threads) == 2 and len(apply_threads) == 1
     assert all(thread != apply_threads[0] for thread in worker_threads)
-    assert rig.models.available_organs == frozenset({"replyer", "custom"})
+    assert rig.models.available_organs == frozenset({"replyer", "planner"})
     assert rig.models.bus._organs["replyer"] is not original.organs[0]
 
 
@@ -500,19 +500,26 @@ def test_other_existing_builtin_organs_cannot_be_removed(rig: ConfigRig, name: s
     assert rig.models.bus._organs == registered
 
 
-def test_deleting_a_custom_organ_removes_it_from_the_running_bus(rig: ConfigRig) -> None:
+def test_legacy_organ_can_be_bound_but_not_removed(rig: ConfigRig) -> None:
     config = saved_config(rig)
     config["organs"]["custom"] = {"models": ["first"]}
     original = ModelsConfig.model_validate(config)
     rig.service.write_models(original)
     rig.models.apply(rig.models.prepare(original))
-    assert rig.models.bus.is_registered("custom")
+    before = rig.paths.models_config_file.read_bytes()
     del config["organs"]["custom"]
-    response = rig.client.put("/api/models", json={"config": config})
-    assert response.status_code == 200
-    assert rig.models.bus.list_organs() == ["replyer"]
-    assert rig.models.available_organs == frozenset({"replyer"})
-    assert (
-        "custom"
-        not in tomllib.loads(rig.paths.models_config_file.read_text(encoding="utf-8"))["organs"]
-    )
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 422
+    assert rig.paths.models_config_file.read_bytes() == before
+    assert rig.models.bus.is_registered("custom")
+    config["organs"]["custom"] = {"models": []}
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 200
+    assert rig.client.get("/api/models").json()["config"]["organs"]["custom"]["models"] == []
+
+
+def test_web_cannot_register_an_unknown_organ(rig: ConfigRig) -> None:
+    config = saved_config(rig)
+    before = rig.paths.models_config_file.read_bytes()
+    config["organs"]["invented"] = {"models": ["first"]}
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 422
+    assert rig.paths.models_config_file.read_bytes() == before
+    assert not rig.models.bus.is_registered("invented")

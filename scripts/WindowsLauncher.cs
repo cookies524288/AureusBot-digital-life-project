@@ -8,6 +8,8 @@ using System.Windows.Forms;
 
 internal static class WindowsLauncher
 {
+    private const int RestartExitCode = 75;
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -29,11 +31,17 @@ internal static class WindowsLauncher
             };
             if (args.Length == 1)
                 info.Arguments += " --fake";
-            using (Process process = Process.Start(info))
+            string arguments = info.Arguments;
+            while (true)
             {
-                RunTray(process);
-                process.WaitForExit();
-                return process.ExitCode;
+                using (Process process = Process.Start(info))
+                {
+                    RunTray(process);
+                    process.WaitForExit();
+                    if (process.ExitCode != RestartExitCode)
+                        return process.ExitCode;
+                }
+                info.Arguments = arguments + " --restarted";
             }
         }
         catch (Exception error)
@@ -48,7 +56,8 @@ internal static class WindowsLauncher
         const string urlPrefix = "AUREUS_WEB_URL=";
         string webUrl = null;
         using (var context = new ApplicationContext())
-        using (var icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath))
+        using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Aureus.Tray.ico"))
+        using (var icon = new Icon(stream))
         using (var tray = new NotifyIcon())
         using (var menu = new ContextMenuStrip())
         using (var timer = new System.Windows.Forms.Timer { Interval = 200 })
@@ -61,10 +70,23 @@ internal static class WindowsLauncher
             };
             var open = menu.Items.Add("打开主页面");
             open.Click += delegate { openPage(); };
+            var restart = menu.Items.Add("重启");
             var exit = menu.Items.Add("退出");
+            restart.Click += delegate
+            {
+                restart.Enabled = false;
+                exit.Enabled = false;
+                open.Enabled = false;
+                if (!process.HasExited)
+                {
+                    process.StandardInput.BaseStream.WriteByte((byte)'R');
+                    process.StandardInput.BaseStream.Flush();
+                }
+            };
             exit.Click += delegate
             {
                 exit.Enabled = false;
+                restart.Enabled = false;
                 open.Enabled = false;
                 process.StandardInput.Close();
             };

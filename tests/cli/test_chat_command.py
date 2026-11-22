@@ -124,6 +124,14 @@ def test_end_of_input_shuts_down_cleanly(paths: AureusPaths) -> None:
     assert read_timeline(paths)[-1].event_type == EVENT_SHUT_DOWN
 
 
+def test_restart_reopens_core_and_reads_next_command(paths: AureusPaths) -> None:
+    lines = iter(["/restart", "/restart", "/quit"])
+    output: list[str] = []
+    assert run_chat_command(FAKE, paths, lambda: next(lines, ""), output.append) == EXIT_OK
+    assert output.count("正在重启……") == 2
+    assert sum(row.event_type == EVENT_SHUT_DOWN for row in read_timeline(paths)) == 3
+
+
 def test_restart_says_how_long_it_was_down(paths: AureusPaths) -> None:
     run_chat(paths, [])
     output = run_chat(paths, [])

@@ -17,6 +17,8 @@ Windows 图形启动入口、现有终端通道的本机窗口和网页按钮。
 
 ## 使用
 
+2026-11-22 追加重启入口。CLI 使用 `/restart`，网页侧栏提供带确认的「重启」，托盘右键提供「重启」。重启先正常关闭心跳和网页，保留数据目录和启动模式。网页重启要求登录、修改默认密码并同源发起。按用户要求，暂缓全量检查。
+
 在项目目录运行 `uv sync` 准备环境，并按 README 准备数据目录。双击根目录的 `Aureus.exe`。数据根目录沿用 `AUREUS_HOME` 或当前检出下的 `aureus_home/`。如要重新构建，在 PowerShell 中运行 `./scripts/build-launcher.ps1`。
 
 离线试运行可以在 PowerShell 中执行 `./Aureus.exe --fake`。
