@@ -8,6 +8,8 @@ D89：旧 MaiBotData 排除；不迁人格或其他 MaiBot 配置；沿用当前
 
 ## 下一步
 
+3.5 实机发布使用 97c632d、现有 staging.sqlite3、独立目标 candidate-memory-review。按源机器 China Standard Time 用 Asia/Shanghai 解释无偏移时间。已核对源媒体根：主库相对活动 MaiBot 程序目录（路径带 data/）；记忆库相对 XiaoDou/Data/a-memorix/images/assets。98629 条原消息、9583 段落、946 个事件摘要、7829 条事实及 6224 条图片观察均已发布。主库 3928 个附件、记忆库 3244 个附件归档；主库另有 1994 条源标志明确缺文件。消息有 234 条组件解码诊断，须由原记忆子会话分析。8192 条自动人物画像暂存行转交 3.3；连同人工画像和别名覆盖一起核对。候选库中的归档记录与可用于当前回答的记录分开计数。
+
 3.6 离线实现 bcad3c9 已入主线并通过独立 11 项专项。3.8 的前置证据记录来自 1094881，校准依赖 3.7，网页只读、TOML 单项恢复仍须实测。
 
 Logo 主线实现 d15b82f，复审通过，详见 [Logo 任务](tasks/phase3-logo.md)。Windows 正在运行的旧启动器在仓库根目录保留为 Aureus.previous-running.exe，原路径已安装新版。
