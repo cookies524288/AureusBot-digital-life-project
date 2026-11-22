@@ -87,6 +87,14 @@ def _make_main(path: Path) -> None:
                 (5, "legacy-json", b'[{"type":"text","data":"legacy raw text"}]', "fallback"),
                 (6, "broken-json", b'[{"type":', "broken JSON fallback"),
                 (7, "legacy-media", b'[{"type":"text","data":" "}]', "media fallback"),
+                (
+                    8,
+                    "legacy-forward",
+                    b' [{"type":"forward","data":[{"content":[{"type":"text",'
+                    b'"data":"nested original"}]}]}]',
+                    "forward fallback",
+                ),
+                (9, "legacy-empty", b'[{"type":"at","data":"fixture"}]', ""),
             ],
         )
         database.commit()
@@ -252,7 +260,7 @@ def test_cli_import_publish_restart_and_rebuild(
     assert json.loads(capsys.readouterr().err) == {"error": "memory_snapshot_conflict"}
     assert "同名" not in json.dumps(report, ensure_ascii=False) and "fixture" not in str(report)
     tables = {(row["role"], row["table"]): row for row in report["tables"]}
-    assert tables["main", "mai_messages"]["published"] == 7
+    assert tables["main", "mai_messages"]["published"] == 9
     assert tables["main", "mai_messages"]["attachment_invalid_message_components"] == 1
     assert tables["main", "binary_data"]["attachment_missing"] == 1
     assert tables["memory", "episodes"]["unresolved_links"] == 2
@@ -280,12 +288,16 @@ def test_cli_import_publish_restart_and_rebuild(
         (5, "legacy raw text"),
         (6, "broken JSON fallback"),
         (7, "media fallback"),
+        (8, "nested original"),
     ):
         message = index.get_history(_source("main", "mai_messages", number))
         assert message is not None and message.text == expected
         assert [hit.source for hit in index.search([expected], (), 1)] == [message.source]
         kinds = {link.kind for link in message.evidence}
         assert ("attachment_invalid_message_components" in kinds) == (number == 6)
+    empty = index.get_history(_source("main", "mai_messages", 9))
+    assert empty is not None and empty.text == "" and empty.status == "missing"
+    assert all(link.kind != "attachment_invalid_message_components" for link in empty.evidence)
     with closing(sqlite3.connect(stage)) as database:
         damaged = database.execute(
             "SELECT record FROM source_rows WHERE table_name='mai_messages' AND source_key='[6]'"

@@ -9,6 +9,8 @@
 | `aureus/memory/language_matching.py` 的黑话匹配 | MaiBot 安装包 1.3.15，`src/maisaka/jargon_context_matcher.py` 的 `_normalize_match_text`、`_contains_mechanical_match`、`_calculate_match_score`、`match_jargons_for_context`，https://github.com/Mai-with-u/MaiBot | GPL-3.0 | 沿用小写和空白归一、子串、频率和上下文位置计分、十条上限。以词与释义为去重键，保留各义的证据。 |
 | `aureus/tools/migrate/maibot_language.py` 的表达清洗 | MaiBot 安装包 1.3.15，`src/learners/expression_style_utils.py` 的 `strip_expression_style_usage_prefix`、`is_prompt_example_expression_style`，https://github.com/Mai-with-u/MaiBot | GPL-3.0 | 召回索引移除「使用」前缀并排除提示示例，原值和排除原因仍保存在语言库。 |
 | `aureus/memory/history.py` 的 `search_history` | 安装版 A_Memorix 2.0.0 的 `core/storage/metadata_fact.py::list_current_person_fact_claims` | AGPL-3.0 | 复用有效状态与左闭右开的时段条件，读取 Aureus 时钟，为记忆原件增加内容与人物过滤 |
+| `aureus/memory/sparse.py` 的 `ranked_matches` | 安装版 A_Memorix 2.0.0 的 `core/storage/metadata_fts.py::fts_search_bm25` | AGPL-3.0 | 移植 SQLite FTS5 MATCH 和 BM25 的稀疏排位，接到 Aureus 原件及时间线索引。使用标准库 SQLite，脱离 MaiBot 运行 |
+| `aureus/memory/consolidation.py` 的 `read_candidates` | 安装版 A_Memorix 2.0.0 的 `core/utils/memory_lifecycle_policy.py::retention_at` | AGPL-3.0 | 沿用指数半衰期公式，保留源证据，以 Aureus 时钟和可配置半衰期计算派生候选权重 |
 | `aureus/tools/migrate/maibot_memory.py` 的 `_message_person` | 安装版 MaiBot 1.3.15 的 `src/person_info/person_info.py::get_person_id` | GPL-3.0 | 保持平台字段规范化和哈希规则，附逻辑实例名，匹配同源 A_Memorix 人物键 |
 | `aureus/web/static/ark-pixel.woff2` | TakWolf/ark-pixel-font，2026-11-10 版，12 像素比例简体中文 WOFF2，https://github.com/TakWolf/ark-pixel-font | SIL OFL 1.1 | 原样随网页分发，许可证见同目录 `ark-pixel-OFL.txt` |
 

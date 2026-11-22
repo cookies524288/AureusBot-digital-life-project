@@ -5,7 +5,7 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from aureus.common import ManualClock
+from aureus.common import ManualClock, MemoryConfig
 from aureus.memory import HistoricalMemory, MemoryEntry, MemoryEvidence, MemoryIndex, MemorySource
 from aureus.timeline import ActorType, TimelineDatabase
 
@@ -55,8 +55,9 @@ def test_shared_history_person_date_active_status_and_rebuild(tmp_path: Path) ->
     ]
     filters = {"person_key": "qq:one", "since": THEN, "before": NOW}
     before = index.search(["木卫二"], (), 10, **filters)
-    assert [hit.source for hit in before] == [source(1), source(2), source(3)]
-    assert before[-1].evidence == (linked, orphan)
+    assert [hit.source for hit in before] == [source(3), source(1), source(2)]
+    assert before[0].evidence == (linked, orphan)
+    assert before[0].sparse_score < before[-1].sparse_score < 0
     assert all(hit.recorded_at == THEN for hit in before)
     index.close()
     with closing(sqlite3.connect(path)) as database:
@@ -80,3 +81,46 @@ def test_history_source_update_invalidates_recall(tmp_path: Path) -> None:
     assert index.get_history(source(1)) == deleted
     assert not index.search(["木卫二"], (), 2)
     index.close()
+
+
+def test_candidate_evidence_validity_half_life_and_restart(tmp_path: Path) -> None:
+    clock = ManualClock(NOW)
+    path = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(path, clock)
+    timeline.open()
+    config = MemoryConfig(consolidation_half_life_days=2.0)
+    index = MemoryIndex(path, timeline, clock, config=config)
+    index.open()
+    try:
+        future = HistoricalMemory(
+            source(1), "未来生效", recorded_at=NOW, valid_from=NOW + timedelta(days=2)
+        )
+        current = HistoricalMemory(
+            source(2), "可用原文", recorded_at=NOW, valid_to=NOW + timedelta(days=2)
+        )
+        fixed = HistoricalMemory(source(3), "持续有效", recorded_at=NOW)
+        index.publish([future, current, fixed])
+        assert index.consolidation_batch(4) is None
+        batch = index.consolidation_batch(3)
+        assert batch is not None and index.save_consolidation(batch, [])
+        assert {c.text for c in index.consolidated_candidates(10)} == {current.text, fixed.text}
+        index.close()
+        index = MemoryIndex(path, timeline, clock, config=config)
+        index.open()
+        assert index.consolidation_batch(1) is None
+        clock.advance(timedelta(days=2))
+        visible = {c.text: c for c in index.consolidated_candidates(10)}
+        assert set(visible) == {future.text, fixed.text}
+        assert visible[future.text].weight == visible[fixed.text].weight == 0.5
+        assert visible[future.text].evidence == (future.source.encode(),)
+        assert index.get_history(current.source) == current
+        index.publish(
+            [
+                HistoricalMemory(source(1), "已修订"),
+                HistoricalMemory(source(3), fixed.text, status="deleted"),
+            ]
+        )
+        assert index.consolidated_candidates(10) == []
+    finally:
+        index.close()
+        timeline.close()

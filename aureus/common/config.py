@@ -518,6 +518,10 @@ class MemoryConfig(BaseModel):
     heuristic_recall_enabled: bool = False
     max_results: int = Field(default=5, ge=1, le=20)
     index_batch: int = Field(default=200, ge=1, le=5000)
+    consolidation_enabled: bool = False
+    consolidation_batch: int = Field(default=64, ge=1, le=500)
+    consolidation_half_life_days: float = Field(default=30.0, gt=0, allow_inf_nan=False)
+    consolidation_extract_enabled: bool = False
 
 
 class LanguageConfig(BaseModel):

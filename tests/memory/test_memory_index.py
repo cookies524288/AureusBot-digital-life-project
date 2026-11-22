@@ -1,7 +1,9 @@
 """真实临时 SQLite 的增量索引、转义、排序和事务行为（D80）。"""
 
 import asyncio
+import sqlite3
 from collections.abc import Iterator
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -113,3 +115,33 @@ async def test_search_opens_connection_in_worker(
     timeline.append("message", "后台查木卫二", ActorType.USER)
     index.index_more(20, describe)
     assert len(await asyncio.to_thread(index.search, ["木卫二"], (), 5)) == 1
+
+
+def test_old_index_migration_and_rebuild_preserve_consolidation_progress(
+    opened: tuple[TimelineDatabase, MemoryIndex], tmp_path: Path
+) -> None:
+    timeline, index = opened
+    timeline.append("state", "未索引事件", ActorType.SYSTEM)
+    first = timeline.append("message", "第一条经历", ActorType.USER)
+    index.index_more(10, describe)
+    index.close()
+    with closing(sqlite3.connect(tmp_path / "aureus.db")) as conn, conn:
+        conn.execute("ALTER TABLE memory_index_state DROP COLUMN stable_rowid")
+        conn.execute("UPDATE memory_index SET rowid=1 WHERE record_id=?", (first.id,))
+    index.open()
+    assert index.index_more(10, describe) == 0
+    batch = index.consolidation_batch(1)
+    assert batch is not None and batch.end == (0, first.id)
+    assert index.save_consolidation(batch, [])
+    assert not index.save_consolidation(batch, [])
+    index.close()
+    with closing(sqlite3.connect(tmp_path / "aureus.db")) as conn, conn:
+        conn.execute("DROP TABLE memory_index")
+    index.open()
+    assert index.index_more(10, describe) == 2
+    assert index.consolidation_batch(1) is None
+    second = timeline.append("message", "第二条经历", ActorType.USER)
+    assert index.index_more(10, describe) == 1
+    batch = index.consolidation_batch(1)
+    assert batch is not None
+    assert [item.reference for item in batch.items] == [f"timeline:{second.id}"]

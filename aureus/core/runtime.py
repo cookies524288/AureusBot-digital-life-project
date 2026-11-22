@@ -265,7 +265,9 @@ def open_core(
         memory: MemoryIndex | None = None
         if runtime.memory.enabled:
             try:
-                memory = MemoryIndex(paths.database_file, timeline, clock)
+                memory = MemoryIndex(
+                    paths.database_file, timeline, the_clock, config=runtime.memory
+                )
                 memory.open()
                 stack.callback(memory.close)
             except sqlite3.Error:
@@ -322,6 +324,7 @@ def open_core(
             has_persona_organ=persona_growth.organ in models.available_organs,
         )
         models.on_reload = heartbeat.update_available_organs
+        heartbeat.update_available_organs(models.available_organs)
         qq = None
         qq_link = None
         if runtime.qq.enabled:

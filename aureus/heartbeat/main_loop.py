@@ -26,7 +26,7 @@ from aureus.agenda import AgendaStore, describe_agenda
 from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
 from aureus.attention import Inbox, Priority
-from aureus.body import Body, BodyReading, BodySampleStore, sample_from_reading
+from aureus.body import Body, BodyReading, BodySampleStore, EnergyTier, sample_from_reading
 from aureus.common import (
     BudgetCalendar,
     Clock,
@@ -79,6 +79,10 @@ from aureus.heartbeat.events import (
 from aureus.heartbeat.initiative import decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import Judgment, TowardMeKind
+from aureus.heartbeat.memory_consolidation import (
+    ORGAN as MEMORY_CONSOLIDATION_ORGAN,
+)
+from aureus.heartbeat.memory_consolidation import ConsolidationOutcome, MemoryConsolidator
 from aureus.heartbeat.perception import (
     MessageKind,
     MessageSink,
@@ -316,6 +320,13 @@ class Heartbeat:
             people_config=people_config,
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
+        self._memory_consolidator = (
+            MemoryConsolidator(memory, self._memory.config)
+            if memory is not None
+            and self._memory.config.consolidation_enabled
+            and not config.roleplay_mode
+            else None
+        )
         self._diary: DiaryTracker | None = None
         diary_config = diary_config or DiaryConfig()
         if diary is not None:
@@ -380,6 +391,8 @@ class Heartbeat:
         for tracker in (self._diary, self._persona_growth, self._exploration):
             if tracker is not None:
                 tracker.has_organ = tracker.config.organ in available
+        if self._memory_consolidator is not None:
+            self._memory_consolidator.has_organ = MEMORY_CONSOLIDATION_ORGAN in available
 
     def attach_channel(self, name: str, sink: MessageSink) -> None:
         """接上一个通道：发往这个通道的消息交给 sink。
@@ -706,6 +719,7 @@ class Heartbeat:
         self._maybe_start_diary()
         if not diary_running:
             self._maybe_start_persona_review()
+        self._maybe_consolidate_memory()
         self._broadcast_cognitive_state()
         self._record_body_sample()
 
@@ -790,6 +804,10 @@ class Heartbeat:
         if thought.task.get_name() == language_runner.TASK_NAME:
             return
         assert outcome is not None
+        if isinstance(outcome, ConsolidationOutcome):
+            assert self._memory_consolidator is not None
+            self._memory_consolidator.finish(outcome, self._clock.now())
+            return
         if isinstance(outcome, growth.PersonaReviewOutcome):
             assert self._persona_growth is not None
             self._identity = self._persona_growth.finish(outcome, self._identity) or self._identity
@@ -1278,6 +1296,30 @@ class Heartbeat:
             task.add_done_callback(self._on_thought_done)
             self._thought = _Thought(task, (), self._current_strategy())
 
+    def _maybe_consolidate_memory(self) -> None:
+        """夜间空闲时才检查积累量，沿用唯一后台思考槽。"""
+        consolidator, reading = self._memory_consolidator, self._reading
+        if (
+            consolidator is None
+            or reading is None
+            or not reading.sleep.night
+            or self._halt_status.halted
+            or reading.energy.tier is EnergyTier.OVERDRAFT
+            or self._stop_requested
+            or self._thought
+            or self._unanswered
+            or self._pending
+            or not consolidator.due(self._clock.now())
+        ):
+            return
+        strategy = self._current_strategy()
+        task = asyncio.create_task(
+            consolidator.run(self._organs.call, strategy.model_preference),
+            name="aureus-memory-consolidation",
+        )
+        task.add_done_callback(self._on_thought_done)
+        self._thought = _Thought(task, (), strategy)
+
     async def _initiate(self, job: _InitiativeJob) -> _ThoughtOutcome:
         """后台只问器官，不写状态；任何失败都朝不打扰的方向倒。"""
         conversation = job.conversation
@@ -1621,6 +1663,8 @@ class Heartbeat:
             return  # 取消探索或日记不写结果，也不补记（D79、D80）。
         if thought.task.get_name() in ("aureus-persona-review", language_runner.TASK_NAME):
             return  # D81：取消不写结果，重启后允许再试。
+        if thought.task.get_name() == "aureus-memory-consolidation":
+            return
         if thought.initiative is not None:
             self._collect_initiative(
                 thought, _ThoughtOutcome(notice="急停时取消" if halted else "关闭时取消")
