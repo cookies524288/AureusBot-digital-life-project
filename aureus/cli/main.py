@@ -19,7 +19,7 @@ from aureus.cli.inspect_commands import (
 from aureus.cli.interests_command import run_interests_command
 from aureus.cli.keys_command import EXIT_FAILURE, ReadSecret, key_name_argument, run_keys_command
 from aureus.cli.lab_command import configure_lab_parser, list_experiments, run_lab_command
-from aureus.cli.maibot_command import configure_maibot_parser, run_maibot_inspect_command
+from aureus.cli.maibot_command import configure_maibot_parser, run_maibot_command
 from aureus.cli.monitor_command import DEFAULT_MONITOR_PORT, run_monitor_command
 from aureus.cli.persona_command import DEFAULT_PERSONA_LIMIT, run_persona_command
 from aureus.cli.portability_commands import (
@@ -104,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"监听端口，1024 到 65535，默认 {DEFAULT_MONITOR_PORT}",
     )
     configure_lab_parser(commands.add_parser("lab", help="运行可复现的离线实验"))
-    configure_maibot_parser(commands.add_parser("migrate-maibot", help="盘点 MaiBot 迁移来源"))
+    configure_maibot_parser(commands.add_parser("migrate-maibot", help="盘点并迁移 MaiBot 数据"))
     halt = commands.add_parser(
         "halt", help="急停：它不再调用模型、不再回复，消息照常记录（运行中的实例下一拍生效）"
     )
@@ -170,7 +170,7 @@ def main(
     if args.command == "lab" and args.action == "list":
         return list_experiments()
     if args.command == "migrate-maibot":
-        return run_maibot_inspect_command(args.source)
+        return run_maibot_command(args)
     if (
         args.command == "persona"
         and args.revert is not None
