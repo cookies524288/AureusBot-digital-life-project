@@ -202,26 +202,38 @@ def read_staged_source(source: Source, target: Path) -> Iterator[StagedSource]:
         yield StagedSource(database, row[0], row[1])
 
 
-def _restore_snapshot(source: Source, target: Path, temporary: Path) -> None:
-    with open_staging(target) as database:
-        match = database.execute(
-            "SELECT id, json_extract(manifest, '$.snapshot_sha256') FROM sources "
-            "WHERE instance = ? AND role = ?",
-            (source.instance, source.role),
-        ).fetchone()
-        if match is None:
-            raise MigrationError("source_not_imported")
-        source_id, expected_digest = match
-        digest = hashlib.sha256()
-        with temporary.open("wb") as output:
-            for (block,) in database.execute(
-                "SELECT data FROM snapshot_blocks WHERE source_id = ? ORDER BY block_number",
-                (source_id,),
-            ):
-                output.write(block)
-                digest.update(block)
-        if digest.hexdigest() != expected_digest:
-            raise MigrationError("snapshot_checksum")
+def _restore_snapshot(source: Source, database: sqlite3.Connection, temporary: Path) -> None:
+    match = database.execute(
+        "SELECT id, json_extract(manifest, '$.snapshot_sha256') FROM sources "
+        "WHERE instance = ? AND role = ?",
+        (source.instance, source.role),
+    ).fetchone()
+    if match is None:
+        raise MigrationError("source_not_imported")
+    source_id, expected_digest = match
+    digest = hashlib.sha256()
+    with temporary.open("wb") as output:
+        for (block,) in database.execute(
+            "SELECT data FROM snapshot_blocks WHERE source_id = ? ORDER BY block_number",
+            (source_id,),
+        ):
+            output.write(block)
+            digest.update(block)
+    if digest.hexdigest() != expected_digest:
+        raise MigrationError("snapshot_checksum")
+
+
+@contextmanager
+def open_staged_snapshot(
+    source: Source, database: sqlite3.Connection, work_parent: Path
+) -> Iterator[sqlite3.Connection]:
+    """从同一暂存读事务校验完整快照，在临时目录中只读打开。"""
+    with tempfile.TemporaryDirectory(dir=work_parent) as work:
+        temporary = Path(work) / "snapshot.sqlite3"
+        temporary.touch(mode=0o600, exist_ok=False)
+        _restore_snapshot(source, database, temporary)
+        with closing(open_readonly_database(temporary)) as snapshot:
+            yield snapshot
 
 
 def restore_snapshot(source: Source, target: Path, output: Path) -> dict[str, object]:
@@ -230,6 +242,7 @@ def restore_snapshot(source: Source, target: Path, output: Path) -> dict[str, ob
     with tempfile.TemporaryDirectory(dir=output.parent) as work:
         temporary = Path(work) / "snapshot.sqlite3"
         temporary.touch(mode=0o600, exist_ok=False)
-        _restore_snapshot(source, target, temporary)
+        with open_staging(target) as database:
+            _restore_snapshot(source, database, temporary)
         publish_file(temporary, output)
     return {"operation": "restore", "role": source.role, "snapshot_verified": True}

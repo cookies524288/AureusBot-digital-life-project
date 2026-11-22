@@ -214,7 +214,10 @@ class PeopleDirectory:
 
     def history_for(self, person_id: int, *, limit: int | None = None) -> list[HistoricalEntry]:
         """按人物取历史资料，可使用当前发言人账号查到的人物编号。"""
-        return history.for_person(self._require_open(), person_id, limit)
+        conn = self._require_open()
+        if limit is None:
+            return history.for_person(conn, person_id)
+        return history.for_recall(conn, person_id, limit, self._clock.now().timestamp())
 
     def historical_record(
         self, instance: str, kind: HistoricalKind, source_key: str

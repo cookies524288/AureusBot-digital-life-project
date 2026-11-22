@@ -32,6 +32,12 @@ def _line(entry: HistoricalEntry, person_id: int) -> str:
             ("认识时间", record.known_since),
             ("关系状态", record.relationship_state),
         ]
+    elif record.kind in (
+        HistoricalKind.PROFILE_SNAPSHOT,
+        HistoricalKind.PROFILE_OVERRIDE,
+        HistoricalKind.ALIAS_OVERRIDE,
+    ):
+        fields = [("画像", record.summary), ("别名", record.aliases)]
     else:
         direction = None
         if record.kind is HistoricalKind.RELATION:

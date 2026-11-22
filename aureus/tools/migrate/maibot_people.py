@@ -1,6 +1,7 @@
 """3.3 将已暂存的 MaiBot 人际资料发布到人际子系统。"""
 
 import json
+import sqlite3
 from collections import Counter
 from contextlib import ExitStack
 from pathlib import Path
@@ -11,8 +12,9 @@ from aureus.common import AureusPaths, Clock, ConfigError
 from aureus.core.runtime import open_people
 from aureus.identity import IdentityError, IdentityService, SingleInstanceLockError
 from aureus.people import HistoricalKind, HistoricalPublication, HistoricalRecord, PeopleError
-from aureus.tools.migrate.maibot_catalog import MigrationError
-from aureus.tools.migrate.maibot_staging import open_staging
+from aureus.tools.migrate.maibot_catalog import MigrationError, encode_row, read_rows, read_tables
+from aureus.tools.migrate.maibot_package import Source
+from aureus.tools.migrate.maibot_staging import open_staged_snapshot, open_staging
 
 _TABLES = {
     HistoricalKind.PROFILE: "main",
@@ -20,8 +22,12 @@ _TABLES = {
     HistoricalKind.RELATION: "people",
     HistoricalKind.EVENT: "people",
     HistoricalKind.THREAD_ITEM: "people",
+    HistoricalKind.PROFILE_SNAPSHOT: "memory",
+    HistoricalKind.PROFILE_OVERRIDE: "memory",
+    HistoricalKind.ALIAS_OVERRIDE: "memory",
 }
 _STATE_COLUMNS = ("affinity", "mood", "ignore", "thread")
+_MANUAL_KINDS = {HistoricalKind.PROFILE_OVERRIDE, HistoricalKind.ALIAS_OVERRIDE}
 
 
 def _text(value: JsonValue) -> str | None:
@@ -32,6 +38,18 @@ def _identifier(value: JsonValue) -> str | None:
     if type(value) is int:
         return str(value)
     return _text(value)
+
+
+def _aliases(value: JsonValue) -> list[str] | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        items = json.loads(value)
+    except ValueError:
+        return None
+    if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
+        return None
+    return items
 
 
 def _record(
@@ -87,20 +105,67 @@ def _record(
                 "due_at": values.get("due_at"),
                 "hardness": values.get("hardness"),
             }
+        case HistoricalKind.PROFILE_SNAPSHOT:
+            version = values.get("profile_version")
+            updates = {
+                "profile_version": version if type(version) is int else None,
+                "summary": _text(values.get("profile_text")),
+                "aliases": _aliases(values.get("aliases_json")),
+                "occurred_at": values.get("updated_at"),
+                "expires_at": values.get("expires_at"),
+            }
+        case HistoricalKind.PROFILE_OVERRIDE:
+            updates = {
+                "summary": _text(values.get("override_text")),
+                "occurred_at": values.get("updated_at"),
+            }
+        case HistoricalKind.ALIAS_OVERRIDE:
+            updates = {
+                "aliases": _aliases(values.get("aliases_json")),
+                "occurred_at": values.get("updated_at"),
+            }
     return record.model_copy(update=updates)
 
 
-def _read_records(staging: Path, instance: str) -> list[HistoricalRecord]:
+def _decode_record(
+    instance: str, kind: HistoricalKind, source_key: str, encoded: str | bytes
+) -> HistoricalRecord:
+    try:
+        values = json.loads(encoded)["values"]
+    except (ValueError, TypeError, KeyError):
+        raise MigrationError("invalid_staged_people_record") from None
+    if not isinstance(values, dict):
+        raise MigrationError("invalid_staged_people_record")
+    return _record(instance, kind, source_key, values)
+
+
+def _read_snapshot_profiles(
+    database: sqlite3.Connection, instance: str, missing: set[HistoricalKind], work_parent: Path
+) -> list[HistoricalRecord]:
+    records: list[HistoricalRecord] = []
+    with open_staged_snapshot(Source(instance, "memory"), database, work_parent) as snapshot:
+        for table in read_tables(snapshot, "memory"):
+            if table.name.casefold() not in missing:
+                continue
+            if not table.primary_key:
+                raise MigrationError("invalid_people_override_key")
+            kind = HistoricalKind(table.name.casefold())
+            for key, values in read_rows(snapshot, table):
+                encoded_key, encoded = encode_row(table, key, values)
+                records.append(_decode_record(instance, kind, encoded_key.decode("ascii"), encoded))
+    return records
+
+
+def _read_records(staging: Path, instance: str, work_parent: Path) -> list[HistoricalRecord]:
     records: list[HistoricalRecord] = []
     with open_staging(staging) as database:
-        if (
-            database.execute(
-                "SELECT 1 FROM sources WHERE instance = ? AND role IN ('main', 'people')",
-                (instance,),
-            ).fetchone()
-            is None
-        ):
+        roles = {
+            row[0]
+            for row in database.execute("SELECT role FROM sources WHERE instance = ?", (instance,))
+        }
+        if not roles:
             raise MigrationError("source_not_imported")
+        missing = _MANUAL_KINDS.copy()
         for kind, role in _TABLES.items():
             rows = database.execute(
                 """
@@ -112,14 +177,10 @@ def _read_records(staging: Path, instance: str) -> list[HistoricalRecord]:
                 (instance, role, kind.value),
             )
             for source_key, encoded in rows:
-                try:
-                    data = json.loads(encoded)
-                    values = data["values"]
-                except (ValueError, TypeError, KeyError):
-                    raise MigrationError("invalid_staged_people_record") from None
-                if not isinstance(values, dict):
-                    raise MigrationError("invalid_staged_people_record")
-                records.append(_record(instance, kind, source_key, values))
+                missing.discard(kind)
+                records.append(_decode_record(instance, kind, source_key, encoded))
+        if missing and "memory" in roles:
+            records.extend(_read_snapshot_profiles(database, instance, missing, work_parent))
     return records
 
 
@@ -151,7 +212,7 @@ def publish_people(staging: Path, instance: str, home: Path, clock: Clock) -> di
     paths = AureusPaths(home.resolve())
     if paths.database_file.exists() and paths.database_file.samefile(staging):
         raise MigrationError("people_home_is_staging")
-    records = _read_records(staging, instance)
+    records = _read_records(staging, instance, home)
     identity_service = IdentityService(paths)
     try:
         with ExitStack() as stack:

@@ -2,10 +2,13 @@
 
 import sqlite3
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, JsonValue
+
+# A_Memorix query_person_profile 对未设 expires_at 的快照使用此默认期限。
+_AUTOMATIC_PROFILE_TTL_SECONDS = 6 * 60 * 60
 
 
 class PeopleError(Exception):
@@ -20,6 +23,9 @@ class HistoricalKind(StrEnum):
     RELATION = "relation_edge"
     EVENT = "events"
     THREAD_ITEM = "thread_item"
+    PROFILE_SNAPSHOT = "person_profile_snapshots"
+    PROFILE_OVERRIDE = "person_profile_overrides"
+    ALIAS_OVERRIDE = "person_profile_alias_overrides"
 
     @property
     def is_profile(self) -> bool:
@@ -55,6 +61,9 @@ class HistoricalRecord(BaseModel):
     summary: str | None = None
     due_at: JsonValue = None
     hardness: JsonValue = None
+    profile_version: int | None = None
+    aliases: list[str] | None = None
+    expires_at: JsonValue = None
     original: dict[str, JsonValue] | None = None
 
 
@@ -132,19 +141,105 @@ def get_record(
     return _entry(row) if row is not None else None
 
 
-def for_person(
-    conn: sqlite3.Connection, person_id: int, limit: int | None
-) -> list[HistoricalEntry]:
-    """查与人物相关的资料。带上限时优先选档案和最近写入的资料供回复使用。"""
+def for_person(conn: sqlite3.Connection, person_id: int) -> list[HistoricalEntry]:
+    """查与人物相关的完整资料，包括所有可关联的画像版本。"""
     rows = conn.execute(
         """
         SELECT * FROM people_history WHERE (person_id = ? OR other_person_id = ?)
-            AND (? IS NULL OR pending_reason IS NULL)
-        ORDER BY kind NOT IN ('person_info', 'person_state'), id DESC LIMIT ?
+        ORDER BY kind NOT IN ('person_info', 'person_state'), id DESC
         """,
-        (person_id, person_id, limit, -1 if limit is None else limit),
+        (person_id, person_id),
     )
     return [_entry(row) for row in rows]
+
+
+def _snapshot_is_current(record: HistoricalRecord, now: float) -> bool:
+    expires = record.expires_at
+    if expires is not None:
+        return isinstance(expires, (int, float)) and not isinstance(expires, bool) and now < expires
+    updated = record.occurred_at
+    return (
+        isinstance(updated, (int, float))
+        and not isinstance(updated, bool)
+        and now < updated + _AUTOMATIC_PROFILE_TTL_SECONDS
+    )
+
+
+def _profiles_for_recall(
+    conn: sqlite3.Connection, person_id: int, now: float
+) -> list[HistoricalEntry]:
+    rows = conn.execute(
+        """
+        WITH revisions AS (
+            SELECT id, row_number() OVER (
+                PARTITION BY instance, json_extract(record, '$.subject_key'), kind
+                ORDER BY json_extract(record, '$.profile_version') DESC, id DESC
+            ) AS revision
+            FROM people_history
+            WHERE person_id = ? AND pending_reason IS NULL
+                AND kind IN ('person_profile_snapshots', 'person_profile_overrides',
+                             'person_profile_alias_overrides')
+        )
+        SELECT people_history.* FROM revisions JOIN people_history USING (id)
+        WHERE revision = 1 ORDER BY id DESC
+        """,
+        (person_id,),
+    )
+    profiles: dict[tuple[str, str | None], dict[HistoricalKind, HistoricalEntry]] = {}
+    for row in rows:
+        entry = _entry(row)
+        record = entry.record
+        profiles.setdefault((record.instance, record.subject_key), {})[record.kind] = entry
+
+    selected: list[HistoricalEntry] = []
+    for group in profiles.values():
+        manual = group.get(HistoricalKind.PROFILE_OVERRIDE)
+        manual_alias = group.get(HistoricalKind.ALIAS_OVERRIDE)
+        has_manual_text = manual is not None and bool(manual.record.summary)
+        has_manual_alias = manual_alias is not None and manual_alias.record.aliases is not None
+        if manual is not None and has_manual_text:
+            selected.append(manual)
+        if manual_alias is not None and manual_alias.record.aliases:
+            selected.append(manual_alias)
+        snapshot = group.get(HistoricalKind.PROFILE_SNAPSHOT)
+        if snapshot is None or not _snapshot_is_current(snapshot.record, now):
+            continue
+        record = snapshot.record
+        summary = None if has_manual_text else record.summary
+        aliases = None if has_manual_alias else record.aliases
+        if summary or aliases:
+            selected.append(
+                replace(
+                    snapshot,
+                    record=record.model_copy(
+                        update={
+                            "summary": summary,
+                            "aliases": aliases,
+                        }
+                    ),
+                )
+            )
+    return selected
+
+
+def for_recall(
+    conn: sqlite3.Connection, person_id: int, limit: int, now: float
+) -> list[HistoricalEntry]:
+    """选有效画像和普通人际资料，避免旧画像占用召回预算。"""
+    profiles = _profiles_for_recall(conn, person_id, now)
+    if 0 <= limit <= len(profiles):
+        return profiles[:limit]
+    rows = conn.execute(
+        """
+        SELECT * FROM people_history WHERE (person_id = ? OR other_person_id = ?)
+            AND pending_reason IS NULL
+            AND kind NOT IN ('person_profile_snapshots', 'person_profile_overrides',
+                             'person_profile_alias_overrides')
+        ORDER BY kind NOT IN ('person_info', 'person_state'), id DESC LIMIT ?
+        """,
+        (person_id, person_id, limit - len(profiles)),
+    )
+    return profiles + [_entry(row) for row in rows]
 
 
 def _person_id(conn: sqlite3.Connection, instance: str, key: str | None) -> int | None:
