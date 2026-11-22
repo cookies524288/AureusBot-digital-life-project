@@ -65,6 +65,7 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
         mentioned=mentioned,
         quoted_message_id=quoted,
         source_timestamp=timestamp if type(timestamp) is int else None,
+        source_message_id=f"{receiving_account}:{message_id}",
     )
 
 

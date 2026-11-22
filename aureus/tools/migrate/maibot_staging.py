@@ -1,9 +1,12 @@
 """MaiBot 导入暂存库：事务写入业务行和可取回的完整快照。"""
 
 import hashlib
+import json
 import sqlite3
 import tempfile
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from aureus.tools.migrate.maibot import open_readonly_database
@@ -59,6 +62,16 @@ def _check_target_file(target: Path) -> None:
 def _check_target_version(database: sqlite3.Connection) -> None:
     if database.execute("PRAGMA user_version").fetchone()[0] != _STAGING_VERSION:
         raise MigrationError("unsupported_staging_format")
+
+
+@contextmanager
+def open_staging(target: Path) -> Iterator[sqlite3.Connection]:
+    """打开已识别版本的暂存库，所有查询共享同一个只读事务。"""
+    _check_target_file(target)
+    with closing(open_readonly_database(target)) as database:
+        database.execute("BEGIN")
+        _check_target_version(database)
+        yield database
 
 
 def _write_snapshot(database: sqlite3.Connection, source_id: int, snapshot: Path) -> None:
@@ -149,10 +162,48 @@ def import_package(source: Source, path: Path, target: Path) -> dict[str, object
         return report
 
 
-def _restore_snapshot(source: Source, target: Path, temporary: Path) -> None:
+@dataclass(frozen=True)
+class StagedSource:
+    """同一只读事务中的暂存清单与业务行。"""
+
+    database: sqlite3.Connection
+    source_id: int
+    manifest: str
+
+    def rows(self, table: str) -> Iterator[tuple[str, dict[str, object]]]:
+        """按原主键数组返回对应业务行的原值字典。"""
+        for key, record in self.database.execute(
+            "SELECT source_key, record FROM source_rows WHERE source_id = ? AND table_name = ?",
+            (self.source_id, table),
+        ):
+            yield key, json.loads(record)["values"]
+
+    def source_counts(self) -> dict[str, int]:
+        """读取原始条数，包括暂存层未导出的行。"""
+        return {
+            item["table"]["name"].casefold(): item["source"]
+            for item in json.loads(self.manifest)["tables"]
+        }
+
+
+@contextmanager
+def read_staged_source(source: Source, target: Path) -> Iterator[StagedSource]:
+    """只读打开正式暂存库中的一个已校验来源。"""
+    _check_target_file(target)
     with closing(open_readonly_database(target)) as database:
         database.execute("BEGIN")
         _check_target_version(database)
+        row = database.execute(
+            "SELECT id, manifest FROM sources WHERE instance = ? AND role = ?",
+            (source.instance, source.role),
+        ).fetchone()
+        if row is None:
+            raise MigrationError("source_not_imported")
+        yield StagedSource(database, row[0], row[1])
+
+
+def _restore_snapshot(source: Source, target: Path, temporary: Path) -> None:
+    with open_staging(target) as database:
         match = database.execute(
             "SELECT id, json_extract(manifest, '$.snapshot_sha256') FROM sources "
             "WHERE instance = ? AND role = ?",
@@ -175,7 +226,6 @@ def _restore_snapshot(source: Source, target: Path, temporary: Path) -> None:
 
 def restore_snapshot(source: Source, target: Path, output: Path) -> dict[str, object]:
     """从暂存库校验并恢复一个来源快照，不覆盖既有文件。"""
-    _check_target_file(target)
     require_new_output(output)
     with tempfile.TemporaryDirectory(dir=output.parent) as work:
         temporary = Path(work) / "snapshot.sqlite3"

@@ -390,6 +390,8 @@ class PeopleConfig(BaseModel):
     # 严格类型，理由同 SafetyConfig：好感写成字符串、开关写成数字要报错，不悄悄转换。
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    # 3.3 的迁移人物资料只影响正常回复，关掉后仍可查询来源。
+    history_in_reply_enabled: bool = True
     # 好感的总开关（D5）；关掉后不记变化、不进上下文。
     affinity_enabled: bool = True
     # 好感满分 100。初值只在第一次用到时采用，之后改配置不会回头改已有的好感（D71 第 3 条）。
@@ -517,6 +519,17 @@ class MemoryConfig(BaseModel):
     index_batch: int = Field(default=200, ge=1, le=5000)
 
 
+class LanguageConfig(BaseModel):
+    """习得语言的召回、增量学习与单个参考块的字数预算（D89）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    recall_enabled: bool = True
+    learning_enabled: bool = False
+    organ: str = "summarizer"
+    reference_chars: int = Field(default=700, ge=0, le=2000)
+
+
 class DiaryConfig(BaseModel):
     """每日日记的器官、当地写作时刻和长度限制（D80）。"""
 
@@ -574,6 +587,7 @@ class RuntimeConfig(BaseModel):
     interests: InterestsConfig = Field(default_factory=InterestsConfig)
     exploration: ExplorationConfig = Field(default_factory=ExplorationConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    language: LanguageConfig = Field(default_factory=LanguageConfig)
     diary: DiaryConfig = Field(default_factory=DiaryConfig)
     persona_growth: PersonaGrowthConfig = Field(default_factory=PersonaGrowthConfig)
 

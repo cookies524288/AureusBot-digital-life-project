@@ -47,7 +47,7 @@ from aureus.heartbeat import Heartbeat, Perception
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
-from aureus.memory import DiaryBook, MemoryIndex
+from aureus.memory import DiaryBook, LanguageStore, MemoryIndex
 from aureus.mood import Mood
 from aureus.organs import FakeReplyer, KeyResolver, OrganBus, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
@@ -75,7 +75,7 @@ class Core:
     qq_link: AccountLink | None = None
 
 
-def _open_people(
+def open_people(
     paths: AureusPaths, clock: Clock, identity: Identity, stack: ExitStack
 ) -> PeopleDirectory:
     """打开人物档案，登记用户和用户的账号（1.8，05 号文档）。
@@ -195,7 +195,7 @@ def open_core(
             removed = samples.prune(runtime.body.sample_retention_days)
             if removed:
                 logger.info("清理了 {} 行过期的身体信号样本", removed)
-        people = _open_people(paths, the_clock, identity, stack)
+        people = open_people(paths, the_clock, identity, stack)
         # 反馈（D67）：关掉时不创建，认知状态的信心显示没有数据，其它行为不变。
         feedback: FeedbackStore | None = None
         if runtime.feedback.enabled:
@@ -274,6 +274,14 @@ def open_core(
         if roleplay:
             exploration = exploration.model_copy(update={"enabled": False})
             persona_growth = persona_growth.model_copy(update={"enabled": False})
+        language: LanguageStore | None = None
+        if runtime.language.recall_enabled or runtime.language.learning_enabled:
+            try:
+                language = LanguageStore(paths.database_file)
+                language.open()
+            except sqlite3.Error:
+                language = None
+                logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -285,6 +293,7 @@ def open_core(
             emergency_stop=emergency_stop,
             body=body,
             people=people,
+            people_config=runtime.people,
             identity_history=identity_history,
             samples=samples,
             feedback=feedback,
@@ -304,6 +313,8 @@ def open_core(
             has_exploration_organ=exploration.organ in models.available_organs,
             memory=memory,
             memory_config=runtime.memory,
+            language=language,
+            language_config=runtime.language,
             diary=DiaryBook(paths.diary_dir),
             diary_config=runtime.diary,
             has_diary_organ=runtime.diary.organ in models.available_organs,

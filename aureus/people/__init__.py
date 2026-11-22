@@ -8,7 +8,14 @@ from aureus.people.affinity import (
     AffinityReason,
     describe_affinity,
 )
-from aureus.people.directory import PeopleDirectory, PeopleError, Person, PersonKind
+from aureus.people.directory import PeopleDirectory, Person, PersonKind
+from aureus.people.history import (
+    HistoricalEntry,
+    HistoricalKind,
+    HistoricalPublication,
+    HistoricalRecord,
+    PeopleError,
+)
 
 __all__ = [
     "LINK_COMMAND",
@@ -18,6 +25,10 @@ __all__ = [
     "AffinityChange",
     "AffinityEvent",
     "AffinityReason",
+    "HistoricalEntry",
+    "HistoricalKind",
+    "HistoricalPublication",
+    "HistoricalRecord",
     "PeopleDirectory",
     "PeopleError",
     "Person",
