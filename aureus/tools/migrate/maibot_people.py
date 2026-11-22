@@ -21,6 +21,7 @@ _TABLES = {
     HistoricalKind.EVENT: "people",
     HistoricalKind.THREAD_ITEM: "people",
 }
+_STATE_COLUMNS = ("affinity", "mood", "ignore", "thread")
 
 
 def _text(value: JsonValue) -> str | None:
@@ -36,40 +37,57 @@ def _identifier(value: JsonValue) -> str | None:
 def _record(
     instance: str, kind: HistoricalKind, source_key: str, values: dict[str, JsonValue]
 ) -> HistoricalRecord:
-    platform = _text(values.get("platform"))
-    account = _identifier(values.get("user_id"))
-    if kind.is_profile:
-        return HistoricalRecord(
-            instance=instance,
-            kind=kind,
-            source_key=source_key,
-            subject_key=_identifier(values.get("person_id")),
-            account=(platform, account) if platform and account else None,
-            name=_text(values.get("person_name")) or _text(values.get("user_nickname")),
-            impression=_text(values.get("impression")),
-            memory_points=values.get("memory_points"),
-            known_since=values.get("first_known_time"),
-            relationship_state=values.get("relationship_state"),
-            original=values,
-        )
-
-    is_relation = kind is HistoricalKind.RELATION
-    weight = values.get("weight")
-    return HistoricalRecord(
+    record = HistoricalRecord(
         instance=instance,
         kind=kind,
         source_key=source_key,
-        subject_key=_identifier(values.get("source_person_id" if is_relation else "person_id")),
-        other_key=_identifier(values.get("target_person_id")),
-        relation_type=_text(values.get("relation_type")),
-        weight=(
-            weight if isinstance(weight, (int, float)) and not isinstance(weight, bool) else None
-        ),
-        evidence=values.get("evidence"),
-        occurred_at=values.get("occurred_at"),
-        summary=_text(values.get("summary")),
+        subject_key=_identifier(values.get("person_id")),
         original=values,
     )
+    match kind:
+        case HistoricalKind.PROFILE:
+            platform = _text(values.get("platform"))
+            account = _identifier(values.get("user_id"))
+            nickname = _text(values.get("user_nickname"))
+            updates = {
+                "account": (platform, account) if platform and account else None,
+                "name": _text(values.get("person_name")) or nickname,
+                "nickname": nickname,
+                "group_cardname": values.get("group_cardname"),
+                "name_reason": _text(values.get("name_reason")),
+                "memory_points": values.get("memory_points"),
+                "known_since": values.get("first_known_time"),
+            }
+        case HistoricalKind.STATE:
+            updates = {
+                "name": _text(values.get("display_name")),
+                "relationship_state": {key: values[key] for key in _STATE_COLUMNS if key in values},
+                "occurred_at": values.get("updated_at"),
+            }
+        case HistoricalKind.RELATION:
+            weight = values.get("weight")
+            updates = {
+                "subject_key": _identifier(values.get("from_person")),
+                "other_key": _identifier(values.get("to_person")),
+                "relation_type": _text(values.get("kind")),
+                "weight": weight if type(weight) in (int, float) else None,
+                "evidence": values.get("evidence"),
+                "occurred_at": values.get("updated_at"),
+            }
+        case HistoricalKind.EVENT:
+            updates = {
+                "event_type": _text(values.get("kind")),
+                "occurred_at": values.get("ts"),
+                "summary": _text(values.get("detail")),
+            }
+        case HistoricalKind.THREAD_ITEM:
+            updates = {
+                "summary": _text(values.get("content")),
+                "occurred_at": values.get("created_at"),
+                "due_at": values.get("due_at"),
+                "hardness": values.get("hardness"),
+            }
+    return record.model_copy(update=updates)
 
 
 def _read_records(staging: Path, instance: str) -> list[HistoricalRecord]:

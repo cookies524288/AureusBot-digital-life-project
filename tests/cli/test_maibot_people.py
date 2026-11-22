@@ -9,6 +9,8 @@ from aureus.cli import maibot_command
 from aureus.cli.main import main
 from aureus.common import ManualClock
 from aureus.core.runtime import open_core
+from aureus.heartbeat.people_context import format_people_context
+from aureus.heartbeat.recall import MAX_RECALL_CHARS
 from aureus.people import HistoricalKind, PeopleDirectory, PeopleError
 from tests.cli.test_maibot_migration import SOURCE_ARGS, create_source, run_command
 from tests.heartbeat.test_judging_flow import NOW
@@ -40,31 +42,37 @@ def test_publish_people_after_real_export_and_import(
             """
             CREATE TABLE person_info (
                 id PRIMARY KEY, person_id, platform, user_id, person_name, user_nickname,
-                memory_points, first_known_time, is_user
+                group_cardname, name_reason, memory_points, first_known_time, is_user
             );
             INSERT INTO person_info VALUES
-                (1,'a','qq','123','同名','旧昵称','["展览"]','2023-01-01 00:00:00',0),
-                ('1','b','qq','456','同名','群名',NULL,NULL,1),
-                (2,'c',NULL,NULL,'同名',NULL,NULL,NULL,0),
-                (3,'d','terminal','local','旧用户称呼',NULL,NULL,NULL,0);
+                (1,'a','qq','123','同名','旧昵称','[{"group_id":"g","group_cardname":"旧群名"}]',
+                 '来源称呼原因','["展览"]','2023-01-01 00:00:00',0),
+                ('1','b','qq','456','同名','群名',NULL,NULL,NULL,NULL,1),
+                (2,'c',NULL,NULL,'同名',NULL,NULL,NULL,NULL,NULL,0),
+                (3,'d','terminal','local','旧用户称呼',NULL,NULL,NULL,NULL,NULL,0);
             """,
         ),
         (
             "people",
             """
-            CREATE TABLE person_state (id PRIMARY KEY, person_id, impression, relationship_state);
-            INSERT INTO person_state VALUES (1,'a','了解对方的兴趣','{"trust":0.31}');
+            CREATE TABLE person_state (
+                person_id TEXT PRIMARY KEY, display_name, affinity, mood, ignore, thread, updated_at
+            );
+            INSERT INTO person_state VALUES ('a','熟人称呼',0.31,'平静',0,'["兴趣话题"]',100.25);
             CREATE TABLE relation_edge (
-                source_person_id, target_person_id, relation_type, weight, evidence, occurred_at,
-                PRIMARY KEY (source_person_id, target_person_id, relation_type)
+                from_person, to_person, kind, weight, evidence, updated_at,
+                PRIMARY KEY (from_person, to_person, kind)
             );
             INSERT INTO relation_edge VALUES
                 ('a','b','合作',0.31,'一起准备展览',123.456),
                 ('a','c','合作',-2.5,'保留未解析证据',NULL);
-            CREATE TABLE events (id PRIMARY KEY, person_id, summary, occurred_at);
-            INSERT INTO events VALUES (1,'a','讨论展览行程',12.25);
-            CREATE TABLE thread_item (id PRIMARY KEY, person_id, summary);
-            INSERT INTO thread_item VALUES (1,'b','补充展览细节');
+            CREATE TABLE events (id PRIMARY KEY, person_id, kind, ts, detail);
+            INSERT INTO events VALUES
+                (1,'a','对话','2026-11-20 10:30:00','{"text":"讨论展览行程"}');
+            CREATE TABLE thread_item (
+                id PRIMARY KEY, person_id, content, created_at, due_at, hardness
+            );
+            INSERT INTO thread_item VALUES (1,'b','补充展览细节',3.125,4.25,0.75);
             """,
         ),
     ]:
@@ -118,17 +126,44 @@ def test_publish_people_after_real_export_and_import(
         b_history = {row.record.kind: row for row in people.history_for(bob.id)}
         profile = a_history[HistoricalKind.PROFILE].record
         assert profile.name == "同名" and profile.known_since == "2023-01-01 00:00:00"
+        assert profile.nickname == "旧昵称"
+        assert profile.group_cardname == '[{"group_id":"g","group_cardname":"旧群名"}]'
+        assert profile.name_reason == "来源称呼原因"
         assert profile.memory_points == '["展览"]' and profile.source_key == "[1]"
         assert b_history[HistoricalKind.PROFILE].record.source_key == '["1"]'
         state = a_history[HistoricalKind.STATE].record
-        assert state.impression == "了解对方的兴趣" and state.relationship_state == '{"trust":0.31}'
+        assert state.name == "熟人称呼" and state.occurred_at == 100.25
+        assert state.relationship_state == {
+            "affinity": 0.31,
+            "mood": "平静",
+            "ignore": 0,
+            "thread": '["兴趣话题"]',
+        }
         edge = a_history[HistoricalKind.RELATION]
         assert b_history[HistoricalKind.RELATION] == edge
         assert edge.person_id == alice.id and edge.other_person_id == bob.id
+        assert edge.record.relation_type == "合作"
         assert edge.record.weight == 0.31 and edge.record.evidence == "一起准备展览"
         assert edge.record.occurred_at == 123.456
-        assert a_history[HistoricalKind.EVENT].record.summary == "讨论展览行程"
-        assert b_history[HistoricalKind.THREAD_ITEM].record.summary == "补充展览细节"
+        assert edge.record.original == {
+            "from_person": "a",
+            "to_person": "b",
+            "kind": "合作",
+            "weight": 0.31,
+            "evidence": "一起准备展览",
+            "updated_at": 123.456,
+        }
+        event = a_history[HistoricalKind.EVENT].record
+        assert event.event_type == "对话" and event.occurred_at == "2026-11-20 10:30:00"
+        assert event.summary == '{"text":"讨论展览行程"}'
+        thread = b_history[HistoricalKind.THREAD_ITEM].record
+        assert thread.summary == "补充展览细节" and thread.occurred_at == 3.125
+        assert thread.due_at == 4.25 and thread.hardness == 0.75
+        alice_context = format_people_context(list(a_history.values()), alice.id, MAX_RECALL_CHARS)
+        bob_context = format_people_context(list(b_history.values()), bob.id, MAX_RECALL_CHARS)
+        assert "关系方向：发出" in alice_context and "讨论展览行程" in alice_context
+        assert "昵称：旧昵称" in alice_context and "事件：对话" in alice_context
+        assert "关系方向：指向此人" in bob_context and "补充展览细节" in bob_context
         pending = people.historical_record(
             SOURCE_ARGS[1], HistoricalKind.RELATION, '["a","c","\\u5408\\u4f5c"]'
         )

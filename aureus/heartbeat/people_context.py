@@ -26,6 +26,7 @@ def _line(entry: HistoricalEntry, person_id: int) -> str:
     if record.kind.is_profile:
         fields = [
             ("称呼", record.name),
+            ("昵称", record.nickname if record.nickname != record.name else None),
             ("印象", record.impression),
             ("记忆点", record.memory_points),
             ("认识时间", record.known_since),
@@ -38,6 +39,7 @@ def _line(entry: HistoricalEntry, person_id: int) -> str:
         fields = [
             ("关系方向", direction),
             ("关系", record.relation_type),
+            ("事件", record.event_type),
             ("证据", record.evidence),
             ("摘要", record.summary),
             ("时间", record.occurred_at),

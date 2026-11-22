@@ -40,15 +40,21 @@ class HistoricalRecord(BaseModel):
     other_key: str | None = None
     account: tuple[str, str] | None = None
     name: str | None = None
+    nickname: str | None = None
+    group_cardname: JsonValue = None
+    name_reason: str | None = None
     impression: str | None = None
     memory_points: JsonValue = None
     known_since: JsonValue = None
     relationship_state: JsonValue = None
     relation_type: str | None = None
+    event_type: str | None = None
     weight: int | float | None = None
     evidence: JsonValue = None
     occurred_at: JsonValue = None
     summary: str | None = None
+    due_at: JsonValue = None
+    hardness: JsonValue = None
     original: dict[str, JsonValue] | None = None
 
 
