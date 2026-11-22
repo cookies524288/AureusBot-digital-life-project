@@ -1273,6 +1273,12 @@ function sendChat() {
   const box = $('chat-text');
   const text = box.value.trim();
   if (!text) return;
+  // 等历史快照合并后再发送，避免同一条消息同时出现在快照和本地气泡里。
+  if (pendingChat !== null) {
+    toast('正在读取聊天记录，读取完成后请再发送。');
+    loadChatHistory();
+    return;
+  }
   if (!socket || socket.readyState !== 1) { toast('还没连上，稍等一下再发。', 'error'); return; }
   socket.send(JSON.stringify({ text }));
   addMessage({kind:'user', sender:'你', channel:'web', content:text});

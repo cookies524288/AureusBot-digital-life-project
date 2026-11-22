@@ -172,6 +172,80 @@ def test_initial_chat_history_merges_live_reply_by_record_id() -> None:
     )
 
 
+@pytest.mark.parametrize("send_count", [1, 2])
+def test_chat_sends_only_after_initial_history_is_merged(send_count: int) -> None:
+    run_page_script(
+        rf"""
+        let finishHistory;
+        const sent = [];
+        api = () => new Promise(resolve => {{ finishHistory = resolve; }});
+        state.loggedIn = true;
+        openSocket();
+        Object.assign(sockets.at(-1), {{
+          readyState:1, send:message => sent.push(JSON.parse(message).text),
+        }});
+        const loading = loadChatHistory();
+        const box = $('chat-text');
+        const send = $('chat-send').listeners.click[0];
+        box.value = '你好';
+        send();
+        finishHistory({{ok:true, data:sent.map((content, id) => ({{
+          id, time:'2026-11-22T12:00:00Z', who:'user', channel:'web', content,
+        }}))}});
+        await loading;
+        const bubbles = () => $('chat-log').children.filter(node => node.className === 'msg user');
+        assert.equal(bubbles().length, 0);
+        assert.equal(box.value, '你好');
+        send();
+        for (let i = 1; i < {send_count}; i++) {{
+          box.value = '你好';
+          send();
+        }}
+        assert.deepEqual(sent, Array({send_count}).fill('你好'));
+        assert.deepEqual(Array.from(bubbles(), node => node.children[0].textContent), sent);
+        assert.equal(box.value, '');
+        """
+    )
+
+
+def test_chat_history_failure_preserves_the_draft_for_retry() -> None:
+    run_page_script(
+        r"""
+        let finishHistory;
+        let requests = 0;
+        const sent = [];
+        api = () => {
+          requests++;
+          return new Promise(resolve => { finishHistory = resolve; });
+        };
+        state.loggedIn = true;
+        openSocket();
+        Object.assign(sockets.at(-1), {
+          readyState:1, send:message => sent.push(JSON.parse(message).text),
+        });
+        const loading = loadChatHistory();
+        finishHistory({ok:false, status:0, data:{detail:'断网'}});
+        await loading;
+        const box = $('chat-text');
+        box.value = ' 草稿 ';
+        const enter = $('chat-text').listeners.keydown[0];
+        enter({key:'Enter', preventDefault() {}});
+        $('chat-send').listeners.click[0]();
+        assert.equal(requests, 2);
+        assert.deepEqual(sent, []);
+        assert.equal(box.value, ' 草稿 ');
+        box.value = '修改后的草稿';
+        const retry = loadChatHistory();
+        finishHistory({ok:true, data:[]});
+        await retry;
+        assert.deepEqual(sent, []);
+        enter({key:'Enter', preventDefault() {}});
+        assert.deepEqual(sent, ['修改后的草稿']);
+        assert.equal(box.value, '');
+        """
+    )
+
+
 def test_selected_task_keeps_its_text_until_the_selection_is_released() -> None:
     run_page_script(
         r"""
