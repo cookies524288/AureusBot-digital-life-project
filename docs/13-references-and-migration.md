@@ -42,14 +42,14 @@ digital-life-core 值得借鉴的设计：用 `genome.json` 声明每种激素�
 
 - **人设**：`personality` 作为可变人格的初稿，`behavior_style` 对应行为风格，`reply_style` 对应表达风格。不变人格和身份事实只有用户能改，不从导入文件里取。群聊、私聊提示词暂时没有对应项，原样存档。
 - **表达方式、黑话**：AureusBot 里的存放位置还没设计，所以先做中间格式（见 2.4）。
-- **可见范围**：MaiBot 的 `session_id` 是聊天流编号，表达里有真实聊天内容。导入时每条都带上来源和可见范围，默认不当作全局；用户逐批确认后才放开。不确定时朝安全方向倒。
+- **统一记忆库**：群聊、私聊和缺少会话编号的历史资料全部保留。导入与运行时按内容、说话人、时间和来源证据组织；说话人或时间原本缺失时保留缺失状态。原始聊天流编号可随源记录存档。
 
 ### 2.4 导入工具的做法
 
 - 分两段：先读出来，转成 AureusBot 自己定义的中间格式（带版本号的 JSON Lines）；再通过对应子系统的接口写入，因为状态写入必须走子系统接口。第一段现在就能做，第二段等子系统建好再接。
 - 以只读方式打开 MaiBot 的数据库（SQLite 的 `mode=ro`），并建议用户先停掉 MaiBot 或对副本操作。
 - 先预览（条数、来源分布），用户确认后才写入。可以重复运行，按来源 ID 去重；每条记录标明来源 `maibot-import`。
-- 工具放在 `tools/migrate/`；动手前先更新 11 号文档的目录图。
+- 迁移工具放在 `aureus/tools/migrate/`，安装 Aureus 后可运行 `aureus migrate-maibot inspect <SQLite 文件>`。
 
 ### 2.5 Phase 3 目标部署基线（2026-11-22）
 
@@ -64,4 +64,4 @@ digital-life-core 值得借鉴的设计：用 `genome.json` 声明每种激素�
 | 黑话 | `_refresh_jargon_reference_message` → `jargon_context_matcher.build_jargon_reference_message` → `match_jargons_for_context` | 结合 jargons、会话高频词和近期消息，按作用域选词供 Planner 使用；学习入口为 jargon_learner |
 | 表达 | Replyer 构造上下文时调用 `maisaka_expression_selector.select_for_reply`、`expression_vector_index.select_candidates` 和表达选择器 | 先限定会话，以表达意图检索，再选择并写入回复上下文；学习入口为 expression_learner |
 
-当前部署关闭 retro prompt，Replyer 的即时消息历史不直接包含 Planner 的全部工具输出。功能验证需要检查 Replyer 真正收到的证据。核心库还包括 person_info、chat_sessions、mai_messages，会话映射应保留平台、账号、类型和会话标识。附属人际状态、关系边、图片记忆与插件效果分别核对。原部署允许跨会话分享，导入后依 Aureus 的私聊与群可见范围检索。
+当前部署关闭 retro prompt，Replyer 的即时消息历史不直接包含 Planner 的全部工具输出。功能验证需要检查 Replyer 真正收到的证据。核心库还包括 person_info、chat_sessions、mai_messages，人物识别保留原平台和账号，原始会话记录可供消息追溯。附属人际状态、关系边、图片记忆与插件效果分别核对。Aureus 在统一记忆库内按人物、时间和情景召回，当前投递地址由通道处理。
