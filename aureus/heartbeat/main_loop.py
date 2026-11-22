@@ -831,6 +831,8 @@ class Heartbeat:
                 self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)
         if target.trust is TrustLevel.VERIFIED_USER:
             metadata["to_user"] = True
+        if target.route is not None:
+            metadata["recipient_id"] = target.route.recipient_id
         reply_record = self._timeline.append(
             event_type=EVENT_MESSAGE,
             content=text,
@@ -1005,6 +1007,17 @@ class Heartbeat:
             }
             if person is not None:
                 metadata["person_id"] = person.id
+            if route := perception.route:
+                metadata.update(
+                    account_id=route.account_id,
+                    recipient_id=route.recipient_id,
+                    message_id=route.message_id,
+                    message_type=route.kind,
+                    mentioned=perception.mentioned,
+                    quoted_message_id=perception.quoted_message_id,
+                    source_timestamp=perception.source_timestamp,
+                    temporary_group_id=route.temporary_group_id,
+                )
             record = self._timeline.append(
                 event_type=EVENT_MESSAGE,
                 content=perception.content,
@@ -1021,8 +1034,19 @@ class Heartbeat:
                     "收到来自 %s 上未确认身份的账号的消息：只记录，不回复", perception.channel
                 )
                 continue
-            heard = _Heard(perception, record, person is not None and person.is_user)
-            self._unanswered.add(heard, priority, _conversation_of(perception))
+            heard = _Heard(
+                perception,
+                record,
+                person is not None and person.is_user and priority is Priority.USER,
+            )
+            route = perception.route
+            conversation = _conversation_of(perception)
+            group_address = (
+                (route.kind, route.recipient_id, route.temporary_group_id)
+                if route is not None
+                else None
+            )
+            self._unanswered.add(heard, priority, (conversation, group_address))
             if priority is Priority.USER:
                 self._last_user_contact = perception
                 self._initiative.note_user_message(record.timestamp)
@@ -1588,6 +1612,7 @@ class Heartbeat:
             sender_name=sender,
             timeline_id=record.id if record is not None else None,
             timestamp=record.timestamp if record is not None else self._clock.now(),
+            route=target.route,
         )
         sink = self._sinks.get(message.channel)
         if sink is None:
@@ -1621,7 +1646,7 @@ def _priority_of(perception: Perception, person: Person | None) -> Priority | No
     if perception.trust is TrustLevel.VERIFIED_USER:
         return Priority.USER
     if perception.trust is TrustLevel.VERIFIED_CONTACT:
-        if person is not None and person.is_user:
+        if person is not None and person.is_user and perception.route is None:
             return None
         return Priority.CONTACT
     return None

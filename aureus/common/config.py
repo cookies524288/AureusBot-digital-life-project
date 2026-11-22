@@ -12,6 +12,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Self
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -252,6 +253,44 @@ class WebConfig(BaseModel):
     login_max_failures: int = Field(default=7, ge=1)
     login_window_seconds: int = Field(default=300, ge=1)
     login_lockout_seconds: int = Field(default=30, ge=1)
+
+
+class QQConfig(BaseModel):
+    """QQ 正向 WebSocket 的部署参数（路线图 3.6）"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
+
+    enabled: bool = False
+    endpoint: str = ""
+    account_id: str = Field(default="", pattern=r"^(?:[1-9][0-9]{0,19})?$")
+    token_key: str = Field(default="", pattern=r"^(?:AUREUS_KEY_[A-Z0-9_]+)?$")
+    action_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    reconnect_seconds: float = Field(default=5.0, gt=0, le=120)
+
+    @model_validator(mode="after")
+    def check_endpoint(self) -> "QQConfig":
+        """启用时要求明确的账号与端点。凭据只由密钥接口读取"""
+        if not self.enabled:
+            return self
+        try:
+            url = urlsplit(self.endpoint)
+            port = url.port
+        except ValueError:
+            raise ValueError("QQ 通道的 WebSocket 端点无效") from None
+        if (
+            not self.account_id
+            or not url.hostname
+            or url.scheme not in ("ws", "wss")
+            or url.username is not None
+            or port == 0
+            or "?" in self.endpoint
+            or "#" in self.endpoint
+            or any(character.isspace() for character in self.endpoint)
+        ):
+            raise ValueError("QQ 通道需要账号和不含凭据、查询参数或片段的 WebSocket 端点")
+        if url.scheme == "ws" and url.hostname not in ("127.0.0.1", "::1", "localhost"):
+            raise ValueError("QQ 的 ws 端点仅限回环地址，远程端点使用 wss")
+        return self
 
 
 class FeedbackConfig(BaseModel):
@@ -523,6 +562,7 @@ class RuntimeConfig(BaseModel):
     time: TimeConfig = Field(default_factory=TimeConfig)
     snapshots: SnapshotsConfig = Field(default_factory=SnapshotsConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    qq: QQConfig = Field(default_factory=QQConfig)
     feedback: FeedbackConfig = Field(default_factory=FeedbackConfig)
     judge: JudgeConfig = Field(default_factory=JudgeConfig)
     hormones: HormonesConfig = Field(default_factory=HormonesConfig)

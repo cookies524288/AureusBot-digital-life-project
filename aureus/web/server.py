@@ -34,7 +34,8 @@ from aureus.common import Clock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.organs import OrganResponse
-from aureus.timeline import TimelineDatabase, TimelineQuery
+from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleError
+from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 
 from .auth import (
     MAX_PASSWORD_LENGTH,
@@ -66,6 +67,12 @@ SESSION_RECHECK_SECONDS = 30.0
 # 网页本身是随代码放在 static 目录里的一个静态文件，登录页、聊天页和设置页都在里面；
 # 页面不含任何数据，数据都走要登录的接口。路径从本文件派生，不写死（D38）。
 INDEX_PAGE = Path(__file__).parent / "static" / "index.html"
+
+
+class QQLinkRequest(BaseModel):
+    """网页发起绑定时提供的 QQ 账号"""
+
+    account_id: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
 
 
 class LoginRequest(BaseModel):
@@ -200,6 +207,7 @@ def create_app(
     request_restart: Callable[[], None] | None = None,
     run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
     | None = None,
+    qq_link: AccountLink | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -242,6 +250,8 @@ def create_app(
         token: Annotated[str, Depends(require_session)], response: Response
     ) -> dict[str, bool]:
         sessions.revoke(token)
+        if qq_link is not None:
+            qq_link.revoke(token)
         response.delete_cookie(SESSION_COOKIE, path="/")
         return {"ok": True}
 
@@ -254,6 +264,56 @@ def create_app(
             if not _same_http_origin(request):
                 raise HTTPException(403, detail="请在当前网页上确认退出。")
             request_shutdown()
+            return {"ok": True}
+
+    if qq_link is not None:
+        links = qq_link
+
+        async def require_link_session(
+            request: Request, token: Annotated[str, Depends(require_ready)]
+        ) -> str:
+            if not _same_http_origin(request):
+                raise HTTPException(403, detail="请在当前网页上操作 QQ 绑定。")
+            return token
+
+        @app.post("/api/qq-link")
+        async def issue_link(
+            body: QQLinkRequest,
+            token: Annotated[str, Depends(require_link_session)],
+            response: Response,
+        ) -> dict[str, str | int]:
+            try:
+                code = links.issue(token, body.account_id)
+            except PeopleError as error:
+                raise HTTPException(409, detail=str(error)) from None
+            response.headers["Cache-Control"] = "no-store"
+            return {
+                "command": f"{LINK_COMMAND} {code}",
+                "expires_in": int(LINK_LIFETIME.total_seconds()),
+            }
+
+        @app.post("/api/qq-link/confirm")
+        async def confirm_link(
+            token: Annotated[str, Depends(require_link_session)],
+        ) -> dict[str, str]:
+            try:
+                account_id = links.confirm(token)
+            except PeopleError as error:
+                raise HTTPException(409, detail=str(error)) from None
+            timeline.append(
+                "account_linked",
+                "已通过网页会话和 QQ 私聊验证关联账号。",
+                ActorType.USER,
+                visibility=VisibilityScope.USER_ONLY,
+                metadata={"platform": "qq", "account_id": account_id},
+            )
+            return {"account_id": account_id}
+
+        @app.delete("/api/qq-link")
+        async def revoke_link(
+            token: Annotated[str, Depends(require_link_session)],
+        ) -> dict[str, bool]:
+            links.revoke(token)
             return {"ok": True}
 
     if request_restart is not None:
@@ -272,6 +332,8 @@ def create_app(
         request: Request, _token: Annotated[str, Depends(require_session)]
     ) -> dict[str, bool | str]:
         result: dict[str, bool | str] = {"must_change_password": auth.password_is_default}
+        if qq_link is not None and not auth.password_is_default:
+            result["qq_link"] = True
         if request_restart is not None and not auth.password_is_default:
             result["restart_instance"] = instance
         if open_terminal is not None and not auth.password_is_default:
@@ -314,10 +376,15 @@ def create_app(
     async def history(
         _token: Annotated[str, Depends(require_ready)], limit: int = DEFAULT_HISTORY_LIMIT
     ) -> list[dict[str, Any]]:
-        """最新一批对话，不分通道，每条标明来自哪个通道（D63 第 8 条）。"""
+        """最新一批与用户本人的私聊，每条标明来自哪个通道（D84）"""
         bounded = min(max(limit, 1), MAX_HISTORY_LIMIT)
         records = timeline.query(
-            TimelineQuery(event_type=EVENT_MESSAGE, latest=True, limit=bounded)
+            TimelineQuery(
+                event_type=EVENT_MESSAGE,
+                latest=True,
+                limit=bounded,
+                visibility=VisibilityScope.USER_ONLY,
+            )
         )
         return [
             {
