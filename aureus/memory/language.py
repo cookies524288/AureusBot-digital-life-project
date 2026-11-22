@@ -1,18 +1,26 @@
 """记忆子系统的习得语言和原始消息证据（D89）。"""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import groupby
 from pathlib import Path
-from sqlite3 import Connection
+from sqlite3 import Connection, Row, connect
 
 from aureus.common.sqlite import open_connection
+from aureus.memory.language_import import (
+    EXPRESSION_TABLE,
+    IMPORT_SCHEMA,
+    JARGON_TABLE,
+    ImportedLanguageRow,
+    imported_entries,
+    imported_frequencies,
+    publish_rows,
+)
 from aureus.memory.language_matching import (
     MIN_JARGON_EVIDENCE,
     LanguageEntry,
-    TermFrequency,
     format_language,
     is_reference,
     match_jargons,
@@ -53,6 +61,10 @@ class LanguageKind(StrEnum):
 
     EXPRESSION = "expression"
     JARGON = "jargon"
+
+
+class LanguageTargetError(ValueError):
+    """语言发布要求一个已有的 Aureus 运行主库。"""
 
 
 @dataclass(frozen=True)
@@ -111,7 +123,28 @@ class LanguageStore:
     def open(self) -> None:
         """初始化语言子系统持有的表。"""
         with closing(open_connection(self._path)) as connection:
-            connection.executescript(_SCHEMA)
+            connection.executescript(_SCHEMA + IMPORT_SCHEMA)
+
+    def publish(
+        self,
+        instance: str,
+        manifest: str,
+        source_counts: dict[str, int],
+        rows: Iterable[ImportedLanguageRow],
+    ) -> dict[str, object]:
+        """发布一份正式暂存快照到显式指定的 Aureus 运行主库。"""
+        uri = f"{self._path.absolute().as_uri()}?mode=rw"
+        with closing(connect(uri, uri=True)) as connection, connection:
+            connection.row_factory = Row
+            if (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'timeline'"
+                ).fetchone()
+                is None
+            ):
+                raise LanguageTargetError("language_target_not_runtime")
+            connection.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA)
+            return publish_rows(connection, instance, manifest, source_counts, rows)
 
     def unseen(self, samples: Sequence[LanguageSample]) -> list[LanguageSample]:
         """取本批还没有消费的真实样本，同一来源取首条。"""
@@ -155,6 +188,14 @@ class LanguageStore:
         entries = connection.execute(
             "SELECT id, text_key FROM language_entries WHERE kind = ?", (LanguageKind.EXPRESSION,)
         ).fetchall()
+        imported = [
+            (row["instance"], row["source_key"], normalize(row["text"]))
+            for row in connection.execute(
+                """SELECT instance, source_key, text FROM language_import_rows
+                   WHERE table_name = ? AND status = 'received'""",
+                (EXPRESSION_TABLE,),
+            )
+        ]
         for sample in samples.values():
             content = normalize(sample.content)
             connection.executemany(
@@ -163,6 +204,14 @@ class LanguageStore:
                     (entry["id"], sample.source_key)
                     for entry in entries
                     if entry["text_key"] in content
+                ],
+            )
+            connection.executemany(
+                "INSERT OR IGNORE INTO language_import_observations VALUES (?, ?, ?, ?)",
+                [
+                    (instance, EXPRESSION_TABLE, key, sample.source_key)
+                    for instance, key, text in imported
+                    if text in content
                 ],
             )
 
@@ -216,13 +265,15 @@ class LanguageStore:
                             frozenset(row["speaker"] for row in evidence),
                         )
                     )
+            source_table = JARGON_TABLE if kind == LanguageKind.JARGON else EXPRESSION_TABLE
+            entries.extend(imported_entries(connection, source_table))
         return entries
 
-    def jargon_reference(
-        self, texts: Sequence[str], budget: int, frequencies: dict[str, TermFrequency] | None = None
-    ) -> str:
-        """生成 Planner 的黑话参考，暂存发布后可传入全库高频词。"""
-        matches = match_jargons(texts, self.entries(LanguageKind.JARGON), frequencies or {})
+    def jargon_reference(self, texts: Sequence[str], budget: int) -> str:
+        """生成 Planner 的黑话参考，按统一库的高频词加权。"""
+        with closing(open_connection(self._path)) as connection:
+            frequencies = imported_frequencies(connection)
+        matches = match_jargons(texts, self.entries(LanguageKind.JARGON), frequencies)
         return format_language(matches, jargon=True, budget=budget)
 
     def expression_reference(

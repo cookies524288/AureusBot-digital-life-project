@@ -24,7 +24,7 @@ def test_jargon_match_keeps_senses_and_uses_frequency_and_position() -> None:
     matches = match_jargons(
         ["<message id='1'> NOW", "xp", "gO"], entries, {"go": TermFrequency(2, 4)}
     )
-    assert [match.evidence_ids for match in matches] == [(32,), (33,), (35,), (31,)]
+    assert [match.evidence_ids for match in matches] == [(32, 34), (33,), (35,), (31,)]
     assert match_jargons(["<message tag='XP'> 空白"], entries, {}) == []
     assert format_language(matches, jargon=True, budget=10) == ""
     block = format_language([entries[0], entries[1]], jargon=True, budget=70)

@@ -9,6 +9,7 @@ from datetime import date, datetime, tzinfo
 
 from aureus.actions.web import WebPage
 from aureus.agenda import Finding, Interest
+from aureus.common.language_prompts import LANGUAGE_PLANNER_EXPRESSION_INTENT
 from aureus.common.limits import MAX_FINDING_CHARS, MAX_INTEREST_CHARS
 from aureus.common.time_format import format_local_time
 from aureus.heartbeat.downtime import Downtime
@@ -339,11 +340,7 @@ def build_plan_prompt(
         parts.append(jargon)
     parts.append(_PLAN_INSTRUCTION)
     if with_expressions:
-        parts.append(
-            '如有适用的表达语境，可加 "expression_intent" 对象，'
-            '用 "focus"、"reply_act"、"scene"、"tone"、"prefer" 或 "avoid" '
-            "标记回复对象、动作、情景、语气、想用和要避开的说法。只写相关项。"
-        )
+        parts.append(LANGUAGE_PLANNER_EXPRESSION_INTENT)
     if with_agenda:
         parts.append(_PLAN_AGENDA_INSTRUCTION)
     if with_interests:
