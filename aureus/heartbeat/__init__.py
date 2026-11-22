@@ -39,6 +39,7 @@ from .judging import (
 from .main_loop import Heartbeat, OrganCaller
 from .perception import (
     MessageKind,
+    MessageRoute,
     MessageSink,
     OutgoingMessage,
     Perception,
@@ -74,6 +75,7 @@ __all__ = [
     "Heartbeat",
     "Judgment",
     "MessageKind",
+    "MessageRoute",
     "MessageSink",
     "OrganCaller",
     "OtherEmotion",

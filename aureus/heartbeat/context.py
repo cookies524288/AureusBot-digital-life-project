@@ -9,6 +9,7 @@ from datetime import date, datetime, tzinfo
 
 from aureus.actions.web import WebPage
 from aureus.agenda import Finding, Interest
+from aureus.common.language_prompts import LANGUAGE_PLANNER_EXPRESSION_INTENT
 from aureus.common.limits import MAX_FINDING_CHARS, MAX_INTEREST_CHARS
 from aureus.common.time_format import format_local_time
 from aureus.heartbeat.downtime import Downtime
@@ -271,6 +272,8 @@ def build_reply_prompt(
     intent: str = "",
     length: ReplyLength | None = None,
     recall: str = "",
+    jargon: str = "",
+    expressions: str = "",
     people_context: str = "",
 ) -> str:
     """拼出回复用的提示词：之前的对话，加上刚收到、还没回复的消息。
@@ -283,6 +286,8 @@ def build_reply_prompt(
         intent: 规划器想好的意思；空字符串表示没有规划（合并成一次调用）。
         length: 回复的长度要求；None 表示不限。
         recall: 按关键词查到的内部参考块；空字符串表示没查记忆（D80）。
+        jargon: 合并调用时命中的黑话参考。
+        expressions: 选中的习得表达参考。
         people_context: 当前发言人的历史资料；空字符串表示不附人物资料（3.3）。
 
     Returns:
@@ -292,10 +297,7 @@ def build_reply_prompt(
         ValueError: 没有要回复的消息。
     """
     parts = _dialogue_sections(history, new_messages, user_name, timezone)
-    if recall:
-        parts.append(recall)
-    if people_context:
-        parts.append(people_context)
+    parts.extend(filter(None, (recall, people_context, jargon, expressions)))
     if intent:
         parts.append(f"你已经想好要表达的意思：{_one_line(intent)}")
     if length is not None:
@@ -313,6 +315,8 @@ def build_plan_prompt(
     with_agenda: bool = False,
     with_interests: bool = False,
     with_recall: bool = False,
+    jargon: str = "",
+    with_expressions: bool = False,
 ) -> str:
     """拼出规划器的提示词：同样的对话，最后要它只输出一个 JSON 格式的建议（D59）。
 
@@ -324,6 +328,8 @@ def build_plan_prompt(
         with_agenda: 日程开着时，告诉它可以顺带提出答应了什么、做完了哪项（D74）。
         with_interests: 兴趣开着且在用户私聊时，说明可选的兴趣建议字段（D79）。
         with_recall: 记忆和召回都开着时，说明按需提供关键词（D80）。
+        jargon: 当前聊天命中的内部黑话参考。
+        with_expressions: 是否请 Planner 在需要时描述表达意图。
 
     Returns:
         提示词。
@@ -332,7 +338,11 @@ def build_plan_prompt(
         ValueError: 没有要回复的消息。
     """
     parts = _dialogue_sections(history, new_messages, user_name, timezone)
+    if jargon:
+        parts.append(jargon)
     parts.append(_PLAN_INSTRUCTION)
+    if with_expressions:
+        parts.append(LANGUAGE_PLANNER_EXPRESSION_INTENT)
     if with_agenda:
         parts.append(_PLAN_AGENDA_INSTRUCTION)
     if with_interests:

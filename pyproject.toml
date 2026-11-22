@@ -21,11 +21,13 @@ dependencies = [
     "httpx>=0.28.1",
     "litellm>=1.109.1",
     "loguru>=0.8.0",
+    "msgpack>=1.2.2",
     "platformdirs>=4.14.5",
     "python-dotenv>=1.2.4",
     "tomlkit>=0.15.2",
     "tzdata>=2026.6",
     "uvicorn[standard]>=0.54.0",
+    "websockets>=17.4",
 ]
 
 [project.scripts]
