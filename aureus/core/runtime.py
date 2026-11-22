@@ -21,7 +21,13 @@ from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
 from aureus.body import Body, BodySampleStore
 from aureus.channels import CHANNEL_NAME as TERMINAL_CHANNEL
-from aureus.channels import TERMINAL_USER_ID, WEB_CHANNEL_NAME, WEB_USER_ID
+from aureus.channels import (
+    QQ_CHANNEL_NAME,
+    TERMINAL_USER_ID,
+    WEB_CHANNEL_NAME,
+    WEB_USER_ID,
+    QQChannel,
+)
 from aureus.common import (
     AureusPaths,
     Clock,
@@ -37,15 +43,15 @@ from aureus.common.vault import SecretVault
 from aureus.core.model_runtime import ModelRuntime
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
-from aureus.heartbeat import Heartbeat
+from aureus.heartbeat import Heartbeat, Perception, registered_templates
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
-from aureus.memory import DiaryBook, MemoryIndex
+from aureus.memory import DiaryBook, LanguageStore, MemoryIndex
 from aureus.mood import Mood
-from aureus.organs import FakeReplyer, KeyResolver, OrganBus, load_models_config
+from aureus.organs import FakeReplyer, KeyResolver, OrganBus, PromptStore, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
-from aureus.people import AffinityBook, PeopleDirectory, PeopleError
+from aureus.people import AccountLink, AffinityBook, PeopleDirectory, PeopleError
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
 from aureus.timeline import TimelineDatabase
 
@@ -65,9 +71,11 @@ class Core:
     identity_history: IdentityHistory
     feedback: FeedbackStore | None = None  # [feedback] enabled 关闭时为 None
     models: ModelRuntime | None = None
+    qq: QQChannel | None = None
+    qq_link: AccountLink | None = None
 
 
-def _open_people(
+def open_people(
     paths: AureusPaths, clock: Clock, identity: Identity, stack: ExitStack
 ) -> PeopleDirectory:
     """打开人物档案，登记用户和用户的账号（1.8，05 号文档）。
@@ -95,7 +103,11 @@ def _build_organ_bus(
     """注册器官。假器官模式不读 models.toml、不调用任何模型，不花钱。"""
     bus = OrganBus()
     models = ModelRuntime(
-        bus, resolver, fake_organs=fake_organs, fake_reply_organ=heartbeat.reply_organ
+        bus,
+        resolver,
+        fake_organs=fake_organs,
+        fake_reply_organ=heartbeat.reply_organ,
+        prompts=PromptStore(paths.home / "prompts.toml", registered_templates()),
     )
     if fake_organs:
         bus.register(FakeReplyer(organ_id=heartbeat.reply_organ))
@@ -187,7 +199,7 @@ def open_core(
             removed = samples.prune(runtime.body.sample_retention_days)
             if removed:
                 logger.info("清理了 {} 行过期的身体信号样本", removed)
-        people = _open_people(paths, the_clock, identity, stack)
+        people = open_people(paths, the_clock, identity, stack)
         # 反馈（D67）：关掉时不创建，认知状态的信心显示没有数据，其它行为不变。
         feedback: FeedbackStore | None = None
         if runtime.feedback.enabled:
@@ -257,7 +269,7 @@ def open_core(
         memory: MemoryIndex | None = None
         if runtime.memory.enabled:
             try:
-                memory = MemoryIndex(paths.database_file, timeline)
+                memory = MemoryIndex(paths.database_file, timeline, clock)
                 memory.open()
                 stack.callback(memory.close)
             except sqlite3.Error:
@@ -266,6 +278,14 @@ def open_core(
         if roleplay:
             exploration = exploration.model_copy(update={"enabled": False})
             persona_growth = persona_growth.model_copy(update={"enabled": False})
+        language: LanguageStore | None = None
+        if runtime.language.recall_enabled or runtime.language.learning_enabled:
+            try:
+                language = LanguageStore(paths.database_file)
+                language.open()
+            except sqlite3.Error:
+                language = None
+                logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -277,6 +297,7 @@ def open_core(
             emergency_stop=emergency_stop,
             body=body,
             people=people,
+            people_config=runtime.people,
             identity_history=identity_history,
             samples=samples,
             feedback=feedback,
@@ -297,6 +318,8 @@ def open_core(
             has_exploration_organ=exploration.organ in models.available_organs,
             memory=memory,
             memory_config=runtime.memory,
+            language=language,
+            language_config=runtime.language,
             diary=DiaryBook(paths.diary_dir),
             diary_config=runtime.diary,
             has_diary_organ=runtime.diary.organ in models.available_organs,
@@ -304,6 +327,37 @@ def open_core(
             has_persona_organ=persona_growth.organ in models.available_organs,
         )
         models.on_reload = heartbeat.update_available_organs
+        qq = None
+        qq_link = None
+        if runtime.qq.enabled:
+            token = resolver.get(runtime.qq.token_key) if runtime.qq.token_key else None
+            if runtime.qq.token_key and token is None:
+                raise ConfigError("QQ 通道配置的密钥未设置")
+            link = qq_link = AccountLink(
+                people,
+                the_clock,
+                (WEB_CHANNEL_NAME, WEB_USER_ID),
+                QQ_CHANNEL_NAME,
+                runtime.qq.account_id,
+            )
+
+            def is_qq_owner(account: str) -> bool:
+                person = people.find(QQ_CHANNEL_NAME, account)
+                return person is not None and person.is_user
+
+            def consume_qq_link(perception: Perception) -> bool:
+                assert perception.route is not None
+                return link.receive(
+                    perception.sender_id,
+                    perception.content,
+                    is_direct=(
+                        perception.route.kind == "private"
+                        and perception.route.temporary_group_id is None
+                    ),
+                )
+
+            qq = QQChannel(runtime.qq, token, heartbeat, is_qq_owner, consume_qq_link)
+            heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show)
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
         )
@@ -319,4 +373,6 @@ def open_core(
             identity_history,
             feedback,
             models,
+            qq,
+            qq_link,
         )

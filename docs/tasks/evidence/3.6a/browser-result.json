@@ -1,0 +1,31 @@
+{
+  "browser": "158.0.4370.33",
+  "report": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "scenes": {
+        "replyer": 6,
+        "planner": 5,
+        "judge": 2,
+        "summarizer": 3
+      },
+      "status": "passed"
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scenes": {
+        "replyer": 6,
+        "planner": 5,
+        "judge": 2,
+        "summarizer": 3
+      },
+      "status": "passed"
+    }
+  ]
+}

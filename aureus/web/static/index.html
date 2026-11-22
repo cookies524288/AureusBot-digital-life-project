@@ -59,7 +59,8 @@ nav.side:hover,nav.side:has(:focus-visible){width:var(--nav-open);border-right-c
 nav.side:is(:hover,:has(:focus-visible)) .brand-content,#app:has(.nav-trigger:hover) .brand-content{transform:translateX(calc(-50% - 4px))}
 .catalog-row select{flex:1;min-width:0}
 .brand-mark{flex:none;width:32px;height:32px;object-fit:contain;display:block}
-:root[data-theme='dark'] .brand-mark{filter:invert(1)}
+.brand-mark-bg{fill:var(--brand-mark-bg,var(--bg))}
+:root[data-theme='dark'] .brand-mark{--brand-mark-bg:transparent;filter:invert(1)}
 .ico{display:block;flex:none;width:16px;height:16px;fill:currentColor;fill-rule:evenodd;shape-rendering:crispEdges}
 .nav-icon{width:20px;height:20px}
 /* 文字平时藏着，展开时同时滑出（同一栏的标签一起出现，不错开）；收回时不延迟，一起淡出 */
@@ -287,6 +288,18 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .lock-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
 .layer-card .field-label{margin-bottom:6px}
 
+/* ---------- Prompt 管理 ---------- */
+.prompt-layout{display:grid;grid-template-columns:minmax(180px,280px) minmax(0,1fr);gap:18px}
+.prompt-directory{max-height:64vh;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.prompt-directory .btn{text-align:left;white-space:normal;overflow-wrap:anywhere}
+.prompt-directory .btn[aria-pressed="true"]{border-color:currentColor}
+.prompt-source{min-height:18rem;resize:vertical;font-family:ui-monospace,monospace}
+.prompt-actions{display:flex;gap:8px;flex-wrap:wrap}
+#prompt-preview{width:min(850px,calc(100% - 24px))}
+.prompt-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 16px}
+.prompt-preview .dialog-body{max-height:70dvh;overflow:auto}
+.prompt-scene{padding:8px 22px 12px;margin:0;border-bottom:1px solid var(--border)}
+@media(max-width:700px){.prompt-layout{grid-template-columns:minmax(0,1fr)}.prompt-directory{max-height:24vh}.prompt-source{min-height:13rem}}
 /* ---------- 模型和器官 ---------- */
 .provider-card .card-head{align-items:flex-start}
 .model-row{display:grid;grid-template-columns:1.2fr 1.2fr auto;gap:10px;align-items:start;padding:12px 0;border-top:1px solid var(--border)}
@@ -460,7 +473,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <symbol id="i-close" viewBox="0 0 16 16"><path d="M3 2h1v1h1v1h1v1h1v1h2V5h1V4h1V3h1V2h2v2h-1v1h-1v1h-1v1h-1v2h1v1h1v1h1v1h1v2h-2v-1h-1v-1h-1v-1H9v-1H7v1H6v1H5v1H4v1H2v-2h1v-1h1v-1h1V9h1V7H5V6H4V5H3V4H2V2z"/></symbol>
 <symbol id="i-up" viewBox="0 0 16 16"><path d="M7 2h2v1h1v1h1v1h1v1h1v2h-2V7h-1V6H9v8H7V6H6v1H5v1H3V6h1V5h1V4h1V3h1z"/></symbol>
 <symbol id="i-down" viewBox="0 0 16 16"><use href="#i-up" transform="translate(0 16) scale(1 -1)"/></symbol>
-<symbol id="login-logo" viewBox="3 3 58 58">
+<symbol id="login-logo" viewBox="0 0 64 64">
+  <circle class="brand-mark-bg" cx="32" cy="32" r="30"/>
   <path fill="#000" fill-rule="evenodd" d="M32 9.5C24.5 9.5 18.1 10.7 15.2 13.7C13.3 15.7 13.1 19.1 13 21.9C12.92 24.14 12.47 24.91 11.2 26.6L7 32.1C4.7 35.2 5.3 38.2 7.8 39.7C10.2 41.2 13.3 40.2 15.5 38.2C16.4 40.4 18.6 42.2 21 43.35L22 41.45C17.3 39.1 16 36.8 17.6 32.6C20.8914 23.96 43.1086 23.96 46.4 32.6C48 36.8 46.7 39.1 42 41.45L43 43.35C45.4 42.2 47.6 40.4 48.5 38.2C50.7 40.2 53.8 41.2 56.2 39.7C58.7 38.2 59.3 35.2 57 32.1L52.8 26.6C51.53 24.91 51.08 24.14 51 21.9C50.9 19.1 50.7 15.7 48.8 13.7C45.9 10.7 39.5 9.5 32 9.5ZM32 11.5C38.7 11.5 44.7 12.6 47.1 15C48.7 16.6 48.8 19.4 48.95 22.3C49.08 24.8 49.54 25.68 51 27.65L55.5 33.8Q56.8 35.7 56 36.5Q55.5 36.9 55 35.9L47.4 25.5C47 25 46.9 24.5 46.9 23.9C46.7 19.9 46.8 17.6 45.6 16.3C43.7 14.4 38.6 13.4 32 13.4S20.3 14.4 18.4 16.3C17.2 17.6 17.3 19.9 17.1 23.9Q17.1 24.8 16.6 25.5L9 35.9Q8.5 36.9 8 36.5Q7.2 35.7 8.5 33.8L13 27.65C14.46 25.68 14.92 24.8 15.05 22.3C15.2 19.4 15.3 16.6 16.9 15C19.3 12.6 25.3 11.5 32 11.5Z"/>
   <g fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round">
     <path stroke-width="2.2" d="M21.5 42.4C18.1 44.8 15.7 48.8 14 54.4M42.5 42.4C45.9 44.8 48.3 48.8 50 54.4"/>
@@ -468,7 +482,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
   </g>
   <path fill="#000" d="M29.8 32.1C29.8 31.3 34.2 31.3 34.2 32.1C34.2 32.9 32.8 34.3 32 34.3S29.8 32.9 29.8 32.1Z"/>
 </symbol>
-<symbol id="aureus-logo" viewBox="0 0 48 48"><image width="48" height="48" style="image-rendering:pixelated" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAE+SURBVGhD7ZDLbgMxDAPz/z/dXopAmUh+iUxz8AA87C49NPbxuFwuF/AzydfAi3XzMTh8egGeP/Us4x5y+0sxh3dDqvctKOUlVKFfRhRyVB3uSYgyDqqTbbbIxM5wpw1FHFSHO20o4qA63GlDEQfV4U4bijioDndaUMIxV+Jei0w4ywz2s7B7BA9zJBvchZ7MyecleIhyfu9CL/18nhIPULol2oQ7vMMSLFO4LDqAO9k9hrBEWZaK014WdktigRIe5nPGSYd78Tu7L/AjBVVG7HRmYf+N+IGHmRns8bmCO0zsvMFylRlVr3pPuFclhaUsbriXZcioXL1XULlH9zlCKvvD4RyiHFS6llGOKl1LuMZc3hecf8vpfuIesPqt8oBtxyYGlh2LdIB8Ty6cIN2TyjaQ7cpEm/zX7uVy+SS/J8BgvLpp8jwAAAAASUVORK5CYII="/></symbol>
+<symbol id="aureus-logo" viewBox="0 0 64 64">
+  <circle class="brand-mark-bg" cx="32" cy="32" r="30"/>
+  <image x="3" y="3" width="58" height="58" style="image-rendering:pixelated" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAE+SURBVGhD7ZDLbgMxDAPz/z/dXopAmUh+iUxz8AA87C49NPbxuFwuF/AzydfAi3XzMTh8egGeP/Us4x5y+0sxh3dDqvctKOUlVKFfRhRyVB3uSYgyDqqTbbbIxM5wpw1FHFSHO20o4qA63GlDEQfV4U4bijioDndaUMIxV+Jei0w4ywz2s7B7BA9zJBvchZ7MyecleIhyfu9CL/18nhIPULol2oQ7vMMSLFO4LDqAO9k9hrBEWZaK014WdktigRIe5nPGSYd78Tu7L/AjBVVG7HRmYf+N+IGHmRns8bmCO0zsvMFylRlVr3pPuFclhaUsbriXZcioXL1XULlH9zlCKvvD4RyiHFS6llGOKl1LuMZc3hecf8vpfuIesPqt8oBtxyYGlh2LdIB8Ty6cIN2TyjaQ7cpEm/zX7uVy+SS/J8BgvLpp8jwAAAAASUVORK5CYII="/>
+</symbol>
 </svg>
 <div id="toasts" popover="manual" aria-live="polite"></div>
 <div id="model-test-status" role="status" aria-live="polite"></div>
@@ -512,6 +529,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button class="nav-item" data-page="models" aria-label="模型"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-model"/></svg><span class="nav-label" style="--i:6">模型</span></button>
 <button class="nav-item" data-page="organs" aria-label="器官"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-organ"/></svg><span class="nav-label" style="--i:7">器官</span></button>
 <button class="nav-item" data-page="keys" aria-label="密钥"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-key"/></svg><span class="nav-label" style="--i:8">密钥</span></button>
+<div class="nav-group"><span class="nav-label" style="--i:8">高级管理</span></div>
+<button class="nav-item" data-page="prompts" aria-label="Prompt 管理"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-persona"/></svg><span class="nav-label" style="--i:9">Prompt 管理</span></button>
 <button class="nav-item" data-page="config" aria-label="设置"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-sliders"/></svg><span class="nav-label" style="--i:9">设置</span></button>
 <div class="nav-spacer"></div>
 <div class="nav-foot">
@@ -636,6 +655,20 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
 <div class="page-body stack">
 <div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
+<section id="qq-link" class="stack hidden" aria-labelledby="qq-link-title">
+<h3 id="qq-link-title">QQ 账号关联</h3>
+<form id="qq-link-form" class="row">
+<label for="qq-link-account">QQ 号</label>
+<input id="qq-link-account" type="text" inputmode="numeric" pattern="[1-9][0-9]{0,19}" maxlength="20" required style="max-width:220px">
+<button class="btn" type="submit">生成验证码</button>
+</form>
+<div id="qq-link-pending" class="stack hidden">
+<div>请在 QQ 私聊中发送以下命令，有效期 5 分钟。</div>
+<input id="qq-link-command" type="text" aria-label="QQ 验证命令" readonly>
+<div class="row"><button id="qq-link-confirm" class="btn primary">确认绑定</button>
+<button id="qq-link-revoke" class="btn">撤销验证码</button></div>
+</div>
+</section>
 <div id="cf-missing" class="empty hidden"></div>
 <div id="cf-content" class="cfg-layout hidden">
 <div id="cf-tabs" class="cfg-tabs"></div>
@@ -645,6 +678,17 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 </div>
 </div></section>
+<section id="page-prompts" class="page wide"><div class="page-head"><h2>Prompt 管理</h2></div>
+<div class="page-body stack">
+<div id="prompt-banner" class="banner hidden" role="alert"></div>
+<div class="prompt-layout">
+<div class="stack">
+<label class="field"><span>器官</span><select id="prompt-organ"></select></label>
+<label class="field"><span>搜索模板</span><input id="prompt-search" type="search"></label>
+<div id="prompt-directory" class="prompt-directory" role="group" aria-label="提示词目录"></div>
+</div>
+<div id="prompt-editor" class="stack"></div>
+</div></div></section>
 <section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class='page-body stack'>
 <div id='mo-missing' class='empty hidden'></div>
@@ -665,6 +709,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
 <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg>关闭</button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title"><div class="dialog-shell">
+<header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" autofocus>关闭预览</button></form></header>
+<div id="prompt-preview-scene"></div><div id="prompt-preview-body" class="dialog-body" tabindex="0"></div></div></dialog>
 
 <script src="/assets/organ-graph.js"></script>
 <script>
@@ -910,6 +957,7 @@ $('theme-btn').addEventListener('click', () => {
 // 默认密码时只能进改密码页（D63 第 6 条）。
 function showAuth(view, message) {
   state.loggedIn = false;
+  clearQQLink();
   pendingLiveUpdates.clear();
   catalogs.clear();
   state.loaded = {};
@@ -936,6 +984,7 @@ async function enter() {
     return;
   }
   state.loggedIn = true;
+  $('qq-link').classList.toggle('hidden', !res.data?.qq_link);
   $('terminal-btn').classList.toggle('hidden', !res.data?.can_open_terminal);
   $('restart-btn').classList.toggle('hidden', !res.data?.restart_instance);
   $('login').classList.add('hidden');
@@ -2050,7 +2099,8 @@ function openOrganEditor(name) {
   maxTokens.input.addEventListener('change', () => { if (maxTokens.input.reportValidity()) { organ.max_tokens = fieldNumber(maxTokens); markDirty(); } });
   body.append(list, search, picker,
     el('button', { class: 'btn small', text: '清空模型', onclick: () => { organ.models = []; changed(); } }),
-    el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort), temperature.node, maxTokens.node);
+    el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort), temperature.node, maxTokens.node,
+    el('button', { class: 'btn', type: 'button', text: '预览完整提示词', onclick: () => openPromptPreview(name) }));
   openEditor(name.toUpperCase(), body, true); refreshList();
   notifyModelWarnings([name]);
 }
@@ -2062,7 +2112,140 @@ async function loadOrgansPage() {
   if (result === true) { renderOrgans(); notifyModelWarnings(); }
 }
 PAGES.organs = { load: loadOrgansPage };
+
+// ---------- 高级管理：按器官查找提示词及逐项恢复 ----------
+const promptCatalog = { organs: {}, templates: [], selected: '' };
+function renderPromptDirectory() {
+  const organ = $('prompt-organ').value;
+  const keys = promptCatalog.organs[organ];
+  const search = $('prompt-search').value.trim().toLowerCase();
+  const entries = promptCatalog.templates.filter(entry => (!keys || keys.includes(entry.key))
+    && [entry.label, entry.key, ...entry.variables].some(value => value.toLowerCase().includes(search)));
+  $('prompt-directory').replaceChildren(...entries.map(entry => el('button', {
+    class: 'btn small', type: 'button', text: entry.label,
+    'aria-pressed': String(entry.key === promptCatalog.selected),
+    onclick: () => {
+      promptCatalog.selected = entry.key;
+      renderPromptDirectory();
+      renderPromptEditor(entry, true);
+    },
+  })));
+  if (!entries.length) $('prompt-directory').append(el('p', { class: 'empty', text: '没有匹配的提示词。' }));
+}
+function renderPromptEditor(entry, focus = false) {
+  const editor = $('prompt-editor');
+  showBanner('prompt-banner', '');
+  const source = el('textarea', { id: 'prompt-source', class: 'prompt-source', readonly: !entry.editable });
+  source.value = entry.source;
+  const status = el('span', { class: 'muted', role: 'status',
+    text: entry.editable ? (entry.customized ? '自定义' : '默认') : '固定片段' });
+  const save = el('button', { class: 'btn primary', type: 'button', text: '保存',
+    onclick: () => update('PUT', { source: source.value }) });
+  const reset = el('button', { class: 'btn', type: 'button', text: '恢复默认',
+    disabled: !entry.editable,
+    onclick: () => update('DELETE') });
+  async function update(method, body) {
+    save.disabled = reset.disabled = true;
+    const response = await api('/api/prompts/' + encodeURIComponent(entry.key), method, body);
+    save.disabled = reset.disabled = false;
+    if (response.ok) {
+      promptCatalog.templates = promptCatalog.templates.map(item => item.key === entry.key ? response.data : item);
+    }
+    if (!editor.contains(source)) return;
+    if (!response.ok) { showBanner('prompt-banner', errorText(response)); return; }
+    renderPromptEditor(response.data, true);
+    toast(method === 'DELETE' ? '已恢复默认模板' : '已保存提示词', 'ok');
+  }
+  editor.replaceChildren(
+    el('label', { for: 'prompt-source', text: entry.label }), status,
+    el('div', { class: 'muted', text: entry.variables.length
+      ? '变量　' + entry.variables.map(value => '$' + value).join('、') : '无变量' }),
+    source, el('div', { class: 'prompt-actions' }, entry.editable ? save : null, reset));
+  if (focus) source.focus();
+}
+async function loadPromptPage() {
+  showBanner('prompt-banner', '');
+  const response = await api('/api/prompts');
+  if (!response.ok) { showBanner('prompt-banner', errorText(response)); return false; }
+  Object.assign(promptCatalog, response.data);
+  const filter = $('prompt-organ');
+  const previous = filter.value;
+  filter.replaceChildren(el('option', { value: '', text: '全部器官' }),
+    ...Object.keys(promptCatalog.organs).map(name => el('option', { value: name, text: name.toUpperCase() })));
+  if (Object.hasOwn(promptCatalog.organs, previous)) filter.value = previous;
+  const entry = promptCatalog.templates.find(item => item.key === promptCatalog.selected) || promptCatalog.templates[0];
+  if (entry) {
+    promptCatalog.selected = entry.key;
+    renderPromptEditor(entry);
+  }
+  renderPromptDirectory();
+  return true;
+}
+$('prompt-organ').addEventListener('change', renderPromptDirectory);
+$('prompt-search').addEventListener('input', renderPromptDirectory);
+PAGES.prompts = { load: loadPromptPage };
+
+async function openPromptPreview(organ) {
+  const dialog = $('prompt-preview');
+  const body = $('prompt-preview-body');
+  const scenePicker = $('prompt-preview-scene');
+  $('prompt-preview-title').textContent = organ.toUpperCase() + ' · 完整提示词';
+  const loading = el('p', { role: 'status', text: '正在加载…' });
+  scenePicker.replaceChildren();
+  body.replaceChildren(loading);
+  dialog.showModal();
+  const response = await api('/api/organs/' + encodeURIComponent(organ) + '/prompt-preview');
+  if (!dialog.open || !body.contains(loading)) return;
+  if (!response.ok) {
+    body.replaceChildren(el('p', { class: 'banner', role: 'alert', text: errorText(response) }));
+    return;
+  }
+  const scenes = response.data.scenes;
+  const select = el('select', { 'aria-label': '运行场景' },
+    ...scenes.map(scene => el('option', { value: scene.id, text: scene.label })));
+  const messages = el('div', { class: 'stack' });
+  function renderMessages() {
+    const scene = scenes.find(item => item.id === select.value);
+    messages.replaceChildren(...(scene.note ? [el('p', { class: 'muted', text: scene.note })] : []),
+      ...scene.messages.map(message => el('section', {},
+        el('h4', { text: message.role }), el('pre', { text: message.content }))));
+    body.scrollTop = 0;
+  }
+  select.addEventListener('change', renderMessages);
+  scenePicker.replaceChildren(el('label', { class: 'field prompt-scene' }, el('span', { text: '运行场景' }), select));
+  body.replaceChildren(messages);
+  renderMessages();
+}
 $('og-reset').addEventListener('click', () => organGraph?.reset());
+
+// ---------- 设置：QQ 账号关联 ----------
+function clearQQLink() {
+  $('qq-link-command').value = '';
+  $('qq-link-account').value = '';
+  $('qq-link-pending').classList.add('hidden');
+}
+
+$('qq-link-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const result = await api('/api/qq-link', 'POST', { account_id: $('qq-link-account').value });
+  if (!result.ok) { failApi(result); return; }
+  $('qq-link-command').value = result.data.command;
+  $('qq-link-pending').classList.remove('hidden');
+});
+
+$('qq-link-confirm').addEventListener('click', async () => {
+  const result = await api('/api/qq-link/confirm', 'POST');
+  if (!result.ok) { failApi(result); return; }
+  clearQQLink();
+  toast('已绑定 QQ 账号 ' + result.data.account_id);
+});
+
+$('qq-link-revoke').addEventListener('click', async () => {
+  const result = await api('/api/qq-link', 'DELETE');
+  if (!result.ok) { failApi(result); return; }
+  clearQQLink();
+  toast('验证码已撤销。');
+});
 
 // ---------- 设置：运行配置（/api/config，2.12b 的接口） ----------
 // 字段的类型、范围、默认值都从后端给的 schema 读；这里只写中文名和说明。不认识的节和字段照原名显示。

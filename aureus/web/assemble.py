@@ -75,10 +75,12 @@ def open_web(
             clock=clock,
             config_files=ConfigService(core.paths, core.settings.runtime),
             model_runtime=core.models,
+            prompt_identity=lambda: core.heartbeat.identity,
             open_terminal=open_terminal,
             request_shutdown=core.heartbeat.request_stop,
             request_restart=request_restart,
             run_model_test=core.gateway.test_model,
+            qq_link=core.qq_link,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

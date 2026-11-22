@@ -40,6 +40,12 @@ READONLY_CONFIG = (
     "web.enabled",
     "web.allow_remote",
     "web.port",
+    "qq.enabled",
+    "qq.endpoint",
+    "qq.account_id",
+    "qq.token_key",
+    "qq.action_timeout_seconds",
+    "qq.reconnect_seconds",
     *(f"cortisol.{field}" for field in CortisolConfig.model_fields),
 )
 PASSWORD_SECTIONS = ("safety", "web")
@@ -146,6 +152,11 @@ class ConfigService:
         """读取文件的有效值；缺文件是空骨架，错误只使用相对来源名。"""
         exists, raw = _read_toml(self.paths.models_config_file, "models.toml")
         return exists, validate_models_config(raw, "models.toml")
+
+    @property
+    def runtime(self) -> RuntimeConfig:
+        """当前进程生效的运行设置。"""
+        return self._runtime
 
     def view_models(self) -> dict[str, Any]:
         """模型配置、由 Literal 得到的选项和当前密钥状态，不返回密钥原文。"""

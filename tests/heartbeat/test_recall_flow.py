@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import AsyncIterator, Callable, Collection, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -16,7 +16,7 @@ from aureus.heartbeat.context import build_initiative_plan_prompt
 from aureus.heartbeat.planning import parse_plan
 from aureus.heartbeat.recall import MemoryTracker, format_recall, memory_entry
 from aureus.identity import Identity
-from aureus.memory import MemoryEntry, MemoryHit, MemoryIndex
+from aureus.memory import HistoricalMemory, MemoryEntry, MemoryHit, MemoryIndex, MemorySource
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, PermissionChecker
@@ -36,10 +36,19 @@ class CountingIndex(MemoryIndex):
         self.searches: list[tuple[tuple[str, ...], tuple[int, ...], int]] = []
 
     def search(
-        self, keywords: Sequence[str], exclude_ids: Collection[int], limit: int
+        self,
+        keywords: Sequence[str],
+        exclude_ids: Collection[int],
+        limit: int,
+        *,
+        person_key: str | None = None,
+        since: datetime | None = None,
+        before: datetime | None = None,
     ) -> list[MemoryHit]:
         self.searches.append((tuple(keywords), tuple(exclude_ids), limit))
-        return super().search(keywords, exclude_ids, limit)
+        return super().search(
+            keywords, exclude_ids, limit, person_key=person_key, since=since, before=before
+        )
 
 
 class RecallOrgans:
@@ -199,6 +208,36 @@ async def test_existing_history_is_excluded_and_empty_result_is_explicit(env: Me
     assert old.id in env.index.searches[-1][1]
     assert "命中：0 条\n没有找到相关的记忆。" in env.organs.requests[-1].prompt
     assert env.records("message")[-1].metadata["recall_record_ids"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit", [True, False])
+async def test_imported_history_reaches_planner_and_replyer(env: MemoryEnv, explicit: bool) -> None:
+    source = MemorySource("fixture", "main", "mai_messages", (1,))
+    env.index.publish(
+        [
+            HistoricalMemory(
+                source, "我们约好看木卫二照片", "阿明", recorded_at=NOW - timedelta(days=31)
+            )
+        ]
+    )
+    if not explicit:
+        env.organs.plan = '{"reply":true,"intent":"回忆观测"}'
+    await env.exchange(env.build(MemoryConfig(heuristic_recall_enabled=True)))
+    planner, replyer = env.organs.requests
+    assert "启发式记忆" in planner.prompt and "我们约好看木卫二照片" in planner.prompt
+    assert ("长期记忆检索结果" if explicit else "启发式记忆") in replyer.prompt
+    assert "我们约好看木卫二照片" in replyer.prompt and "来源 mai_messages/" in replyer.prompt
+    assert env.records("message")[-1].metadata["recall_source_keys"] == [source.encode()]
+    assert len(env.index.searches) == (2 if explicit else 1)
+
+
+@pytest.mark.asyncio
+async def test_heuristic_empty_search_keeps_both_prompts_clear(env: MemoryEnv) -> None:
+    env.organs.plan = '{"reply":true,"intent":"照常回复"}'
+    await env.exchange(env.build(MemoryConfig(heuristic_recall_enabled=True)))
+    assert len(env.index.searches) == 1
+    assert all("启发式记忆" not in request.prompt for request in env.organs.requests)
 
 
 @pytest.mark.asyncio

@@ -143,6 +143,15 @@ log_level = "INFO"
 
 # 网页通道（设计见 docs/10-decisions.md 的 D63、D53 第 5 条）。下面的值都是默认值，需要改再取消注释。
 # 第一次登录用默认密码 admin，登录后必须先改密码；密码还是默认的时候，只有本机能登录。
+[qq]
+# QQ 通道默认关闭。使用 SnowLuma 的正向 WebSocket 端点。
+# enabled = false
+# endpoint = ""
+# account_id = ""  # SnowLuma 登录的机器人 QQ 号，保留引号。
+# token_key = "AUREUS_KEY_QQ_ONEBOT"  # 通过 aureus keys set 写入令牌。
+# action_timeout_seconds = 10.0
+# reconnect_seconds = 5.0
+
 [web]
 # 网页通道的总开关。关掉后 aureus chat 不启动网页服务。
 # enabled = true
@@ -229,6 +238,8 @@ log_level = "INFO"
 [people]
 # 好感的开关。关掉后不记变化、不写进上下文。
 # affinity_enabled = true
+# 迁入的人物资料是否作为正常回复的内部参考（3.3）
+# history_in_reply_enabled = true
 # 初值：用户和其他人。只在第一次用到时采用，之后改这里不会改已有的好感。要在 0 和 100 之间（不含两端）。
 # user_initial_affinity = 80.0
 # stranger_affinity = 30.0
@@ -328,12 +339,20 @@ log_level = "INFO"
 # enabled = true
 # 只关召回仍继续建索引。
 # recall_enabled = true
+# heuristic_recall_enabled = false  # 在规划前按本轮回忆提示词检索
 # 一次最多给回复器几条，1～20。
 # max_results = 5
 # 每拍最多处理几条新的时间线记录，1～5000。
 # index_batch = 200
 
 # 每日日记（D80）：失败当天不再试，不补写；与记忆开关相互独立。
+[language]
+recall_enabled = true
+# 可选调用，启用后配置的学习器官须可用。
+learning_enabled = false
+organ = "summarizer"
+reference_chars = 700
+
 [diary]
 # enabled = true
 # 没注册这个器官时跳过，启动时只记一次日志。

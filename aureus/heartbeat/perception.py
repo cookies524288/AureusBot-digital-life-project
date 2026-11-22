@@ -14,6 +14,7 @@ from aureus.timeline import VisibilityScope
 
 __all__ = [
     "MessageKind",
+    "MessageRoute",
     "MessageSink",
     "OutgoingMessage",
     "Perception",
@@ -35,14 +36,30 @@ class TrustLevel(StrEnum):
 
 
 @dataclass(frozen=True)
+class MessageRoute:
+    """收发账号与原消息地址，供通道回投与时间线追溯"""
+
+    account_id: str
+    kind: str
+    recipient_id: str
+    message_id: str
+    temporary_group_id: str | None = None
+
+
+@dataclass(frozen=True)
 class Perception:
     """通道交给心跳的一条感知。"""
 
     channel: str  # 通道名，比如 terminal；回复会发回这个通道
     sender_id: str  # 发消息的人在这个平台上的账号 ID
     content: str
-    visibility: VisibilityScope  # 私聊是 USER_ONLY，群聊是 GROUP
+    visibility: VisibilityScope
     trust: TrustLevel
+    route: MessageRoute | None = None
+    mentioned: bool = False
+    quoted_message_id: str | None = None
+    source_timestamp: int | None = None
+    source_message_id: str | None = None  # 通道提供的稳定入站消息键，用于语言学习去重。
 
     def __post_init__(self) -> None:
         if not self.channel.strip():
@@ -69,6 +86,7 @@ class OutgoingMessage:
     sender_name: str  # 显示的名字：回复是它的名字，通知是“系统”
     timeline_id: int | None = None  # 同一历史回复拆出的各段共享序号
     timestamp: datetime | None = None
+    route: MessageRoute | None = None
 
 
 # 通道收消息的函数。必须很快返回、不能阻塞（心跳会直接调用它），出错只影响这个通道。

@@ -6,6 +6,7 @@ import ctypes
 import os
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 from threading import Thread
 from time import sleep
 
@@ -76,7 +77,7 @@ async def _run_web(
             web.request_stop()
 
     try:
-        async with asyncio.TaskGroup() as tasks:
+        async with core.qq or nullcontext(), asyncio.TaskGroup() as tasks:
             tasks.create_task(serve())
             tasks.create_task(beat())
     finally:

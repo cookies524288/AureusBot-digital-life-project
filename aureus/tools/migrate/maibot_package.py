@@ -15,6 +15,7 @@ from typing import IO
 from aureus.tools.migrate.maibot import open_readonly_database
 from aureus.tools.migrate.maibot_catalog import (
     BUSINESS_TABLES,
+    STAGING_APPLICATION_ID,
     MigrationError,
     Table,
     count_rows,
@@ -106,7 +107,7 @@ class Package:
                 "quarantined": count.quarantined,
                 "skipped": count.source - count.exported - count.quarantined,
             }
-            if table.name.casefold() in BUSINESS_TABLES[self.source.role]:
+            if table.reason != "unknown_table":
                 item["name"] = table.name.casefold()
             if count.quarantined:
                 item["quarantine_reason"] = "null_primary_key"
@@ -152,6 +153,8 @@ def _backup(source: Path, snapshot: Path) -> None:
         reader.execute("BEGIN")
         # BEGIN 延迟获取快照，先读取库头以固定已提交的 WAL 边界。
         reader.execute("PRAGMA main.user_version").fetchone()
+        if reader.execute("PRAGMA main.application_id").fetchone()[0] == STAGING_APPLICATION_ID:
+            raise MigrationError("staging_is_not_source")
         reader.backup(destination, pages=_BACKUP_PAGES)
         destination.execute("PRAGMA journal_mode = DELETE").fetchone()
 
@@ -214,6 +217,11 @@ def export_package(source: Source, database: Path, output: Path) -> Package:
 def _read_manifest(archive: zipfile.ZipFile, source: Source) -> tuple[bytes, object]:
     if sorted(archive.namelist()) != sorted((SNAPSHOT, RECORDS, MANIFEST)):
         raise MigrationError("invalid_package_members")
+    if any(
+        info.compress_type != zipfile.ZIP_STORED or info.flag_bits & 1
+        for info in archive.infolist()
+    ):
+        raise MigrationError("unsupported_package_encoding")
     with archive.open(MANIFEST) as entry:
         content = entry.read(_MANIFEST_LIMIT + 1)
     if len(content) > _MANIFEST_LIMIT:
