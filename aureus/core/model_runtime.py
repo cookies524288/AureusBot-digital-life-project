@@ -17,11 +17,19 @@ class PreparedModels:
 class ModelRuntime:
     """保留原总线和启动时的密钥解析器，不替换安全网关或重置任何计数。"""
 
-    def __init__(self, bus: OrganBus, resolver: KeyResolver, *, fake_organs: bool) -> None:
+    def __init__(
+        self,
+        bus: OrganBus,
+        resolver: KeyResolver,
+        *,
+        fake_organs: bool,
+        fake_reply_organ: str | None = None,
+    ) -> None:
         self.bus = bus
         self._resolver = resolver
         # 来源是启动参数 --fake；热重载不能把假器官切换成真实调用。
         self._fake_organs = fake_organs
+        self._fake_reply_organ = fake_reply_organ if fake_organs else None
         # 来源是实际应用的模型路线，只影响可选总结任务是否可以启动。空模型就是关闭。
         self.available_organs: frozenset[str] = frozenset(bus.list_organs())
         self.on_reload: Callable[[frozenset[str]], None] | None = None
@@ -49,6 +57,9 @@ class ModelRuntime:
                 if self._fake_organs
                 else LLMOrgan(name, routes, self._resolver)
             )
+        # 启动时的假回复器来自心跳配置，models.toml 可以没有同名条目。
+        if self._fake_reply_organ is not None and self._fake_reply_organ not in config.organs:
+            organs.append(FakeReplyer(organ_id=self._fake_reply_organ))
         return PreparedModels(tuple(organs), frozenset(available))
 
     def apply(self, prepared: PreparedModels) -> None:

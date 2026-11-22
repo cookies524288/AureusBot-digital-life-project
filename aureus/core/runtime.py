@@ -94,7 +94,9 @@ def _build_organ_bus(
 ) -> ModelRuntime:
     """注册器官。假器官模式不读 models.toml、不调用任何模型，不花钱。"""
     bus = OrganBus()
-    models = ModelRuntime(bus, resolver, fake_organs=fake_organs)
+    models = ModelRuntime(
+        bus, resolver, fake_organs=fake_organs, fake_reply_organ=heartbeat.reply_organ
+    )
     if fake_organs:
         bus.register(FakeReplyer(organ_id=heartbeat.reply_organ))
         models.available_organs = frozenset(bus.list_organs())

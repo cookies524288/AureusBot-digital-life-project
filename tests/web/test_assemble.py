@@ -7,10 +7,13 @@ from pathlib import Path
 
 import pytest
 from argon2 import PasswordHasher
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from aureus.channels import WEB_CHANNEL_NAME
 from aureus.common import AureusPaths, ConfigError, ManualClock, shutdown_logging
 from aureus.core.runtime import open_core
+from aureus.organs import CallPurpose, OrganRequest
 from aureus.web import PasswordStore
 from aureus.web.assemble import open_web
 from aureus.web.runner import WebServer
@@ -73,6 +76,35 @@ def test_an_enabled_web_channel_is_attached_to_the_heartbeat(paths: AureusPaths)
             core.heartbeat.attach_channel(WEB_CHANNEL_NAME, lambda _message: None)
     # 关闭后数据库连接都放掉了：Windows 上文件没被锁住，能删掉。
     paths.database_file.unlink()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply_organ", ["replyer", "custom-replyer"])
+async def test_first_provider_save_keeps_fake_replies(paths: AureusPaths, reply_organ: str) -> None:
+    paths.runtime_config_file.write_text(
+        f'[heartbeat]\nreply_organ = "{reply_organ}"\n', encoding="utf-8"
+    )
+    password = "correct horse"
+    PasswordStore(paths.web_password_file, FAST_HASHER).set_password(password)
+    clock = ManualClock(START)
+    with (
+        open_core(paths, fake_organs=True, clock=clock, to_console=False) as core,
+        open_web(core, clock) as server,
+    ):
+        assert server is not None
+        app = server._server.config.app
+        assert isinstance(app, FastAPI)
+        client = TestClient(app, client=("127.0.0.1", 50000))
+        assert client.post("/api/login", json={"password": password}).status_code == 200
+        config = client.get("/api/models").json()["config"]
+        assert not config["organs"]
+        config["providers"] = [{"name": "local", "protocol": "openai"}]
+        assert client.put("/api/models", json={"config": config}).status_code == 200
+        response = await core.gateway.call(
+            OrganRequest(organ_id=reply_organ, prompt="测试", purpose=CallPurpose.USER_REPLY)
+        )
+        assert response.metadata["type"] == "fake"
+        assert response.attempts == []
 
 
 def test_remote_access_with_the_default_password_refuses_to_assemble(paths: AureusPaths) -> None:
