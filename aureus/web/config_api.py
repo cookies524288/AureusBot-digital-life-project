@@ -17,6 +17,7 @@ from aureus.core.model_runtime import ModelRuntime
 from aureus.organs import (
     API_KEY_ENV_PATTERN,
     BUILTIN_ORGANS,
+    ModelsConfig,
     OrganCallError,
     OrganResponse,
     validate_models_config,
@@ -27,9 +28,12 @@ from aureus.safety import CallRejectedError
 
 from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
 from .config_files import (
+    MODEL_RESTORE_FIELDS,
     PASSWORD_SECTIONS,
     READONLY_CONFIG,
     ConfigService,
+    ModelRename,
+    model_defaults,
     models_require_password,
     runtime_field_names,
 )
@@ -107,6 +111,34 @@ def _runtime_changes(body: dict[str, Any]) -> dict[str, Any]:
         if any(not isinstance(item, (bool, int, float, str)) for item in fields):
             raise HTTPException(422, detail="配置的值只能是开关、数字或文字。")
     return changes
+
+
+def _confirm_runtime_edit(
+    names: list[str], auth: WebAuth, body: dict[str, Any], request: Request
+) -> None:
+    if any(name in READONLY_CONFIG for name in names):
+        raise HTTPException(
+            403,
+            detail="这一项只能在本机直接编辑 aureus.toml：改错了会让你从网页上进不来。",
+        )
+    if any(name.split(".")[0] in PASSWORD_SECTIONS for name in names):
+        _confirm(auth, body, request)
+
+
+def _model_rename(
+    body: dict[str, Any], current: ModelsConfig, submitted: ModelsConfig
+) -> ModelRename | None:
+    rename = body.get("rename")
+    if rename is None:
+        return None
+    if isinstance(rename, list) and len(rename) == 3:
+        section, old, new = rename
+        if section in ("providers", "models") and isinstance(old, str) and isinstance(new, str):
+            before = {entry.name for entry in getattr(current, section)}
+            after = {entry.name for entry in getattr(submitted, section)}
+            if old in before - after and new in after - before:
+                return section, old, new
+    raise HTTPException(422, detail="找不到改名前后的配置条目。")
 
 
 def register_config_routes(
@@ -214,6 +246,7 @@ def register_config_routes(
             async with service.write_lock:
                 _, current = await asyncio.to_thread(service.read_models)
                 submitted = submitted.model_copy(update={"config_version": current.config_version})
+                rename = _model_rename(body, current, submitted)
                 removed = set(current.organs) - set(submitted.organs)
                 if removed:
                     kind = "默认" if removed.intersection(BUILTIN_ORGANS) else "已有"
@@ -228,13 +261,56 @@ def register_config_routes(
                         if model_runtime is not None
                         else None
                     )
-                    await asyncio.to_thread(service.write_models, submitted)
+                    if rename is None:
+                        await asyncio.to_thread(service.write_models, submitted)
+                    else:
+                        await asyncio.to_thread(service.write_models, submitted, rename)
                     if model_runtime is not None and prepared is not None:
                         model_runtime.apply(prepared)
             return {
                 "ok": True,
                 "restart_required": service.restart_required,
                 "warnings": submitted.warnings(),
+            }
+
+    @app.post("/api/models/restore-default")
+    async def restore_model_default(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, Any]:
+        with _translate_errors(service):
+            body = await _body(request)
+            section, name, field = (body.get(key) for key in ("section", "name", "field"))
+            if not (
+                isinstance(section, str)
+                and isinstance(name, str)
+                and isinstance(field, str)
+                and field in MODEL_RESTORE_FIELDS.get(section, ())
+            ):
+                raise HTTPException(422, detail="这项设置没有可恢复的默认值。")
+            async with service.write_lock:
+                current, restored, changed = await asyncio.to_thread(
+                    service.prepare_model_restore, section, name, field
+                )
+                if models_require_password(current, restored):
+                    _confirm(auth, body, request)
+                if changed:
+                    prepared = (
+                        await asyncio.to_thread(model_runtime.prepare, restored)
+                        if model_runtime is not None and current != restored
+                        else None
+                    )
+                    await asyncio.to_thread(service.write_model_restore, section, name, field)
+                    if model_runtime is not None and prepared is not None:
+                        model_runtime.apply(prepared)
+            entries = restored.model_dump(mode="json")[section]
+            entry = (
+                entries.get(name)
+                if section == "organs"
+                else next(item for item in entries if item["name"] == name)
+            )
+            return {
+                "value": entry[field] if entry is not None else model_defaults(section)[field],
+                "restart_required": service.restart_required,
             }
 
     @app.get("/api/keys")
@@ -311,16 +387,28 @@ def register_config_routes(
             async with service.write_lock:
                 changed = await asyncio.to_thread(service.changed_runtime, changes)
                 names = runtime_field_names(changed)
-                if any(name in READONLY_CONFIG for name in names):
-                    raise HTTPException(
-                        403,
-                        detail="这一项只能在本机直接编辑 aureus.toml：改错了会让你从网页上进不来。",
-                    )
-                if any(name.split(".")[0] in PASSWORD_SECTIONS for name in names):
-                    _confirm(auth, body, request)
+                _confirm_runtime_edit(names, auth, body, request)
                 if changed:
                     await asyncio.to_thread(service.write_runtime, changed)
             return {"ok": True, "changed": names, "restart_required": service.restart_required}
+
+    @app.post("/api/config/restore-default")
+    async def restore_runtime_default(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, Any]:
+        with _translate_errors(service):
+            body = await _body(request)
+            field = body.get("field")
+            if not isinstance(field, str):
+                raise HTTPException(422, detail="需要指定一项要恢复默认的设置。")
+            async with service.write_lock:
+                _confirm_runtime_edit([field], auth, body, request)
+                value, changed = await asyncio.to_thread(service.restore_runtime, field)
+            return {
+                "value": value,
+                "changed": changed,
+                "restart_required": service.restart_required,
+            }
 
     @app.post("/api/keys/remove")
     async def remove_key(

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, MutableMapping
 from pathlib import Path
 from typing import Any, get_args
 
@@ -29,6 +29,7 @@ from aureus.organs import (
     ReasoningLevel,
     validate_models_config,
 )
+from aureus.organs.model_config import ModelConfig, OrganConfig, ProviderConfig
 from aureus.organs.topology import organ_connections
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,28 @@ READONLY_CONFIG = (
     "qq.reconnect_seconds",
 )
 PASSWORD_SECTIONS = ("safety", "web")
+MODEL_ENTRY_TYPES = {"providers": ProviderConfig, "models": ModelConfig, "organs": OrganConfig}
+MODEL_RESTORE_FIELDS = {
+    "providers": ("base_url", "timeout_seconds", "max_retry"),
+    "models": (
+        "kind",
+        "vision",
+        "price_in",
+        "price_out",
+        "price_cache_in",
+        "temperature",
+        "max_tokens",
+        "reasoning_levels",
+    ),
+    "organs": ("models", "reasoning_effort", "temperature", "max_tokens"),
+}
+ModelRename = tuple[str, str, str]
+
+
+def model_defaults(section: str) -> dict[str, Any]:
+    """从实际配置模型取默认值，供表单和稀疏写入共用。"""
+    fields = MODEL_ENTRY_TYPES[section].model_json_schema()["properties"]
+    return {name: prop["default"] for name, prop in fields.items() if "default" in prop}
 
 
 def runtime_field_names(changes: dict[str, Any]) -> list[str]:
@@ -71,8 +94,26 @@ def _read_toml(path: Path, source: str) -> tuple[bool, dict[str, Any]]:
         raise ConfigError(f"读不了 {source}。") from None
 
 
-def _edit_models(document: TOMLDocument, submitted: ModelsConfig) -> None:
-    """按名称复用未改的表；有改动的整条替换，顺序跟随提交。"""
+def _edit_model_table(table: Any, before: dict[str, Any], after: dict[str, Any]) -> None:
+    if table.get("kind") == "vision" and (
+        before["kind"] != after["kind"] or before["vision"] != after["vision"]
+    ):
+        # 旧版用一个值表示类型和视觉。改动其中一项时先拆开，避免旧写法盖过新值。
+        table["kind"] = after["kind"]
+        table["vision"] = after["vision"]
+    for field, value in after.items():
+        if field in before and before[field] == value:
+            continue
+        if value is None:
+            table.pop(field, None)
+        else:
+            table[field] = value
+
+
+def _edit_models(
+    document: TOMLDocument, submitted: ModelsConfig, rename: ModelRename | None
+) -> None:
+    """按名称复用现有表，只写值有变化的字段，并跟随提交顺序。"""
     current = validate_models_config(document.unwrap(), "models.toml")
     for section in ("providers", "models"):
         old_entries = {item.name: item for item in getattr(current, section)}
@@ -82,26 +123,62 @@ def _edit_models(document: TOMLDocument, submitted: ModelsConfig) -> None:
         old_tables = {table["name"]: table for table in document.get(section, [])}
         tables = tomlkit.aot()
         for entry in entries:
-            if old_entries.get(entry.name) == entry:
-                tables.append(old_tables[entry.name])
-            else:
-                tables.append(tomlkit.item(entry.model_dump(mode="json", exclude_none=True)))
+            previous_name = (
+                rename[1]
+                if rename and (section, entry.name) == (rename[0], rename[2])
+                else entry.name
+            )
+            previous = old_entries.get(previous_name)
+            table = old_tables[previous_name] if previous is not None else tomlkit.table()
+            before = (
+                previous.model_dump(mode="json")
+                if previous is not None
+                else model_defaults(section)
+            )
+            _edit_model_table(table, before, entry.model_dump(mode="json"))
+            tables.append(table)
         if entries:
             document[section] = tables
         else:
             document.pop(section, None)
     if current.organs != submitted.organs or list(current.organs) != list(submitted.organs):
-        previous = document.get("organs", {})
+        previous_tables = document.get("organs", {})
         organs = tomlkit.table(is_super_table=True)
         for name, entry in submitted.organs.items():
-            organs[name] = (
-                previous[name]
-                if current.organs.get(name) == entry
-                else entry.model_dump(mode="json", exclude_none=True)
+            previous = current.organs.get(name)
+            table = previous_tables[name] if previous is not None else tomlkit.table()
+            before = (
+                previous.model_dump(mode="json")
+                if previous is not None
+                else model_defaults("organs")
             )
+            _edit_model_table(table, before, entry.model_dump(mode="json"))
+            organs[name] = table
         document["organs"] = organs
     if "config_version" not in document:
         document["config_version"] = 1
+
+
+def _drop_model_override(document: Mapping[str, Any], section: str, name: str, field: str) -> bool:
+    if section == "organs":
+        table = document.get(section, {}).get(name)
+        if table is None and name in BUILTIN_ORGANS:
+            return False
+    else:
+        table = next((entry for entry in document.get(section, []) if entry["name"] == name), None)
+    if table is None:
+        raise ConfigError("找不到要恢复的配置条目。")
+    if table.get("kind") == "vision":
+        if field == "kind":
+            table["vision"] = True
+        elif field == "vision":
+            table["kind"] = "llm"
+            table.pop(field, None)
+            return True
+    if field not in table:
+        return False
+    del table[field]
+    return True
 
 
 def models_require_password(current: ModelsConfig, submitted: ModelsConfig) -> bool:
@@ -141,6 +218,11 @@ class ConfigService:
         exists, raw = _read_toml(self.paths.models_config_file, "models.toml")
         return exists, validate_models_config(raw, "models.toml")
 
+    @property
+    def runtime(self) -> RuntimeConfig:
+        """当前进程生效的运行设置。"""
+        return self._runtime
+
     def view_models(self) -> dict[str, Any]:
         """模型配置、由 Literal 得到的选项和当前密钥状态，不返回密钥原文。"""
         exists, config = self.read_models()
@@ -149,6 +231,7 @@ class ConfigService:
         return {
             "exists": exists,
             "config": config.model_dump(mode="json"),
+            "defaults": {section: model_defaults(section) for section in MODEL_ENTRY_TYPES},
             "choices": {
                 "protocols": list(get_args(ProviderProtocol)),
                 "kinds": list(get_args(ModelKind)),
@@ -181,12 +264,34 @@ class ConfigService:
             .replace(str(self.paths.master_key_file), "secrets.key")
         )
 
-    def write_models(self, config: ModelsConfig) -> None:
+    def write_models(self, config: ModelsConfig, rename: ModelRename | None = None) -> None:
         """按文件当前内容写回模型配置；由接口热重载，不设置重启标志（D86）。"""
         apply_toml_edit(
             self.paths.models_config_file,
-            lambda document: _edit_models(document, config),
+            lambda document: _edit_models(document, config, rename),
             lambda raw: validate_models_config(raw, "提交的模型配置"),
+        )
+
+    def prepare_model_restore(
+        self, section: str, name: str, field: str
+    ) -> tuple[ModelsConfig, ModelsConfig, bool]:
+        """读取原配置和删除指定覆盖后的有效配置，供权限检查和热重载。"""
+        _, raw = _read_toml(self.paths.models_config_file, "models.toml")
+        current = validate_models_config(raw, "models.toml")
+        changed = _drop_model_override(raw, section, name, field)
+        restored = validate_models_config(raw, "恢复默认后的模型配置") if changed else current
+        return current, restored, changed
+
+    def write_model_restore(self, section: str, name: str, field: str) -> None:
+        """仅删除指定键，重新校验并原子写回模型配置文件。"""
+
+        def edit(document: TOMLDocument) -> None:
+            _drop_model_override(document, section, name, field)
+
+        apply_toml_edit(
+            self.paths.models_config_file,
+            edit,
+            lambda raw: validate_models_config(raw, "恢复默认后的模型配置"),
         )
 
     def view_keys(self) -> dict[str, Any]:
@@ -308,3 +413,29 @@ class ConfigService:
         )
         self.restart_required = True
         logger.info("网页修改运行配置：%s", "、".join(runtime_field_names(changes)))
+
+    def restore_runtime(self, key: str) -> tuple[Any, bool]:
+        """仅删除一个运行配置覆盖，返回有效值和覆盖是否存在。"""
+        section, separator, field = key.rpartition(".")
+        defaults = RuntimeConfig().model_dump(mode="json")
+        fields = defaults.get(section) if separator else defaults
+        if not isinstance(fields, dict) or field not in fields or isinstance(fields[field], dict):
+            raise ConfigError("这项设置没有可恢复的默认值。")
+        changed = False
+
+        def edit(document: TOMLDocument) -> None:
+            nonlocal changed
+            table = document.get(section, {}) if section else document
+            if isinstance(table, MutableMapping) and field in table:
+                del table[field]
+                changed = True
+
+        config = apply_toml_edit(
+            self.paths.runtime_config_file,
+            edit,
+            lambda raw: validate_runtime_config(raw, "恢复默认后的配置"),
+        ).model_dump(mode="json")
+        if changed:
+            self.restart_required = True
+            logger.info("网页恢复运行配置：%s", key)
+        return (config[section] if section else config)[field], changed

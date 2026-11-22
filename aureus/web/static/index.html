@@ -288,6 +288,18 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .lock-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
 .layer-card .field-label{margin-bottom:6px}
 
+/* ---------- Prompt 管理 ---------- */
+.prompt-layout{display:grid;grid-template-columns:minmax(180px,280px) minmax(0,1fr);gap:18px}
+.prompt-directory{max-height:64vh;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.prompt-directory .btn{text-align:left;white-space:normal;overflow-wrap:anywhere}
+.prompt-directory .btn[aria-pressed="true"]{border-color:currentColor}
+.prompt-source{min-height:18rem;resize:vertical;font-family:ui-monospace,monospace}
+.prompt-actions{display:flex;gap:8px;flex-wrap:wrap}
+#prompt-preview{width:min(850px,calc(100% - 24px))}
+.prompt-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 16px}
+.prompt-preview .dialog-body{max-height:70dvh;overflow:auto}
+.prompt-scene{padding:8px 22px 12px;margin:0;border-bottom:1px solid var(--border)}
+@media(max-width:700px){.prompt-layout{grid-template-columns:minmax(0,1fr)}.prompt-directory{max-height:24vh}.prompt-source{min-height:13rem}}
 /* ---------- 模型和器官 ---------- */
 .provider-card .card-head{align-items:flex-start}
 .model-row{display:grid;grid-template-columns:1.2fr 1.2fr auto;gap:10px;align-items:start;padding:12px 0;border-top:1px solid var(--border)}
@@ -312,6 +324,9 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .cfg-field:first-child{border-top:0}
 .cfg-field .name{font-weight:600;font-size:14px}
 .cfg-field .desc{font-size:12px;color:var(--text-2)}
+.cfg-control{display:flex;align-items:center;gap:8px}
+.cfg-control>:first-child{min-width:0}
+.cfg-control button,.field button[data-restore]{flex-shrink:0}
 @media (max-width:820px){.cfg-field{grid-template-columns:1fr}}
 .save-bar{position:sticky;bottom:0;display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:12px 0;background:linear-gradient(transparent,var(--bg) 30%)}
 /* ---------- 观察：带标题栏的卡片，参考 MaiBot 主页的 STATUS / DISK 面板 ---------- */
@@ -517,6 +532,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button class="nav-item" data-page="models" aria-label="模型"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-model"/></svg><span class="nav-label" style="--i:6">模型</span></button>
 <button class="nav-item" data-page="organs" aria-label="器官"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-organ"/></svg><span class="nav-label" style="--i:7">器官</span></button>
 <button class="nav-item" data-page="keys" aria-label="密钥"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-key"/></svg><span class="nav-label" style="--i:8">密钥</span></button>
+<div class="nav-group"><span class="nav-label" style="--i:8">高级管理</span></div>
+<button class="nav-item" data-page="prompts" aria-label="Prompt 管理"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-persona"/></svg><span class="nav-label" style="--i:9">Prompt 管理</span></button>
 <button class="nav-item" data-page="config" aria-label="设置"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-sliders"/></svg><span class="nav-label" style="--i:9">设置</span></button>
 <div class="nav-spacer"></div>
 <div class="nav-foot">
@@ -664,6 +681,17 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 </div>
 </div></section>
+<section id="page-prompts" class="page wide"><div class="page-head"><h2>Prompt 管理</h2></div>
+<div class="page-body stack">
+<div id="prompt-banner" class="banner hidden" role="alert"></div>
+<div class="prompt-layout">
+<div class="stack">
+<label class="field"><span>器官</span><select id="prompt-organ"></select></label>
+<label class="field"><span>搜索模板</span><input id="prompt-search" type="search"></label>
+<div id="prompt-directory" class="prompt-directory" role="group" aria-label="提示词目录"></div>
+</div>
+<div id="prompt-editor" class="stack"></div>
+</div></div></section>
 <section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class='page-body stack'>
 <div id='mo-missing' class='empty hidden'></div>
@@ -684,6 +712,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
 <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg>关闭</button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title"><div class="dialog-shell">
+<header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" autofocus>关闭预览</button></form></header>
+<div id="prompt-preview-scene"></div><div id="prompt-preview-body" class="dialog-body" tabindex="0"></div></div></dialog>
 
 <script src="/assets/organ-graph.js"></script>
 <script>
@@ -915,9 +946,12 @@ window.addEventListener('hashchange', () => { if (state.loggedIn) showPage(locat
 // ---------- 主题：默认亮色（不看系统设置），点一下在亮色和深色之间切；只记在这台浏览器里 ----------
 function applyTheme(theme) { if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; }
 try { applyTheme(localStorage.getItem('aureus-theme')); } catch (e) { /* 浏览器不让存就用亮色 */ }
+const DEFAULT_UI_FONT = 'pixel';
+document.documentElement.dataset.font = DEFAULT_UI_FONT;
 try {
-  if (localStorage.getItem('aureus-font') === 'system') document.documentElement.dataset.font = 'system';
-} catch (e) { /* 浏览器不让存就用像素字体 */ }
+  const savedFont = localStorage.getItem('aureus-font');
+  if (savedFont === 'pixel' || savedFont === 'system') document.documentElement.dataset.font = savedFont;
+} catch (e) { /* 浏览器不让存就用默认字体 */ }
 $('theme-btn').addEventListener('click', () => {
   const current = document.documentElement.dataset.theme || 'light';
   const next = current === 'dark' ? 'light' : 'dark';
@@ -1466,9 +1500,11 @@ async function loadPersona() {
   locks.textContent = '';
   for (const [key, title] of FREE_LAYERS) {
     free.append(personaLayerCard(key, title, v.layers[key], v.history[key] || []));
+    const input = el('input', { type: 'checkbox', id: 'ps-lock-' + key, checked: !!v.locks[key], 'aria-label': '锁定' + title });
     locks.append(el('div', { class: 'lock-row' },
       el('span', { text: '锁定' + title }),
-      el('label', { class: 'switch' }, el('input', { type: 'checkbox', id: 'ps-lock-' + key, checked: !!v.locks[key] }), el('span', { class: 'track' }))));
+      el('div', { class: 'row' }, el('label', { class: 'switch' }, input, el('span', { class: 'track' })),
+        restoreButton('锁定' + title, key, button => restorePersonaLock(key, input, button)))));
   }
   const facts = v.layers.facts.facts, user = v.layers.facts.user;
   $('ps-name').value = facts.name;
@@ -1481,11 +1517,30 @@ async function loadPersona() {
   $('ps-password').value = '';
 }
 
-// 三个锁定开关一起发，都是 true 或 false（LocksRequest 是 strict 模式）。
-$('ps-save-locks').addEventListener('click', () => {
+async function restorePersonaLock(key, input, button) {
+  const locks = $('ps-locks'), save = $('ps-save-locks');
+  locks.inert = true; save.disabled = true;
+  try {
+    const res = await api('/api/settings/locks/restore-default', 'POST', { layer: key });
+    if (!res.ok) { fail(res); return; }
+    input.checked = res.data.value;
+    toast('已恢复默认。', 'ok');
+  } finally {
+    locks.inert = false; save.disabled = false; button.focus();
+  }
+}
+
+// 保留已有请求格式，编辑器仅写入实际改变的开关。
+$('ps-save-locks').addEventListener('click', async () => {
+  const panel = $('ps-locks'), save = $('ps-save-locks');
   const locks = {};
   for (const [key] of FREE_LAYERS) locks[key] = $('ps-lock-' + key).checked;
-  savePersona({ locks }, '锁定已保存。');
+  panel.inert = true; save.disabled = true;
+  try {
+    await savePersona({ locks }, '锁定已保存。');
+  } finally {
+    panel.inert = false; save.disabled = false;
+  }
 });
 
 $('ps-save-baseline').addEventListener('click', async () => {
@@ -1514,7 +1569,7 @@ PAGES.persona = { load: loadPersona };
 const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], connections: [], provider: '',
   dirty: false, revision: 0, saved: 0, pending: 0, queue: Promise.resolve() };
 const clone = value => JSON.parse(JSON.stringify(value));
-const emptyOrgan = () => ({ models: [], strategy: 'sequential', temperature: null, max_tokens: null, reasoning_effort: null });
+const emptyOrgan = () => clone(mdl.defaults.organs);
 
 function refreshDirty() {
   const text = mdl.pending ? '正在自动保存…' : mdl.dirty ? '有改动未保存' : '已自动保存';
@@ -1537,12 +1592,12 @@ function notifyModelWarnings(names) {
 }
 
 // 每次 change/选模型产生一份完整快照，按操作顺序写；旧响应不覆盖后来的编辑，不自动重试。
-function markDirty(password) {
+function markDirty(password, rename) {
   const config = clone(mdl.cfg), revision = ++mdl.revision;
   mdl.dirty = true; mdl.pending++; refreshDirty();
   mdl.queue = mdl.queue.then(async () => {
     try {
-      const res = await api('/api/models', 'PUT', { config, password: password || undefined });
+      const res = await api('/api/models', 'PUT', { config, password: password || undefined, rename });
       if (!res.ok) { failApi(res); return false; }
       mdl.baseline = config; mdl.saved = revision;
       if (res.data.restart_required) showRestart();
@@ -1562,6 +1617,7 @@ async function loadModelsConfig() {
   if (notBuilt(res)) return 'missing';
   if (!res.ok) { fail(res); return false; }
   mdl.cfg = clone(res.data.config); mdl.baseline = clone(mdl.cfg);
+  mdl.defaults = res.data.defaults;
   mdl.choices = res.data.choices || {}; mdl.keys = res.data.key_status || {}; mdl.entries = res.data.key_entries || [];
   mdl.builtin = res.data.builtin_organs || [];
   mdl.connections = res.data.organ_connections || [];
@@ -1589,6 +1645,44 @@ function editorForm(title, fields, onChange, action) {
 const fieldText = field => field.input.value.trim();
 const fieldNumber = field => field.input.value === '' ? null : Number(field.input.value);
 function validFields(fields) { return Object.values(fields).every(field => field.input.reportValidity()); }
+
+function restoreButton(label, field, run) {
+  return el('button', { type: 'button', class: 'btn small', 'data-restore': field,
+    'aria-label': label + '：恢复默认', text: '恢复默认', onclick: event => run(event.currentTarget) });
+}
+
+function addModelRestore(host, label, section, entry, field, reopen, passwordInput) {
+  host.append(restoreButton(label, field, async button => {
+    const dialog = $('editor-dialog'), editor = $('editor-body'), close = $('editor-close');
+    const generation = editorGeneration;
+    const password = passwordInput?.value;
+    if (passwordInput) passwordInput.value = '';
+    editor.inert = true; close.disabled = true;
+    const keepOpen = event => event.preventDefault();
+    dialog.addEventListener('cancel', keepOpen);
+    try {
+      await mdl.queue;
+      if (!dialog.open || generation !== editorGeneration) return;
+      const name = section === 'organs' ? entry : entry.name;
+      const res = await api('/api/models/restore-default', 'POST', { section, name, field, password });
+      if (!res.ok) { failApi(res); return; }
+      for (const config of [mdl.cfg, mdl.baseline]) {
+        const entries = config[section];
+        const item = section === 'organs' ? entries[name] : entries.find(row => row.name === name);
+        if (item) item[field] = clone(res.data.value);
+      }
+      if (res.data.restart_required) showRestart();
+      toast('已恢复默认。', 'ok');
+      if (section === 'providers' && field === 'base_url') refreshCatalog(entry);
+      renderModels(); renderOrgans();
+      if (dialog.open && generation === editorGeneration) reopen();
+    } finally {
+      editor.inert = false; close.disabled = false;
+      dialog.removeEventListener('cancel', keepOpen);
+      if (dialog.open) (button.isConnected ? button : editor.querySelector('[data-restore="' + field + '"]'))?.focus();
+    }
+  }));
+}
 
 // 同一份已保存配置共用目录；两个选择框同步显示刷新结果。
 const catalogs = new Map();
@@ -1803,7 +1897,7 @@ function providerNeedsPassword(before, next) {
 }
 function openProviderEditor(provider) {
   const original = provider, isNew = !provider;
-  provider = provider || { name: '', protocol: (mdl.choices.protocols || ['openai'])[0], base_url: null, api_key_env: null, timeout_seconds: 60, max_retry: 2 };
+  provider = provider || { name: '', protocol: (mdl.choices.protocols || ['openai'])[0], ...mdl.defaults.providers };
   const selected = provider.api_key_ref ? 'vault:' + provider.api_key_ref : provider.api_key_env ? 'legacy' : '';
   const keyChoices = [{value:'', label:'不使用密钥'}, ...(mdl.entries || []).filter(entry => entry.kind === 'api_key').map(entry => ({value:'vault:' + entry.id, label:entry.name})), {value:'legacy', label:'环境变量 / 旧配置'}];
   if (provider.api_key_ref && !keyChoices.some(item => item.value === selected)) keyChoices.push({value:selected, label:'引用的 API key 已删除'});
@@ -1826,12 +1920,13 @@ function openProviderEditor(provider) {
     if (mdl.cfg.providers.some(item => item !== original && item.name === next.name)) { toast('API供应商名称已存在。', 'error'); return; }
     const password = fields.password.input.value;
     if (providerNeedsPassword(original, next) && !password) { toast('这项修改需要当前密码，填写后会自动保存。', 'error'); return; }
+    const rename = original && original.name !== next.name ? ['providers', original.name, next.name] : undefined;
     if (original) {
       for (const model of mdl.cfg.models) if (model.provider === original.name) model.provider = next.name;
       Object.assign(original, next);
     } else mdl.cfg.providers.push(next);
     mdl.provider = next.name; fields.password.input.value = '';
-    markDirty(password).then(ok => {
+    markDirty(password, rename).then(ok => {
       if (!ok || !state.loggedIn) return;
       refreshCatalog(next);
       renderModels();
@@ -1854,7 +1949,13 @@ function openProviderEditor(provider) {
   updateSource();
   body.append(el('div', {class:'row'}, keyStatus,
     el('button', {class:'btn small', text:'管理密钥', onclick:() => { $('editor-dialog').close(); showPage('keys'); }})));
-  if (original) body.append(el('button', { class: 'btn danger', text: '删除API供应商', onclick: () => removeProvider(original) }));
+  if (original) {
+    for (const [field, control, label] of [
+      ['base_url', fields.base_url, '请求地址'], ['timeout_seconds', fields.timeout, '超时（秒）'], ['max_retry', fields.retry, '失败重试次数'],
+    ]) addModelRestore(control.node, label, 'providers', original, field, () => openProviderEditor(original),
+      field === 'base_url' ? fields.password.input : undefined);
+    body.append(el('button', { class: 'btn danger', text: '删除API供应商', onclick: () => removeProvider(original) }));
+  }
 }
 async function removeProvider(provider) {
   if (!await confirmAction('确定要删除API供应商「' + provider.name + '」及其模型吗？')) return;
@@ -1865,8 +1966,7 @@ async function removeProvider(provider) {
 
 function openModelEditor(model, identifier = '') {
   const original = model, isNew = !model;
-  model = model || { name: '', identifier, provider: mdl.provider || mdl.cfg.providers[0].name, kind: 'llm',
-    price_in: null, price_out: null, price_cache_in: null, temperature: null, max_tokens: null, reasoning_levels: [] };
+  model = model || { name: '', identifier, provider: mdl.provider || mdl.cfg.providers[0].name, ...clone(mdl.defaults.models) };
   const fields = {
     provider: editorField('API供应商', model.provider, { values: mdl.cfg.providers.map(provider => provider.name) }),
     identifier: editorField('模型标识符', model.identifier, { required: true }),
@@ -1903,11 +2003,12 @@ function openModelEditor(model, identifier = '') {
       vision: fields.kind.input.value === 'llm' && !!vision.checked,
       price_in: fieldNumber(fields.price_in), price_out: fieldNumber(fields.price_out), price_cache_in: fieldNumber(fields.price_cache_in),
       temperature: fieldNumber(fields.temperature), max_tokens: fieldNumber(fields.max_tokens), reasoning_levels: [...levels] };
+    const rename = original && original.name !== name ? ['models', original.name, name] : undefined;
     if (original) {
       for (const organ of Object.values(mdl.cfg.organs)) organ.models = organ.models.map(item => item === original.name ? name : item);
       Object.assign(original, next);
     } else mdl.cfg.models.push(next);
-    markDirty(); renderModels(); renderOrgans();
+    markDirty(undefined, rename); renderModels(); renderOrgans();
     if (isNew) $('editor-dialog').close();
   };
   const body = editorForm(isNew ? '添加模型' : '编辑模型 · 自动保存', fields, () => { if (!isNew) apply(); },
@@ -1927,7 +2028,15 @@ function openModelEditor(model, identifier = '') {
     checkbox.addEventListener('change', () => { if (checkbox.checked) levels.add(level); else levels.delete(level); if (!isNew) apply(); });
     choices.append(el('label', { class: 'row' }, checkbox, level));
   }
-  body.append(el('div', { class: 'field' }, el('label', { text: '支持的思考等级' }), choices));
+  const reasoning = el('div', { class: 'field' }, el('label', { text: '支持的思考等级' }), choices);
+  body.append(reasoning);
+  if (original) {
+    for (const field of ['kind', 'price_in', 'price_out', 'price_cache_in', 'temperature', 'max_tokens']) {
+      addModelRestore(fields[field].node, fields[field].input.getAttribute('aria-label'), 'models', original, field, () => openModelEditor(original));
+    }
+    addModelRestore(fields.kind.node, '视觉', 'models', original, 'vision', () => openModelEditor(original));
+    addModelRestore(reasoning, '支持的思考等级', 'models', original, 'reasoning_levels', () => openModelEditor(original));
+  }
 }
 async function removeModel(model) {
   if (!await confirmAction('确定要删除模型「' + model.name + '」吗？')) return;
@@ -2023,10 +2132,11 @@ function allowedEfforts(organ) {
   return (mdl.choices.reasoning_levels || []).filter(level => rows.every(model => (model.reasoning_levels || []).includes(level)));
 }
 function openOrganEditor(name) {
-  const organ = mdl.cfg.organs[name] || (mdl.cfg.organs[name] = emptyOrgan());
+  const organ = mdl.cfg.organs[name] || emptyOrgan();
   const body = el('div', { class: 'stack' });
   const list = el('div', { class: 'chain' });
-  const changed = () => { markDirty(); notifyModelWarnings([name]); renderOrgans(); renderModels(); refreshList(); };
+  const save = () => { mdl.cfg.organs[name] = organ; markDirty(); };
+  const changed = () => { save(); notifyModelWarnings([name]); renderOrgans(); renderModels(); refreshList(); };
   let dragIndex = null;
   const move = (from, to) => {
     if (to < 0 || to >= organ.models.length) return;
@@ -2064,14 +2174,20 @@ function openOrganEditor(name) {
   }
   picker.addEventListener('change', () => { if (picker.value) { organ.models.push(picker.value); changed(); } });
   search.addEventListener('input', refreshList);
-  effort.addEventListener('change', () => { organ.reasoning_effort = effort.value || null; markDirty(); });
+  effort.addEventListener('change', () => { organ.reasoning_effort = effort.value || null; save(); });
   const temperature = editorField('温度', organ.temperature, { type: 'number', min: 0, step: 'any', hint: '留空使用模型自己的值' });
   const maxTokens = editorField('单次回复 token 上限', organ.max_tokens, { type: 'number', min: 1, step: 1 });
-  temperature.input.addEventListener('change', () => { if (temperature.input.reportValidity()) { organ.temperature = fieldNumber(temperature); markDirty(); } });
-  maxTokens.input.addEventListener('change', () => { if (maxTokens.input.reportValidity()) { organ.max_tokens = fieldNumber(maxTokens); markDirty(); } });
-  body.append(list, search, picker,
-    el('button', { class: 'btn small', text: '清空模型', onclick: () => { organ.models = []; changed(); } }),
-    el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort), temperature.node, maxTokens.node);
+  temperature.input.addEventListener('change', () => { if (temperature.input.reportValidity()) { organ.temperature = fieldNumber(temperature); save(); } });
+  maxTokens.input.addEventListener('change', () => { if (maxTokens.input.reportValidity()) { organ.max_tokens = fieldNumber(maxTokens); save(); } });
+  const chainActions = el('div', { class: 'row' },
+    el('button', { class: 'btn small', text: '清空模型', onclick: () => { organ.models = []; changed(); } }));
+  const effortField = el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort);
+  body.append(list, search, picker, chainActions, effortField, temperature.node, maxTokens.node);
+  for (const [field, host, label] of [
+    ['models', chainActions, '模型顺序'], ['reasoning_effort', effortField, '思考等级'],
+    ['temperature', temperature.node, '温度'], ['max_tokens', maxTokens.node, '单次回复 token 上限'],
+  ]) addModelRestore(host, label, 'organs', name, field, () => openOrganEditor(name));
+  body.append(el('button', { class: 'btn', type: 'button', text: '预览完整提示词', onclick: () => openPromptPreview(name) }));
   openEditor(name.toUpperCase(), body, true); refreshList();
   notifyModelWarnings([name]);
 }
@@ -2083,6 +2199,110 @@ async function loadOrgansPage() {
   if (result === true) { renderOrgans(); notifyModelWarnings(); }
 }
 PAGES.organs = { load: loadOrgansPage };
+
+// ---------- 高级管理：按器官查找提示词及逐项恢复 ----------
+const promptCatalog = { organs: {}, templates: [], selected: '' };
+function renderPromptDirectory() {
+  const organ = $('prompt-organ').value;
+  const keys = promptCatalog.organs[organ];
+  const search = $('prompt-search').value.trim().toLowerCase();
+  const entries = promptCatalog.templates.filter(entry => (!keys || keys.includes(entry.key))
+    && [entry.label, entry.key, ...entry.variables].some(value => value.toLowerCase().includes(search)));
+  $('prompt-directory').replaceChildren(...entries.map(entry => el('button', {
+    class: 'btn small', type: 'button', text: entry.label,
+    'aria-pressed': String(entry.key === promptCatalog.selected),
+    onclick: () => {
+      promptCatalog.selected = entry.key;
+      renderPromptDirectory();
+      renderPromptEditor(entry, true);
+    },
+  })));
+  if (!entries.length) $('prompt-directory').append(el('p', { class: 'empty', text: '没有匹配的提示词。' }));
+}
+function renderPromptEditor(entry, focus = false) {
+  const editor = $('prompt-editor');
+  showBanner('prompt-banner', '');
+  const source = el('textarea', { id: 'prompt-source', class: 'prompt-source', readonly: !entry.editable });
+  source.value = entry.source;
+  const status = el('span', { class: 'muted', role: 'status',
+    text: entry.editable ? (entry.customized ? '自定义' : '默认') : '固定片段' });
+  const save = el('button', { class: 'btn primary', type: 'button', text: '保存',
+    onclick: () => update('PUT', { source: source.value }) });
+  const reset = el('button', { class: 'btn', type: 'button', text: '恢复默认',
+    disabled: !entry.editable,
+    onclick: () => update('DELETE') });
+  async function update(method, body) {
+    save.disabled = reset.disabled = true;
+    const response = await api('/api/prompts/' + encodeURIComponent(entry.key), method, body);
+    save.disabled = reset.disabled = false;
+    if (response.ok) {
+      promptCatalog.templates = promptCatalog.templates.map(item => item.key === entry.key ? response.data : item);
+    }
+    if (!editor.contains(source)) return;
+    if (!response.ok) { showBanner('prompt-banner', errorText(response)); return; }
+    renderPromptEditor(response.data, true);
+    toast(method === 'DELETE' ? '已恢复默认模板' : '已保存提示词', 'ok');
+  }
+  editor.replaceChildren(
+    el('label', { for: 'prompt-source', text: entry.label }), status,
+    el('div', { class: 'muted', text: entry.variables.length
+      ? '变量　' + entry.variables.map(value => '$' + value).join('、') : '无变量' }),
+    source, el('div', { class: 'prompt-actions' }, entry.editable ? save : null, reset));
+  if (focus) source.focus();
+}
+async function loadPromptPage() {
+  showBanner('prompt-banner', '');
+  const response = await api('/api/prompts');
+  if (!response.ok) { showBanner('prompt-banner', errorText(response)); return false; }
+  Object.assign(promptCatalog, response.data);
+  const filter = $('prompt-organ');
+  const previous = filter.value;
+  filter.replaceChildren(el('option', { value: '', text: '全部器官' }),
+    ...Object.keys(promptCatalog.organs).map(name => el('option', { value: name, text: name.toUpperCase() })));
+  if (Object.hasOwn(promptCatalog.organs, previous)) filter.value = previous;
+  const entry = promptCatalog.templates.find(item => item.key === promptCatalog.selected) || promptCatalog.templates[0];
+  if (entry) {
+    promptCatalog.selected = entry.key;
+    renderPromptEditor(entry);
+  }
+  renderPromptDirectory();
+  return true;
+}
+$('prompt-organ').addEventListener('change', renderPromptDirectory);
+$('prompt-search').addEventListener('input', renderPromptDirectory);
+PAGES.prompts = { load: loadPromptPage };
+
+async function openPromptPreview(organ) {
+  const dialog = $('prompt-preview');
+  const body = $('prompt-preview-body');
+  const scenePicker = $('prompt-preview-scene');
+  $('prompt-preview-title').textContent = organ.toUpperCase() + ' · 完整提示词';
+  const loading = el('p', { role: 'status', text: '正在加载…' });
+  scenePicker.replaceChildren();
+  body.replaceChildren(loading);
+  dialog.showModal();
+  const response = await api('/api/organs/' + encodeURIComponent(organ) + '/prompt-preview');
+  if (!dialog.open || !body.contains(loading)) return;
+  if (!response.ok) {
+    body.replaceChildren(el('p', { class: 'banner', role: 'alert', text: errorText(response) }));
+    return;
+  }
+  const scenes = response.data.scenes;
+  const select = el('select', { 'aria-label': '运行场景' },
+    ...scenes.map(scene => el('option', { value: scene.id, text: scene.label })));
+  const messages = el('div', { class: 'stack' });
+  function renderMessages() {
+    const scene = scenes.find(item => item.id === select.value);
+    messages.replaceChildren(...(scene.note ? [el('p', { class: 'muted', text: scene.note })] : []),
+      ...scene.messages.map(message => el('section', {},
+        el('h4', { text: message.role }), el('pre', { text: message.content }))));
+    body.scrollTop = 0;
+  }
+  select.addEventListener('change', renderMessages);
+  scenePicker.replaceChildren(el('label', { class: 'field prompt-scene' }, el('span', { text: '运行场景' }), select));
+  body.replaceChildren(messages);
+  renderMessages();
+}
 $('og-reset').addEventListener('click', () => organGraph?.reset());
 
 // ---------- 设置：QQ 账号关联 ----------
@@ -2288,7 +2508,7 @@ const CFG_FIELDS = {
   'web.login_lockout_seconds': ['登录锁定时长（秒）', '触发锁定后等待多少秒才能重新登录。'],
 };
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
-const cf = { data: null, schema: null, readonly: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '' };
+const cf = { data: null, schema: null, readonly: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false };
 const cfKey = (sec, field) => sec ? sec + '.' + field : field;
 const cfResolve = node => (node && node.$ref ? cf.schema.$defs[node.$ref.split('/').pop()] : node) || {};
 const cfOriginal = (sec, field) => (sec ? (cf.data[sec] || {})[field] : cf.data[field]);
@@ -2323,9 +2543,11 @@ function cfSet(key, value, original) {
 }
 function refreshConfigDirty() {
   const keys = Object.keys(cf.changes);
-  $('cf-save').disabled = !keys.length && !cf.invalid.size;
-  $('cf-reset').disabled = !keys.length && !cf.invalid.size;
-  const needPassword = keys.some(key => key.includes('.') && cf.pwSections.has(key.split('.')[0]));
+  $('cf-save').disabled = cf.busy || (!keys.length && !cf.invalid.size);
+  $('cf-reset').disabled = cf.busy || (!keys.length && !cf.invalid.size);
+  $('cf-section').inert = cf.busy;
+  $('cf-tabs').inert = cf.busy;
+  const needPassword = cf.pwSections.has(cf.tab) || keys.some(key => key.includes('.') && cf.pwSections.has(key.split('.')[0]));
   $('cf-password-box').classList.toggle('hidden', !needPassword);
   for (const tab of document.querySelectorAll('#cf-tabs .nav-item')) {
     const sec = tab.dataset.sec;
@@ -2372,6 +2594,28 @@ function settingTerm(name, hint, key) {
   return el('span', {class:'setting-term', tabindex:0, 'aria-describedby':id}, name,
     el('span', {id, class:'setting-help', role:'tooltip'}, el('b', {'aria-hidden':'true', text:'i'}), hint));
 }
+async function restoreConfigField(sec, field, button) {
+  const key = cfKey(sec, field);
+  const password = cf.pwSections.has(sec) ? $('cf-password').value : undefined;
+  if (cf.pwSections.has(sec)) $('cf-password').value = '';
+  cf.busy = true; refreshConfigDirty();
+  let focus = button;
+  try {
+    const res = await api('/api/config/restore-default', 'POST', { field: key, password });
+    if (!res.ok) { failApi(res); return; }
+    (sec ? cf.data[sec] : cf.data)[field] = res.data.value;
+    delete cf.changes[key];
+    cf.invalid.delete(key);
+    const row = cfRow(sec, field);
+    button.closest('.cfg-field').replaceWith(row);
+    focus = row.querySelector('button');
+    if (res.data.restart_required) showRestart();
+    toast(res.data.changed ? '已恢复默认，重启后生效。' : '已使用默认值。', 'ok');
+  } finally {
+    cf.busy = false; refreshConfigDirty();
+    focus?.focus();
+  }
+}
 function cfRow(sec, field) {
   const key = cfKey(sec, field);
   const prop = sec ? cfResolve(cf.schema.properties[sec]).properties[field] : cf.schema.properties[field];
@@ -2382,7 +2626,9 @@ function cfRow(sec, field) {
     el('div', { class: 'name' }, settingTerm(name, hint, key), ' ',
       el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field }),
       readonly ? el('span', { class: 'tag', text: '只读' }) : null),
-    cfControl(sec, field, info, readonly));
+    el('div', { class: 'cfg-control' }, cfControl(sec, field, info, readonly),
+      !readonly && Object.hasOwn(prop, 'default')
+        ? restoreButton(name, key, button => restoreConfigField(sec, field, button)) : null));
 }
 function renderConfigSection(sec) {
   const container = $('cf-section');
@@ -2393,19 +2639,24 @@ function renderConfigSection(sec) {
     const font = el('select', {id:'cf-font'},
       el('option', {value:'pixel', text:'Ark Pixel（像素）'}),
       el('option', {value:'system', text:'系统字体'}));
-    font.value = document.documentElement.dataset.font || 'pixel';
+    font.value = document.documentElement.dataset.font;
     font.addEventListener('change', () => {
       document.documentElement.dataset.font = font.value;
       try { localStorage.setItem('aureus-font', font.value); } catch (e) { /* 当前页面仍可切换 */ }
     });
-    container.append(el('div', { class: 'cfg-field' }, el('label', {class:'name', for:'cf-font'}, settingTerm('界面字体', '选择这台浏览器显示 Aureus 时使用的字体。', 'font')), font));
+    const resetFont = restoreButton('界面字体', 'font', () => {
+      document.documentElement.dataset.font = font.value = DEFAULT_UI_FONT;
+      try { localStorage.removeItem('aureus-font'); } catch (e) { /* 当前页面仍可恢复 */ }
+    });
+    container.append(el('div', { class: 'cfg-field' }, el('label', {class:'name', for:'cf-font'}, settingTerm('界面字体', '选择这台浏览器显示 Aureus 时使用的字体。', 'font')),
+      el('div', { class: 'cfg-control' }, font, resetFont)));
   }
   for (const field of cfFields(sec)) container.append(cfRow(sec, field));
 }
 
 // 有没保存的改动时，切回这一页不重新读，免得改动丢掉。
 async function loadConfigPage(force) {
-  if (!force && cf.data && (Object.keys(cf.changes).length || cf.invalid.size)) return;
+  if (!force && cf.data && (cf.busy || Object.keys(cf.changes).length || cf.invalid.size)) return;
   const res = await api('/api/config');
   const missing = $('cf-missing');
   if (notBuilt(res)) { missing.textContent = NOT_BUILT_TEXT; missing.classList.remove('hidden'); $('cf-content').classList.add('hidden'); return; }
@@ -2429,6 +2680,7 @@ async function loadConfigPage(force) {
     for (const tab of buttons) tab.classList.toggle('active', tab === button);
     cf.tab = button.dataset.sec;
     renderConfigSection(cf.tab);
+    refreshConfigDirty();
   }
   for (const button of buttons) button.addEventListener('click', () => {
     if (button.classList.contains('active')) return;
@@ -2455,14 +2707,18 @@ $('cf-save').addEventListener('click', async () => {
   }
   body.password = $('cf-password').value || undefined;
   $('cf-password').value = '';
-  const res = await api('/api/config', 'PUT', body);
-  if (!res.ok) { failApi(res); return; }
-  cf.changes = {};
-  cf.invalid = new Set();
-  refreshConfigDirty();
-  toast('配置已保存（改了 ' + res.data.changed.length + ' 项），重启后生效。', 'ok');
-  showRestart();
-  await loadConfigPage(true);
+  cf.busy = true; refreshConfigDirty();
+  try {
+    const res = await api('/api/config', 'PUT', body);
+    if (!res.ok) { failApi(res); return; }
+    cf.changes = {};
+    cf.invalid = new Set();
+    toast('配置已保存（改了 ' + res.data.changed.length + ' 项），重启后生效。', 'ok');
+    if (res.data.restart_required) showRestart();
+    await loadConfigPage(true);
+  } finally {
+    cf.busy = false; refreshConfigDirty();
+  }
 });
 
 $('cf-reset').addEventListener('click', async () => { if (await confirmAction('放弃所有没保存的改动？')) loadConfigPage(true); });

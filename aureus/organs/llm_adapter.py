@@ -36,6 +36,7 @@ from aureus.organs.model_config import (
     ProviderConfig,
     ProviderProtocol,
 )
+from aureus.organs.prompts import PromptStore, PromptTemplate, render_prompt
 
 # 调用大模型的函数。默认是 litellm.acompletion；测试时换成假的，不联网。
 CompletionFunction = Callable[..., Awaitable[Any]]
@@ -392,7 +393,9 @@ class ModelProbeError(OrganCallError):
 
 
 # 调用方没给背景时的系统提示词：有些服务商不收空的系统消息。
-_EMPTY_SYSTEM_MESSAGE = "你是 Aureus 的一个器官，按用户消息里的要求回答。"
+EMPTY_SYSTEM_MESSAGE = PromptTemplate(
+    "empty_system", "无背景时的系统提示", "你是 Aureus 的一个器官，按用户消息里的要求回答。"
+)
 
 
 def order_routes[T](routes: Sequence[T], preference: ModelPreference) -> list[T]:
@@ -419,13 +422,19 @@ def order_routes[T](routes: Sequence[T], preference: ModelPreference) -> list[T]
     return [*routes[start:], *reversed(routes[:start])]
 
 
-def _system_message(request: OrganRequest) -> str:
-    """系统提示词：只有调用方给的背景（D41 第 8 条）。
-
-    身体和激素的状态由调用方以事实摘要写进背景里（D69）；这里不再另外编「你心情愉快」
-    这类没有来源的话（D66 第 2 条）。
-    """
-    return request.system_context.strip() or _EMPTY_SYSTEM_MESSAGE
+def assemble_messages(
+    request: OrganRequest, prompts: PromptStore | None = None
+) -> list[dict[str, str]]:
+    """预览与实际发送共用消息顺序、角色和模板快照（D90）。"""
+    overrides = prompts.snapshot() if prompts is not None else {}
+    system = render_prompt(request.system_context, overrides).strip()
+    return [
+        {
+            "role": "system",
+            "content": system or render_prompt(EMPTY_SYSTEM_MESSAGE.fill(), overrides),
+        },
+        {"role": "user", "content": render_prompt(request.prompt, overrides)},
+    ]
 
 
 class LLMOrgan:
@@ -439,6 +448,8 @@ class LLMOrgan:
         completion: CompletionFunction | None = None,
         token_counter: TokenCounter | None = None,
         sleep: SleepFunction | None = None,
+        *,
+        prompts: PromptStore | None = None,
     ) -> None:
         llm_routes = tuple(route for route in routes if route.model.kind == "llm")
         if routes and not llm_routes:
@@ -451,6 +462,7 @@ class LLMOrgan:
         self._completion = completion or (_load_litellm_completion() if llm_routes else None)
         self._token_counter = token_counter or count_prompt_tokens
         self._sleep = sleep or asyncio.sleep
+        self._prompts = prompts
 
     @classmethod
     def from_config(
@@ -497,10 +509,7 @@ class LLMOrgan:
         """
         if not self._routes:
             raise OrganCallError(self.organ_id, ["未配置可用的模型"], [])
-        messages = [
-            {"role": "system", "content": _system_message(request)},
-            {"role": "user", "content": request.prompt},
-        ]
+        messages = assemble_messages(request, self._prompts)
         failures: list[str] = []
         attempts: list[CallAttempt] = []
         for route in order_routes(self._routes, request.model_preference):

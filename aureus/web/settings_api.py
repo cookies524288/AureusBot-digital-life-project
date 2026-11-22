@@ -1,4 +1,4 @@
-"""网页设置页的接口层：请求体校验和三个接口（路线图 1.10，D63 第 1、2、5 条）。
+"""网页人设页的接口层：请求体校验和路由（路线图 1.10，D63 第 1、2、5 条）。
 
 只做翻译：把请求变成 IdentityEdit 交给 SettingsService，把错误换成 HTTP 错误。
 接口都是 async def：和心跳在同一个线程里用同一个 SQLite 连接。
@@ -133,6 +133,12 @@ class RollbackRequest(_Strict):
     version_id: int = Field(ge=1)
 
 
+class RestoreLockRequest(_Strict):
+    """恢复某一层锁定开关的程序默认值（D91）。"""
+
+    layer: IdentityLayer
+
+
 def _remote_address(request: Request) -> str:
     return request.client.host if request.client else ""
 
@@ -151,7 +157,7 @@ def _http_error(error: Exception) -> HTTPException:
 def register_settings_routes(
     app: FastAPI, service: SettingsService, require_ready: Callable[..., Awaitable[str]]
 ) -> None:
-    """把设置页的三个接口挂到应用上；都要求已登录且不在默认密码状态。"""
+    """注册人设设置接口；都要求已登录且不在默认密码状态。"""
     errors = (
         LoginLockedError,
         LoginRejectedError,
@@ -189,3 +195,15 @@ def register_settings_routes(
         except errors as error:
             raise _http_error(error) from None
         return {"changed": [layer.value for layer in result.changed_layers]}
+
+    @app.post("/api/settings/locks/restore-default")
+    async def restore_lock(
+        body: RestoreLockRequest, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, bool]:
+        try:
+            result = service.apply(
+                IdentityEdit(restore_lock=body.layer), password=None, remote_addr=""
+            )
+        except errors as error:
+            raise _http_error(error) from None
+        return {"value": getattr(result.identity.persona.locks, body.layer.value)}

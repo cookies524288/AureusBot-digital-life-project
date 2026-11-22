@@ -1,7 +1,7 @@
 # AureusBot 运行配置模板。
 #
 # 用法：复制成 <数据根目录>/config/aureus.toml，再按需修改。
-# 不复制也能运行，所有字段都有默认值。
+# 不复制也能运行，所有字段都有程序默认值。只取消注释需要覆盖的字段。
 # 这里不放密钥：密钥只放 .env（见 .env.example）。
 # 数据根目录是什么、在哪里，见 docs/14-user-data.md。
 
@@ -9,7 +9,7 @@
 config_version = 1
 
 # 日志级别：DEBUG / INFO / WARNING / ERROR，默认 INFO。
-log_level = "INFO"
+# log_level = "INFO"
 
 # 安全网关（设计见 docs/06-safety.md 第 12 节）。下面的值都是默认值，需要改再取消注释。
 # 注意：true / false 不能写成引号或数字，数字不能加引号。
