@@ -25,7 +25,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
@@ -91,6 +91,10 @@ def _remote_address(request: Request) -> str:
 def _local_terminal_request(request: Request) -> bool:
     host = request.url.hostname or ""
     return is_loopback(_remote_address(request)) and (host == "localhost" or is_loopback(host))
+
+
+def _same_http_origin(request: Request) -> bool:
+    return request.headers.get("origin") == f"{request.url.scheme}://{request.url.netloc}"
 
 
 def _http_error(error: Exception) -> HTTPException:
@@ -188,6 +192,7 @@ def create_app(
     config_files: ConfigService | None = None,
     model_runtime: ModelRuntime | None = None,
     open_terminal: Callable[[], Awaitable[None]] | None = None,
+    request_shutdown: Callable[[], None] | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -232,6 +237,17 @@ def create_app(
         response.delete_cookie(SESSION_COOKIE, path="/")
         return {"ok": True}
 
+    if request_shutdown is not None:
+
+        @app.post("/api/shutdown")
+        async def shutdown(
+            request: Request, _token: Annotated[str, Depends(require_ready)]
+        ) -> dict[str, bool]:
+            if not _same_http_origin(request):
+                raise HTTPException(403, detail="请在当前网页上确认退出。")
+            request_shutdown()
+            return {"ok": True}
+
     @app.get("/api/status")
     async def status(
         request: Request, _token: Annotated[str, Depends(require_session)]
@@ -247,8 +263,7 @@ def create_app(
         async def show_terminal(
             request: Request, _token: Annotated[str, Depends(require_ready)]
         ) -> dict[str, bool]:
-            origin = f"{request.url.scheme}://{request.url.netloc}"
-            if not _local_terminal_request(request) or request.headers.get("origin") != origin:
+            if not _local_terminal_request(request) or not _same_http_origin(request):
                 raise HTTPException(403, detail="请从本机网页打开 CLI 窗口。")
             try:
                 await open_terminal()
@@ -335,10 +350,12 @@ def create_app(
         register_config_routes(app, config_files, auth, require_ready, model_runtime)
 
     # ---------- 网页本身 ----------
+    # 和 API 一起加载，避免更新磁盘文件后旧进程提供依赖新接口的页面。
+    index_html = INDEX_PAGE.read_bytes()
 
     @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
+    async def index() -> HTMLResponse:
         """登录前也要能打开页面，所以不检查登录；页面里没有数据，数据都要登录后从接口取。"""
-        return FileResponse(INDEX_PAGE, headers={"Cache-Control": "no-store"})
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-store"})
 
     return app

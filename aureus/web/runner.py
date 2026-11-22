@@ -5,8 +5,13 @@ uvicorn 默认会接管 Ctrl+C 和终止信号，还会重设日志配置：这�
 """
 
 import contextlib
+import hashlib
+import os
 import socket
+import sys
 from collections.abc import Callable, Generator
+from multiprocessing.shared_memory import SharedMemory
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
@@ -16,6 +21,27 @@ from aureus.common import ConfigError, WebConfig
 # 默认只监听本机；allow_remote 打开后监听所有网卡，局域网里的手机才连得上（D53 第 5 条）。
 LOOPBACK_HOST = "127.0.0.1"
 ALL_INTERFACES_HOST = "0.0.0.0"
+_PORT_BYTES = 2
+
+
+def _address_name(home: Path) -> str:
+    canonical_home = os.path.normcase(str(home.resolve()))
+    return "AureusWeb_" + hashlib.sha256(os.fsencode(canonical_home)).hexdigest()
+
+
+def running_web_url(home: Path) -> str | None:
+    """读取同一数据根目录正在监听的 Windows 网页地址。"""
+    if sys.platform != "win32":
+        return None
+    try:
+        address = SharedMemory(name=_address_name(home))
+    except FileNotFoundError:
+        return None
+    with contextlib.closing(address):
+        buffer = address.buf
+        assert buffer is not None
+        port = int.from_bytes(buffer[:_PORT_BYTES], "big")
+    return f"http://{LOOPBACK_HOST}:{port}" if port else None
 
 
 class WebServerError(Exception):
@@ -60,8 +86,12 @@ class _EmbeddedServer(uvicorn.Server):
 class WebServer:
     """网页服务。用法：asyncio.create_task(server.run())，要停时调用 request_stop()。"""
 
-    def __init__(self, app: FastAPI, config: WebConfig) -> None:
+    def __init__(self, app: FastAPI, config: WebConfig, *, home: Path | None = None) -> None:
         self._port = config.port
+        self._address_name = (
+            _address_name(home) if home is not None and sys.platform == "win32" else None
+        )
+        self._address: SharedMemory | None = None
         self._server = _EmbeddedServer(
             uvicorn.Config(
                 app,
@@ -87,7 +117,18 @@ class WebServer:
         Raises:
             WebServerError: 端口被占用等原因，没能开始监听。
         """
-        self._server.on_started = on_started
+
+        def publish_address() -> None:
+            if self._address_name is not None:
+                # Windows 在最后一个句柄关闭时移除映射，异常退出也不会留下旧端口。
+                self._address = SharedMemory(name=self._address_name, create=True, size=_PORT_BYTES)
+                buffer = self._address.buf
+                assert buffer is not None
+                buffer[:_PORT_BYTES] = self._port.to_bytes(_PORT_BYTES, "big")
+            if on_started is not None:
+                on_started()
+
+        self._server.on_started = publish_address
         try:
             await self._server.serve()
         except SystemExit as error:
@@ -96,7 +137,15 @@ class WebServer:
                 f"网页服务没能在端口 {self._port} 上启动，可能被别的程序占用或被系统保留；"
                 "可以在 aureus.toml 的 [web] 里改 port。"
             ) from error
+        finally:
+            self._clear_address()
+
+    def _clear_address(self) -> None:
+        if self._address is not None:
+            self._address.close()
+            self._address = None
 
     def request_stop(self) -> None:
         """请服务停下来；可以重复调用。"""
+        self._clear_address()
         self._server.should_exit = True

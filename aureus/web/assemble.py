@@ -71,7 +71,8 @@ def open_web(
             config_files=ConfigService(core.paths),
             model_runtime=core.models,
             open_terminal=open_terminal,
+            request_shutdown=core.heartbeat.request_stop,
         )
-        yield WebServer(app, config)
+        yield WebServer(app, config, home=core.paths.home)
     finally:
         sessions.close()

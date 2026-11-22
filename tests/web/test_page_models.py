@@ -36,11 +36,16 @@ def test_toast_fades_out_before_removing_the_node() -> None:
         timers.length = 0;
         toast('动画验收');
         const node = $('toasts').children.at(-1);
+        let finish;
+        const finished = new Promise(resolve => { finish = resolve; });
+        node.getAnimations = () => [{finished}];
         assert.equal(node.removed, undefined);
         timers.shift()();
         assert.equal(node.classList.contains('leaving'), true);
         assert.equal(node.removed, undefined);
-        timers.shift()();
+        finish();
+        await finished;
+        await Promise.resolve();
         assert.equal(node.removed, true);
         """
     )

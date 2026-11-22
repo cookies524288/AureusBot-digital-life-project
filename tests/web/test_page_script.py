@@ -59,6 +59,7 @@ const context = vm.createContext({
   localStorage: { getItem: () => null },
   location: { protocol: 'http:', host: 'localhost', hash: '' },
   history: { replaceState() {} },
+  matchMedia: () => ({ matches: true, addEventListener() {} }),
   setTimeout: callback => { timers.push(callback); return callback; },
   clearTimeout: callback => {
     const i = timers.indexOf(callback); if (i >= 0) timers.splice(i, 1);
@@ -92,6 +93,33 @@ def run_page_script(code: str) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_shutdown_request_is_only_sent_after_confirming() -> None:
+    run_page_script(
+        r"""
+        const shutdown = $('shutdown-btn').listeners.click[0];
+        const dialog = $('confirm-dialog');
+        const requests = [];
+        api = async (...request) => { requests.push(request); return {ok:true}; };
+
+        const cancelled = shutdown();
+        assert.equal($('confirm-text').textContent, '确定要关闭程序吗');
+        await shutdown();
+        assert.deepEqual(requests, []);
+        dialog.returnValue = 'no';
+        dialog.onclose();
+        await cancelled;
+        assert.deepEqual(requests, []);
+
+        const confirmed = shutdown();
+        dialog.returnValue = 'yes';
+        dialog.onclose();
+        await confirmed;
+        assert.deepEqual(requests, [['/api/shutdown', 'POST']]);
+        assert.equal($('shutdown').classList.contains('hidden'), false);
+        """
+    )
 
 
 @pytest.mark.parametrize("probe", ["valid", "offline"])

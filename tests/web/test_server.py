@@ -42,6 +42,7 @@ class Rig:
         config: WebConfig | None = None,
         *,
         open_terminal: Callable[[], Awaitable[None]] | None = None,
+        request_shutdown: Callable[[], None] | None = None,
     ) -> None:
         self.clock = ManualClock(START)
         self.config = config or WebConfig(login_max_failures=3)
@@ -58,6 +59,7 @@ class Rig:
             channel=WebChannel(FakeHeartbeat()),
             timeline=self.timeline,
             open_terminal=open_terminal,
+            request_shutdown=request_shutdown,
         )
 
     def client(self, host: str = "127.0.0.1") -> TestClient:
@@ -140,6 +142,52 @@ def test_the_api_docs_are_not_exposed(rig: Rig) -> None:
     client = rig.client()
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert client.get(path).status_code == 404
+
+
+def test_shutdown_requires_ready_login_and_same_origin(tmp_path: Path) -> None:
+    stopped = []
+    rig = Rig(tmp_path, WebConfig(allow_remote=True), request_shutdown=lambda: stopped.append(True))
+    path = "/api/shutdown"
+    origin = {"Origin": "http://testserver"}
+    try:
+        client = rig.client()
+        assert client.post(path, headers=origin).status_code == 401
+        assert login(client).status_code == 200
+        assert client.post(path, headers=origin).status_code == 403
+
+        set_password(rig)
+        client = rig.client(host="192.168.1.20")
+        assert login(client, GOOD).status_code == 200
+        assert client.post(path).status_code == 403
+        assert client.post(path, headers={"Origin": "http://other.test"}).status_code == 403
+        assert not stopped
+
+        assert client.post(path, headers=origin).status_code == 200
+        assert stopped == [True]
+    finally:
+        rig.close()
+
+
+def test_running_app_keeps_its_own_page_when_the_html_file_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = tmp_path / "index.html"
+    page.write_text("<p>first</p>", encoding="utf-8")
+    monkeypatch.setattr("aureus.web.server.INDEX_PAGE", page)
+    running = Rig(tmp_path)
+    try:
+        page.write_text("<p>second</p>", encoding="utf-8")
+        assert running.client().get("/").text == "<p>first</p>"
+    finally:
+        running.close()
+
+    restarted = Rig(tmp_path)
+    try:
+        response = restarted.client().get("/")
+        assert response.text == "<p>second</p>"
+        assert response.headers["Cache-Control"] == "no-store"
+    finally:
+        restarted.close()
 
 
 def test_the_project_logo_is_embedded_and_used_without_a_new_route(rig: Rig) -> None:

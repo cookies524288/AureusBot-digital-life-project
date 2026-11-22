@@ -143,13 +143,15 @@ def open_core(
     """
     the_clock = clock or SystemClock()
     paths.ensure_directories()
-    settings = load_settings(paths)
-    # 先解锁，再设日志：解锁过程不写日志，解开的密钥一开始就在日志过滤里。
-    resolver = KeyResolver(
-        paths.env_file, vault=SecretVault(paths.vault_file, paths.master_key_file)
-    )
-    hidden = resolver.all_secret_values()
     with ExitStack() as stack:
+        identity_service = IdentityService(paths)
+        stack.enter_context(identity_service.acquire_lock())
+        settings = load_settings(paths)
+        # 先解锁，再设日志：解锁过程不写日志，解开的密钥一开始就在日志过滤里。
+        resolver = KeyResolver(
+            paths.env_file, vault=SecretVault(paths.vault_file, paths.master_key_file)
+        )
+        hidden = resolver.all_secret_values()
         configure_logging(paths.log_dir, settings.runtime.log_level, hidden, to_console=to_console)
         stack.callback(shutdown_logging)
         warn_about_plaintext_keys(resolver)
@@ -157,8 +159,6 @@ def open_core(
             paths.snapshots_dir, settings.runtime.snapshots.max_total_megabytes * BYTES_PER_MEGABYTE
         )
 
-        identity_service = IdentityService(paths)
-        stack.enter_context(identity_service.acquire_lock())
         from_file = identity_service.load_identity()
 
         timeline = TimelineDatabase(paths.database_file, the_clock)
