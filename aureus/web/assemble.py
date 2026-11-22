@@ -4,7 +4,7 @@
 核心和别的子系统都不 import 本包（import-linter 检查）。
 """
 
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 
 from aureus.channels import WEB_CHANNEL_NAME, WebChannel
@@ -21,7 +21,9 @@ from .settings import SettingsService
 
 
 @contextmanager
-def open_web(core: Core, clock: Clock) -> Iterator[WebServer | None]:
+def open_web(
+    core: Core, clock: Clock, *, open_terminal: Callable[[], Awaitable[None]] | None = None
+) -> Iterator[WebServer | None]:
     """组装网页服务；退出 with 块时关闭它用到的数据库连接。
 
     网页通道关着（[web] enabled = false）时什么也不做，返回 None。
@@ -30,6 +32,7 @@ def open_web(core: Core, clock: Clock) -> Iterator[WebServer | None]:
     Args:
         core: 组装好的核心，心跳还没有开始跳也可以。
         clock: 时钟，要和核心用的是同一个。
+        open_terminal: 启动器提供的本机终端打开操作。
 
     Yields:
         网页服务，或者 None。
@@ -67,6 +70,7 @@ def open_web(core: Core, clock: Clock) -> Iterator[WebServer | None]:
             clock=clock,
             config_files=ConfigService(core.paths),
             model_runtime=core.models,
+            open_terminal=open_terminal,
         )
         yield WebServer(app, config)
     finally:

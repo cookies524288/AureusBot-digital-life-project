@@ -7,7 +7,7 @@
 import asyncio
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import get_ident
@@ -36,7 +36,13 @@ class FakeHeartbeat:
 
 
 class Rig:
-    def __init__(self, tmp_path: Path, config: WebConfig | None = None) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        config: WebConfig | None = None,
+        *,
+        open_terminal: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self.clock = ManualClock(START)
         self.config = config or WebConfig(login_max_failures=3)
         self.passwords = PasswordStore(tmp_path / "web_password.argon2", FAST_HASHER)
@@ -51,6 +57,7 @@ class Rig:
             sessions=self.sessions,
             channel=WebChannel(FakeHeartbeat()),
             timeline=self.timeline,
+            open_terminal=open_terminal,
         )
 
     def client(self, host: str = "127.0.0.1") -> TestClient:
@@ -92,6 +99,41 @@ def test_a_forged_cookie_is_not_a_login(rig: Rig) -> None:
     client = rig.client()
     client.cookies.set(SESSION_COOKIE, "x" * 43)
     assert client.get("/api/status").status_code == 401
+
+
+def test_terminal_open_requires_local_same_origin_and_ready_login(tmp_path: Path) -> None:
+    opened = 0
+
+    async def open_terminal() -> None:
+        nonlocal opened
+        opened += 1
+
+    rig = Rig(tmp_path, open_terminal=open_terminal)
+    path = "/api/terminal/open"
+    origin = {"Origin": "http://127.0.0.1"}
+    try:
+        client = TestClient(rig.app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+        assert client.post(path, headers=origin).status_code == 401
+        assert login(client).status_code == 200
+        assert client.post(path, headers=origin).status_code == 403
+        assert "can_open_terminal" not in client.get("/api/status").json()
+
+        set_password(rig)
+        assert login(client, GOOD).status_code == 200
+        assert client.get("/api/status").json()["can_open_terminal"]
+        assert client.post(path).status_code == 403
+        assert client.post(path, headers={"Origin": "http://localhost"}).status_code == 403
+
+        remote = TestClient(rig.app, base_url="http://127.0.0.1", client=("192.168.1.20", 50000))
+        assert login(remote, GOOD).status_code == 200
+        assert not remote.get("/api/status").json()["can_open_terminal"]
+        assert remote.post(path, headers=origin).status_code == 403
+        assert opened == 0
+
+        assert client.post(path, headers=origin).status_code == 200
+        assert opened == 1
+    finally:
+        rig.close()
 
 
 def test_the_api_docs_are_not_exposed(rig: Rig) -> None:

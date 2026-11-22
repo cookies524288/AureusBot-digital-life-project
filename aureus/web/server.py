@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -39,6 +40,7 @@ from .auth import (
     LoginRejectedError,
     PasswordPolicyError,
     WebAuth,
+    is_loopback,
 )
 from .config_api import register_config_routes
 from .config_files import ConfigService
@@ -84,6 +86,11 @@ class ChangePasswordRequest(BaseModel):
 def _remote_address(request: Request) -> str:
     """来源 IP；拿不到时是空串，is_loopback 会把它当作不是本机（朝安全方向倒）。"""
     return request.client.host if request.client else ""
+
+
+def _local_terminal_request(request: Request) -> bool:
+    host = request.url.hostname or ""
+    return is_loopback(_remote_address(request)) and (host == "localhost" or is_loopback(host))
 
 
 def _http_error(error: Exception) -> HTTPException:
@@ -180,6 +187,7 @@ def create_app(
     clock: Clock | None = None,
     config_files: ConfigService | None = None,
     model_runtime: ModelRuntime | None = None,
+    open_terminal: Callable[[], Awaitable[None]] | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -225,8 +233,29 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/status")
-    async def status(_token: Annotated[str, Depends(require_session)]) -> dict[str, bool]:
-        return {"must_change_password": auth.password_is_default}
+    async def status(
+        request: Request, _token: Annotated[str, Depends(require_session)]
+    ) -> dict[str, bool]:
+        result = {"must_change_password": auth.password_is_default}
+        if open_terminal is not None and not auth.password_is_default:
+            result["can_open_terminal"] = _local_terminal_request(request)
+        return result
+
+    if open_terminal is not None:
+
+        @app.post("/api/terminal/open")
+        async def show_terminal(
+            request: Request, _token: Annotated[str, Depends(require_ready)]
+        ) -> dict[str, bool]:
+            origin = f"{request.url.scheme}://{request.url.netloc}"
+            if not _local_terminal_request(request) or request.headers.get("origin") != origin:
+                raise HTTPException(403, detail="请从本机网页打开 CLI 窗口。")
+            try:
+                await open_terminal()
+            except OSError:
+                logger.exception("启动 CLI 窗口失败")
+                raise HTTPException(500, detail="无法打开 CLI 窗口，请查看日志。") from None
+            return {"ok": True}
 
     @app.post("/api/password")
     async def change_password(

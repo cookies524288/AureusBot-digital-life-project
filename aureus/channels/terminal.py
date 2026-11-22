@@ -39,9 +39,11 @@ HELP_TEXT = (
     f"  {COMMAND_STATE}  看它此刻的状态\n"
     f"  {COMMAND_HALT} [原因]  急停：它不再调用模型、不再回复，消息照常记录\n"
     f"  {COMMAND_RESUME}  解除急停\n"
-    f"  {COMMAND_QUIT}   关闭（也可以按 Ctrl+C，或者 Ctrl+D / Windows 上的 Ctrl+Z 回车）\n"
+    f"  {COMMAND_QUIT}   关闭 Aureus\n"
     f"  {COMMAND_HELP}   显示这段说明"
 )
+STOP_SHORTCUTS = "\n  Ctrl+C 或结束输入  关闭 Aureus"
+WINDOW_SHORTCUTS = "\n  Ctrl+C 或关闭窗口  只关闭 CLI 窗口"
 
 ReadLine = Callable[[], str]
 WriteLine = Callable[[str], None]
@@ -79,6 +81,8 @@ class TerminalChannel:
         heartbeat: HeartbeatHandle,
         read_line: ReadLine = input,
         write_line: WriteLine = print,
+        *,
+        close_on_interrupt: bool = True,
     ) -> None:
         """创建终端通道。
 
@@ -86,10 +90,12 @@ class TerminalChannel:
             heartbeat: 心跳。
             read_line: 读一行输入的函数，读到结尾时抛 EOFError；默认是 input，测试时传假的。
             write_line: 打印一行的函数，默认是 print，测试时传假的。
+            close_on_interrupt: 结束输入或 Ctrl+C 是否关闭 Aureus。
         """
         self._heartbeat = heartbeat
         self._read_line = read_line
         self._write_line = write_line
+        self._close_on_interrupt = close_on_interrupt
         self._reader: threading.Thread | None = None
         # 已经请心跳停下来了：之后输入结束时不再重复提示。
         self._stop_requested = False
@@ -108,7 +114,7 @@ class TerminalChannel:
             return
         command = text.lower()
         if command == COMMAND_HELP:
-            self._write_line(HELP_TEXT)
+            self._write_line(self._help_text())
         elif command == COMMAND_STATE:
             self._write_line(self._heartbeat.describe_state())
         elif command == COMMAND_HALT or command.startswith(f"{COMMAND_HALT} "):
@@ -155,7 +161,11 @@ class TerminalChannel:
 
     def handle_end_of_input(self) -> None:
         """输入结束（Ctrl+D、Windows 上的 Ctrl+Z 回车，或者输入被关掉）：请心跳停下来。"""
-        self._request_stop("输入结束，正在关闭……")
+        if self._close_on_interrupt:
+            self._request_stop("输入结束，正在关闭……")
+
+    def _help_text(self) -> str:
+        return HELP_TEXT + (STOP_SHORTCUTS if self._close_on_interrupt else WINDOW_SHORTCUTS)
 
     def _request_stop(self, announcement: str) -> None:
         """请心跳停下来；只提示一次。"""
@@ -173,7 +183,7 @@ class TerminalChannel:
         if self._reader is not None:
             raise RuntimeError("终端通道已经开始读输入了")
         loop = asyncio.get_running_loop()
-        self._write_line(f"已连上。{HELP_TEXT}")
+        self._write_line(f"已连上。{self._help_text()}")
         self._reader = threading.Thread(
             target=self._read_forever, args=(loop,), name="aureus-terminal-input", daemon=True
         )

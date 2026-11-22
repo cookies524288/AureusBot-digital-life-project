@@ -358,6 +358,7 @@ dialog::backdrop{background:rgba(0,20,25,.28);backdrop-filter:blur(2px)}
 <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
 <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></symbol>
 <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/><path d="M15 8l4 4-4 4M19 12H9"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6m8 14h8"/></symbol>
 <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3L10 14M21 3l-7 18-4-8-8-4z"/></symbol>
 <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/></symbol>
 <symbol id="aureus-logo" viewBox="0 0 1254 1254">
@@ -409,6 +410,7 @@ dialog::backdrop{background:rgba(0,20,25,.28);backdrop-filter:blur(2px)}
 <div class="nav-foot">
 <button id="theme-btn" class="nav-item" aria-label="切换主题"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-theme"/></svg><span class="nav-label" style="--i:9">切换主题</span></button>
 <button id="logout-btn" class="nav-item" aria-label="退出"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-logout"/></svg><span class="nav-label" style="--i:10">退出</span></button>
+<button id="terminal-btn" class="nav-item hidden" aria-label="打开 CLI 窗口" title="打开 CLI 窗口"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-terminal"/></svg><span class="nav-label" style="--i:11">打开 CLI</span></button>
 </div>
 </nav>
 <main id="pages">
@@ -687,6 +689,7 @@ async function enter() {
     return;
   }
   state.loggedIn = true;
+  $('terminal-btn').classList.toggle('hidden', !res.data?.can_open_terminal);
   $('login').classList.add('hidden');
   $('change').classList.add('hidden');
   $('app').classList.remove('hidden');
@@ -724,6 +727,13 @@ $('new-password').addEventListener('keydown', ev => { if (ev.key === 'Enter') $(
 $('logout-btn').addEventListener('click', async () => {
   await api('/api/logout', 'POST');
   showAuth('login');
+});
+$('terminal-btn').addEventListener('click', async () => {
+  const button = $('terminal-btn');
+  button.disabled = true;
+  const res = await api('/api/terminal/open', 'POST');
+  button.disabled = false;
+  if (!res.ok) fail(res);
 });
 // ---------- 总览：读 /api/overview（2.12b 的接口，没做好时如实说明） ----------
 async function loadOverview() {
