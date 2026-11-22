@@ -4,6 +4,8 @@
 
 ## 下一步
 
+本机访问 GitHub 时使用代理 `http://127.0.0.1:7897`。获得推送授权后运行 `git -c http.proxy=http://127.0.0.1:7897 push origin HEAD:main`。用 `git -c http.proxy=http://127.0.0.1:7897 ls-remote origin refs/heads/main` 核对远端提交号。`-c` 仅对该次命令生效。
+
 请 GPT 6.2 Astra 先评审，再结合 docs/08-roadmap.md 规划下一步。功能提交 a515ab6，整批评审范围可用 git log --oneline d8f80c4..a515ab6 查看。远端同步状态以 git fetch 和 git status -sb 为准。
 
 1. 对照 [启动器](tasks/windows-launcher.md) 和 [模型目录与项目标识](tasks/provider-catalog-logo.md) 评审。重点核对重复启动、网页退出确认、CLI 和托盘重启、单实例锁释放与端口发布。
