@@ -33,7 +33,8 @@ INSERT INTO expressions VALUES
     (1, '庆祝跑步成绩', '使用 白桦冲线', '["来庆祝跑步成绩"]', 12, 1, 'USER', 't0', 't1', NULL, 0),
     (2, '庆祝跑步成绩', '禁用表达', '["例句"]', 99, 1, NULL, NULL, NULL, 'group', 1),
     (3, '庆祝跑步成绩', '缺例表达', '[]', 1, 0, NULL, NULL, NULL, NULL, 0),
-    (4, '庆祝跑步成绩', '使用 对对对', '["例句"]', 99, 1, NULL, NULL, NULL, NULL, 0);
+    (4, '庆祝跑步成绩', '使用 对对对', '["例句"]', 99, 1, NULL, NULL, NULL, NULL, 0),
+    (5, '庆祝跑步成绩', '', '[]', 1, 0, NULL, NULL, NULL, NULL, 0);
 CREATE TABLE jargons (id INTEGER PRIMARY KEY, content TEXT, meaning TEXT, is_jargon INTEGER,
     is_complete INTEGER, count INTEGER, last_inference_count INTEGER, evidence_messages TEXT);
 INSERT INTO jargons VALUES
@@ -42,7 +43,8 @@ INSERT INTO jargons VALUES
     (3, 'GG', '证据未知', 1, 0, 4, 4, '[[{"platform":"mock","message_id":"03"}]]'),
     (4, 'GG', '已认定非黑话', 0, 1, 99, 99, '[]'),
     (5, 'GG', '', 0, 0, 2, 0, NULL),
-    (6, 'GO', '普通提醒', 1, 1, 20, 20, '[[{"platform":"mock","message_id":"02"}]]');
+    (6, 'GO', '普通提醒', 1, 1, 20, 20, '[[{"platform":"mock","message_id":"02"}]]'),
+    (7, 'GG', '原库无引用', 1, 1, 3, 3, '[]');
 CREATE TABLE high_frequency_terms (id INTEGER PRIMARY KEY, term TEXT, rank INTEGER,
     occurrence_count INTEGER, chat_id TEXT);
 INSERT INTO high_frequency_terms VALUES (1, 'gG', 2, 7, 'group'), (2, 'GG', 1, 4, NULL),
@@ -64,8 +66,12 @@ def _publish(staging: Path, target: Path) -> int:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("old_target", [False, True], ids=["fresh", "old-target"])
 async def test_cli_publishes_language_from_real_staging_then_restarts(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    old_target: bool,
 ) -> None:
     paths = _paths(tmp_path)
     source, package, staging = (tmp_path / name for name in ("source.db", "pkg.zip", "staging.db"))
@@ -79,34 +85,78 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
     timeline.close()
     staging_bytes = staging.read_bytes()
     identity_bytes = paths.identity_file.read_bytes()
-    for received_field in ("received", "already_exists"):
+    store = LanguageStore(paths.database_file)
+    observed = LanguageSample("synthetic", 99, "person:1", "白桦冲线")
+    if old_target:
+        assert _publish(staging, paths.database_file) == 0
+        capsys.readouterr()
+        # 还原旧发布器实际保存的待处理行，并保留目标库的自定义及观察。
+        create_source(
+            paths.database_file,
+            """
+            UPDATE language_import_rows
+            SET status = 'pending', reason = 'missing_example', text = '', detail = '', count = 0
+            WHERE table_name = 'expressions' AND json_extract(raw_values, '$.id') = 3;
+            UPDATE language_import_rows
+            SET status = 'pending', reason = 'evidence_unresolved', count = 0
+            WHERE table_name = 'jargons' AND json_extract(raw_values, '$.id') = 3;
+            UPDATE language_import_rows
+            SET status = 'pending', reason = 'missing_evidence'
+            WHERE table_name = 'jargons' AND json_extract(raw_values, '$.id') = 7;
+            UPDATE language_import_rows SET example = '本地例句'
+            WHERE table_name = 'expressions' AND json_extract(raw_values, '$.id') = 1;
+            """,
+        )
+        store.observe([observed], [])
+
+    initial_counts = [(1, 1), (2, 3), (0, 2)] if old_target else [(2, 0), (5, 0), (2, 0)]
+    for expected_counts in (initial_counts, [(0, 2), (0, 5), (0, 2)]):
         assert _publish(staging, paths.database_file) == 0
         stdout = capsys.readouterr().out
         assert all(text not in stdout for text in ("白桦冲线", "private-instance", "runner"))
         tables = json.loads(stdout)["tables"]
-        for table, counts in {
-            "expressions": (4, 1, 1, 2),
-            "jargons": (6, 3, 2, 1),
-            "high_frequency_terms": (3, 2, 1, 0),
-        }.items():
-            assert (
-                tuple(
-                    tables[table][field]
-                    for field in ("source", received_field, "pending", "skipped")
-                )
-                == counts
-            )
+        for (table, (total, pending, skipped)), (received, exists) in zip(
+            {
+                "expressions": (5, 1, 2),
+                "jargons": (7, 1, 1),
+                "high_frequency_terms": (3, 1, 0),
+            }.items(),
+            expected_counts,
+            strict=True,
+        ):
+            assert tuple(
+                tables[table][field]
+                for field in ("source", "received", "already_exists", "pending", "skipped")
+            ) == (total, received, exists, pending, skipped)
         assert tables["jargons"]["unresolved_evidence"] == 1
+        assert tables["jargons"]["reasons"]["evidence_unresolved"] == 1
+        assert tables["jargons"]["reasons"]["missing_evidence"] == 1
         assert tables["expressions"]["reasons"]["prompt_example"] == 1
     assert staging.read_bytes() == staging_bytes
     assert paths.identity_file.read_bytes() == identity_bytes
-    store = LanguageStore(paths.database_file)
-    [expression] = store.entries(LanguageKind.EXPRESSION)
-    assert expression.count == 12
-    assert expression.example == "来庆祝跑步成绩"
+    expressions = store.entries(LanguageKind.EXPRESSION)
+    expression, missing_example = expressions
+    assert expression.count == (13 if old_target else 12)
+    assert expression.example == ("本地例句" if old_target else "来庆祝跑步成绩")
+    assert (missing_example.text, missing_example.example, missing_example.count) == (
+        "缺例表达",
+        "",
+        1,
+    )
+    assert missing_example.evidence_ids == ()
     assert json.loads(expression.source_refs[0]) == ["private-instance", "main", "expressions", [1]]
     for entry in store.entries(LanguageKind.JARGON):
-        assert json.loads(entry.source_refs[1])[:3] == ["private-instance", "main", "mai_messages"]
+        if entry.detail in {"证据未知", "原库无引用"}:
+            assert len(entry.source_refs) == 1
+            assert entry.evidence_ids == ()
+            if entry.detail == "证据未知":
+                assert entry.count == (0 if old_target else 4)
+        else:
+            assert json.loads(entry.source_refs[1])[:3] == [
+                "private-instance",
+                "main",
+                "mai_messages",
+            ]
     block = store.jargon_reference(["go gg"], 700)
     assert block.index("等候开局") < block.index("普通提醒")
 
@@ -117,6 +167,16 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
                 (expression.source_refs[0],),
             ).fetchone()[0]
         )
+        raw_example, raw_evidence = connection.execute(
+            """SELECT
+                (SELECT json_extract(raw_values, '$.content_list') FROM language_import_rows
+                 WHERE table_name = 'expressions' AND json_extract(raw_values, '$.id') = 3),
+                (SELECT json_extract(raw_values, '$.evidence_messages') FROM language_import_rows
+                 WHERE table_name = 'jargons' AND json_extract(raw_values, '$.id') = 3)
+            """
+        ).fetchone()
+    assert raw_example == "[]"
+    assert json.loads(raw_evidence) == [[{"platform": "mock", "message_id": "03"}]]
     assert (raw["checked"], raw["modified_by"], raw["create_time"], raw["last_active_time"]) == (
         1,
         "USER",
@@ -133,11 +193,10 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
     capsys.readouterr()
     assert _publish(new_staging, paths.database_file) == 1
     assert json.loads(capsys.readouterr().err) == {"error": "language_snapshot_conflict"}
-    assert store.entries(LanguageKind.EXPRESSION) == [expression]
-    observed = LanguageSample("synthetic", 99, "person:1", "白桦冲线")
+    assert store.entries(LanguageKind.EXPRESSION) == expressions
     store.observe([observed], [])
     store.observe([observed], [])
-    [reused] = store.entries(LanguageKind.EXPRESSION)
+    reused, _ = store.entries(LanguageKind.EXPRESSION)
     assert (reused.count, reused.evidence_ids, reused.source_refs) == (
         13,
         (99,),
@@ -177,8 +236,11 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
         plan, reply = requests
         assert "GG：抵达终点" in plan.prompt
         assert "gg：等候开局" in plan.prompt
-        assert "证据未知" not in plan.prompt
+        assert "GG：证据未知" in plan.prompt
+        assert "GG：原库无引用" in plan.prompt
+        assert "已认定非黑话" not in plan.prompt
         assert "当「庆祝跑步成绩」时，可用「白桦冲线」" in reply.prompt
+        assert "当「庆祝跑步成绩」时，可用「缺例表达」" in reply.prompt
         assert "禁用表达" not in reply.prompt
         await heart.shut_down()
     assert paths.identity_file.read_bytes() == identity_bytes
