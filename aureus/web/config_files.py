@@ -34,7 +34,18 @@ from aureus.organs.topology import organ_connections
 logger = logging.getLogger(__name__)
 
 # 改错会关闭网页或改变开放范围，只能直接编辑文件（D84、2.12b）。
-READONLY_CONFIG = ("config_version", "web.enabled", "web.allow_remote", "web.port")
+READONLY_CONFIG = (
+    "config_version",
+    "web.enabled",
+    "web.allow_remote",
+    "web.port",
+    "qq.enabled",
+    "qq.endpoint",
+    "qq.account_id",
+    "qq.token_key",
+    "qq.action_timeout_seconds",
+    "qq.reconnect_seconds",
+)
 PASSWORD_SECTIONS = ("safety", "web")
 
 

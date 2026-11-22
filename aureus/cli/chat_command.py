@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 
 from aureus.channels import CHANNEL_NAME, TerminalChannel
 from aureus.common import AureusPaths, ConfigError, SystemClock, WebConfig
@@ -107,7 +108,8 @@ def run_chat_command(
                         core.heartbeat, read_line, write_line, request_restart=request_restart
                     )
                 with open_web(core, SystemClock(), request_restart=request_restart) as web:
-                    await _chat(core, web, terminal, write_line, first=first)
+                    async with core.qq or nullcontext():
+                        await _chat(core, web, terminal, write_line, first=first)
             if not restarting:
                 return
 

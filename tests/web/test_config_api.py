@@ -57,7 +57,18 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
     assert data["config"] == RuntimeConfig().model_dump(mode="json")
     assert data["schema"] == RuntimeConfig.model_json_schema()
     assert "$defs" in data["schema"]
-    assert data["readonly"] == ["config_version", "web.enabled", "web.allow_remote", "web.port"]
+    assert data["readonly"] == [
+        "config_version",
+        "web.enabled",
+        "web.allow_remote",
+        "web.port",
+        "qq.enabled",
+        "qq.endpoint",
+        "qq.account_id",
+        "qq.token_key",
+        "qq.action_timeout_seconds",
+        "qq.reconnect_seconds",
+    ]
     assert data["password_sections"] == ["safety", "web"]
 
 
