@@ -80,6 +80,15 @@ def _make_main(path: Path) -> None:
             ],
         )
         database.execute("INSERT INTO binary_data VALUES (1, ?, 'missing.bin')", (digest,))
+        database.executemany(
+            "INSERT INTO mai_messages VALUES (?, ?, '2026-10-22', NULL, 'qq', 'c', "
+            "'合成人物', 'group', NULL, ?, ?)",
+            [
+                (5, "legacy-json", b'[{"type":"text","data":"legacy raw text"}]', "fallback"),
+                (6, "broken-json", b'[{"type":', "broken JSON fallback"),
+                (7, "legacy-media", b'[{"type":"text","data":" "}]', "media fallback"),
+            ],
+        )
         database.commit()
 
 
@@ -243,7 +252,8 @@ def test_cli_import_publish_restart_and_rebuild(
     assert json.loads(capsys.readouterr().err) == {"error": "memory_snapshot_conflict"}
     assert "同名" not in json.dumps(report, ensure_ascii=False) and "fixture" not in str(report)
     tables = {(row["role"], row["table"]): row for row in report["tables"]}
-    assert tables["main", "mai_messages"]["published"] == 4
+    assert tables["main", "mai_messages"]["published"] == 7
+    assert tables["main", "mai_messages"]["attachment_invalid_message_components"] == 1
     assert tables["main", "binary_data"]["attachment_missing"] == 1
     assert tables["memory", "episodes"]["unresolved_links"] == 2
     assert tables["memory", "fact_claims"]["archive"] == 2
@@ -266,6 +276,23 @@ def test_cli_import_publish_restart_and_rebuild(
     timeline.open()
     index = MemoryIndex(runtime, timeline, clock)
     index.open()
+    for number, expected in (
+        (5, "legacy raw text"),
+        (6, "broken JSON fallback"),
+        (7, "media fallback"),
+    ):
+        message = index.get_history(_source("main", "mai_messages", number))
+        assert message is not None and message.text == expected
+        assert [hit.source for hit in index.search([expected], (), 1)] == [message.source]
+        kinds = {link.kind for link in message.evidence}
+        assert ("attachment_invalid_message_components" in kinds) == (number == 6)
+    with closing(sqlite3.connect(stage)) as database:
+        damaged = database.execute(
+            "SELECT record FROM source_rows WHERE table_name='mai_messages' AND source_key='[6]'"
+        ).fetchone()
+        assert json.loads(damaged[0])["values"]["raw_content"] == {
+            "blob_base64": b64encode(b'[{"type":').decode()
+        }
     person_id = md5(b"qq_a", usedforsecurity=False).hexdigest()
     expected_time = datetime(2026, 10, 22, 0, 10, 20, 234567, tzinfo=UTC)
     filters = {"person_key": f"maibot:fixture:{person_id}", "since": expected_time}

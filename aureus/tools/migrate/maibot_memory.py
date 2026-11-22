@@ -207,7 +207,7 @@ class _Projection:
         stamp, precision = _time(raw.get(time_field), self.zone)
         if table == "mai_messages":
             raw_text = self._message_content(row, evidence)
-            text = raw_text or text
+            text = raw_text if raw_text.strip() else text
             label = _text(raw, "user_nickname") or _text(raw, "user_cardname")
             person = _message_person(row)
             if reply := _text(raw, "reply_to"):

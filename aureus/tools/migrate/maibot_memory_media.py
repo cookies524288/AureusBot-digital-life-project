@@ -1,6 +1,7 @@
 """归档 MaiBot 和 A_Memorix 的可验证附件，保留缺失与远端引用。"""
 
 import binascii
+import json
 import re
 from base64 import b64decode
 from collections.abc import Iterator
@@ -19,12 +20,25 @@ _END = object()
 
 
 def message_components(row: StagedRow) -> list[object]:
-    """按照 MaiBot 1.3.15 MessageSequence 的序列结构读数据组件。"""
+    """读取现行 MessagePack 与旧 JSON 的 MaiBot 消息组件数组。"""
     packed = row.values.get("raw_content")
-    if not isinstance(packed, dict):
+    if packed is None:
         return []
-    content = msgpack.unpackb(b64decode(packed["blob_base64"], validate=True), strict_map_key=False)
-    if not isinstance(content, list):
+    if isinstance(packed, str):
+        content = json.loads(packed)
+    elif isinstance(packed, dict):
+        payload = b64decode(packed["blob_base64"], validate=True)
+        try:
+            content = msgpack.unpackb(payload, strict_map_key=False)
+        except msgpack.ExtraData:
+            if not payload.lstrip().startswith(b"["):
+                raise
+            content = json.loads(payload)
+    else:
+        raise ValueError("invalid_message_components")
+    if not isinstance(content, list) or any(
+        not isinstance(entry, dict) or not isinstance(entry.get("type"), str) for entry in content
+    ):
         raise ValueError("invalid_message_components")
     return content
 
