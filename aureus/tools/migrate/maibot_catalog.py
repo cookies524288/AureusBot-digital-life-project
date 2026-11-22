@@ -135,11 +135,13 @@ _MEDIA_COLUMNS = {
     "mai_messages": frozenset({"content", "message_segments", "message_components"}),
     "paragraphs": frozenset({"source", "source_ref", "metadata"}),
     "image_assets": frozenset({"file_hash", "payload", "storage_key"}),
-    "external_memory_refs": frozenset({"source_id", "resource_key", "ref_id", "target_key"}),
+    "external_memory_refs": frozenset({"external_id", "metadata_json"}),
     "knowledge_package_resources": frozenset({"resource_key"}),
 }
 
 type SqlValue = int | float | str | bytes | None
+
+STAGING_APPLICATION_ID = 0x41554D42  # AUMB，供显式识别迁移暂存库。
 
 
 @dataclass(frozen=True)
@@ -242,4 +244,7 @@ def encode_row(
         "values": values,
         "external_refs": references,
     }
+    # MaiBot v1.3.15 的 raw_content 是 MsgPack。保留原值并单列待解析字段。
+    if table.name.casefold() == "mai_messages" and row.get("raw_content"):
+        line["deferred_media_fields"] = ["raw_content"]
     return encode_json(encoded_key), encode_json(line) + b"\n"
