@@ -37,13 +37,13 @@ from aureus.common.vault import SecretVault
 from aureus.core.model_runtime import ModelRuntime
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
-from aureus.heartbeat import Heartbeat
+from aureus.heartbeat import Heartbeat, registered_templates
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
 from aureus.memory import DiaryBook, MemoryIndex
 from aureus.mood import Mood
-from aureus.organs import FakeReplyer, KeyResolver, OrganBus, load_models_config
+from aureus.organs import FakeReplyer, KeyResolver, OrganBus, PromptStore, load_models_config
 from aureus.organs.api_keys import warn_about_plaintext_keys
 from aureus.people import AffinityBook, PeopleDirectory, PeopleError
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
@@ -95,7 +95,11 @@ def _build_organ_bus(
     """注册器官。假器官模式不读 models.toml、不调用任何模型，不花钱。"""
     bus = OrganBus()
     models = ModelRuntime(
-        bus, resolver, fake_organs=fake_organs, fake_reply_organ=heartbeat.reply_organ
+        bus,
+        resolver,
+        fake_organs=fake_organs,
+        fake_reply_organ=heartbeat.reply_organ,
+        prompts=PromptStore(paths.home / "prompts.toml", registered_templates()),
     )
     if fake_organs:
         bus.register(FakeReplyer(organ_id=heartbeat.reply_organ))

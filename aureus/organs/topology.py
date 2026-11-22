@@ -34,18 +34,35 @@ ORGAN_DEFINITIONS = {
 BUILTIN_ORGANS = tuple(ORGAN_DEFINITIONS)
 
 
+def organ_tasks(runtime: RuntimeConfig) -> dict[str, str]:
+    """从启动配置取得各调用任务实际交给哪个器官。"""
+    return {
+        "plan": runtime.heartbeat.plan_organ,
+        "initiative_plan": runtime.heartbeat.plan_organ,
+        "reply": runtime.heartbeat.reply_organ,
+        "initiative_reply": runtime.heartbeat.reply_organ,
+        "judge": runtime.judge.organ,
+        "exploration_summary": runtime.exploration.organ,
+        "diary": runtime.diary.organ,
+        "persona_review": runtime.persona_growth.organ,
+    }
+
+
 def organ_connections(names: Iterable[str], runtime: RuntimeConfig) -> list[dict[str, str | None]]:
     """由本次运行的职责分配生成布线；流程是可能执行的路径，分支取决于当次心跳。"""
-    routes: dict[str, tuple[str, ...]] = {name: (name,) for name in ORGAN_DEFINITIONS}
+    tasks = organ_tasks(runtime)
+    routes: dict[str, tuple[str, ...]] = {role: (role,) for role in ORGAN_DEFINITIONS}
     routes.update(
-        planner=(runtime.heartbeat.plan_organ,),
-        replyer=(runtime.heartbeat.reply_organ,),
-        judge=(runtime.judge.organ,),
-        summarizer=tuple(
-            dict.fromkeys(
-                (runtime.exploration.organ, runtime.diary.organ, runtime.persona_growth.organ)
-            )
-        ),
+        {
+            "planner": (tasks["plan"],),
+            "replyer": (tasks["reply"],),
+            "judge": (tasks["judge"],),
+            "summarizer": tuple(
+                dict.fromkeys(
+                    tasks[key] for key in ("exploration_summary", "diary", "persona_review")
+                )
+            ),
+        }
     )
     endpoints = dict.fromkeys((*ORGAN_DEFINITIONS, *names))
     links: list[dict[str, str | None]] = []

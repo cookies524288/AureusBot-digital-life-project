@@ -115,11 +115,11 @@ def test_partial_preparation_failure_preserves_organs_and_availability(
     runtime.on_reload = updates.append
     constructed: list[str] = []
 
-    def construct(name: str, *args: Any) -> LLMOrgan:
+    def construct(name: str, *args: Any, **kwargs: Any) -> LLMOrgan:
         constructed.append(name)
         if name == "broken":
             raise ConfigError("新器官构造失败")
-        return LLMOrgan(name, *args)
+        return LLMOrgan(name, *args, **kwargs)
 
     monkeypatch.setattr("aureus.core.model_runtime.LLMOrgan", construct)
     raw = config_for("new").model_dump(mode="json")
