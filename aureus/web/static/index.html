@@ -413,6 +413,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .dialog-body .hint{font-size:12px;color:var(--text-2)}
 .confirm-dialog{width:min(400px,calc(100vw - 32px))}.confirm-dialog p{padding:26px 24px;font-size:16px}
 .key-card{min-width:0;overflow-wrap:anywhere}.key-card .row{justify-content:space-between}.key-card h3{min-width:0}.key-card .key-actions{justify-content:flex-end;margin-top:20px}
+.key-actions .btn{display:grid;place-items:center;min-width:34px;min-height:34px;padding:6px}
 @media(max-width:1100px){.model-library{grid-template-columns:1fr}.model-vendors{position:static}.provider-list{flex-direction:row;flex-wrap:wrap}.provider-row{flex:1 1 100px}.model-price,.model-owners{display:none}}
 @media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
 
@@ -2048,6 +2049,12 @@ async function removeModel(model) {
 // ---------- 通用密钥库：页面只持有元数据，录入原文在发出请求前清空 ----------
 const KEY_TYPES = [{value:'api_key', label:'API key'}, {value:'password', label:'密码'}, {value:'other', label:'其他'}];
 let keyLoadRevision = 0;
+function keyAction(entry, action, label, icon) {
+  const button = el('button', {type:'button', class:action === 'remove' ? 'btn small danger' : 'btn small',
+    title:label, 'aria-label':label, onclick:() => openKeyEditor(entry, action)});
+  button.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + icon + '"/></svg>';
+  return button;
+}
 async function loadKeysPage() {
   const revision = ++keyLoadRevision;
   const res = await api('/api/keys');
@@ -2061,46 +2068,64 @@ async function loadKeysPage() {
   $('ky-list').replaceChildren(...entries.map(entry => el('div', {class:'card key-card'},
     el('div', {class:'row'}, el('h3', {text:entry.name}), el('span', {class:'tag', text:(KEY_TYPES.find(type => type.value === entry.kind) || {}).label || entry.kind})),
     el('div', {class:'row key-actions'},
-      el('button', {class:'btn small', text:'改名', onclick:() => openKeyEditor(entry)}),
-      el('button', {class:'btn small danger', text:'删除', onclick:() => openKeyEditor(entry, true)})))));
+      keyAction(entry, 'rename', '改名', 'pencil'),
+      keyAction(entry, 'update', '修改密钥值', 'key'),
+      keyAction(entry, 'remove', '删除', 'trash')))));
 }
-function openKeyEditor(entry, removing) {
+function keyValueField(label, kind, value = '') {
+  const field = editorField(label, value, {type:'password', required:true});
+  if (kind === 'other') {
+    field.input = el('textarea', {rows:5, 'data-secret':'', 'aria-label':label, autocomplete:'off', spellcheck:'false', required:true});
+    field.input.value = value;
+    field.node.lastChild.replaceWith(field.input);
+  } else field.input.setAttribute('autocomplete', 'new-password');
+  field.input.setAttribute('maxlength', '4096');
+  return field;
+}
+function openKeyEditor(entry, action = 'create') {
+  const creating = action === 'create', renaming = action === 'rename', removing = action === 'remove';
   const fields = {};
-  if (!removing) fields.name = editorField('名称', entry ? entry.name : '', {required:true});
-  if (fields.name) fields.name.input.setAttribute('maxlength', '128');
-  if (!entry) {
+  if (creating || renaming) {
+    fields.name = editorField('名称', entry ? entry.name : '', {required:true});
+    fields.name.input.setAttribute('maxlength', '128');
+  }
+  if (creating) {
     fields.kind = editorField('类型', 'api_key', {values:KEY_TYPES});
-    fields.value = editorField('密钥原文', '', {type:'password', required:true});
-    fields.value.input.setAttribute('autocomplete', 'new-password');
-    fields.value.input.setAttribute('maxlength', '4096');
+    fields.value = keyValueField('密钥原文', 'api_key');
     fields.kind.input.addEventListener('change', () => {
       const previous = fields.value.input;
-      const input = fields.kind.input.value === 'other'
-        ? el('textarea', {rows:5, 'data-secret':'', 'aria-label':'密钥原文', autocomplete:'off', spellcheck:'false', required:true, maxlength:4096})
-        : el('input', {type:'password', 'aria-label':'密钥原文', autocomplete:'new-password', required:true, maxlength:4096});
-      input.value = previous.value; previous.value = '';
-      fields.value.node.replaceChildren(el('label', {text:'密钥原文'}), input);
-      fields.value.input = input;
+      const replacement = keyValueField('密钥原文', fields.kind.input.value, previous.value);
+      previous.value = '';
+      previous.replaceWith(replacement.input);
+      fields.value.input = replacement.input;
     });
   }
+  if (action === 'update') fields.value = keyValueField('新密钥值', entry.kind);
   fields.password = editorField('当前密码', '', {type:'password', required:true});
   fields.password.input.setAttribute('autocomplete', 'current-password');
-  const button = el('button', {class:removing ? 'btn danger' : 'btn primary', text:removing ? '确定删除' : entry ? '保存名称' : '保存密钥'});
-  const body = editorForm(removing ? '删除密钥 · ' + entry.name : entry ? '修改密钥名称' : '添加密钥', fields, () => {}, button);
+  const [title, saveLabel, success] = {
+    create:['添加密钥', '保存密钥', '密钥已保存。'],
+    rename:['修改密钥名称', '保存名称', '名称已更新。'],
+    update:['修改密钥值', '保存密钥', '密钥值已更新。'],
+    remove:['删除密钥', '确定删除', '密钥已删除。'],
+  }[action];
+  const button = el('button', {class:removing ? 'btn danger' : 'btn primary', text:saveLabel});
+  const body = editorForm(removing || action === 'update' ? title + ' · ' + entry.name : title, fields, () => {}, button);
   const generation = editorGeneration;
   button.addEventListener('click', async () => {
     if (button.disabled || !validFields(fields)) return;
     const data = {password:fields.password.input.value};
     if (entry) data.id = entry.id;
-    if (!removing) data.name = fieldText(fields.name);
-    if (!entry) { data.kind = fields.kind.input.value; data.value = fields.value.input.value; fields.value.input.value = ''; }
+    if (fields.name) data.name = fieldText(fields.name);
+    if (fields.kind) data.kind = fields.kind.input.value;
+    if (fields.value) { data.value = fields.value.input.value; fields.value.input.value = ''; }
     fields.password.input.value = ''; button.disabled = true;
-    const res = await api(removing ? '/api/keys/remove' : entry ? '/api/keys/rename' : '/api/keys', 'POST', data);
+    const res = await api(creating ? '/api/keys' : '/api/keys/' + action, 'POST', data);
     delete data.value; delete data.password;
     button.disabled = false;
     if (!res.ok) { failApi(res); return; }
     if (generation === editorGeneration) $('editor-dialog').close();
-    toast(removing ? '密钥已删除。' : entry ? '名称已更新。' : '密钥已保存。', 'ok');
+    toast(success, 'ok');
     if (res.data.restart_required) showRestart();
     await loadKeysPage();
   });

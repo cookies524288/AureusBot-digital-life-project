@@ -378,6 +378,23 @@ def register_config_routes(
                 raise HTTPException(404, detail="没有这个密钥。")
             return {"ok": True, "restart_required": service.restart_required}
 
+    @app.post("/api/keys/update")
+    async def update_key(
+        request: Request, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, bool]:
+        _require_local(request)
+        with _translate_errors(service):
+            body = await _body(request)
+            _confirm(auth, body, request)
+            entry_id, value = _entry_id(body), body.get("value")
+            if not isinstance(value, str) or not value or len(value) > MAX_KEY_CHARS:
+                raise HTTPException(422, detail=f"密钥不能为空，且最多 {MAX_KEY_CHARS} 个字。")
+            async with service.write_lock:
+                updated = await asyncio.to_thread(service.update_key, entry_id, value)
+            if not updated:
+                raise HTTPException(404, detail="没有这个密钥。")
+            return {"ok": True, "restart_required": service.restart_required}
+
     @app.get("/api/config")
     async def view_config(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
         with _translate_errors(service):

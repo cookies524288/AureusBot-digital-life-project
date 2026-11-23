@@ -69,6 +69,13 @@ def _require_available(entries: list[VaultEntry], name: str, entry_id: str | Non
         raise VaultError("这个密钥名称已存在。")
 
 
+def _entry_value(kind: str, value: str) -> str:
+    value = value.strip() if kind == "api_key" else value
+    if not value or len(value) > MAX_SECRET_CHARS:
+        raise VaultError(f"密钥不能为空，且最多 {MAX_SECRET_CHARS} 个字。")
+    return value
+
+
 def _write_atomically(path: Path, text: str) -> None:
     # 先写临时文件再替换：中途崩溃时原文件完好，不会留下半个文件。
     # mkstemp 在类 Unix 上创建的文件只有所有者能读写（0600），主密钥文件需要这样。
@@ -310,9 +317,7 @@ class SecretVault:
         name = _entry_name(name)
         if kind not in SECRET_KINDS:
             raise VaultError("请选择密码、API key 或其他类型。")
-        value = value.strip() if kind == "api_key" else value
-        if not value or len(value) > MAX_SECRET_CHARS:
-            raise VaultError(f"密钥不能为空，且最多 {MAX_SECRET_CHARS} 个字。")
+        value = _entry_value(kind, value)
         entry = VaultEntry.model_validate(
             {
                 "id": uuid4().hex,
@@ -345,6 +350,19 @@ class SecretVault:
                     ]
                 )
         return True
+
+    def update_value(self, entry_id: str, value: str) -> bool:
+        """按稳定 id 替换原文，保留名称、类型和兼容名。"""
+        with self._locked_for_writing():
+            entries = self.load_entries()
+            for index, entry in enumerate(entries):
+                if entry.id == entry_id:
+                    entries[index] = entry.model_copy(
+                        update={"value": SecretStr(_entry_value(entry.kind, value))}
+                    )
+                    self._save(entries)
+                    return True
+        return False
 
     def remove_entry(self, entry_id: str) -> bool:
         """按稳定 id 删除；没有该记录时不写文件。"""

@@ -18,6 +18,7 @@ from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import GOOD
 
 VALUE = "fake-vault-secret-for-d87-tests"
+NEW_VALUE = "fake-updated-vault-secret"
 
 
 @pytest.fixture
@@ -105,6 +106,40 @@ def test_legacy_config_survives_rename_and_cli_upsert(rig: ConfigRig) -> None:
     assert vault.load_entries()[0].id == entry_id
 
 
+@pytest.mark.parametrize("kind", ["api_key", "password", "other"])
+def test_update_keeps_entry_metadata_and_never_returns_values(rig: ConfigRig, kind: str) -> None:
+    entry_id = create(rig, name="AUREUS_KEY_UPDATE", kind=kind)
+    before = rig.client.get("/api/keys").json()
+    value = f"  {NEW_VALUE}\n  "
+    response = rig.client.post(
+        "/api/keys/update", json={"id": entry_id, "value": value, "password": GOOD}
+    )
+    assert response.json() == {"ok": True, "restart_required": False}
+    listed = rig.client.get("/api/keys")
+    assert listed.json() == before
+    assert all(secret not in response.text + listed.text for secret in (VALUE, NEW_VALUE))
+    vault = SecretVault(rig.paths.vault_file, rig.paths.master_key_file)
+    entry = vault.load_entries()[0]
+    assert entry.legacy_name == "AUREUS_KEY_UPDATE"
+    assert entry.value.get_secret_value() == (value.strip() if kind == "api_key" else value)
+
+
+def test_update_requires_password_and_existing_id(rig: ConfigRig) -> None:
+    entry_id = create(rig)
+    before = rig.paths.vault_file.read_bytes()
+    response = rig.client.post("/api/keys/update", json={"id": entry_id, "value": NEW_VALUE})
+    assert response.status_code == 403
+    response = rig.client.post(
+        "/api/keys/update", json={"id": "0" * 32, "value": NEW_VALUE, "password": GOOD}
+    )
+    assert response.status_code == 404
+    response = rig.client.post(
+        "/api/keys/update", json={"id": entry_id, "value": "   ", "password": GOOD}
+    )
+    assert response.status_code == 422
+    assert rig.paths.vault_file.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -131,8 +166,9 @@ def test_invalid_create_never_echoes_input_or_creates_files(
     assert not rig.paths.vault_file.exists()
 
 
+@pytest.mark.parametrize("action", ["remove", "update"])
 def test_duplicate_names_and_failed_file_writes_leave_memory_unchanged(
-    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch, action: str
 ) -> None:
     entry_id = create(rig)
     before = rig.paths.vault_file.read_bytes()
@@ -150,7 +186,9 @@ def test_duplicate_names_and_failed_file_writes_leave_memory_unchanged(
         raise OSError(VALUE)
 
     monkeypatch.setattr(module, "_write_atomically", fail)
-    response = rig.client.post("/api/keys/remove", json={"id": entry_id, "password": GOOD})
+    response = rig.client.post(
+        f"/api/keys/{action}", json={"id": entry_id, "value": NEW_VALUE, "password": GOOD}
+    )
     assert response.status_code == 500 and VALUE not in response.text
     assert rig.paths.vault_file.read_bytes() == before
     secret = rig.models.key_resolver.get_vault(entry_id)
@@ -210,10 +248,18 @@ def test_runtime_call_uses_memory_and_refuses_deleted_or_non_api_keys(rig: Confi
             "organs": {"replyer": {"models": ["m"]}},
         }
     )
-    completion = FakeCompletion(make_response("测试成功"))
+    completion = FakeCompletion(make_response("测试成功"), make_response("换值成功"))
     organ = LLMOrgan.from_config("replyer", config, rig.models.key_resolver, completion)
     asyncio.run(organ.process(ask()))
     assert completion.calls[0]["api_key"] == VALUE
+    assert (
+        rig.client.post(
+            "/api/keys/update", json={"id": entry_id, "value": NEW_VALUE, "password": GOOD}
+        ).status_code
+        == 200
+    )
+    asyncio.run(organ.process(ask()))
+    assert completion.calls[1]["api_key"] == NEW_VALUE
     assert rig.models.key_resolver.get_vault(password_id) is None
     assert (
         rig.client.post("/api/keys/remove", json={"id": entry_id, "password": GOOD}).status_code
@@ -221,7 +267,7 @@ def test_runtime_call_uses_memory_and_refuses_deleted_or_non_api_keys(rig: Confi
     )
     with pytest.raises(OrganCallError, match="API key"):
         asyncio.run(organ.process(ask()))
-    assert len(completion.calls) == 1
+    assert len(completion.calls) == 2
     # 重启使用同一主密钥自动解锁，不依赖网页登录原文。
     restarted = KeyResolver(
         rig.paths.env_file,

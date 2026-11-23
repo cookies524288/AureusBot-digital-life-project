@@ -348,6 +348,17 @@ class ConfigService:
             logger.info("网页修改密钥名称")
         return renamed
 
+    def update_key(self, entry_id: str, value: str) -> bool:
+        """保存新值后同步内存中的密钥库。"""
+        # 在途请求仍可能持有旧值，继续过滤两份原文。
+        hide_secrets(self._vault.load().values())
+        hide_secrets([value, value.strip()])
+        updated = self._vault.update_value(entry_id, value)
+        if updated:
+            self._keys_changed()
+            logger.info("网页修改密钥值")
+        return updated
+
     def write_key(self, name: str, value: str) -> None:
         """录入密钥；首次创建、文件锁和加密均复用 SecretVault，不记录原文。"""
         hide_secrets([value, value.strip()])
