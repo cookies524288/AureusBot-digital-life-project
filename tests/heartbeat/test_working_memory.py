@@ -5,7 +5,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
 from aureus.attention import WorkingMemory, route_scope, summarize
 from aureus.common import HeartbeatConfig, ManualClock
@@ -13,7 +15,8 @@ from aureus.heartbeat import Heartbeat, Perception, TrustLevel
 from aureus.identity import Identity
 from aureus.organs import ModelPreference, OrganRequest, OrganResponse
 from aureus.safety import EmergencyStop, PermissionChecker
-from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
+from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from aureus.web.timeline_api import register_timeline_routes
 
 NOW = datetime(2026, 11, 23, 12, tzinfo=UTC)
 
@@ -137,17 +140,14 @@ class _Organs:
         return OrganResponse(request.organ_id, "收到。")
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("interrupt", [False, True])
-async def test_actual_planner_and_replyer_get_saved_summary(
-    tmp_path: Path, interrupt: bool
-) -> None:
-    clock = ManualClock(NOW)
-    timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
-    timeline.open()
-    config = HeartbeatConfig(working_memory_capacity=3, working_memory_retain=1)
+def _heartbeat(
+    tmp_path: Path,
+    clock: ManualClock,
+    timeline: TimelineDatabase,
+    config: HeartbeatConfig,
+    organs: _Organs,
+) -> Heartbeat:
     stop = EmergencyStop(tmp_path / "halt.json", clock)
-    organs = _Organs()
     heart = Heartbeat(
         clock=clock,
         timeline=timeline,
@@ -165,11 +165,58 @@ async def test_actual_planner_and_replyer_get_saved_summary(
         working_memory=WorkingMemory(timeline, config),
     )
     heart.attach_channel("web", lambda _: None)
+    return heart
+
+
+async def _assert_timeline_focus(
+    heart: Heartbeat, timeline: TimelineDatabase, clock: ManualClock, boundary_id: int
+) -> None:
+    app = FastAPI()
+
+    async def signed_in() -> str:
+        return "test-session"
+
+    register_timeline_routes(
+        app,
+        timeline=timeline,
+        heartbeat=heart,
+        clock=clock,
+        visibility=VisibilityScope.USER_ONLY,
+        require_ready=signed_in,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        for params in ({}, {"limit": 1, "before_id": boundary_id, "types": "message"}):
+            response = await client.get("/api/timeline", params=params)
+            assert response.status_code == 200
+            data = response.json()
+            assert data["context"] == {
+                "message_limit": 5,
+                "boundary_id": boundary_id,
+                "working_memory": True,
+            }
+            assert data["summary"]["用户私聊"] == "摘要：已压缩的对话"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt", [False, True])
+async def test_actual_planner_and_replyer_get_saved_summary(
+    tmp_path: Path, interrupt: bool
+) -> None:
+    clock = ManualClock(NOW)
+    timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
+    timeline.open()
+    config = HeartbeatConfig(working_memory_capacity=5, working_memory_retain=1)
+    organs = _Organs()
+    heart = _heartbeat(tmp_path, clock, timeline, config, organs)
     heart.update_available_organs(frozenset({"summarizer", "planner", "replyer"}))
     heart.wake_up()
     try:
-        _append(timeline, "已压缩的对话")
+        for text in ("已压缩的对话", "第一段旧对话", "第二段旧对话"):
+            _append(timeline, text)
         _append(timeline, "保留焦点的对话")
+        boundary_id = timeline.get_latest_id()
         heart.beat()
         await asyncio.wait_for(organs.started.wait(), 1)
         heart.beat()
@@ -179,6 +226,14 @@ async def test_actual_planner_and_replyer_get_saved_summary(
             await heart.wait_for_thought()
             heart.beat()
             assert heart.working_memory_summaries()["用户私聊"] == "摘要：已压缩的对话"
+            await _assert_timeline_focus(heart, timeline, clock, boundary_id)
+            await heart.shut_down()
+            timeline.close()
+            timeline.open()
+            heart = _heartbeat(tmp_path, clock, timeline, config, organs)
+            heart.update_available_organs(frozenset({"planner", "replyer"}))
+            heart.wake_up()
+            await _assert_timeline_focus(heart, timeline, clock, boundary_id)
         assert heart.submit(
             Perception("web", "user", "请回我", VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER)
         )
@@ -191,7 +246,51 @@ async def test_actual_planner_and_replyer_get_saved_summary(
         requests = [req for req in organs.requests if req.organ_id in {"planner", "replyer"}]
         assert {req.organ_id for req in requests} == {"planner", "replyer"}
         assert all(("摘要：已压缩的对话" in req.prompt) is not interrupt for req in requests)
+        if not interrupt:
+            for request in requests:
+                assert "第一段旧对话" not in request.prompt
+                assert "第二段旧对话" not in request.prompt
+                assert request.prompt.count("保留焦点的对话") == 1
     finally:
         organs.release.set()
+        await heart.shut_down()
+        timeline.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_replies_are_split_at_working_memory_capacity(tmp_path: Path) -> None:
+    clock = ManualClock(NOW)
+    timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
+    timeline.open()
+    config = HeartbeatConfig(working_memory_capacity=2, working_memory_retain=1)
+    organs = _Organs()
+    heart = _heartbeat(tmp_path, clock, timeline, config, organs)
+    heart.update_available_organs(frozenset({"planner", "replyer"}))
+    heart.wake_up()
+    messages = [f"排队来信{index}" for index in range(5)]
+    try:
+        for message in messages:
+            assert heart.submit(
+                Perception(
+                    "web", "user", message, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER
+                )
+            )
+        for _ in range(3):
+            heart.beat()
+            await heart.wait_for_thought()
+        heart.beat()
+        records = timeline.query(TimelineQuery(event_type="message"))
+        message_ids = [record.id for record in records if record.content in messages]
+        assert len(message_ids) == 5
+        expected = [message_ids[:2], message_ids[2:4], message_ids[4:]]
+        for organ_id in ("planner", "replyer"):
+            requests = [request for request in organs.requests if request.organ_id == organ_id]
+            assert [request.context["in_reply_to"] for request in requests] == expected
+            for request, batch in zip(requests, expected, strict=True):
+                assert all(
+                    record.content in request.prompt for record in records if record.id in batch
+                )
+                assert sum(message in request.prompt for message in messages) <= 2
+    finally:
         await heart.shut_down()
         timeline.close()

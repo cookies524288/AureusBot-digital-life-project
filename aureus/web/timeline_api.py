@@ -33,6 +33,10 @@ class HeartbeatView(Protocol):
         """已持久化的注意力滚动摘要。"""
         ...
 
+    def working_memory_focus(self) -> tuple[int, int | None] | None:
+        """启用工作记忆时返回容量和全局焦点边界。"""
+        ...
+
     @property
     def cognitive_state(self) -> CognitiveState | None:
         """最近一拍的认知状态。"""
@@ -87,8 +91,13 @@ def register_timeline_routes(
             )
         ]
         records = sorted(records, key=lambda record: record.id)[-bounded_limit:]
-        message_limit = heartbeat.context_message_limit()
-        context = recent_dialogue(timeline, visibility=visibility, limit=message_limit)
+        focus = heartbeat.working_memory_focus()
+        if focus is None:
+            message_limit = heartbeat.context_message_limit()
+            context = recent_dialogue(timeline, visibility=visibility, limit=message_limit)
+            boundary_id = context[0].id if context else None
+        else:
+            message_limit, boundary_id = focus
         return {
             "summary": heartbeat.working_memory_summaries(),
             "records": [
@@ -108,7 +117,8 @@ def register_timeline_routes(
             "next_before_id": records[0].id if len(records) == bounded_limit else None,
             "context": {
                 "message_limit": message_limit,
-                "boundary_id": context[0].id if context else None,
+                "boundary_id": boundary_id,
+                **({"working_memory": True} if focus is not None else {}),
             },
         }
 

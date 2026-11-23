@@ -1,6 +1,7 @@
 """记忆子系统：从经历派生的全文索引、检索和每日日记文件（D80）。"""
 
 from aureus.memory.diary import DiaryBook
+from aureus.memory.edits import MAX_MEMORY_TEXT, MemoryKind
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -12,7 +13,9 @@ from aureus.memory.index import MAX_HIT_CHARS, MemoryEntry, MemoryHit, MemoryInd
 from aureus.memory.language import (
     BATCH_SIZE,
     MAX_DETAIL,
+    MAX_EXAMPLE,
     MAX_TEXT,
+    LanguageContent,
     LanguageKind,
     LanguageProposal,
     LanguageSample,
@@ -33,11 +36,14 @@ __all__ = [
     "FREQUENCY_TABLE",
     "JARGON_TABLE",
     "MAX_DETAIL",
+    "MAX_EXAMPLE",
     "MAX_HIT_CHARS",
+    "MAX_MEMORY_TEXT",
     "MAX_TEXT",
     "DiaryBook",
     "HistoricalMemory",
     "ImportedLanguageRow",
+    "LanguageContent",
     "LanguageKind",
     "LanguageProposal",
     "LanguageSample",
@@ -48,6 +54,7 @@ __all__ = [
     "MemoryEvidence",
     "MemoryHit",
     "MemoryIndex",
+    "MemoryKind",
     "MemorySnapshotConflictError",
     "MemorySource",
     "MemoryStatus",

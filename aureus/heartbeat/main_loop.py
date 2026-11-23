@@ -614,6 +614,16 @@ class Heartbeat:
         """读取本次运行已恢复的分区摘要，供管理网页展示。"""
         return self._working_memory.summaries() if self._working_memory is not None else {}
 
+    def working_memory_focus(self) -> tuple[int, int | None] | None:
+        """管理网页所见的工作记忆容量和最早焦点；停用时沿用对话窗口。"""
+        if (
+            self._working_memory is None
+            or not self._config.working_memory_enabled
+            or not self._working_memory.is_ready
+        ):
+            return None
+        return self._config.working_memory_capacity, self._working_memory.focus_boundary()
+
     def _describe_signals(self) -> list[str]:
         """疲劳、压力、夜间的一行读数；关掉的信号注明已关闭。"""
         reading = self._reading
@@ -1434,9 +1444,11 @@ class Heartbeat:
         batch = sorted(self._unanswered.peek_batch(address), key=lambda heard: heard.record.id)
         if not batch or self._debounce_remaining(batch) > 0:
             return
+        if self._working_memory is not None and self._config.working_memory_enabled:
+            batch = batch[:self._config.working_memory_capacity]
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
         job = self._reply_job(batch)
-        self._unanswered.take_next(address)
+        self._unanswered.remove(batch)
         run = None
         if self._config.inbox_debounce_enabled and _platform_key(batch[-1]) is not None:
             run = _PlannerRun()

@@ -179,8 +179,8 @@ def imported_entries(connection: Connection, table: str) -> list[LanguageEntry]:
     """读取可召回的导入语言，来源引用与本地时间线编号分别保留。"""
     references: list[LanguageEntry] = []
     rows = connection.execute(
-        """SELECT entry.source_key, entry.text, entry.detail, entry.example, entry.count,
-                  entry.evidence, sample.record_id, sample.speaker
+        """SELECT entry.instance, entry.source_key, entry.text, entry.detail, entry.example,
+                  entry.count, entry.evidence, sample.record_id, sample.speaker
            FROM language_import_rows AS entry
            LEFT JOIN language_import_observations AS observed
                USING (instance, table_name, source_key)
@@ -189,7 +189,7 @@ def imported_entries(connection: Connection, table: str) -> list[LanguageEntry]:
            ORDER BY entry.instance, entry.source_key, sample.record_id""",
         (table,),
     )
-    for _, group in groupby(rows, key=lambda row: row["source_key"]):
+    for source, group in groupby(rows, key=lambda row: (row["instance"], row["source_key"])):
         records = list(group)
         first = records[0]
         evidence = records if first["record_id"] is not None else []
@@ -202,6 +202,7 @@ def imported_entries(connection: Connection, table: str) -> list[LanguageEntry]:
                 tuple(row["record_id"] for row in evidence),
                 frozenset(row["speaker"] for row in evidence),
                 source_refs=(first["source_key"], *json.loads(first["evidence"])),
+                entry_key=_encode((table, *source)),
             )
         )
     return references

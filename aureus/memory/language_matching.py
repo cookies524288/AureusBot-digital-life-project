@@ -36,6 +36,9 @@ class LanguageEntry:
     evidence_ids: tuple[int, ...]
     speakers: frozenset[str]
     source_refs: tuple[str, ...] = ()
+    entry_key: str = ""
+    is_enabled: bool = True
+    original: tuple[str, str, str] | None = None
 
 
 @dataclass(frozen=True)

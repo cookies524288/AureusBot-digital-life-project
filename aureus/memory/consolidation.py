@@ -228,8 +228,14 @@ def read_candidates(
         FROM memory_candidates c
         JOIN memory_candidate_evidence e USING (fingerprint)
         LEFT JOIN memory_history h ON h.source_key = e.reference
-        WHERE e.reference LIKE 'timeline:%'
-           OR (h.status = 'active'
+        LEFT JOIN memory_edits history_edit
+            ON history_edit.kind = 'history' AND history_edit.entry_id = h.id
+        LEFT JOIN memory_edits live_edit ON live_edit.kind = 'live'
+            AND e.reference = 'timeline:' || live_edit.entry_id
+        WHERE (e.reference LIKE 'timeline:%' AND coalesce(live_edit.is_enabled, 1)
+               AND live_edit.edited_content IS NULL)
+           OR (h.status = 'active' AND coalesce(history_edit.is_enabled, 1)
+               AND history_edit.edited_content IS NULL
                AND (h.valid_from IS NULL OR h.valid_from <= ?)
                AND (h.valid_to IS NULL OR h.valid_to > ?))
         ORDER BY c.last_seen DESC, c.fingerprint, e.reference

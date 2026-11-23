@@ -28,6 +28,7 @@ class FakeHeartbeat:
         self.limit = 2
         self.maintenance_paused = False
         self.summaries: dict[str, str] = {}
+        self.focus: tuple[int, int | None] | None = None
 
     def set_maintenance_paused(self, paused: bool) -> None:
         self.maintenance_paused = paused
@@ -43,6 +44,9 @@ class FakeHeartbeat:
 
     def working_memory_summaries(self) -> dict[str, str]:
         return self.summaries
+
+    def working_memory_focus(self) -> tuple[int, int | None] | None:
+        return self.focus
 
 
 class Rig:

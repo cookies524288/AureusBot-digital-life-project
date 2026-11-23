@@ -306,9 +306,10 @@ class ConversationFlow:
         self._people_config = people_config or PeopleConfig()
         self._working_memory = working_memory
 
-    def _working_context(self, target: Perception, ids: tuple[int, ...]) -> str:
-        if self._working_memory is None:
-            return ""
+    def _working_context(
+        self, memory: WorkingMemory, target: Perception, batch_ids: set[int], limit: int
+    ) -> tuple[Sequence[TimelineRecord], str, tuple[int, ...]]:
+        """用同一份近期焦点组装对话历史、其他经历与摘要（D96）。"""
         route = target.route
         scope = (
             route_scope(
@@ -322,11 +323,41 @@ class ConversationFlow:
             if route is not None
             else None
         )
-        return self._working_memory.context(
-            owner=target.trust is TrustLevel.VERIFIED_USER
-            and target.visibility is VisibilityScope.USER_ONLY,
-            route=scope,
-            exclude=ids,
+        owner = (
+            target.trust is TrustLevel.VERIFIED_USER
+            and target.visibility is VisibilityScope.USER_ONLY
+        )
+        focus = memory.dialogue_focus(owner=owner, route=scope, exclude=batch_ids)
+        history = [record for record in focus if record.event_type == EVENT_MESSAGE][-limit:]
+        experiences = [record for record in focus if record.event_type != EVENT_MESSAGE]
+        material = memory.describe_context(owner=owner, route=scope, focus=experiences)
+        return history, material, tuple(record.id for record in experiences)
+
+    def _recent_history(self, target: Perception, limit: int) -> Sequence[TimelineRecord]:
+        """停用工作记忆时沿用按精力档位查询对话的规则（D59、D61、D84）。"""
+        if target.route is None:
+            return recent_dialogue(
+                self._timeline,
+                visibility=(
+                    target.visibility if target.trust is TrustLevel.VERIFIED_USER else None
+                ),
+                limit=limit,
+            )
+        key = ConversationKey.from_perception(target)
+        return self._timeline.query(
+            TimelineQuery(
+                event_type=EVENT_MESSAGE,
+                visibility=target.visibility,
+                latest=True,
+                limit=limit,
+                metadata={
+                    "channel": key.platform,
+                    "account_id": key.account_id,
+                    "message_type": key.kind,
+                    "recipient_id": key.recipient_id,
+                    "temporary_group_id": key.temporary_group_id,
+                },
+            )
         )
 
     def _conversation_job(
@@ -357,34 +388,19 @@ class ConversationFlow:
         batch_ids = {record.id for record in messages}
         contact = target.trust is not TrustLevel.VERIFIED_USER
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
-        # 回复用户时只带同一可见范围的对话。回复别人时不按范围过滤（D61，用户决定）：
-        # 它的记忆是连续的一份，防套话靠系统上下文里的说明，由规划器和回复器各自判断。
-        if target.route is None:
-            recent = recent_dialogue(
-                self._timeline,
-                visibility=None if contact else target.visibility,
-                limit=strategy.message_limit,
+        memory = self._working_memory
+        if (
+            memory is not None
+            and memory.config.working_memory_enabled
+            and memory.is_ready
+        ):
+            history, working_context, experience_ids = self._working_context(
+                memory, target, batch_ids, strategy.message_limit
             )
         else:
-            key = ConversationKey.from_perception(target)
-            recent = self._timeline.query(
-                TimelineQuery(
-                    event_type=EVENT_MESSAGE,
-                    visibility=target.visibility,
-                    latest=True,
-                    limit=strategy.message_limit,
-                    metadata={
-                        "channel": key.platform,
-                        "account_id": key.account_id,
-                        "message_type": key.kind,
-                        "recipient_id": key.recipient_id,
-                        "temporary_group_id": key.temporary_group_id,
-                    },
-                )
-            )
-        # 按序号排除这次要回复的消息，而不是只取“比它们早的”：想上一件事的时候来的消息，
-        # 序号比上一次的回复还小，只取更早的就会漏掉它刚说过的话。
-        history = [record for record in recent if record.id not in batch_ids]
+            recent = self._recent_history(target, strategy.message_limit)
+            history = [record for record in recent if record.id not in batch_ids]
+            working_context, experience_ids = "", ()
         body_state = self._body_state_for_context(strategy, body, reading)
         now = self._clock.now()
         identity_changes = (
@@ -448,7 +464,7 @@ class ConversationFlow:
             and self._people_config.history_in_reply_enabled
             else ()
         )
-        history_ids = tuple(record.id for record in [*history, *messages])
+        history_ids = (*experience_ids, *(record.id for record in [*history, *messages]))
         job = _ReplyJob(
             strategy=strategy,
             history=history,
@@ -464,7 +480,7 @@ class ConversationFlow:
             build_contexts=build_contexts,
             with_interests=bool(interests_state),
             history_ids=history_ids,
-            working_context=self._working_context(target, history_ids),
+            working_context=working_context,
             people_history=people_history,
             inbox_attention=inbox_attention,
         )

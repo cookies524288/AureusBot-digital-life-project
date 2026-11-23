@@ -153,6 +153,23 @@ def for_person(conn: sqlite3.Connection, person_id: int) -> list[HistoricalEntry
     return [_entry(row) for row in rows]
 
 
+def browse_profiles(
+    conn: sqlite3.Connection, query: str, offset: int, limit: int
+) -> list[HistoricalEntry]:
+    """分页查找人物画像和维护覆盖，包含待解析的来源。"""
+    rows = conn.execute(
+        """SELECT history.* FROM people_history history
+           LEFT JOIN people person ON person.id = history.person_id
+           WHERE history.kind IN ('person_profile_snapshots', 'person_profile_overrides',
+                                  'person_profile_alias_overrides')
+             AND (? = '' OR instr(lower(history.record), lower(?)) > 0
+                         OR instr(lower(person.name), lower(?)) > 0)
+           ORDER BY history.id DESC LIMIT ? OFFSET ?""",
+        (query, query, query, limit, offset),
+    )
+    return [_entry(row) for row in rows]
+
+
 def _snapshot_is_current(record: HistoricalRecord, now: float) -> bool:
     expires = record.expires_at
     if expires is not None:

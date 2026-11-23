@@ -38,7 +38,7 @@ from aureus.heartbeat.inbox_store import InboxStore
 from aureus.identity import Identity
 from aureus.memory import LanguageStore, MemoryIndex
 from aureus.organs import OrganResponse
-from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleError
+from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 
 from .auth import (
@@ -222,6 +222,8 @@ def create_app(
     resource_language: LanguageStore | None = None,
     resource_memory: MemoryIndex | None = None,
     resource_images: InboxImageIndex | None = None,
+    resource_people: PeopleDirectory | None = None,
+    resource_memory_dir: Path | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -439,7 +441,13 @@ def create_app(
 
     register_inbox_routes(app, inbox_store, require_ready)
     register_resource_routes(
-        app, require_ready, resource_language, resource_memory, resource_images
+        app,
+        require_ready,
+        resource_language,
+        resource_memory,
+        resource_images,
+        resource_people,
+        resource_memory_dir,
     )
 
     if maintenance_paused is not None and set_maintenance_paused is not None:
@@ -491,6 +499,7 @@ def create_app(
     # 和 API 一起加载，避免更新磁盘文件后旧进程提供依赖新接口的页面。
     index_html = INDEX_PAGE.read_bytes()
     organ_graph = INDEX_PAGE.with_name("organ-graph.js").read_bytes()
+    resources_ui = INDEX_PAGE.with_name("resource-management.js").read_bytes()
     organ_tile = INDEX_PAGE.with_name("organ-tile.png").read_bytes()
 
     @app.get("/", include_in_schema=False)
@@ -502,6 +511,12 @@ def create_app(
     async def organ_graph_asset() -> Response:
         return Response(
             organ_graph, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/assets/resource-management.js", include_in_schema=False)
+    async def resource_management_asset() -> Response:
+        return Response(
+            resources_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
         )
 
     @app.get("/assets/organ-tile.png", include_in_schema=False)

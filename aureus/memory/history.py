@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal
 
-from aureus.memory.sparse import keyword_conditions, ranked_matches, relevance_expression
+from aureus.memory.edits import effective_keyword_conditions, effective_ranked_matches
+from aureus.memory.sparse import relevance_expression
 
 type SourceValue = str | int | float | dict[str, str]
 type MemoryStatus = Literal[
@@ -71,6 +72,10 @@ class HistoricalMemory:
     valid_to: datetime | None = None
     evidence: tuple[MemoryEvidence, ...] = ()
     received_at: datetime | None = None
+    entry_id: int | None = None
+    is_enabled: bool = True
+    is_recallable: bool = True
+    original_text: str | None = None
 
 
 class MemorySnapshotConflictError(ValueError):
@@ -233,19 +238,80 @@ def read_history(conn: sqlite3.Connection, source: MemorySource) -> HistoricalMe
 
 
 def browse_history(
-    conn: sqlite3.Connection, query: str, status: str, offset: int, limit: int
+    conn: sqlite3.Connection,
+    query: str,
+    status: str,
+    offset: int,
+    limit: int,
+    *,
+    now: datetime,
+    recall: str = "",
+    source_table: str = "",
+    omit_image_type: str = "",
 ) -> list[HistoricalMemory]:
-    """返回一页原件，包括被归档的记录。"""
+    """返回一页记录和维护覆盖，包括被归档的记录。"""
     rows = conn.execute(
-        """SELECT * FROM memory_history
+        """SELECT history.*, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled,
+                  (status = 'active' AND (valid_from IS NULL OR valid_from <= ?)
+                   AND (valid_to IS NULL OR valid_to > ?) AND coalesce(edit.is_enabled, 1))
+                    AS is_recallable
+           FROM memory_history AS history
+           LEFT JOIN memory_edits AS edit ON edit.kind = 'history' AND edit.entry_id = history.id
            WHERE (? = '' OR status = ?)
-             AND (? = '' OR instr(lower(content), lower(?)) > 0
+             AND (? = '' OR json_extract(source_key, '$[2]') = ?
+                  OR (? = 'text' AND json_extract(source_key, '$[2]') IN
+                      ('paragraphs', 'relations', 'fact_claims', 'episodes', 'mai_messages')))
+             AND (? = '' OR is_recallable = (? = 'enabled'))
+             AND (? = '' OR NOT EXISTS (
+                  SELECT 1 FROM json_each(history.evidence) evidence_item
+                  WHERE json_extract(evidence_item.value, '$.kind') = 'media_type'
+                    AND json_extract(evidence_item.value, '$.reference') = ?))
+             AND (? = '' OR instr(lower(coalesce(edit.edited_content, content)), lower(?)) > 0
+                         OR instr(lower(content), lower(?)) > 0
                          OR instr(lower(actor_label), lower(?)) > 0
                          OR instr(lower(source_key), lower(?)) > 0)
-           ORDER BY id DESC LIMIT ? OFFSET ?""",
-        (status, status, query, query, query, query, limit, offset),
+           ORDER BY history.id DESC LIMIT ? OFFSET ?""",
+        (
+            now.timestamp(),
+            now.timestamp(),
+            status,
+            status,
+            source_table,
+            source_table,
+            source_table,
+            recall,
+            recall,
+            omit_image_type,
+            omit_image_type,
+            query,
+            query,
+            query,
+            query,
+            query,
+            limit,
+            offset,
+        ),
     ).fetchall()
-    return [_decode(row) for row in rows]
+    return [
+        replace(
+            _decode(row),
+            entry_id=row["id"],
+            is_enabled=bool(row["is_enabled"]),
+            is_recallable=bool(row["is_recallable"]),
+            text=row["edited_content"] if row["edited_content"] is not None else row["content"],
+            original_text=row["content"] if row["edited_content"] is not None else None,
+        )
+        for row in rows
+    ]
+
+
+def count_history_sources(conn: sqlite3.Connection) -> dict[str, int]:
+    """按来源表汇总已迁入的记录。"""
+    return dict(
+        conn.execute("""
+        SELECT json_extract(source_key, '$[2]'), count(*) FROM memory_history GROUP BY 1
+    """).fetchall()
+    )
 
 
 def search_history(
@@ -259,7 +325,9 @@ def search_history(
     before: datetime | None,
 ) -> list[tuple[HistoricalMemory, int, float]]:
     """只查当前有效的资料。起始时间包含端点，截止时间排除端点。"""
-    clauses, terms = keyword_conditions(keywords, "memory_history_fts", "id")
+    clauses, terms = effective_keyword_conditions(
+        keywords, "memory_history_fts", "memory_history.id", "memory_history.content"
+    )
     if not clauses and person_keys is None and since is None and before is None:
         return []
     # 上游的有效区间为 [valid_from, valid_to)，查询时刻来自 Aureus 时钟。
@@ -267,6 +335,7 @@ def search_history(
         "status = 'active'",
         "(valid_from IS NULL OR valid_from <= ?)",
         "(valid_to IS NULL OR valid_to > ?)",
+        "coalesce(edit.is_enabled, 1) = 1",
     ]
     point = now.timestamp()
     parameters: list[str | int | float] = [point, point]
@@ -277,18 +346,28 @@ def search_history(
         return []
     _append_filters(where, parameters, person_keys, since, before)
     parameters.append(limit)
-    rank_prefix, score, rank_parameters = ranked_matches(keywords, "memory_history_fts")
+    rank_prefix, score, rank_parameters = effective_ranked_matches(
+        keywords, "memory_history_fts", "memory_history.id"
+    )
     rows = conn.execute(
         rank_prefix
-        + "SELECT *, "
+        + "SELECT memory_history.*, edit.edited_content, "
         + relevance_expression(clauses)
-        + f" AS relevance, {score.format(row_id='memory_history.id')} AS sparse_score "
-        + "FROM memory_history WHERE "
+        + f" AS relevance, {score} AS sparse_score "
+        + "FROM memory_history LEFT JOIN memory_edits AS edit "
+        + "ON edit.kind = 'history' AND edit.entry_id = memory_history.id WHERE "
         + " AND ".join(where)
         + " ORDER BY relevance DESC, recorded_at DESC, sparse_score, source_key LIMIT ?",
         [*rank_parameters, *terms, *parameters],
     )
-    return [(_decode(row), row["relevance"], row["sparse_score"]) for row in rows]
+    return [
+        (
+            replace(_decode(row), text=row["edited_content"] or row["content"]),
+            row["relevance"],
+            row["sparse_score"],
+        )
+        for row in rows
+    ]
 
 
 def _append_filters(

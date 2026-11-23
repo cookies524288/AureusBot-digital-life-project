@@ -7,6 +7,7 @@
 
 import sqlite3
 from collections.abc import Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -274,6 +275,11 @@ class PeopleDirectory:
     ) -> HistoricalEntry | None:
         """按来源取资料原值和解析结果，包括尚未关联的人物与关系。"""
         return history.get_record(self._require_open(), instance, kind, source_key)
+
+    def browse_profiles(self, query: str, offset: int, limit: int) -> list[HistoricalEntry]:
+        """使用独立连接分页浏览迁入人物画像。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return history.browse_profiles(conn, query, offset, limit)
 
     def accounts_of(self, person_id: int) -> list[tuple[str, str]]:
         """这个人的全部（平台，账号 ID），按平台和账号排序。"""

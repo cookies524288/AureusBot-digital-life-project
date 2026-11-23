@@ -1,8 +1,11 @@
 """记忆子系统的习得语言和原始消息证据（D89）。"""
 
+from __future__ import annotations
+
+import json
 from collections.abc import Iterable, Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from itertools import groupby
 from pathlib import Path
@@ -30,6 +33,7 @@ from aureus.memory.language_matching import (
 
 MAX_TEXT = 80
 MAX_DETAIL = 160
+MAX_EXAMPLE = 2000
 BATCH_SIZE = 16
 _EXCLUDED_MARKERS = ("SELF", "[表情包", "[图片")
 _SCHEMA = """
@@ -53,6 +57,20 @@ CREATE TABLE IF NOT EXISTS language_evidence (
     source_key TEXT NOT NULL REFERENCES language_observations(source_key),
     PRIMARY KEY(entry_id, source_key)
 );
+CREATE TABLE IF NOT EXISTS language_manual (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    example TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS language_edits (
+    entry_key TEXT PRIMARY KEY,
+    text TEXT,
+    detail TEXT,
+    example TEXT,
+    is_enabled INTEGER
+);
 """
 
 
@@ -65,6 +83,30 @@ class LanguageKind(StrEnum):
 
 class LanguageTargetError(ValueError):
     """语言发布要求一个已有的 Aureus 运行主库。"""
+
+
+@dataclass(frozen=True)
+class LanguageContent:
+    """维护者在网页填写的词、释义或场景及例句。"""
+
+    text: str
+    detail: str
+    example: str = ""
+
+    def validated(self) -> LanguageContent:
+        """去掉首尾空白，检查必填内容和最大长度。"""
+        text, detail, example = self.text.strip(), self.detail.strip(), self.example.strip()
+        if not text or not detail:
+            raise ValueError("请填写词或表达，以及释义或使用场景。")
+        if len(text) > MAX_TEXT or len(detail) > MAX_DETAIL or len(example) > MAX_EXAMPLE:
+            raise ValueError(
+                f"词或表达最多 {MAX_TEXT} 字，释义或场景 {MAX_DETAIL} 字，例句 {MAX_EXAMPLE} 字。"
+            )
+        return LanguageContent(text, detail, example)
+
+
+def _local_key(kind: str, entry_id: int) -> str:
+    return json.dumps((kind, entry_id), separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -236,37 +278,121 @@ class LanguageStore:
             [(entry_id, sample.source_key) for sample in supporting],
         )
 
-    def entries(self, kind: LanguageKind) -> list[LanguageEntry]:
-        """查询已具备证据的候选，返回关联的时间线编号与说话人。"""
-        minimum = MIN_JARGON_EVIDENCE if kind == LanguageKind.JARGON else 1
-        with closing(open_connection(self._path)) as connection:
-            rows = connection.execute(
-                """SELECT entry.id, entry.text, entry.detail, entry.example,
-                          observation.record_id, observation.speaker
-                   FROM language_entries AS entry
-                   JOIN language_evidence AS evidence ON evidence.entry_id = entry.id
-                   JOIN language_observations AS observation USING (source_key)
-                   WHERE entry.kind = ?
-                   ORDER BY entry.id, observation.record_id""",
-                (kind,),
+    def add_entry(self, kind: LanguageKind, content: LanguageContent) -> str:
+        """新增一条维护者指定的语言参考，返回稳定标识。"""
+        content = content.validated()
+        with closing(open_connection(self._path)) as connection, connection:
+            row = connection.execute(
+                "INSERT INTO language_manual (kind, text, detail, example) VALUES (?, ?, ?, ?) "
+                "RETURNING id",
+                (kind, content.text, content.detail, content.example),
+            ).fetchone()
+            return _local_key("manual", row["id"])
+
+    def update_entry(
+        self,
+        kind: LanguageKind,
+        entry_key: str,
+        content: LanguageContent | None,
+        is_enabled: bool | None,
+    ) -> bool:
+        """保存指定条目的内容或启停覆盖，返回条目是否存在。"""
+        content = content.validated() if content is not None else None
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not any(
+                entry.entry_key == entry_key for entry in self._read_entries(connection, kind)
+            ):
+                return False
+            connection.execute(
+                """INSERT INTO language_edits (entry_key, text, detail, example, is_enabled)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(entry_key) DO UPDATE SET
+                       text = coalesce(excluded.text, text),
+                       detail = coalesce(excluded.detail, detail),
+                       example = coalesce(excluded.example, example),
+                       is_enabled = coalesce(excluded.is_enabled, is_enabled)""",
+                (
+                    entry_key,
+                    content.text if content else None,
+                    content.detail if content else None,
+                    content.example if content else None,
+                    is_enabled,
+                ),
             )
-            entries: list[LanguageEntry] = []
-            for _, group in groupby(rows, key=lambda row: row["id"]):
-                evidence = list(group)
-                if len(evidence) >= minimum:
-                    first = evidence[0]
-                    entries.append(
-                        LanguageEntry(
-                            first["text"],
-                            first["detail"],
-                            first["example"],
-                            len(evidence),
-                            tuple(row["record_id"] for row in evidence),
-                            frozenset(row["speaker"] for row in evidence),
-                        )
+        return True
+
+    def entries(self, kind: LanguageKind, *, include_disabled: bool = False) -> list[LanguageEntry]:
+        """返回可用语言和关联证据，管理页可以同时浏览停用条目。"""
+        with closing(open_connection(self._path)) as connection:
+            connection.execute("BEGIN")
+            entries = self._read_entries(connection, kind)
+            edits = {
+                row["entry_key"]: row for row in connection.execute("SELECT * FROM language_edits")
+            }
+        entries = [self._apply_edit(entry, edits.get(entry.entry_key)) for entry in entries]
+        return entries if include_disabled else [entry for entry in entries if entry.is_enabled]
+
+    @staticmethod
+    def _apply_edit(entry: LanguageEntry, row: Row | None) -> LanguageEntry:
+        if row is None:
+            return entry
+        entry = replace(entry, is_enabled=row["is_enabled"] != 0)
+        if row["text"] is None:
+            return entry
+        return replace(
+            entry,
+            text=row["text"],
+            detail=row["detail"],
+            example=row["example"],
+            original=(entry.text, entry.detail, entry.example),
+        )
+
+    @staticmethod
+    def _read_entries(connection: Connection, kind: LanguageKind) -> list[LanguageEntry]:
+        minimum = MIN_JARGON_EVIDENCE if kind == LanguageKind.JARGON else 1
+        rows = connection.execute(
+            """SELECT entry.id, entry.text, entry.detail, entry.example,
+                      observation.record_id, observation.speaker
+               FROM language_entries AS entry
+               JOIN language_evidence AS evidence ON evidence.entry_id = entry.id
+               JOIN language_observations AS observation USING (source_key)
+               WHERE entry.kind = ?
+               ORDER BY entry.id, observation.record_id""",
+            (kind,),
+        )
+        entries: list[LanguageEntry] = []
+        for entry_id, group in groupby(rows, key=lambda row: row["id"]):
+            evidence = list(group)
+            if len(evidence) >= minimum:
+                first = evidence[0]
+                entries.append(
+                    LanguageEntry(
+                        first["text"],
+                        first["detail"],
+                        first["example"],
+                        len(evidence),
+                        tuple(row["record_id"] for row in evidence),
+                        frozenset(row["speaker"] for row in evidence),
+                        entry_key=_local_key("observed", entry_id),
                     )
-            source_table = JARGON_TABLE if kind == LanguageKind.JARGON else EXPRESSION_TABLE
-            entries.extend(imported_entries(connection, source_table))
+                )
+        source_table = JARGON_TABLE if kind == LanguageKind.JARGON else EXPRESSION_TABLE
+        entries.extend(imported_entries(connection, source_table))
+        entries.extend(
+            LanguageEntry(
+                row["text"],
+                row["detail"],
+                row["example"],
+                0,
+                (),
+                frozenset(),
+                entry_key=_local_key("manual", row["id"]),
+            )
+            for row in connection.execute(
+                "SELECT * FROM language_manual WHERE kind = ? ORDER BY id DESC", (kind,)
+            )
+        )
         return entries
 
     def jargon_reference(self, texts: Sequence[str], budget: int) -> str:

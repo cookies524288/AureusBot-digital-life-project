@@ -7,7 +7,7 @@ Phase 1 只有前面几种会出现，枚举里先只放用得到的两种，别
 不靠大模型。同一时间只处理一个对话里的消息（D34：前额叶是串行的）。
 """
 
-from collections.abc import Hashable, Iterator
+from collections.abc import Hashable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -90,6 +90,11 @@ class Inbox[T]:
         conversation = taken[0].conversation
         self._entries = [entry for entry in self._entries if entry.conversation != conversation]
         return [entry.item for entry in taken]
+
+    def remove(self, items: Sequence[T]) -> None:
+        """只取出已组装进任务的队列条目，同一对话的其余条目继续排队。"""
+        selected = {id(item) for item in items}
+        self._entries = [entry for entry in self._entries if id(entry.item) not in selected]
 
     def drain(self) -> list[T]:
         """取出全部，按到达先后。"""

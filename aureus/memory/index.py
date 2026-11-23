@@ -20,16 +20,25 @@ from aureus.memory.consolidation import (
     retention_weight,
     save_batch,
 )
+from aureus.memory.edits import (
+    MemoryKind,
+    effective_keyword_conditions,
+    effective_ranked_matches,
+    open_edits,
+    write_edit,
+)
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
     MemorySource,
+    browse_history,
+    count_history_sources,
     open_history,
     publish_history,
     read_history,
     search_history,
 )
-from aureus.memory.sparse import keyword_conditions, ranked_matches, relevance_expression
+from aureus.memory.sparse import keyword_conditions, relevance_expression
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
 
 # D80 第 4 条：单条记忆交给回复器时的正文上限。
@@ -100,6 +109,9 @@ class MemoryHit:
     evidence: tuple[MemoryEvidence, ...] = ()
     relevance: float = 0
     sparse_score: float = 0.0
+    is_enabled: bool = True
+    is_recallable: bool = True
+    original_text: str | None = None
 
 
 class MemoryIndex:
@@ -127,6 +139,7 @@ class MemoryIndex:
         try:
             open_history(conn)
             _open_live_index(conn)
+            open_edits(conn)
             open_consolidation(conn)
         except BaseException:
             conn.close()
@@ -195,33 +208,76 @@ class MemoryIndex:
             return read_batch(conn, size)
 
     def browse_history(
-        self, query: str, status: str, offset: int, limit: int
+        self,
+        query: str,
+        status: str,
+        offset: int,
+        limit: int,
+        *,
+        recall: str = "",
+        source_table: str = "",
+        omit_image_type: str = "",
     ) -> list[HistoricalMemory]:
         """按入库顺序浏览历史原件，保留原记录与证据。"""
-        from .history import browse_history
-
         with closing(open_connection(self._db_path)) as conn:
-            return browse_history(conn, query, status, offset, limit)
+            return browse_history(
+                conn,
+                query,
+                status,
+                offset,
+                limit,
+                now=self._clock.now(),
+                recall=recall,
+                source_table=source_table,
+                omit_image_type=omit_image_type,
+            )
 
-    def browse_live(self, query: str, offset: int, limit: int) -> list[MemoryHit]:
+    def count_history_sources(self) -> dict[str, int]:
+        """按原来源统计已迁入的记忆。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return count_history_sources(conn)
+
+    def browse_live(
+        self, query: str, offset: int, limit: int, *, recall: str = ""
+    ) -> list[MemoryHit]:
         """浏览已经索引的本地经历，返回时间线来源。"""
         with closing(open_connection(self._db_path)) as conn:
             rows = conn.execute(
-                """SELECT record_id, content, actor_label, recorded_at FROM memory_index
-                   WHERE (? = '' OR instr(lower(content), lower(?)) > 0
+                """SELECT record_id, content, actor_label, recorded_at, edit.edited_content,
+                          coalesce(edit.is_enabled, 1) AS is_recallable
+                   FROM memory_index
+                   LEFT JOIN memory_edits AS edit
+                     ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid
+                   WHERE (? = '' OR is_recallable = (? = 'enabled'))
+                     AND (? = '' OR instr(lower(edit.edited_content), lower(?)) > 0
+                                   OR instr(lower(content), lower(?)) > 0
                                    OR instr(lower(actor_label), lower(?)) > 0)
                    ORDER BY record_id DESC LIMIT ? OFFSET ?""",
-                (query, query, query, limit, offset),
+                (recall, recall, query, query, query, query, limit, offset),
             ).fetchall()
         return [
             MemoryHit(
                 row["record_id"],
                 datetime.fromisoformat(row["recorded_at"]),
                 row["actor_label"],
-                row["content"],
+                row["edited_content"] or row["content"],
+                is_enabled=bool(row["is_recallable"]),
+                is_recallable=bool(row["is_recallable"]),
+                original_text=row["content"] if row["edited_content"] is not None else None,
             )
             for row in rows
         ]
+
+    def update_resource(
+        self,
+        kind: MemoryKind,
+        entry_id: int,
+        text: str | None,
+        is_enabled: bool | None,
+    ) -> bool:
+        """修订召回正文或设置召回开关，保留关联原件。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return write_edit(conn, kind, entry_id, text, is_enabled)
 
     def save_consolidation(
         self,
@@ -254,13 +310,16 @@ class MemoryIndex:
         include_user_extractions: bool = True,
     ) -> list[MemoryHit]:
         """在同一次查询内召回历史与新经历，按稳定人物键和时间过滤。"""
-        clauses, terms = keyword_conditions(keywords, "memory_index", "rowid")
+        clauses, terms = effective_keyword_conditions(
+            keywords, "memory_index", "memory_index.rowid", "memory_index.content"
+        )
         if limit <= 0 or (
             not clauses and (keywords or (person_key is None and since is None and before is None))
         ):
             return []
         parameters: list[str | int | float] = list(terms)
         where = ["(" + " OR ".join(clauses) + ")"] if clauses else []
+        where.append("coalesce(edit.is_enabled, 1) = 1")
         person_keys = (person_key,) if isinstance(person_key, str) else person_key
         if person_keys is not None:
             where.append("person_key IN (" + ",".join("?" for _ in person_keys) + ")")
@@ -277,17 +336,21 @@ class MemoryIndex:
         evidence_where = where[1:] if clauses else where
         evidence_parameters = parameters[len(terms) :]
         parameters.append(limit)
-        rank_prefix, score, rank_parameters = ranked_matches(keywords, "memory_index")
+        rank_prefix, score, rank_parameters = effective_ranked_matches(
+            keywords, "memory_index", "memory_index.rowid"
+        )
         conn = open_connection(self._db_path)
         try:
             conn.execute("BEGIN")
             now = self._clock.now()
             rows = conn.execute(
                 rank_prefix
-                + "SELECT record_id, recorded_at, actor_label, content, "
+                + "SELECT record_id, recorded_at, actor_label, "
+                + "coalesce(edit.edited_content, content) AS content, "
                 + relevance_expression(clauses)
-                + f" AS relevance, {score.format(row_id='memory_index.rowid')} AS sparse_score "
-                + "FROM memory_index WHERE "
+                + f" AS relevance, {score} AS sparse_score "
+                + "FROM memory_index LEFT JOIN memory_edits AS edit "
+                + "ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid WHERE "
                 + " AND ".join(where)
                 + " ORDER BY relevance DESC, recorded_at DESC, sparse_score, "
                 + "CAST(record_id AS INTEGER) DESC LIMIT ?",
@@ -310,15 +373,19 @@ class MemoryIndex:
                         + " AS words FROM memory_extracted_fts WHERE "
                         + " OR ".join(aliases)
                         + ") "
-                        + "SELECT m.record_id, m.recorded_at, m.actor_label, m.content, "
+                        + "SELECT m.record_id, m.recorded_at, m.actor_label, "
+                        + "coalesce(edit.edited_content, m.content) AS content, "
                         + "max(words * retention_weight(?, c.last_seen, ?)) AS relevance, "
                         + "0.0 AS sparse_score FROM matches JOIN memory_candidates c "
                         + "ON c.rowid = matches.rowid JOIN memory_candidate_evidence e "
                         + "ON e.fingerprint = c.fingerprint JOIN memory_index m "
                         + "ON m.rowid = CAST(substr(e.reference, 10) AS INTEGER) "
+                        + "LEFT JOIN memory_edits edit ON edit.kind = 'live' "
+                        + "AND edit.entry_id = m.rowid "
                         + "JOIN timeline t ON t.id = m.rowid AND t.content = m.content "
                         + "WHERE e.reference = 'timeline:' || m.rowid AND t.actor_type='user' "
                         + "AND t.visibility='user_only' AND t.event_type='message' "
+                        + "AND edit.edited_content IS NULL "
                         + "AND c.kind IN ('fact', 'preference') "
                         + "".join(" AND " + clause for clause in evidence_where)
                         + " GROUP BY m.rowid ORDER BY relevance DESC, "

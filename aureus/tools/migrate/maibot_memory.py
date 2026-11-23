@@ -255,6 +255,8 @@ class _Projection:
             if _text(raw, "source_kind") == "chat" and (message := _text(raw, "message_id")):
                 source = self.chat_messages.get((_text(raw, "chat_id"), message))
                 evidence.append(MemoryEvidence("message", message, source))
+        elif table == "images" and (media_kind := _text(raw, "image_type").lower()):
+            evidence.append(MemoryEvidence("media_type", media_kind))
         if attachment := self._record_attachment(row):
             evidence.append(attachment)
         if (source_status := _source_status(row)) != "active":
