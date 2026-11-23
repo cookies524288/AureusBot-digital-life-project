@@ -44,6 +44,7 @@ READONLY_CONFIG = (
     "qq.enabled",
     "qq.endpoint",
     "qq.account_id",
+    "qq.allowed_group_id",
     "qq.token_key",
     "qq.action_timeout_seconds",
     "qq.reconnect_seconds",
