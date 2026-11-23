@@ -31,6 +31,7 @@ config/identity.toml
 
 # 用户数据根目录（开发时放在项目里；里面有个人设定和密钥，永远不进 git，见 docs/14-user-data.md）
 aureus_home/
+/aureus-home.txt
 
 # 本地的个人资料目录，不进 git
 thesis/

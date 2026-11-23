@@ -8,11 +8,12 @@ import os
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
+from pathlib import Path
 from threading import Thread
 from time import sleep
 
-from aureus.common import AureusPaths, ConfigError, SystemClock
-from aureus.common.paths import HomePathError, resolve_home
+from aureus.common import AureusPaths, ConfigError, SystemClock, home_is_default, resolve_home
+from aureus.common.paths import PROJECT_ROOT, HomePathError
 from aureus.common.vault import VaultError
 from aureus.core.runtime import Core, open_core
 from aureus.identity import IdentityError, SingleInstanceLockError
@@ -24,6 +25,22 @@ from .windows_terminal import WindowsTerminal
 RESTART_EXIT_CODE = 75
 _STARTUP_POLLS = 80
 _STARTUP_POLL_INTERVAL = 0.1
+_HOME_POINTER = "aureus-home.txt"
+
+
+def _launcher_home() -> Path:
+    if not home_is_default():
+        return resolve_home()
+    pointer = PROJECT_ROOT / _HOME_POINTER
+    try:
+        home = Path(pointer.read_text(encoding="utf-8-sig").strip())
+    except FileNotFoundError:
+        return resolve_home()
+    except UnicodeDecodeError as error:
+        raise HomePathError(f"请将 {pointer} 保存为 UTF-8 文本。") from error
+    if not home.is_absolute() or not home.is_dir():
+        raise HomePathError(f"请在 {pointer} 中填写现有数据根目录的绝对路径。")
+    return home
 
 
 def _open_running_web(paths: AureusPaths, *, tray: bool) -> bool:
@@ -146,7 +163,7 @@ def main() -> int:
     parser.add_argument("--owner-pid", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
-        paths = AureusPaths(resolve_home())
+        paths = AureusPaths(_launcher_home())
         opening_browser = not args.restarted
         while _launch(
             paths,
