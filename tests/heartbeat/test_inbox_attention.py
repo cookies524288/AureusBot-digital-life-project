@@ -40,7 +40,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
     ledger = Ledger(database, clock, calendar=calendar)
     ledger.open()
     try:
-        people.ensure_user("主人", [("qq", "owner")])
+        people.ensure_user("主人", [])
         store = InboxStore(database, clock)
         stop = EmergencyStop(tmp_path / "halt.json", clock)
         organs = Organs()
@@ -51,7 +51,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
             identity=Identity.model_validate(
                 {
                     "facts": {"name": "小豆", "birthday": "2026-11-23"},
-                    "user": {"name": "主人", "accounts": [{"platform": "qq", "id": "owner"}]},
+                    "user": {"name": "主人"},
                     "persona": {"immutable": "温和。"},
                 }
             ),
@@ -84,6 +84,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
             heart.on_inbox_message(message)
             return perception
 
+        people.ensure_user("主人", [("qq", "owner")])
         owner = receive("owner", "private-only", private=True)
         heart.beat()
         await heart.wait_for_thought()

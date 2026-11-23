@@ -150,12 +150,13 @@ async def test_verified_qq_recalls_imported_person_after_restart(tmp_path: Path)
             await fake.send(remote, **event(11, 2100, "我说过 信物？"))
             assert (await fake.messages.get())["message"][0]["data"]["id"] == "11"
         assert _publish(staging, paths.home) == 0
-        async with run_chat(paths, request_log=log):
+        async with run_chat(paths, request_log=log, browse_inbox=True):
             remote = await fake.connections.get()
-            for number, sender in [(12, 2100), (13, 2200)]:
+            for number, sender in [(13, 2200), (12, 2100)]:
                 message = event(number, sender, "我说过 信物？")
                 message["sender"] = {"nickname": "同名"}
                 await fake.send(remote, **message)
+            for number, sender in [(12, 2100), (13, 2200)]:
                 reply = await fake.messages.get()
                 assert reply["user_id"] == str(sender)
                 assert reply["message"][0]["data"]["id"] == str(number)

@@ -98,7 +98,7 @@ def available_port() -> int:
 
 @asynccontextmanager
 async def run_chat(
-    paths: AureusPaths, *chat_args: str, request_log: Path | None = None
+    paths: AureusPaths, *chat_args: str, request_log: Path | None = None, browse_inbox: bool = False
 ) -> AsyncIterator[asyncio.subprocess.Process]:
     arguments = ["--home", str(paths.home), "chat", *chat_args]
     command = ["-m", "aureus", *arguments, "--fake"]
@@ -107,8 +107,10 @@ async def run_chat(
             "-c",
             "from tests.channels.test_qq_runtime import capture_language_requests; "
             "from aureus.cli.main import main; "
-            "import sys; capture_language_requests(sys.argv.pop(1)); sys.exit(main())",
+            "import sys; capture_language_requests(sys.argv.pop(1), sys.argv.pop(1) == '1'); "
+            "sys.exit(main())",
             str(request_log),
+            "1" if browse_inbox else "0",
             *arguments,
         ]
     process = await asyncio.create_subprocess_exec(
@@ -135,7 +137,7 @@ async def run_chat(
         assert TOKEN.encode() not in output
 
 
-def capture_language_requests(log_file: str) -> None:
+def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None:
     """子进程保留 CLI 和器官网关，器官总线只注册本地替身。"""
     path = Path(log_file)
 
@@ -158,7 +160,12 @@ def capture_language_requests(log_file: str) -> None:
                 )
             if request.context["task"] == "language_learning" and "月兔冲线" not in request.prompt:
                 return OrganResponse(organ_id=self.organ_id, suggestion='{"proposals":[]}')
-            return await super().process(request)
+            response = await super().process(request)
+            if browse_inbox and request.context["task"] == "plan":
+                plan = json.loads(response.suggestion)
+                plan["read_inbox"] = True
+                return OrganResponse(organ_id=self.organ_id, suggestion=json.dumps(plan))
+            return response
 
     def build_bus(
         _paths: AureusPaths,

@@ -63,7 +63,8 @@ class InboxAttention:
     def priority_messages(self) -> list[InboxMessage]:
         """先收绑定用户和特别关心的未读，重启后也会检查。"""
         accounts: dict[str, set[str]] = defaultdict(set)
-        for platform, account_id in self._user_accounts:
+        users = self._people.user_accounts() if self._people is not None else self._user_accounts
+        for platform, account_id in users:
             accounts[platform].add(account_id)
         if self._people is not None:
             for person_id in self._special:

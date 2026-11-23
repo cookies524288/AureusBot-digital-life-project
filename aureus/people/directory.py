@@ -284,3 +284,9 @@ class PeopleDirectory:
             (person_id,),
         ).fetchall()
         return [(str(row["platform"]), str(row["account_id"])) for row in rows]
+
+    def user_accounts(self) -> list[tuple[str, str]]:
+        """取得当前已绑定的用户账号，包括启动后验证通过的账号。"""
+        conn = self._require_open()
+        row = conn.execute("SELECT id FROM people WHERE kind = 'user'").fetchone()
+        return [] if row is None else self.accounts_of(int(row["id"]))
