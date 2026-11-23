@@ -42,6 +42,7 @@ function element(tag = 'div') {
     setAttribute(key, value) {
       this.attributes[key] = value;
       if (key === 'id') nodes.set(value, this);
+      if (key === 'disabled') this.disabled = true;
     },
     addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
     removeEventListener() {}, focus() {},
@@ -88,6 +89,7 @@ const context = vm.createContext({
   WebSocket: class { constructor() { sockets.push(this); } close() {} },
 });
 async function main() {
+  for (const script of input.scripts) vm.runInContext(script, context);
   vm.runInContext(input.html.match(/<script>([\s\S]*?)<\/script>/)[1], context);
   await new Promise(resolve => setImmediate(resolve));
   await vm.runInContext('(async () => {' + input.test + '})()', context);
@@ -101,10 +103,15 @@ def run_page_script(code: str) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("网页脚本行为测试需要 Node，不影响运行或打包")
-    html = (ROOT / "aureus/web/static/index.html").read_text(encoding="utf-8")
+    static = ROOT / "aureus/web/static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    scripts = [
+        (static / name).read_text(encoding="utf-8")
+        for name in ("organ-graph.js", "resource-management.js", "memory-flow-transfer.js")
+    ]
     result = subprocess.run(
         [node, "-e", HARNESS],
-        input=json.dumps({"html": html, "test": code}),
+        input=json.dumps({"html": html, "scripts": scripts, "test": code}),
         capture_output=True,
         text=True,
         encoding="utf-8",

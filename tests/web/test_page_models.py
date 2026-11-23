@@ -129,13 +129,57 @@ def test_declining_a_persona_rollback_makes_no_request() -> None:
         r"""
         let requests = 0;
         let question = '';
+        $('page-persona').querySelector = () => ({});
         globalThis.confirmAction = async text => { question = text; return false; };
         fetch = async () => { requests++; return reply(403, {detail:'测试拒绝'}); };
         const card = personaLayerCard('mutable', '可变人格', '', [{id:1, content:'旧版本'}]);
         const walk = node => [node, ...(node.children || []).flatMap(walk)];
         const button = walk(card).find(node => node.textContent === '用这个版本');
         await button.listeners.click[0]();
-        assert.equal(question, '确定要回退吗？');
+        assert.equal(question, '确定要使用「可变人格」的这个历史版本吗？');
         assert.equal(requests, 0);
+        """
+    )
+
+
+def test_persona_save_requires_changes_and_confirmation() -> None:
+    run_page_script(
+        r"""
+        const requests = [];
+        api = async (...request) => { requests.push(request); return {ok:true}; };
+        loadPersona = async () => {};
+        const body = {};
+        $('page-persona').querySelector = () => body;
+        const card = personaLayerCard('mutable', '可变人格', '原文', []);
+        const walk = node => [node, ...(node.children || []).flatMap(walk)];
+        const save = walk(card).find(node => node.textContent === '保存可变人格');
+        const area = $('ps-mutable');
+        const edit = value => { area.value = value; area.listeners.input[0](); };
+        const dialog = $('confirm-dialog');
+        const click = save.listeners.click[0];
+
+        assert.equal(save.disabled, true);
+        edit('草稿');
+        assert.equal(save.disabled, false);
+        edit('原文');
+        assert.equal(save.disabled, true);
+        edit('草稿');
+
+        const cancelled = click();
+        assert.equal(dialog.open, true);
+        dialog.returnValue = 'no';
+        dialog.onclose();
+        await cancelled;
+        assert.equal(area.value, '草稿');
+        assert.equal(save.disabled, false);
+        assert.deepEqual(requests, []);
+
+        const confirmed = click();
+        await click();
+        assert.deepEqual(requests, []);
+        dialog.returnValue = 'yes';
+        dialog.onclose();
+        await confirmed;
+        assert.deepEqual(requests, [['/api/settings', 'PUT', {text:{mutable:'草稿'}}]]);
         """
     )
