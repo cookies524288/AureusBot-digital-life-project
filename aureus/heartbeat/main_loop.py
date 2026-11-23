@@ -414,6 +414,7 @@ class Heartbeat:
 
     def update_available_organs(self, available: frozenset[str]) -> None:
         """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
+        self._conversation.has_text_embedding = "text_embedding" in available
         for tracker in (self._diary, self._persona_growth, self._exploration):
             if tracker is not None:
                 tracker.has_organ = tracker.config.organ in available

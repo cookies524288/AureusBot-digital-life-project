@@ -10,12 +10,16 @@
 """
 
 import asyncio
+import base64
 import json
 import os
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
+from math import isfinite
+from types import SimpleNamespace
 from typing import Any, Self
 
+import httpx
 from loguru import logger
 
 from aureus.common.config import ConfigError
@@ -223,6 +227,8 @@ def model_probe_inputs(model: ModelConfig) -> dict[str, dict[str, Any]]:
     """列出已声明的每项能力及其实际测试输入。"""
     if model.kind == "embedding":
         return {"embedding": {"input": [_MODEL_TEST_INPUT]}}
+    if model.kind == "image_embedding":
+        return {"image_embedding": {"input": [{"image": _PROBE_IMAGE.split(",", 1)[1]}]}}
     message = {"role": "user", "content": _MODEL_TEST_INPUT}
     probes: dict[str, dict[str, Any]] = {"text": {"messages": [message]}}
     if model.vision:
@@ -269,6 +275,15 @@ async def probe_model(
 ) -> OrganResponse:
     """测量首段可见文字或向量的返回时间，报告一次调用的用量。"""
     organ_id = "model_test"
+    if model.kind == "image_embedding":
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        organ = EmbeddingOrgan(organ_id, [ModelRoute(model, provider, None, None)], resolver)
+        image = base64.b64decode(_PROBE_IMAGE.split(",", 1)[1])
+        response = await organ.process(OrganRequest(organ_id, "", embedding_inputs=(image,)))
+        response.suggestion = json.dumps(response.embeddings[0])
+        response.metadata.update(latency_ms=round((loop.time() - started) * 1000), kind=model.kind)
+        return response
     try:
         params = _provider_arguments(provider, resolver)
     except _RouteFailureError as error:
@@ -391,6 +406,146 @@ class ModelProbeError(OrganCallError):
     def __init__(self, reason: str, attempt: CallAttempt, reply: str) -> None:
         super().__init__("model_test", [reason], [attempt])
         self.reply = reply
+
+
+class EmbeddingOrgan:
+    """计算文本或图片向量，并报告每次请求的用量。"""
+
+    def __init__(
+        self,
+        organ_id: str,
+        routes: Sequence[ModelRoute],
+        resolver: KeyResolver,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.organ_id = organ_id
+        self._routes = routes
+        self._resolver = resolver
+        self._transport = transport
+
+    async def process(self, request: OrganRequest) -> OrganResponse:
+        """按器官路线计算一批向量，保持输入顺序。"""
+        inputs = request.embedding_inputs
+        if not inputs:
+            raise OrganCallError(self.organ_id, ["没有嵌入材料"])
+        attempts: list[CallAttempt] = []
+        failures: list[str] = []
+        for route in order_routes(self._routes, request.model_preference):
+            try:
+                params = _provider_arguments(route.provider, self._resolver)
+                if route.model.kind == "image_embedding":
+                    if not all(isinstance(value, bytes) for value in inputs):
+                        raise _RouteFailureError("图片嵌入需要图片字节")
+                elif route.provider.protocol == "anthropic" or not all(
+                    isinstance(value, str) for value in inputs
+                ):
+                    raise _RouteFailureError("路线不支持文本嵌入输入")
+            except _RouteFailureError as error:
+                failures.append(f"{route.model.name}：{error.reason}")
+                continue
+            usage = TokenUsage(
+                prompt_tokens=sum(
+                    len(value.encode("utf-8")) if isinstance(value, str) else len(value)
+                    for value in inputs
+                ),
+                known=False,
+            )
+            failure = None
+            vectors: tuple[tuple[float, ...], ...] = ()
+            try:
+                async with asyncio.timeout(route.provider.timeout_seconds):
+                    result = await self._send(route, inputs, params)
+                actual = extract_usage(result)
+                if actual.known:
+                    usage = actual
+                vectors = _read_embedding_batch(result.data, len(inputs))
+                if not vectors:
+                    failure = EMPTY_REPLY_REASON
+            except Exception as error:
+                failure = _failure_reason(error)
+                if _rejected_before_processing(error) or (
+                    isinstance(error, httpx.HTTPStatusError)
+                    and error.response.status_code in (400, 401, 403, 404, 422, 429)
+                ):
+                    usage = TokenUsage()
+            attempts.append(
+                CallAttempt(
+                    route.model.name,
+                    route.provider.name,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    cached_tokens=usage.cached_tokens,
+                    estimated=not usage.known,
+                    succeeded=failure is None,
+                    failure_reason=failure,
+                    cost=0.0 if usage == TokenUsage() else compute_cost(route.model, usage),
+                )
+            )
+            if failure is None:
+                return OrganResponse(self.organ_id, "", attempts=attempts, embeddings=vectors)
+            failures.append(f"{route.model.name}：{failure}")
+        raise OrganCallError(self.organ_id, failures or ["未配置可用的模型"], attempts)
+
+    async def _send(
+        self, route: ModelRoute, inputs: tuple[str | bytes, ...], params: dict[str, Any]
+    ) -> Any:
+        if route.model.kind == "embedding":
+            protocol = route.provider.protocol
+            if protocol == "openai_responses":
+                protocol = "openai"
+            library = await asyncio.to_thread(_import_litellm)
+            return await library.aembedding(
+                model=LITELLM_PREFIX_BY_PROTOCOL[protocol] + route.model.identifier,
+                input=list(inputs),
+                **params,
+            )
+        base = (route.provider.base_url or "https://api.jina.ai/v1").rstrip("/")
+        headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
+        payload = {
+            "model": route.model.identifier,
+            "embedding_type": "float",
+            "input": [
+                {"image": base64.b64encode(value).decode("ascii")}
+                for value in inputs
+                if isinstance(value, bytes)
+            ],
+        }
+        async with httpx.AsyncClient(
+            timeout=params["timeout"], transport=self._transport
+        ) as client:
+            response = await client.post(base + "/embeddings", headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+        usage = result.get("usage") or {}
+        return SimpleNamespace(
+            data=result.get("data"),
+            usage=SimpleNamespace(
+                prompt_tokens=usage.get("prompt_tokens", usage.get("total_tokens")),
+                completion_tokens=0,
+            ),
+        )
+
+
+def _read_embedding_batch(data: Any, size: int) -> tuple[tuple[float, ...], ...]:
+    if not isinstance(data, list) or len(data) != size:
+        return ()
+    vectors: dict[int, tuple[float, ...]] = {}
+    for position, item in enumerate(data):
+        index = item.get("index", position)
+        values = item.get("embedding")
+        if type(index) is not int or not 0 <= index < size or index in vectors:
+            return ()
+        if (
+            not isinstance(values, list)
+            or not values
+            or not all(type(value) in (int, float) and isfinite(value) for value in values)
+        ):
+            return ()
+        vectors[index] = tuple(float(value) for value in values)
+    if len({len(vector) for vector in vectors.values()}) != 1:
+        return ()
+    return tuple(vectors[index] for index in range(size))
 
 
 # 调用方没给背景时的系统提示词：有些服务商不收空的系统消息。

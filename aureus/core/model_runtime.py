@@ -12,6 +12,9 @@ from aureus.organs import (
     OrganBus,
     PromptStore,
 )
+from aureus.organs.llm_adapter import EmbeddingOrgan
+
+EMBEDDING_ORGANS = {"text_embedding": "embedding", "image_embedding": "image_embedding"}
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,13 @@ class ModelRuntime:
         available: set[str] = set()
         for name in config.organs:
             routes = config.routes_for(name)
+            kind = EMBEDDING_ORGANS.get(name)
+            if kind is not None:
+                embedding_routes = tuple(route for route in routes if route.model.kind == kind)
+                if embedding_routes and not self._fake_organs:
+                    organs.append(EmbeddingOrgan(name, embedding_routes, self._resolver))
+                    available.add(name)
+                continue
             if any(route.model.kind == "llm" for route in routes):
                 available.add(name)
             organs.append(

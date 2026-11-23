@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from aureus.common.config import ConfigError
@@ -17,11 +18,38 @@ from aureus.organs.llm_adapter import (
     EMPTY_SYSTEM_MESSAGE,
     LITELLM_PREFIX_BY_PROTOCOL,
     RETRY_BACKOFF_SECONDS,
+    EmbeddingOrgan,
     LLMOrgan,
     count_prompt_tokens,
     probe_model,
 )
-from aureus.organs.model_config import ModelsConfig
+from aureus.organs.model_config import ModelConfig, ModelRoute, ModelsConfig, ProviderConfig
+
+
+@pytest.mark.asyncio
+async def test_image_embedding_uses_jina_protocol_and_reports_usage(tmp_path: Path) -> None:
+    provider = ProviderConfig(name="jina", protocol="openai")
+    model = ModelConfig(
+        name="picture", identifier="jina-embeddings-v4", provider="jina", kind="image_embedding"
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.jina.ai/v1/embeddings"
+        assert b'"image":"YWJj"' in request.content
+        return httpx.Response(
+            200,
+            json={"data": [{"index": 0, "embedding": [3, 4]}], "usage": {"total_tokens": 7}},
+        )
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [ModelRoute(model, provider, None, None)],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    response = await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(b"abc",)))
+    assert response.embeddings == ((3.0, 4.0),)
+    assert response.attempts == [CallAttempt("picture", "jina", 7, 0)]
 
 CLOUD_SECRET = "sk-cloud-secret"
 

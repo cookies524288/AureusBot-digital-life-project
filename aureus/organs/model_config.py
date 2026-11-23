@@ -30,7 +30,7 @@ API_KEY_ENV_PATTERN = r"^AUREUS_KEY_[A-Z0-9_]+$"
 
 # D24 规定的四种协议。
 ProviderProtocol = Literal["openai", "openai_responses", "anthropic", "gemini"]
-ModelKind = Literal["llm", "embedding"]
+ModelKind = Literal["llm", "embedding", "image_embedding"]
 # 目前只做“按顺序顺延”。D30 里的 balance、random 等用得上时再加（开发守则 2.5）；
 # 现在写别的值会直接报错，而不是悄悄当成顺序。
 OrganStrategy = Literal["sequential"]

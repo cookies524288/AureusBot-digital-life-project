@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import tzinfo
+from math import hypot, sumprod
 from typing import Protocol
 
 from aureus.agenda import AgendaStore
@@ -271,6 +272,7 @@ class ConversationFlow:
         self._judge_missing_logged = False
         self._memory = memory
         self._memory_config = memory_config or MemoryConfig()
+        self.has_text_embedding = False
         self._language = language
         self._language_config = language_config or LanguageConfig()
         self._people = people
@@ -699,19 +701,55 @@ class ConversationFlow:
                 if job.person_id is None or self._people is None:
                     return []
                 person_keys = self._people.memory_person_keys(job.person_id)
-            return await asyncio.to_thread(
+            limit = self._memory_config.max_results
+            hits = await asyncio.to_thread(
                 self._memory.search,
                 words,
                 job.history_ids,
-                self._memory_config.max_results,
+                limit * 3 if self.has_text_embedding else limit,
                 person_key=person_keys,
                 include_user_extractions=(
                     job.viewer_is_user and job.messages[-1].visibility is VisibilityScope.USER_ONLY
                 ),
             )
+            if self.has_text_embedding and len(hits) > 1:
+                hits = await self._rerank_memory(words, hits)
+            return hits[:limit]
         except Exception:
             logger.exception("记忆检索失败，这次检索不附记忆")
             return None
+
+    async def _rerank_memory(
+        self, words: tuple[str, ...], hits: list[MemoryHit]
+    ) -> list[MemoryHit]:
+        """只给已经通过现有检索过滤的候选重新排序。"""
+        try:
+            response = await self._call(
+                OrganRequest(
+                    "text_embedding",
+                    "",
+                    purpose=CallPurpose.OPTIONAL,
+                    embedding_inputs=(" ".join(words), *(hit.text for hit in hits)),
+                )
+            )
+        except (CallRejectedError, OrganCallError):
+            return hits
+        if len(response.embeddings) != len(hits) + 1:
+            return hits
+        query, *candidates = response.embeddings
+        query_norm = hypot(*query)
+        if not query_norm:
+            return hits
+
+        def similarity(item: tuple[MemoryHit, tuple[float, ...]]) -> float:
+            vector = item[1]
+            norm = hypot(*vector)
+            return sumprod(query, vector) / query_norm / norm if norm else 0.0
+
+        return [
+            hit
+            for hit, _ in sorted(zip(hits, candidates, strict=True), key=similarity, reverse=True)
+        ]
 
     async def _reply(
         self,

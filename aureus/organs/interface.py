@@ -46,6 +46,8 @@ class OrganRequest:
     purpose: CallPurpose = CallPurpose.OPTIONAL
     # 从模型列表哪里开始用；调用方按精力档位选（D59）。不调用模型的器官忽略它。
     model_preference: ModelPreference = ModelPreference.PREFERRED
+    # 文本嵌入传字符串，图片嵌入传已读取的图片字节。
+    embedding_inputs: tuple[str | bytes, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,7 @@ class OrganResponse:
     metadata: dict[str, Any] = field(default_factory=dict)  # token 数、模型名等
     # 这次调用里真正发出去的每一次模型请求，包括成功之前失败的那些。不调用模型的器官留空。
     attempts: list[CallAttempt] = field(default_factory=list)
+    embeddings: tuple[tuple[float, ...], ...] = ()
 
 
 class OrganCallError(Exception):
