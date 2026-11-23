@@ -123,6 +123,8 @@ class Plan:
     recall: tuple[str, ...] = ()
     expression_focus: tuple[str, ...] = ()
     expression_avoid: tuple[str, ...] = ()
+    read_inbox: bool = False
+    special_contact: bool | None = None
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -191,6 +193,10 @@ def parse_plan(text: str) -> Plan | None:
             for item in _expression_terms(expression_intent.get(field))
         ),
         expression_avoid=_expression_terms(expression_intent.get("avoid")),
+        read_inbox=data.get("read_inbox") is True,
+        special_contact=(
+            data["special_contact"] if isinstance(data.get("special_contact"), bool) else None
+        ),
     )
 
 

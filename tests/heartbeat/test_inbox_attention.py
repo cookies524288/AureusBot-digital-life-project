@@ -1,0 +1,128 @@
+"""D94：用假时钟和假器官检查 QQ 收件箱进入心跳的时机与回投。"""
+
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from aureus.body import Body
+from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, ManualClock
+from aureus.heartbeat import Heartbeat, OutgoingMessage, Perception, TrustLevel
+from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.perception import MessageRoute
+from aureus.identity import Identity
+from aureus.organs import OrganRequest, OrganResponse
+from aureus.people import PeopleDirectory
+from aureus.safety import EmergencyStop, Ledger, PermissionChecker
+from aureus.timeline import TimelineDatabase, TimelineQuery, VisibilityScope
+
+
+class Organs:
+    def __init__(self) -> None:
+        self.requests: list[OrganRequest] = []
+        self.plan = '{"reply":true,"intent":"回应"}'
+
+    async def call(self, request: OrganRequest) -> OrganResponse:
+        self.requests.append(request)
+        suggestion = self.plan if request.organ_id == "planner" else "收到。"
+        return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
+
+
+@pytest.mark.asyncio
+async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    people = PeopleDirectory(database, clock)
+    people.open()
+    calendar = BudgetCalendar(UTC)
+    ledger = Ledger(database, clock, calendar=calendar)
+    ledger.open()
+    try:
+        people.ensure_user("主人", [("qq", "owner")])
+        store = InboxStore(database, clock)
+        stop = EmergencyStop(tmp_path / "halt.json", clock)
+        organs = Organs()
+        heart = Heartbeat(
+            clock=clock,
+            timeline=timeline,
+            organs=organs,
+            identity=Identity.model_validate(
+                {
+                    "facts": {"name": "小豆", "birthday": "2026-11-23"},
+                    "user": {"name": "主人", "accounts": [{"platform": "qq", "id": "owner"}]},
+                    "persona": {"immutable": "温和。"},
+                }
+            ),
+            config=HeartbeatConfig(split_reply_enabled=False),
+            permissions=PermissionChecker(stop),
+            emergency_stop=stop,
+            people=people,
+            inbox_store=store,
+            body=Body(BodyConfig(), None, ledger, clock, calendar),
+            timezone=UTC,
+        )
+        sent: list[OutgoingMessage] = []
+        heart.attach_channel("qq", sent.append)
+        heart.wake_up()
+
+        def receive(sender: str, message_id: str, *, private: bool = False) -> Perception:
+            route = MessageRoute(
+                "bot", "private" if private else "group", sender if private else "group", message_id
+            )
+            perception = Perception(
+                "qq",
+                sender,
+                f"消息 {message_id}",
+                VisibilityScope.USER_ONLY if private else VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_USER if private else TrustLevel.VERIFIED_CONTACT,
+                route=route,
+            )
+            message = store.add(perception)
+            assert message is not None
+            heart.on_inbox_message(message)
+            return perception
+
+        owner = receive("owner", "private-only", private=True)
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        assert sent[-1].route == owner.route
+        organs.plan = '{"reply":true,"intent":"回应","special_contact":true}'
+        group = receive("visitor", "group-only")
+        heart.beat()
+        clock.advance(timedelta(minutes=4))
+        heart.beat()
+        assert len(sent) == 1
+        clock.advance(timedelta(minutes=1))
+        heart.beat()
+        assert heart.is_thinking
+        await heart.wait_for_thought()
+        heart.beat()
+        assert sent[-1].route == group.route
+        assert "private-only" not in organs.requests[-2].prompt
+        assert store.add(group) is None
+        changes = timeline.query(TimelineQuery(event_type="special_contact_changed"))
+        assert len(changes) == 1
+        assert changes[0].metadata["add"] is True
+
+        clock.advance(timedelta(hours=17))
+        ordinary = receive("other-visitor", "night-ordinary")
+        heart.beat()
+        assert not heart.is_thinking
+        assert heart.seconds_until_next_beat() > 60
+        priority = receive("visitor", "priority")
+        heart.beat()
+        assert heart.is_thinking
+        await heart.wait_for_thought()
+        heart.beat()
+        assert sent[-1].route == priority.route
+        assert sum(row.unread_count for row in store.list_conversations()) == 1
+        assert ordinary.route is not None
+        assert not any(item.route == ordinary.route for item in sent)
+        await heart.shut_down()
+    finally:
+        people.close()
+        ledger.close()
+        timeline.close()

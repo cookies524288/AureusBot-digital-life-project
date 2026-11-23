@@ -72,6 +72,8 @@ class HeartbeatConfig(BaseModel):
     # 规划器（路线图 1.6，D59）：正常档先由它决定回不回、说什么、多长，再交给回复器。
     # 关掉后每次都合并成一次调用（D5：每个机制都能单独关）。
     planning_enabled: bool = True
+    # D94：只关闭自主翻阅及规划器的特别关心调整，保留重要来信唤醒。
+    inbox_attention_enabled: bool = True
     # 规划用哪个器官；planning_enabled 打开时，models.toml 里必须有它。
     plan_organ: str = Field(default="planner", min_length=1)
     # 节省档、低电量（含透支保护）时带上最近多少条对话；都不会超过 recent_message_limit。

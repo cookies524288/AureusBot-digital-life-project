@@ -35,6 +35,7 @@ from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
+from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
 from aureus.heartbeat.language_runner import speaker_key
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome
@@ -144,6 +145,7 @@ class _ReplyJob:
     with_interests: bool = False
     history_ids: tuple[int, ...] = ()
     people_history: tuple[HistoricalEntry, ...] = ()
+    inbox_attention: bool = False
 
 
 @dataclass(frozen=True)
@@ -296,6 +298,7 @@ class ConversationFlow:
         initiative_note: str = "",
         mood_state: str | None = None,
         agenda_state: str | None = None,
+        inbox_attention: bool = False,
     ) -> _ReplyJob:
         """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
         batch_ids = {record.id for record in messages}
@@ -303,11 +306,29 @@ class ConversationFlow:
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
         # 回复用户时只带同一可见范围的对话。回复别人时不按范围过滤（D61，用户决定）：
         # 它的记忆是连续的一份，防套话靠系统上下文里的说明，由规划器和回复器各自判断。
-        recent = recent_dialogue(
-            self._timeline,
-            visibility=None if contact else target.visibility,
-            limit=strategy.message_limit,
-        )
+        if target.route is None:
+            recent = recent_dialogue(
+                self._timeline,
+                visibility=None if contact else target.visibility,
+                limit=strategy.message_limit,
+            )
+        else:
+            key = ConversationKey.from_perception(target)
+            recent = self._timeline.query(
+                TimelineQuery(
+                    event_type=EVENT_MESSAGE,
+                    visibility=target.visibility,
+                    latest=True,
+                    limit=strategy.message_limit,
+                    metadata={
+                        "channel": key.platform,
+                        "account_id": key.account_id,
+                        "message_type": key.kind,
+                        "recipient_id": key.recipient_id,
+                        "temporary_group_id": key.temporary_group_id,
+                    },
+                )
+            )
         # 按序号排除这次要回复的消息，而不是只取“比它们早的”：想上一件事的时候来的消息，
         # 序号比上一次的回复还小，只取更早的就会漏掉它刚说过的话。
         history = [record for record in recent if record.id not in batch_ids]
@@ -390,6 +411,7 @@ class ConversationFlow:
             with_interests=bool(interests_state),
             history_ids=tuple(record.id for record in [*history, *messages]),
             people_history=people_history,
+            inbox_attention=inbox_attention,
         )
         return self._apply_hormones(job, ())
 
@@ -589,6 +611,13 @@ class ConversationFlow:
             with_expressions=self._can_recall_language(),
             heuristic_recall=heuristic_recall,
         )
+        if job.inbox_attention:
+            prompt += (
+                "\n\n如想在空闲时翻阅平台收件箱，可在 JSON 中加 read_inbox: true。"
+                "如果经过这次交谈，你想将当前已认识的联系人设为特别关心，"
+                "可加 special_contact: true；"
+                "想取消可写 false。特别关心的人来信会叫醒你。此选择由你作出。"
+            )
         request = _organ_request(
             job,
             organ_id=organ_id,

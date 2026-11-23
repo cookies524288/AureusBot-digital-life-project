@@ -15,7 +15,7 @@ import contextlib
 import logging
 import sqlite3
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, cast
@@ -78,6 +78,8 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from aureus.heartbeat.inbox_attention import InboxAttention
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from aureus.heartbeat.initiative import InitiativeDecision, decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import Judgment, TowardMeKind
@@ -222,6 +224,7 @@ class Heartbeat:
         has_diary_organ: bool = True,
         persona_growth: PersonaGrowthConfig | None = None,
         has_persona_organ: bool = True,
+        inbox_store: InboxStore | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -271,6 +274,7 @@ class Heartbeat:
             has_diary_organ: 总结器官是否已注册；缺少时只记一次日志（D68、D80）。
             persona_growth: 默认关闭的人设成长配置（D81）。
             has_persona_organ: 人设成长的总结器官是否已注册。
+            inbox_store: 平台收件箱，未配置 QQ 时不启用。
         """
         self._clock = clock
         self._timeline = timeline
@@ -283,6 +287,17 @@ class Heartbeat:
         self._timezone = timezone
         self._body = body
         self._people = people
+        self._platform_inbox = (
+            InboxAttention(
+                inbox_store,
+                timeline,
+                people,
+                ((account.platform, account.id) for account in identity.user.accounts),
+                enabled=config.inbox_attention_enabled and not config.roleplay_mode,
+            )
+            if inbox_store is not None
+            else None
+        )
         self._identity_history = identity_history
         self._samples = samples
         self._last_sample_at: datetime | None = None  # 上一次记样本的时刻
@@ -383,7 +398,7 @@ class Heartbeat:
             reader or WebReader(exploration),
             has_exploration_organ,
         )
-        self._pending: deque[Perception] = deque()  # 收到了、还没记进时间线
+        self._pending: deque[tuple[Perception, InboxMessage | None]] = deque()
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
         self._thought: _Thought | None = None
         self._wake = asyncio.Event()
@@ -427,9 +442,20 @@ class Heartbeat:
         if self._phase in (_Phase.STOPPING, _Phase.STOPPED):
             logger.info("心跳正在关闭，没有收下来自 %s 的消息", perception.channel)
             return False
-        self._pending.append(perception)
+        self._pending.append((perception, None))
         self._wake.set()
         return True
+
+    def set_inbox_route_filter(self, allows: Callable[[Perception], bool]) -> None:
+        """让已保存的未读也继续遵守当前通道允许的会话范围。"""
+        if self._platform_inbox is not None:
+            self._platform_inbox.allows = allows
+
+    def on_inbox_message(self, message: InboxMessage) -> None:
+        """来信已保存，重要来信立即叫醒心跳。"""
+        inbox = self._platform_inbox
+        if inbox is not None and inbox.is_priority(message.perception):
+            self._wake.set()
 
     def apply_identity_edit(
         self,
@@ -623,6 +649,8 @@ class Heartbeat:
         self._restore_hormones(now)
         self._restore_last_conversation()
         self._initiative.restore(self._clock.now())
+        if self._platform_inbox is not None:
+            self._platform_inbox.restore()
         if self._diary is not None:
             self._diary.restore(now)
         if self._persona_growth is not None:
@@ -713,14 +741,35 @@ class Heartbeat:
         self._initiative.begin_beat(self._clock.now())
         self._exploration.begin_beat(self._clock.now())
         self._watch_emergency_stop()
+        inbox = self._platform_inbox
+        if inbox is not None:
+            self._submit_inbox(inbox.priority_messages())
         # D76：先收下已到的来信，不能把发送前排队的消息算作发送后的回应。
         self._take_in_perceptions()
+        had_thought = self._thought is not None
         diary_running = bool(self._thought and self._thought.task.get_name() == "aureus-diary")
         self._collect_finished_thought()
         self._memory.index_more()
         self._read_body()
         self._check_stress()
         self._agenda_hooks._check_agenda()
+        if inbox is not None:
+            reading = self._reading
+            self._submit_inbox(
+                inbox.browse(
+                    self._clock.now(),
+                    can_browse=(
+                        not had_thought
+                        and self._thought is None
+                        and not self._unanswered
+                        and not self._pending
+                        and not self._stop_requested
+                        and (reading is None or not reading.sleep.night)
+                        and self._permissions.check(ACTION_CALL_ORGAN).allowed
+                    ),
+                )
+            )
+            self._take_in_perceptions()
         self._maybe_start_thought()
         self._maybe_learn_language()
         self._maybe_start_initiative()
@@ -833,6 +882,12 @@ class Heartbeat:
             return
         target = thought.replying_to[-1].perception
         person_id = _person_id_of(thought.replying_to[-1].record)
+        if (
+            self._platform_inbox is not None
+            and outcome.plan is not None
+            and not self._halt_status.halted
+        ):
+            self._platform_inbox.apply_plan(outcome.plan, target, thought.replying_to[-1].record)
         if outcome.judge is not None:
             judgment_record = self._record_judgment(thought, outcome.judge)
             self._record_triggers(outcome.judge.triggers)
@@ -879,7 +934,12 @@ class Heartbeat:
         if target.trust is TrustLevel.VERIFIED_USER:
             metadata["to_user"] = True
         if target.route is not None:
-            metadata["recipient_id"] = target.route.recipient_id
+            metadata.update(
+                account_id=target.route.account_id,
+                recipient_id=target.route.recipient_id,
+                message_type=target.route.kind,
+                temporary_group_id=target.route.temporary_group_id,
+            )
         reply_record = self._timeline.append(
             event_type=EVENT_MESSAGE,
             content=text,
@@ -1043,10 +1103,31 @@ class Heartbeat:
         )
         self._deliver(target, f"（没有回复：{reason}）", MessageKind.NOTICE)
 
+    def _submit_inbox(self, messages: Sequence[InboxMessage]) -> None:
+        existing_ids = {message.id for _, message in self._pending if message is not None}
+        self._pending.extend(
+            (message.perception, message)
+            for message in messages
+            if message.perception.channel in self._sinks and message.id not in existing_ids
+        )
+
     def _take_in_perceptions(self) -> None:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
         while self._pending:
-            perception = self._pending[0]
+            perception, inbox_message = self._pending[0]
+            inbox = self._platform_inbox
+            if inbox_message is not None and inbox is not None:
+                previous = self._timeline.query(
+                    TimelineQuery(
+                        event_type=EVENT_MESSAGE,
+                        metadata={"inbox_message_id": inbox_message.id},
+                        limit=1,
+                    )
+                )
+                if previous:
+                    inbox.store.mark_read([inbox_message.id])
+                    self._pending.popleft()
+                    continue
             person = self._identify(perception)
             metadata: dict[str, Any] = {
                 "channel": perception.channel,
@@ -1067,6 +1148,10 @@ class Heartbeat:
                 )
             if perception.source_message_id:
                 metadata["source_message_id"] = perception.source_message_id
+            if inbox_message is not None:
+                metadata.update(
+                    inbox_message_id=inbox_message.id, sender_name=inbox_message.sender_name
+                )
             record = self._timeline.append(
                 event_type=EVENT_MESSAGE,
                 content=perception.content,
@@ -1076,11 +1161,20 @@ class Heartbeat:
                 metadata=metadata,
             )
             self._pending.popleft()
+            if inbox_message is not None and inbox is not None:
+                inbox.store.mark_read([inbox_message.id])
             if self._language is not None and self._language_config.learning_enabled:
                 self._language_samples.append(
                     language_runner.language_sample(record, perception.source_message_id)
                 )
             priority = _priority_of(perception, person)
+            if (
+                priority is Priority.CONTACT
+                and inbox_message is not None
+                and inbox is not None
+                and inbox.is_priority(perception)
+            ):
+                priority = Priority.SPECIAL
             if priority is None:
                 # 确认不了身份（或通道和档案对不上）就不回，朝安全方向倒。
                 logger.info(
@@ -1092,14 +1186,7 @@ class Heartbeat:
                 record,
                 person is not None and person.is_user and priority is Priority.USER,
             )
-            route = perception.route
-            conversation = _conversation_of(perception)
-            group_address = (
-                (route.kind, route.recipient_id, route.temporary_group_id)
-                if route is not None
-                else None
-            )
-            self._unanswered.add(heard, priority, (conversation, group_address))
+            self._unanswered.add(heard, priority, _reply_address(perception))
             if priority is Priority.USER:
                 self._last_user_contact = perception
                 self._initiative.note_user_message(record.timestamp)
@@ -1621,6 +1708,11 @@ class Heartbeat:
                 person_id, viewer_is_user=target.trust is TrustLevel.VERIFIED_USER
             ),
             agenda_for_context=self._agenda_hooks._agenda_for_context,
+            inbox_attention=(
+                self._platform_inbox is not None
+                and self._config.inbox_attention_enabled
+                and not self._config.roleplay_mode
+            ),
         )
 
     def _downtime_for_context(self) -> Downtime | None:
@@ -1741,6 +1833,11 @@ def _actor_type_of(perception: Perception) -> ActorType:
 def _conversation_of(perception: Perception) -> tuple[str, str]:
     """一个对话 = 一个通道里的一个账号；收件箱按它把同一个人的几句话合成一次回复。"""
     return (perception.channel, perception.sender_id)
+
+
+def _reply_address(perception: Perception) -> tuple[tuple[str, str], ConversationKey | None]:
+    route = ConversationKey.from_perception(perception) if perception.route is not None else None
+    return _conversation_of(perception), route
 
 
 def _priority_of(perception: Perception, person: Person | None) -> Priority | None:
