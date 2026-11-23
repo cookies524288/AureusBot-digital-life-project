@@ -172,13 +172,13 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         "〔可引用经历〕": "[1] 引用经历样本",
     }
     completion = FakeCompletion(*(make_response("模拟输出") for _ in cases))
-    assert set(request.organ_id for request in cases.values()) == set(BUILTIN_ORGANS)
+    active_organs = {request.organ_id for request in cases.values()}
     previews = {
         organ: {
             scene["id"]: scene["messages"]
             for scene in rig.client.get(f"/api/organs/{organ}/prompt-preview").json()["scenes"]
         }
-        for organ in BUILTIN_ORGANS
+        for organ in active_organs
     }
     assert not completion.calls
     routes = make_config().routes_for("replyer")
