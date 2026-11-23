@@ -3,6 +3,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -17,12 +18,26 @@ internal static class WindowsLauncher
         string python = Path.Combine(root, @".venv\Scripts\pythonw.exe");
         try
         {
+            using (var window = new LauncherWindow())
+                return Launch(args, root, python, window);
+        }
+        catch (Exception error)
+        {
+            MessageBox.Show(error.Message, "Aureus 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return 1;
+        }
+    }
+
+    private static int Launch(string[] args, string root, string python, LauncherWindow window)
+    {
+        try
+        {
             if (!File.Exists(python))
                 throw new FileNotFoundException("请先在项目目录运行 uv sync。");
             if (args.Length > 1 || (args.Length == 1 && args[0] != "--fake"))
                 throw new ArgumentException("启动器支持的参数为 --fake。");
 
-            var info = new ProcessStartInfo(python, "-m aureus.cli.windows_launcher --tray")
+            var info = new ProcessStartInfo(python, "-m aureus.cli.windows_launcher --tray --owner-pid " + Process.GetCurrentProcess().Id)
             {
                 WorkingDirectory = root,
                 UseShellExecute = false,
@@ -36,8 +51,21 @@ internal static class WindowsLauncher
             {
                 using (Process process = Process.Start(info))
                 {
-                    RunTray(process);
+                    var status = new ChildStatus();
+                    RunTray(process, window, status);
                     process.WaitForExit();
+                    if (status.Attached)
+                    {
+                        window.Ready(status.Url);
+                        if (status.Owner > 0)
+                        {
+                            try { using (Process owner = Process.GetProcessById(status.Owner)) owner.WaitForExit(); }
+                            catch (ArgumentException) { }
+                        }
+                        return 0;
+                    }
+                    if (process.ExitCode != 0 && process.ExitCode != RestartExitCode && status.Url == null)
+                        window.Failure(status.Error ?? ("网页服务启动失败，退出码 " + process.ExitCode + "。"));
                     if (process.ExitCode != RestartExitCode)
                         return process.ExitCode;
                 }
@@ -46,15 +74,31 @@ internal static class WindowsLauncher
         }
         catch (Exception error)
         {
-            MessageBox.Show(error.Message, "Aureus 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            window.Failure(error.Message);
             return 1;
         }
     }
 
-    private static void RunTray(Process process)
+    private sealed class ChildStatus
+    {
+        public string Url;
+        public string Error;
+        public int Owner;
+        public bool Attached;
+    }
+
+    private static string LocalUrl(string value)
+    {
+        Uri url;
+        return Uri.TryCreate(value, UriKind.Absolute, out url)
+            && url.Scheme == Uri.UriSchemeHttp && url.Host == "127.0.0.1" ? url.AbsoluteUri : null;
+    }
+
+    private static void RunTray(Process process, LauncherWindow window, ChildStatus status)
     {
         const string urlPrefix = "AUREUS_WEB_URL=";
-        string webUrl = null;
+        const string attachPrefix = "AUREUS_WEB_ATTACH=";
+        const string errorPrefix = "AUREUS_WEB_ERROR=";
         using (var context = new ApplicationContext())
         using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Aureus.Tray.ico"))
         using (var icon = new Icon(stream))
@@ -64,9 +108,9 @@ internal static class WindowsLauncher
         {
             Action openPage = delegate
             {
-                string url = Volatile.Read(ref webUrl);
+                string url = Volatile.Read(ref status.Url);
                 if (url != null && !process.HasExited)
-                    using (Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })) { }
+                    window.Open(url);
             };
             var open = menu.Items.Add("打开主页面");
             open.Click += delegate { openPage(); };
@@ -100,20 +144,34 @@ internal static class WindowsLauncher
             };
             process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs args)
             {
-                if (args.Data == null || !args.Data.StartsWith(urlPrefix, StringComparison.Ordinal))
-                    return;
-                Uri url;
-                if (Uri.TryCreate(args.Data.Substring(urlPrefix.Length), UriKind.Absolute, out url)
-                    && url.Scheme == Uri.UriSchemeHttp && url.Host == "127.0.0.1")
-                    Volatile.Write(ref webUrl, url.AbsoluteUri);
+                string value = args.Data;
+                if (value == null) return;
+                if (value.StartsWith(urlPrefix, StringComparison.Ordinal))
+                    Volatile.Write(ref status.Url, LocalUrl(value.Substring(urlPrefix.Length)));
+                else if (value.StartsWith(attachPrefix, StringComparison.Ordinal))
+                {
+                    string[] fields = value.Substring(attachPrefix.Length).Split(new[] { ' ' }, 2);
+                    int owner;
+                    if (fields.Length == 2 && int.TryParse(fields[0], out owner) && LocalUrl(fields[1]) != null)
+                    {
+                        status.Owner = owner;
+                        status.Attached = true;
+                        Volatile.Write(ref status.Url, LocalUrl(fields[1]));
+                    }
+                }
+                else if (value.StartsWith(errorPrefix, StringComparison.Ordinal))
+                    status.Error = Encoding.UTF8.GetString(Convert.FromBase64String(value.Substring(errorPrefix.Length)));
             };
             process.BeginOutputReadLine();
             timer.Tick += delegate
             {
                 if (process.HasExited)
                     context.ExitThread();
-                else if (!tray.Visible && Volatile.Read(ref webUrl) != null)
+                else if (!tray.Visible && Volatile.Read(ref status.Url) != null && !status.Attached)
+                {
+                    window.Ready(status.Url);
                     tray.Visible = true;
+                }
             };
             timer.Start();
             Application.Run(context);

@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import base64
 import ctypes
 import os
 import sys
@@ -16,7 +17,7 @@ from aureus.common.vault import VaultError
 from aureus.core.runtime import Core, open_core
 from aureus.identity import IdentityError, SingleInstanceLockError
 from aureus.web.assemble import open_web
-from aureus.web.runner import LOOPBACK_HOST, WebServer, WebServerError, running_web_url
+from aureus.web.runner import LOOPBACK_HOST, WebServer, WebServerError, running_web_instance
 
 from .windows_terminal import WindowsTerminal
 
@@ -25,11 +26,15 @@ _STARTUP_POLLS = 80
 _STARTUP_POLL_INTERVAL = 0.1
 
 
-def _open_running_web(paths: AureusPaths) -> bool:
-    url = running_web_url(paths.home)
-    if url is None:
+def _open_running_web(paths: AureusPaths, *, tray: bool) -> bool:
+    instance = running_web_instance(paths.home)
+    if instance is None:
         return False
-    os.startfile(url)
+    url, owner = instance
+    if tray:
+        print(f"AUREUS_WEB_ATTACH={owner} {url}", flush=True)
+    else:
+        os.startfile(url)
     return True
 
 
@@ -41,6 +46,7 @@ async def _run_web(
     *,
     tray: bool,
     opening_browser: bool,
+    owner_pid: int | None,
 ) -> None:
     port = core.settings.runtime.web.port
     url = f"http://{LOOPBACK_HOST}:{port}"
@@ -61,12 +67,12 @@ async def _run_web(
     def open_browser() -> None:
         if tray:
             print(f"AUREUS_WEB_URL={url}", flush=True)
-        if opening_browser:
+        elif opening_browser:
             os.startfile(url)
 
     async def serve() -> None:
         try:
-            await web.run(on_started=open_browser)
+            await web.run(on_started=open_browser, owner_pid=owner_pid)
         finally:
             core.heartbeat.request_stop()
 
@@ -84,8 +90,10 @@ async def _run_web(
         await terminal.close()
 
 
-def _launch(paths: AureusPaths, *, fake: bool, tray: bool, opening_browser: bool) -> bool:
-    if _open_running_web(paths):
+def _launch(
+    paths: AureusPaths, *, fake: bool, tray: bool, opening_browser: bool, owner_pid: int | None
+) -> bool:
+    if _open_running_web(paths, tray=tray):
         return False
     restarting = False
     clock = SystemClock()
@@ -112,6 +120,7 @@ def _launch(paths: AureusPaths, *, fake: bool, tray: bool, opening_browser: bool
                             request_restart,
                             tray=tray,
                             opening_browser=opening_browser,
+                            owner_pid=owner_pid,
                         )
                     )
                 except* (WebServerError, OSError) as errors:
@@ -119,7 +128,7 @@ def _launch(paths: AureusPaths, *, fake: bool, tray: bool, opening_browser: bool
     except SingleInstanceLockError:
         # 同时双击时，先拿到核心锁的进程可能还没开始监听。
         for _ in range(_STARTUP_POLLS):
-            if _open_running_web(paths):
+            if _open_running_web(paths, tray=tray):
                 return False
             sleep(_STARTUP_POLL_INTERVAL)
         raise
@@ -134,16 +143,27 @@ def main() -> int:
     parser.add_argument("--fake", action="store_true")
     parser.add_argument("--tray", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--restarted", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--owner-pid", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
         paths = AureusPaths(resolve_home())
         opening_browser = not args.restarted
-        while _launch(paths, fake=args.fake, tray=args.tray, opening_browser=opening_browser):
+        while _launch(
+            paths,
+            fake=args.fake,
+            tray=args.tray,
+            opening_browser=opening_browser,
+            owner_pid=args.owner_pid,
+        ):
             if args.tray:
                 return RESTART_EXIT_CODE
             opening_browser = False
     except (ConfigError, HomePathError, VaultError, IdentityError, OSError) as error:
-        ctypes.windll.user32.MessageBoxW(None, str(error), "Aureus 启动失败", 0x10)
+        if args.tray:
+            reason = base64.b64encode(str(error).encode()).decode("ascii")
+            print(f"AUREUS_WEB_ERROR={reason}", flush=True)
+        else:
+            ctypes.windll.user32.MessageBoxW(None, str(error), "Aureus 启动失败", 0x10)
         return 1
     return 0
 

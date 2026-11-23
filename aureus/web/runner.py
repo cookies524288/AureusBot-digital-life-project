@@ -22,6 +22,7 @@ from aureus.common import ConfigError, WebConfig
 LOOPBACK_HOST = "127.0.0.1"
 ALL_INTERFACES_HOST = "0.0.0.0"
 _PORT_BYTES = 2
+_PID_BYTES = 4
 
 
 def _address_name(home: Path) -> str:
@@ -31,6 +32,12 @@ def _address_name(home: Path) -> str:
 
 def running_web_url(home: Path) -> str | None:
     """读取同一数据根目录正在监听的 Windows 网页地址。"""
+    instance = running_web_instance(home)
+    return instance[0] if instance is not None else None
+
+
+def running_web_instance(home: Path) -> tuple[str, int] | None:
+    """读取网页地址和稳定拥有该服务的启动进程号。"""
     if sys.platform != "win32":
         return None
     try:
@@ -41,7 +48,8 @@ def running_web_url(home: Path) -> str | None:
         buffer = address.buf
         assert buffer is not None
         port = int.from_bytes(buffer[:_PORT_BYTES], "big")
-    return f"http://{LOOPBACK_HOST}:{port}" if port else None
+        owner = int.from_bytes(buffer[_PORT_BYTES : _PORT_BYTES + _PID_BYTES], "big")
+    return (f"http://{LOOPBACK_HOST}:{port}", owner) if port else None
 
 
 class WebServerError(Exception):
@@ -108,11 +116,14 @@ class WebServer:
         """已经开始监听了吗。"""
         return self._server.started
 
-    async def run(self, *, on_started: Callable[[], None] | None = None) -> None:
+    async def run(
+        self, *, on_started: Callable[[], None] | None = None, owner_pid: int | None = None
+    ) -> None:
         """开始服务，直到 request_stop 被调用。
 
         Args:
             on_started: 成功监听后调用的可选函数。
+            owner_pid: Windows 托盘外层进程，可跨内核重启保持不变。
 
         Raises:
             WebServerError: 端口被占用等原因，没能开始监听。
@@ -121,9 +132,14 @@ class WebServer:
         def publish_address() -> None:
             if self._address_name is not None:
                 # Windows 在最后一个句柄关闭时移除映射，异常退出也不会留下旧端口。
-                self._address = SharedMemory(name=self._address_name, create=True, size=_PORT_BYTES)
+                self._address = SharedMemory(
+                    name=self._address_name, create=True, size=_PORT_BYTES + _PID_BYTES
+                )
                 buffer = self._address.buf
                 assert buffer is not None
+                buffer[_PORT_BYTES : _PORT_BYTES + _PID_BYTES] = (
+                    owner_pid or os.getpid()
+                ).to_bytes(_PID_BYTES, "big")
                 buffer[:_PORT_BYTES] = self._port.to_bytes(_PORT_BYTES, "big")
             if on_started is not None:
                 on_started()
