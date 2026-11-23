@@ -7,10 +7,45 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from aureus.common import ManualClock
-from aureus.memory import MemoryIndex
+from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore, MemoryIndex
 from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource
 from aureus.timeline import TimelineDatabase
 from aureus.web.resource_api import register_resource_routes
+
+
+def test_learning_resources_filter_and_page_real_observations(tmp_path: Path) -> None:
+    language = LanguageStore(tmp_path / "language.db")
+    language.open()
+    for number, term in enumerate(("月兔冲线", "月兔加油"), start=1):
+        sample = LanguageSample(f"timeline:{number}", number, "person:1", f"跑步时说{term}")
+        language.observe(
+            [sample], [LanguageProposal(LanguageKind.EXPRESSION, term, "庆祝跑步", (number,))]
+        )
+    for number in range(3, 7):
+        sample = LanguageSample(f"timeline:{number}", number, "person:1", "小队集合 GO")
+        language.observe(
+            [sample], [LanguageProposal(LanguageKind.JARGON, "GO", "集合完成", (number,))]
+        )
+
+    async def require_ready() -> str:
+        return "test"
+
+    app = FastAPI()
+    register_resource_routes(app, require_ready, language, None)
+    with TestClient(app) as client:
+        endpoint = "/api/resources/learning"
+        params = {"q": "庆祝跑步", "limit": 1}
+        first = client.get(endpoint, params=params).json()
+        second = client.get(endpoint, params={**params, "offset": first["next_offset"]}).json()
+        assert first["enabled"] is True and first["next_offset"] == 1
+        assert second["next_offset"] is None
+        entries = first["items"] + second["items"]
+        assert {entry["text"] for entry in entries} == {"月兔冲线", "月兔加油"}
+        assert all(entry["example"].startswith("跑步时说") for entry in entries)
+        jargon = client.get(endpoint, params={"kind": "jargon", "q": "go"}).json()
+        [entry] = jargon["items"]
+        assert entry["detail"] == "集合完成"
+        assert entry["evidence_ids"] == [3, 4, 5, 6]
 
 
 def test_resource_filters_pages_and_reads_evidence(tmp_path: Path) -> None:
