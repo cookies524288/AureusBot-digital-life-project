@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 from subprocess import CompletedProcess
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -223,11 +224,13 @@ def test_two_level_launcher_chain_is_accepted(
     )
     monkeypatch.setattr(debug_restart.sys, "platform", "win32")
     project = Path(debug_restart.__file__).resolve().parents[2]
+    base_pythonw = tmp_path / "installed-python" / "pythonw.exe"
+    monkeypatch.setattr(debug_restart, "_base_pythonw_path", lambda root: base_pythonw)
     processes = [
         {
             "ProcessId": 44,
             "ParentProcessId": 43,
-            "ExecutablePath": str(project / ".venv" / "Scripts" / "pythonw.exe"),
+            "ExecutablePath": str(base_pythonw),
             "Started": "2026-11-23T13:00:02Z",
         },
         {
@@ -256,11 +259,42 @@ def test_two_level_launcher_chain_is_accepted(
     )
     assert debug_restart._verified_target(tmp_path) == ("http://127.0.0.1:29501", identity)
     assert len(calls) == 2
+    processes[0]["ExecutablePath"] = str(tmp_path / "wrong-install" / "pythonw.exe")
+    assert debug_restart._verified_target(tmp_path) is None
+    processes[0]["ExecutablePath"] = str(base_pythonw)
     processes[1]["ParentProcessId"] = 77
     assert debug_restart._verified_target(tmp_path) is None
     processes[1]["ParentProcessId"] = 42
     processes[1]["CommandLine"] = "pythonw.exe -m unrelated.module --tray --owner-pid 42"
     assert debug_restart._verified_target(tmp_path) is None
+
+
+def test_base_pythonw_is_derived_only_from_the_project_venv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "checkout"
+    venv = root / ".venv"
+    venv.mkdir(parents=True)
+    installation = tmp_path / "python-install"
+    installation.mkdir()
+    python = installation / "python.exe"
+    python.write_bytes(b"synthetic executable")
+    pythonw = installation / "pythonw.exe"
+    pythonw.write_bytes(b"synthetic window executable")
+    runtime = SimpleNamespace(
+        prefix=str(venv),
+        base_prefix=str(installation),
+        _base_executable=str(python),
+    )
+    monkeypatch.setattr(debug_restart, "sys", runtime)
+    assert debug_restart._base_pythonw_path(root) == pythonw
+    pythonw.unlink()
+    assert debug_restart._base_pythonw_path(root) is None
+    runtime.prefix = str(tmp_path / "other-venv")
+    assert debug_restart._base_pythonw_path(root) is None
+    runtime.prefix = str(venv)
+    runtime._base_executable = str(tmp_path / "missing-python.exe")
+    assert debug_restart._base_pythonw_path(root) is None
 
 
 def test_recovery_does_not_submit_password_or_claim_old_listener_replaced(

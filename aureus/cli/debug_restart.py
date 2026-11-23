@@ -29,6 +29,23 @@ class ListenerIdentity:
     listener_started: str
 
 
+def _base_pythonw_path(root: Path) -> Path | None:
+    """仅使用当前项目虚拟环境的基础解释器定位对应的窗口程序。"""
+    try:
+        if Path(sys.prefix).resolve(strict=True) != (root / ".venv").resolve(strict=True):
+            return None
+        base_executable = Path(sys._base_executable).resolve(strict=True)
+        if (
+            Path(sys.base_prefix).resolve(strict=True) == Path(sys.prefix).resolve(strict=True)
+            or base_executable.name.lower() != "python.exe"
+        ):
+            return None
+        base_pythonw = base_executable.with_name("pythonw.exe")
+        return base_pythonw.resolve(strict=True) if base_pythonw.is_file() else None
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def _listener_identity(port: int, owner: int) -> ListenerIdentity | None:
     """只认可项目启动器 → 项目中转 → 实际监听者的直属链。"""
     if sys.platform != "win32":
@@ -91,6 +108,9 @@ def _listener_identity(port: int, owner: int) -> ListenerIdentity | None:
     root = Path(__file__).resolve().parents[2]
     launcher_path = root / "Aureus.exe"
     middle_path = root / ".venv" / "Scripts" / "pythonw.exe"
+    base_pythonw = _base_pythonw_path(root)
+    if base_pythonw is None:
+        return None
     middle_args = middle.get("CommandLine")
     match = (
         re.search(r"(?<!\S)--owner-pid\s+(\d+)(?=\s|$)", middle_args)
@@ -104,7 +124,7 @@ def _listener_identity(port: int, owner: int) -> ListenerIdentity | None:
         or launcher.get("ProcessId") != owner
         or launcher.get("ExecutablePath", "").lower() != str(launcher_path).lower()
         or middle.get("ExecutablePath", "").lower() != str(middle_path).lower()
-        or listener.get("ExecutablePath", "").lower() != str(middle_path).lower()
+        or listener.get("ExecutablePath", "").lower() != str(base_pythonw).lower()
         or not isinstance(middle_args, str)
         or not re.search(r"(?<!\S)-m\s+aureus\.cli\.windows_launcher(?=\s|$)", middle_args)
         or not re.search(r"(?<!\S)--tray(?=\s|$)", middle_args)
