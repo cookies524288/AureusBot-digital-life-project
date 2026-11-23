@@ -6,16 +6,30 @@
 import re
 from typing import Any
 
-from aureus.heartbeat import MessageRoute, OutgoingMessage, Perception, TrustLevel, VisibilityScope
+from aureus.heartbeat import (
+    MediaReference,
+    MessageRoute,
+    OutgoingMessage,
+    Perception,
+    TrustLevel,
+    VisibilityScope,
+)
 
 QQ_CHANNEL_NAME = "qq"
 _ACCOUNT_ID = re.compile(r"[1-9][0-9]{0,19}")
 _MESSAGE_ID = re.compile(r"-?[1-9][0-9]{0,19}")
+# SnowLuma 的动作也接受 URL 和路径，因此只传缓存标识。
+_MEDIA_ID = re.compile(r"[A-Za-z0-9_{}@+=-][A-Za-z0-9_{}@.+=-]{0,255}")
 
 
 def account_id(value: object) -> str | None:
     """把 OneBot 数字账号规范为人物档案使用的字符串"""
     return _read_id(value, _ACCOUNT_ID)
+
+
+def media_file_id(value: object) -> str | None:
+    """只接受可作为 SnowLuma 缓存标识的值。"""
+    return value if isinstance(value, str) and _MEDIA_ID.fullmatch(value) else None
 
 
 def _read_id(value: object, pattern: re.Pattern[str]) -> str | None:
@@ -51,9 +65,11 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
         visibility = VisibilityScope.PRIVATE
     else:
         return None
-    text, mentioned, quoted = _read_segments(payload.get("message"), receiving_account)
+    text, mentioned, quoted, attachments = _read_segments(payload.get("message"), receiving_account)
     if not text:
-        return None
+        if not attachments:
+            return None
+        text = " ".join("[图片]" if item.kind == "image" else "[语音]" for item in attachments)
     timestamp = payload.get("time")
     return Perception(
         QQ_CHANNEL_NAME,
@@ -66,15 +82,19 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
         quoted_message_id=quoted,
         source_timestamp=timestamp if type(timestamp) is int else None,
         source_message_id=f"{receiving_account}:{message_id}",
+        attachments=attachments,
     )
 
 
-def _read_segments(message: object, receiving_account: str) -> tuple[str, bool, str | None]:
+def _read_segments(
+    message: object, receiving_account: str
+) -> tuple[str, bool, str | None, tuple[MediaReference, ...]]:
     if isinstance(message, str):
-        return message.strip(), False, None
+        return message.strip(), False, None, ()
     if not isinstance(message, list):
-        return "", False, None
+        return "", False, None, ()
     parts: list[str] = []
+    attachments: list[MediaReference] = []
     mentioned = False
     quoted = None
     for segment in message:
@@ -91,7 +111,10 @@ def _read_segments(message: object, receiving_account: str) -> tuple[str, bool, 
                     parts.append(f"@{target} ")
             case "reply":
                 quoted = quoted or _read_id(data.get("id"), _MESSAGE_ID)
-    return "".join(parts).strip(), mentioned, quoted
+            case "image" | "record" as kind:
+                if file_id := media_file_id(data.get("file")):
+                    attachments.append(MediaReference(kind, file_id))
+    return "".join(parts).strip(), mentioned, quoted, tuple(attachments)
 
 
 def encode_message(message: OutgoingMessage, route: MessageRoute) -> dict[str, Any]:

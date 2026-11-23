@@ -48,6 +48,8 @@ class OrganRequest:
     model_preference: ModelPreference = ModelPreference.PREFERRED
     # 文本嵌入传字符串，图片嵌入传已读取的图片字节。
     embedding_inputs: tuple[str | bytes, ...] = ()
+    media_bytes: bytes | None = field(default=None, repr=False)
+    media_type: str | None = None
 
 
 @dataclass(frozen=True)

@@ -45,6 +45,7 @@ from aureus.core.model_runtime import ModelRuntime
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat, Perception, registered_templates
+from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
@@ -78,6 +79,7 @@ class Core:
     inbox_store: InboxStore | None = None
     language: LanguageStore | None = None
     memory: MemoryIndex | None = None
+    inbox_images: InboxImageIndex | None = None
 
 
 def open_people(
@@ -345,6 +347,7 @@ def open_core(
         heartbeat.update_available_organs(models.available_organs)
         qq = None
         qq_link = None
+        inbox_images = None
         if runtime.qq.enabled:
             token = resolver.get(runtime.qq.token_key) if runtime.qq.token_key else None
             if runtime.qq.token_key and token is None:
@@ -383,6 +386,13 @@ def open_core(
                 on_inbox_message=heartbeat.on_inbox_message,
             )
             heartbeat.set_inbox_route_filter(qq.allows_inbox_perception)
+            inbox_images = InboxImageIndex(
+                paths.database_file,
+                gateway.call,
+                lambda: "image_embedding" in models.available_organs,
+            )
+            heartbeat.set_inbox_image_indexer(inbox_images.index)
+            heartbeat.set_inbox_attachment_reader(qq.read_inbox_attachment)
             heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show)
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
@@ -404,4 +414,5 @@ def open_core(
             inbox_store,
             language,
             memory,
+            inbox_images,
         )

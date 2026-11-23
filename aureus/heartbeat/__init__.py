@@ -38,6 +38,7 @@ from .judging import (
 )
 from .main_loop import Heartbeat, OrganCaller
 from .perception import (
+    MediaReference,
     MessageKind,
     MessageRoute,
     MessageSink,
@@ -75,6 +76,7 @@ __all__ = [
     "Downtime",
     "Heartbeat",
     "Judgment",
+    "MediaReference",
     "MessageKind",
     "MessageRoute",
     "MessageSink",

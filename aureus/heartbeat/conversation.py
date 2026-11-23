@@ -36,6 +36,7 @@ from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
+from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
 from aureus.heartbeat.language_runner import speaker_key
@@ -147,6 +148,7 @@ class _ReplyJob:
     history_ids: tuple[int, ...] = ()
     people_history: tuple[HistoricalEntry, ...] = ()
     inbox_attention: bool = False
+    media_sources: tuple[Perception, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -214,12 +216,15 @@ class _Thought:
 
 def _reply_job(batch: Sequence[_Heard], conversation_job: Callable[..., _ReplyJob]) -> _ReplyJob:
     """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
-    return conversation_job(
+    job = conversation_job(
         batch[-1].perception,
         [heard.record for heard in batch],
         _person_id_of(batch[-1].record),
         viewer_is_user=batch[-1].is_user,
     )
+    if any(heard.perception.attachments for heard in batch):
+        return replace(job, media_sources=tuple(heard.perception for heard in batch))
+    return job
 
 
 def _organ_request(
@@ -267,6 +272,7 @@ class ConversationFlow:
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
+        self.inbox_media = InboxMedia(call)
         self._judge, self._hormones, self._affinity = judge, hormones, affinity
         self._empathy, self._agenda = empathy, agenda
         self._judge_missing_logged = False
@@ -472,6 +478,11 @@ class ConversationFlow:
         规划器出任何问题（调用失败、建议看不懂）都不影响回复：改成合并的一次调用，
         和没有规划器时一样，由回复器自己决定怎么回应（D59）。
         """
+        if job.media_sources:
+            messages = await self.inbox_media.enrich(
+                job.messages, job.media_sources, job.strategy.model_preference
+            )
+            job = replace(job, messages=messages)
         attempt = await self._judge_emotion(job)
         if attempt is not None and attempt.triggers:
             job = self._apply_hormones(job, attempt.triggers)

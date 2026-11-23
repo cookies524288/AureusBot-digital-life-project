@@ -30,7 +30,7 @@ API_KEY_ENV_PATTERN = r"^AUREUS_KEY_[A-Z0-9_]+$"
 
 # D24 规定的四种协议。
 ProviderProtocol = Literal["openai", "openai_responses", "anthropic", "gemini"]
-ModelKind = Literal["llm", "embedding", "image_embedding"]
+ModelKind = Literal["llm", "embedding", "image_embedding", "transcription"]
 # 目前只做“按顺序顺延”。D30 里的 balance、random 等用得上时再加（开发守则 2.5）；
 # 现在写别的值会直接报错，而不是悄悄当成顺序。
 OrganStrategy = Literal["sequential"]
@@ -174,6 +174,14 @@ class ModelsConfig(BaseModel):
                         f"{model_name} 支持的（没写 reasoning_levels 就是不支持）"
                     )
         return self
+
+    def configured_text_organs(self) -> frozenset[str]:
+        """有对话模型路线的器官名，用于显示当前文本任务分配。"""
+        return frozenset(
+            name
+            for name in self.organs
+            if any(route.model.kind == "llm" for route in self.routes_for(name))
+        )
 
     def warnings(self) -> list[str]:
         """列出空器官和失效引用，供网页提示；不修改用户的引用列表。"""

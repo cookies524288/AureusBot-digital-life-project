@@ -15,6 +15,7 @@ from websockets.exceptions import WebSocketException
 
 from aureus.common import QQConfig
 from aureus.heartbeat import (
+    MediaReference,
     MessageKind,
     MessageRoute,
     OutgoingMessage,
@@ -24,18 +25,32 @@ from aureus.heartbeat import (
 )
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 
-from .onebot import QQ_CHANNEL_NAME, decode_message, encode_message
-from .onebot_transport import OneBotError, OneBotTransport
+from .onebot import QQ_CHANNEL_NAME, decode_message, encode_message, media_file_id
+from .onebot_transport import OneBotError, OneBotTransport, decode_media_base64
 from .web import HeartbeatHandle
 
 logger = logging.getLogger(__name__)
 # 跨连接保留最近收取的消息，限制进程长期运行的占用。
 _RECENT_MESSAGE_LIMIT = 16_384
 _OUTGOING_LIMIT = 64
+# 转码结果位于单个 WebSocket 帧，编码后需给 OneBot 的 JSON 信封留空间。
+_MP3_LIMIT = 700 * 1024
 
 
 def _display_name(value: object) -> str:
     return " ".join(value.split()) if isinstance(value, str) else ""
+
+
+def _image_mime(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 class QQChannel:
@@ -148,6 +163,38 @@ class QQChannel:
             and route.account_id == self._config.account_id
             and self._allows_route(route)
         )
+
+    async def read_inbox_attachment(
+        self, perception: Perception, attachment: MediaReference
+    ) -> tuple[bytes, str] | None:
+        """以当前已验证连接取回获准会话里的附件字节和媒体类型。"""
+        socket = self._transport.socket
+        file_id = media_file_id(attachment.file_id)
+        if (
+            socket is None
+            or file_id is None
+            or attachment not in perception.attachments
+            or not self.allows_inbox_perception(perception)
+        ):
+            return None
+        try:
+            if attachment.kind == "image":
+                data = await self._transport.download_image(socket, file_id)
+                if mime := _image_mime(data):
+                    return data, mime
+            else:
+                response = await self._transport.call(
+                    socket, "get_record", {"file_id": file_id, "out_format": "mp3"}
+                )
+                data = decode_media_base64(response.get("base64"), _MP3_LIMIT)
+                if data and (
+                    data.startswith(b"ID3")
+                    or (len(data) >= 4 and data[0] == 255 and data[1] >= 224)
+                ):
+                    return data, "audio/mpeg"
+        except (OSError, TimeoutError, WebSocketException, OneBotError) as error:
+            logger.debug("QQ 附件暂不可用（%s）", type(error).__name__)
+        return None
 
     def _save_inbox(
         self, perception: Perception, route: MessageRoute, payload: dict[str, Any]

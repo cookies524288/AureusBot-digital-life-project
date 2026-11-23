@@ -6,7 +6,9 @@
 import asyncio
 import json
 import logging
+from base64 import b64decode
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
@@ -22,10 +24,73 @@ logger = logging.getLogger(__name__)
 _wire_logger = logging.getLogger(f"{__name__}.wire")
 # DEBUG 帧包含握手令牌、聊天正文及尚未消费的绑定验证码。
 _wire_logger.setLevel(logging.INFO)
+_IMAGE_DOWNLOAD_ACTION = "download_file_image_stream"
+_IMAGE_LIMIT = 8 * 1024 * 1024
+_IMAGE_CHUNK_SIZE = 64 * 1024
 
 
 class OneBotError(RuntimeError):
     """OneBot 动作失败或连接不可用"""
+
+
+def decode_media_base64(value: object, limit: int) -> bytes | None:
+    """在解码前后检查附件长度，拒绝畸形数据。"""
+    if not isinstance(value, str) or len(value) > (limit + 2) // 3 * 4:
+        return None
+    try:
+        result = b64decode(value, validate=True)
+    except ValueError:
+        return None
+    return result if 0 < len(result) <= limit else None
+
+
+@dataclass
+class _ImageStream:
+    """组合同一 echo 的文件头、连续数据块和结束帧。"""
+
+    result: asyncio.Future[bytes | None]
+    data: bytearray = field(default_factory=bytearray)
+    declared_size: int | None = None
+    chunks: int = 0
+
+    def receive(self, response: dict[str, Any]) -> None:
+        packet = response.get("data")
+        if (
+            response.get("status") != "ok"
+            or response.get("retcode") != 0
+            or response.get("stream") != "stream-action"
+            or not isinstance(packet, dict)
+        ):
+            self.result.set_result(None)
+            return
+        match packet.get("type"), packet.get("data_type"):
+            case "stream", "file_info" if self.declared_size is None:
+                size = packet.get("file_size")
+                if type(size) is int and 0 <= size <= _IMAGE_LIMIT:
+                    self.declared_size = size
+                    return
+            case "stream", "file_chunk" if self.declared_size is not None:
+                if self._append(packet):
+                    return
+            case "response", "file_complete" if self.declared_size is not None:
+                if (
+                    self.data
+                    and packet.get("total_bytes") == len(self.data)
+                    and packet.get("total_chunks") == self.chunks
+                ):
+                    self.result.set_result(bytes(self.data))
+                    return
+        self.result.set_result(None)
+
+    def _append(self, packet: dict[str, Any]) -> bool:
+        if packet.get("index") != self.chunks:
+            return False
+        chunk = decode_media_base64(packet.get("data"), _IMAGE_LIMIT - len(self.data))
+        if chunk is None or packet.get("size") != len(chunk):
+            return False
+        self.data.extend(chunk)
+        self.chunks += 1
+        return True
 
 
 class _Connect(connect):
@@ -45,6 +110,7 @@ class OneBotTransport:
         self._receive = receive
         self.socket: ClientConnection | None = None
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._image_streams: dict[str, _ImageStream] = {}
 
     async def run(self) -> None:
         """保持连接，断开后重新验证收发账号"""
@@ -95,7 +161,13 @@ class OneBotTransport:
                     continue
                 if "echo" in payload:
                     echo = payload["echo"]
-                    future = self._pending.get(echo) if isinstance(echo, str) else None
+                    if not isinstance(echo, str):
+                        continue
+                    stream = self._image_streams.get(echo)
+                    if stream is not None and not stream.result.done():
+                        stream.receive(payload)
+                        continue
+                    future = self._pending.get(echo)
                     if future is not None and not future.done():
                         future.set_result(payload)
                         # 首个 echo 后可能紧接消息，等账号核对完再继续读。
@@ -108,6 +180,32 @@ class OneBotTransport:
                 if not future.done():
                     # 用结果唤醒，避免发送本身失败时留下无人取回的 Future 异常。
                     future.set_result({})
+            for stream in self._image_streams.values():
+                if not stream.result.done():
+                    stream.result.set_result(None)
+
+    async def download_image(self, socket: ClientConnection, file_id: str) -> bytes:
+        """从已核对的连接取 SnowLuma 缓存中的图片，限制等待时间与字节数。"""
+        echo = uuid4().hex
+        result: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
+        self._image_streams[echo] = _ImageStream(result)
+        try:
+            async with asyncio.timeout(self._config.action_timeout_seconds):
+                await socket.send(
+                    json.dumps(
+                        {
+                            "action": _IMAGE_DOWNLOAD_ACTION,
+                            "params": {"file_id": file_id, "chunk_size": _IMAGE_CHUNK_SIZE},
+                            "echo": echo,
+                        }
+                    )
+                )
+                media = await result
+        finally:
+            self._image_streams.pop(echo, None)
+        if media is None:
+            raise OneBotError("OneBot 图片下载失败")
+        return media
 
     async def call(
         self, socket: ClientConnection, action: str, params: dict[str, Any]

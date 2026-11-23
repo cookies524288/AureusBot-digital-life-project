@@ -9,10 +9,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from aureus.timeline import VisibilityScope
 
 __all__ = [
+    "MediaReference",
     "MessageKind",
     "MessageRoute",
     "MessageSink",
@@ -47,6 +49,14 @@ class MessageRoute:
 
 
 @dataclass(frozen=True)
+class MediaReference:
+    """已接收消息中的平台附件标识，可按原会话查找。"""
+
+    kind: Literal["image", "record"]
+    file_id: str
+
+
+@dataclass(frozen=True)
 class Perception:
     """通道交给心跳的一条感知。"""
 
@@ -60,6 +70,7 @@ class Perception:
     quoted_message_id: str | None = None
     source_timestamp: int | None = None
     source_message_id: str | None = None  # 通道提供的稳定入站消息键，用于语言学习去重。
+    attachments: tuple[MediaReference, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.channel.strip():

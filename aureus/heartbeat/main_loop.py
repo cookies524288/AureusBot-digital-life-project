@@ -79,6 +79,7 @@ from aureus.heartbeat.events import (
     EVENT_WOKE_UP,
 )
 from aureus.heartbeat.inbox_attention import InboxAttention
+from aureus.heartbeat.inbox_media import AttachmentReader, ImageIndexer
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from aureus.heartbeat.initiative import InitiativeDecision, decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
@@ -415,6 +416,7 @@ class Heartbeat:
     def update_available_organs(self, available: frozenset[str]) -> None:
         """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
         self._conversation.has_text_embedding = "text_embedding" in available
+        self._conversation.inbox_media.available = available
         for tracker in (self._diary, self._persona_growth, self._exploration):
             if tracker is not None:
                 tracker.has_organ = tracker.config.organ in available
@@ -453,6 +455,14 @@ class Heartbeat:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
+
+    def set_inbox_attachment_reader(self, reader: AttachmentReader) -> None:
+        """接上通道提供的后台收件箱附件读取器。"""
+        self._conversation.inbox_media.read = reader
+
+    def set_inbox_image_indexer(self, indexer: ImageIndexer) -> None:
+        """把已经取回的图片交给同一收件箱的图像索引。"""
+        self._conversation.inbox_media.index_image = indexer
 
     def on_inbox_message(self, message: InboxMessage) -> None:
         """来信已保存，重要来信立即叫醒心跳。"""

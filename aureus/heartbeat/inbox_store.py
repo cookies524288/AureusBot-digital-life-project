@@ -1,5 +1,6 @@
 """持久收件箱：按会话保留收到的感知和阅读状态。"""
 
+import json
 from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from sqlite3 import Row
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
 
-from .perception import MessageRoute, Perception, TrustLevel, VisibilityScope
+from .perception import MediaReference, MessageRoute, Perception, TrustLevel, VisibilityScope
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox_conversations (
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
     content TEXT NOT NULL, visibility TEXT NOT NULL, trust TEXT NOT NULL,
     mentioned INTEGER NOT NULL, quoted_message_id TEXT, source_timestamp INTEGER,
     source_message_id TEXT, timestamp TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
+    attachments TEXT NOT NULL DEFAULT '[]',
     UNIQUE (conversation_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS inbox_messages_unread
@@ -124,6 +126,9 @@ def _message(row: Row) -> InboxMessage:
         quoted_message_id=row["quoted_message_id"],
         source_timestamp=row["source_timestamp"],
         source_message_id=row["source_message_id"],
+        attachments=tuple(
+            MediaReference(kind, file_id) for kind, file_id in json.loads(row["attachments"])
+        ),
     )
     return InboxMessage(
         row["id"],
@@ -144,6 +149,14 @@ class InboxStore:
         self._clock = clock
         with closing(open_connection(path)) as database:
             database.executescript(_SCHEMA)
+            with database:
+                database.execute("BEGIN IMMEDIATE")
+                columns = database.execute("PRAGMA table_info(inbox_messages)")
+                if all(column["name"] != "attachments" for column in columns):
+                    database.execute(
+                        "ALTER TABLE inbox_messages ADD COLUMN attachments "
+                        "TEXT NOT NULL DEFAULT '[]'"
+                    )
 
     def add(
         self, perception: Perception, *, sender_name: str = "", conversation_name: str = ""
@@ -173,7 +186,8 @@ class InboxStore:
             added = database.execute(
                 """INSERT INTO inbox_messages (conversation_id, message_id, sender_id, sender_name,
                 content, visibility, trust, mentioned, quoted_message_id, source_timestamp,
-                source_message_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_message_id, timestamp, attachments)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (conversation_id, message_id) DO NOTHING RETURNING id""",
                 (
                     conversation_id,
@@ -188,6 +202,7 @@ class InboxStore:
                     source_timestamp,
                     perception.source_message_id,
                     timestamp.isoformat(),
+                    json.dumps([(item.kind, item.file_id) for item in perception.attachments]),
                 ),
             ).fetchone()
             if added is None:

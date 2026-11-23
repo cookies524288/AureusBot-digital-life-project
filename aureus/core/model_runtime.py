@@ -12,7 +12,7 @@ from aureus.organs import (
     OrganBus,
     PromptStore,
 )
-from aureus.organs.llm_adapter import EmbeddingOrgan
+from aureus.organs.llm_adapter import EmbeddingOrgan, conversational_routes
 
 EMBEDDING_ORGANS = {"text_embedding": "embedding", "image_embedding": "image_embedding"}
 
@@ -70,8 +70,11 @@ class ModelRuntime:
                     organs.append(EmbeddingOrgan(name, embedding_routes, self._resolver))
                     available.add(name)
                 continue
-            if any(route.model.kind == "llm" for route in routes):
+            supported = conversational_routes(name, routes)
+            if supported:
                 available.add(name)
+            if name in ("vlm", "voice") and not supported:
+                continue
             organs.append(
                 FakeReplyer(organ_id=name)
                 if self._fake_organs

@@ -51,6 +51,7 @@ async def test_image_embedding_uses_jina_protocol_and_reports_usage(tmp_path: Pa
     assert response.embeddings == ((3.0, 4.0),)
     assert response.attempts == [CallAttempt("picture", "jina", 7, 0)]
 
+
 CLOUD_SECRET = "sk-cloud-secret"
 
 
@@ -98,6 +99,37 @@ def make_response(
         prompt_tokens_details=SimpleNamespace(cached_tokens=cached),
     )
     return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+
+
+@pytest.mark.asyncio
+async def test_media_organ_routes_and_requests(tmp_path: Path) -> None:
+    provider = ProviderConfig(name="test", protocol="openai_responses")
+    chat = ModelConfig(name="chat", identifier="chat", provider="test")
+    vision = ModelConfig(name="image", identifier="image", provider="test", vision=True)
+    voice = ModelConfig(name="voice", identifier="voice", provider="test", kind="transcription")
+    routes = [ModelRoute(model, provider, None, None) for model in (chat, vision, voice)]
+    key_resolver = KeyResolver(tmp_path / "test.env")
+    visual_model = FakeCompletion(make_response("图片说明"))
+    vlm = LLMOrgan("vlm", routes, key_resolver, completion=visual_model)
+    response = await vlm.process(
+        OrganRequest("vlm", "描述图片", media_bytes=b"abc", media_type="image/png")
+    )
+    assert response.suggestion == "图片说明"
+    assert visual_model.calls[0]["model"] == "openai/responses/image"
+    assert visual_model.calls[0]["messages"][-1]["content"][-1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,YWJj"},
+    }
+    speech_model = FakeCompletion(SimpleNamespace(text=" 转写文本 "))
+    speech = LLMOrgan("voice", routes, key_resolver, completion=speech_model)
+    response = await speech.process(
+        OrganRequest("voice", "", media_bytes=b"ID3voice", media_type="audio/mpeg")
+    )
+    assert response.suggestion == "转写文本"
+    assert len(response.attempts) == 1
+    assert speech_model.calls[0]["model"] == "openai/voice"
+    assert speech_model.calls[0]["file"].name == "voice.mp3"
+    assert speech_model.calls[0]["file"].read() == b"ID3voice"
 
 
 def make_config(

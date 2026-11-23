@@ -13,8 +13,11 @@ import asyncio
 import base64
 import json
 import os
+import wave
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
+from hashlib import sha256
+from io import BytesIO
 from math import isfinite
 from types import SimpleNamespace
 from typing import Any, Self
@@ -229,6 +232,8 @@ def model_probe_inputs(model: ModelConfig) -> dict[str, dict[str, Any]]:
         return {"embedding": {"input": [_MODEL_TEST_INPUT]}}
     if model.kind == "image_embedding":
         return {"image_embedding": {"input": [{"image": _PROBE_IMAGE.split(",", 1)[1]}]}}
+    if model.kind == "transcription":
+        return {"transcription": {"file": "一秒静音 WAV"}}
     message = {"role": "user", "content": _MODEL_TEST_INPUT}
     probes: dict[str, dict[str, Any]] = {"text": {"messages": [message]}}
     if model.vision:
@@ -290,10 +295,15 @@ async def probe_model(
         raise OrganCallError(organ_id, [error.reason]) from None
     library = await asyncio.to_thread(_import_litellm)
     embedding = model.kind == "embedding"
-    capability = capability or ("embedding" if embedding else "text")
+    transcription = model.kind == "transcription"
+    capability = capability or (model.kind if embedding or transcription else "text")
     inputs = model_probe_inputs(model)[capability]
     reply = ""
     protocol = provider.protocol
+    if transcription:
+        if protocol not in ("openai", "openai_responses"):
+            raise OrganCallError(organ_id, ["语音转写需要兼容 OpenAI 音频转写的服务商。"])
+        protocol = "openai"
     if embedding:
         if protocol == "anthropic":
             raise OrganCallError(organ_id, ["Anthropic 协议没有嵌入接口。"])
@@ -306,12 +316,20 @@ async def probe_model(
     failure = None
     usage = TokenUsage(
         prompt_tokens=len(json.dumps(inputs).encode()),
-        completion_tokens=0 if embedding else _MODEL_TEST_MAX_TOKENS,
+        completion_tokens=0 if embedding or transcription else _MODEL_TEST_MAX_TOKENS,
         known=False,
     )
     try:
         async with asyncio.timeout(provider.timeout_seconds):
-            if embedding:
+            if transcription:
+                result = await library.atranscription(file=_probe_audio(), **params)
+                if isinstance(result.text, str):
+                    latency = loop.time() - started
+                    reply = result.text.strip() or "接口已返回，静音没有可转写的文字。"
+                actual = extract_usage(result)
+                if actual.known:
+                    usage = actual
+            elif embedding:
                 result = await library.aembedding(**inputs, **params)
                 if result.data and result.data[0].get("embedding"):
                     latency = loop.time() - started
@@ -483,7 +501,15 @@ class EmbeddingOrgan:
                 )
             )
             if failure is None:
-                return OrganResponse(self.organ_id, "", attempts=attempts, embeddings=vectors)
+                identity = (route.provider.name, route.provider.base_url, route.model.identifier)
+                space = sha256(json.dumps(identity).encode()).hexdigest()
+                return OrganResponse(
+                    self.organ_id,
+                    "",
+                    metadata={"embedding_space": space},
+                    attempts=attempts,
+                    embeddings=vectors,
+                )
             failures.append(f"{route.model.name}：{failure}")
         raise OrganCallError(self.organ_id, failures or ["未配置可用的模型"], attempts)
 
@@ -593,6 +619,39 @@ def assemble_messages(
     ]
 
 
+def conversational_routes(organ_id: str, routes: Sequence[ModelRoute]) -> tuple[ModelRoute, ...]:
+    """按器官职责筛选配置好的对话、视觉和语音路线。"""
+    if organ_id == "voice":
+        return tuple(
+            route
+            for route in routes
+            if route.model.kind == "transcription"
+            and route.provider.protocol in ("openai", "openai_responses")
+        )
+    return tuple(
+        route
+        for route in routes
+        if route.model.kind == "llm" and (organ_id != "vlm" or route.model.vision)
+    )
+
+
+class _SpeechFile(BytesIO):
+    name = "voice.mp3"
+
+
+def _probe_audio() -> BytesIO:
+    class ProbeAudio(BytesIO):
+        name = "probe.wav"
+
+    audio = ProbeAudio()
+    sample_rate = 16_000
+    with wave.open(audio, "wb") as recording:
+        recording.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
+        recording.writeframes(bytes(2 * sample_rate))
+    audio.seek(0)
+    return audio
+
+
 class LLMOrgan:
     """调用大模型的真实器官：按 models.toml 里的顺序尝试模型，失败就顺延。"""
 
@@ -607,7 +666,7 @@ class LLMOrgan:
         *,
         prompts: PromptStore | None = None,
     ) -> None:
-        llm_routes = tuple(route for route in routes if route.model.kind == "llm")
+        llm_routes = conversational_routes(organ_id, routes)
         if routes and not llm_routes:
             # 启动时就报错，而不是等到第一次调用才发现这个器官无模型可用。
             raise ConfigError(f'器官 {organ_id} 没有可调用的对话模型（需要 kind = "llm" 的模型）。')
@@ -615,7 +674,13 @@ class LLMOrgan:
         self._routes = llm_routes
         self._key_resolver = key_resolver
         # 非空真实器官在 prepare 工作线程加载，不能把首次导入留到事件循环。
-        self._completion = completion or (_load_litellm_completion() if llm_routes else None)
+        self._completion = completion
+        if self._completion is None and llm_routes:
+            self._completion = (
+                _import_litellm().atranscription
+                if organ_id == "voice"
+                else _load_litellm_completion()
+            )
         self._token_counter = token_counter or count_prompt_tokens
         self._sleep = sleep or asyncio.sleep
         self._prompts = prompts
@@ -665,12 +730,20 @@ class LLMOrgan:
         """
         if not self._routes:
             raise OrganCallError(self.organ_id, ["未配置可用的模型"], [])
+        media = request.media_bytes
+        media_type = request.media_type
+        if self.organ_id == "voice" and (not media or media_type != "audio/mpeg"):
+            raise OrganCallError(self.organ_id, ["没有可转写的 MP3 语音"])
+        if self.organ_id == "vlm" and (
+            not media or media_type not in ("image/jpeg", "image/png", "image/gif", "image/webp")
+        ):
+            raise OrganCallError(self.organ_id, ["没有可识别的图片"])
         messages = assemble_messages(request, self._prompts)
         failures: list[str] = []
         attempts: list[CallAttempt] = []
         for route in order_routes(self._routes, request.model_preference):
             try:
-                text, attempt = await self._call(route, messages, attempts)
+                text, attempt = await self._call(route, messages, attempts, media, media_type)
             except _RouteFailureError as failure:
                 failures.append(f"{route.model.name}：{failure.reason}")
                 logger.warning(
@@ -681,7 +754,7 @@ class LLMOrgan:
         raise OrganCallError(self.organ_id, failures, attempts)
 
     def _estimate_usage(
-        self, route: ModelRoute, messages: list[dict[str, str]], requests: int
+        self, route: ModelRoute, messages: list[dict[str, str]], requests: int, media_size: int = 0
     ) -> TokenUsage:
         """服务商没告诉我们用了多少时，按 06 号文档 12.3 节往多里估。
 
@@ -689,6 +762,7 @@ class LLMOrgan:
             route: 这次走的模型路线，取 max_tokens 用。
             messages: 发出去的消息。
             requests: 估计实际发了几次请求。
+            media_size: 附件字节数，只在服务商没有提供用量时保守估算。
 
         Returns:
             估算的用量，known 为 False。
@@ -704,7 +778,7 @@ class LLMOrgan:
             prompt_tokens = _byte_length(messages)
         completion_tokens = route.max_tokens or ASSUMED_COMPLETION_TOKENS
         return TokenUsage(
-            prompt_tokens=prompt_tokens * requests,
+            prompt_tokens=(prompt_tokens + media_size) * requests,
             completion_tokens=completion_tokens * requests,
             known=False,
         )
@@ -731,7 +805,12 @@ class LLMOrgan:
         )
 
     async def _call(
-        self, route: ModelRoute, messages: list[dict[str, str]], attempts: list[CallAttempt]
+        self,
+        route: ModelRoute,
+        messages: list[dict[str, str]],
+        attempts: list[CallAttempt],
+        media: bytes | None,
+        media_type: str | None,
     ) -> tuple[str, CallAttempt]:
         """对一条路线发请求，临时性的失败按 max_retry 重试。
 
@@ -743,6 +822,8 @@ class LLMOrgan:
             route: 这次走的模型路线。
             messages: 发出去的消息。
             attempts: 失败的请求记在这里；成功的那次由返回值带出。
+            media: 已取得的图片或语音内容（如有）。
+            media_type: 附件的媒体类型（如有）。
 
         Returns:
             回复文字和成功的那次请求。
@@ -756,16 +837,36 @@ class LLMOrgan:
             "model": LITELLM_PREFIX_BY_PROTOCOL[provider.protocol] + route.model.identifier,
             "messages": messages,
         }
-        if route.temperature is not None:
+        if self.organ_id == "voice":
+            assert media is not None
+            kwargs["model"] = "openai/" + route.model.identifier
+            del kwargs["messages"]
+        elif self.organ_id == "vlm":
+            assert media is not None and media_type is not None
+            data_url = f"data:{media_type};base64,{base64.b64encode(media).decode('ascii')}"
+            kwargs["messages"] = [
+                *messages[:-1],
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": messages[-1]["content"]},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                },
+            ]
+        if route.temperature is not None and self.organ_id != "voice":
             kwargs["temperature"] = route.temperature
-        if route.max_tokens is not None:
+        if route.max_tokens is not None and self.organ_id != "voice":
             kwargs["max_tokens"] = route.max_tokens
-        if route.reasoning_effort is not None:
+        if route.reasoning_effort is not None and self.organ_id != "voice":
             kwargs["reasoning_effort"] = route.reasoning_effort
         requests = 1 + provider.max_retry
         for number in range(1, requests + 1):
             try:
-                return await self._request(route, kwargs, messages, attempts)
+                if self.organ_id == "voice":
+                    assert media is not None
+                    kwargs["file"] = _SpeechFile(media)
+                return await self._request(route, kwargs, messages, attempts, len(media or b""))
             except _RouteFailureError as failure:
                 if not failure.retryable or number == requests:
                     raise
@@ -786,6 +887,7 @@ class LLMOrgan:
         kwargs: dict[str, Any],
         messages: list[dict[str, str]],
         attempts: list[CallAttempt],
+        media_size: int,
     ) -> tuple[str, CallAttempt]:
         """真正发出一次请求。失败的这一次先记进 attempts，再抛出。"""
         try:
@@ -800,15 +902,19 @@ class LLMOrgan:
             else:
                 # 超时、断线这类失败，对方可能已经算完了：按一次请求估算。
                 attempt = self._attempt(
-                    route, self._estimate_usage(route, messages, requests=1), reason
+                    route, self._estimate_usage(route, messages, 1, media_size), reason
                 )
             attempts.append(attempt)
             # from None：不带上原始异常，免得追踪信息里带出请求头里的密钥。
             raise _RouteFailureError(reason, retryable=_retryable(error)) from None
         usage = extract_usage(response)
         if not usage.known:
-            usage = self._estimate_usage(route, messages, requests=1)
-        text = _read_text(response)
+            usage = self._estimate_usage(route, messages, 1, media_size)
+        if self.organ_id == "voice":
+            value = getattr(response, "text", None)
+            text = value.strip() if isinstance(value, str) and value.strip() else None
+        else:
+            text = _read_text(response)
         if text is None:
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
             # 思考上），这次请求照样要记账。重试只会再花一次钱，所以不重试。

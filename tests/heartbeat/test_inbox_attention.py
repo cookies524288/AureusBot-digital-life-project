@@ -7,7 +7,7 @@ import pytest
 
 from aureus.body import Body
 from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, ManualClock
-from aureus.heartbeat import Heartbeat, OutgoingMessage, Perception, TrustLevel
+from aureus.heartbeat import Heartbeat, MediaReference, OutgoingMessage, Perception, TrustLevel
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.perception import MessageRoute
 from aureus.identity import Identity
@@ -24,7 +24,7 @@ class Organs:
 
     async def call(self, request: OrganRequest) -> OrganResponse:
         self.requests.append(request)
-        suggestion = self.plan if request.organ_id == "planner" else "收到。"
+        suggestion = {"planner": self.plan, "vlm": "识别出的内容"}.get(request.organ_id, "收到。")
         return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
 
 
@@ -65,9 +65,26 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         )
         sent: list[OutgoingMessage] = []
         heart.attach_channel("qq", sent.append)
+        heart.update_available_organs(frozenset({"vlm"}))
+        picture = MediaReference("image", "group.png")
+        reads: list[tuple[Perception, MediaReference]] = []
+
+        async def read_attachment(
+            source: Perception, attachment: MediaReference
+        ) -> tuple[bytes, str]:
+            reads.append((source, attachment))
+            return b"test-image", "image/png"
+
+        heart.set_inbox_attachment_reader(read_attachment)
         heart.wake_up()
 
-        def receive(sender: str, message_id: str, *, private: bool = False) -> Perception:
+        def receive(
+            sender: str,
+            message_id: str,
+            *,
+            private: bool = False,
+            attachments: tuple[MediaReference, ...] = (),
+        ) -> Perception:
             route = MessageRoute(
                 "bot", "private" if private else "group", sender if private else "group", message_id
             )
@@ -78,6 +95,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
                 VisibilityScope.USER_ONLY if private else VisibilityScope.GROUP,
                 TrustLevel.VERIFIED_USER if private else TrustLevel.VERIFIED_CONTACT,
                 route=route,
+                attachments=attachments,
             )
             message = store.add(perception)
             assert message is not None
@@ -91,17 +109,20 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         heart.beat()
         assert sent[-1].route == owner.route
         organs.plan = '{"reply":true,"intent":"回应","special_contact":true}'
-        group = receive("visitor", "group-only")
+        group = receive("visitor", "group-only", attachments=(picture,))
         heart.beat()
         clock.advance(timedelta(minutes=4))
         heart.beat()
         assert len(sent) == 1
+        assert reads == []
         clock.advance(timedelta(minutes=1))
         heart.beat()
         assert heart.is_thinking
         await heart.wait_for_thought()
         heart.beat()
         assert sent[-1].route == group.route
+        assert reads == [(group, picture)]
+        assert "识别出的内容" in organs.requests[-2].prompt
         assert "private-only" not in organs.requests[-2].prompt
         assert store.add(group) is None
         changes = timeline.query(TimelineQuery(event_type="special_contact_changed"))
