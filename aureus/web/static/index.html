@@ -1892,12 +1892,12 @@ function notifyModelWarnings(names) {
 }
 
 // 每次 change/选模型产生一份完整快照，按操作顺序写；旧响应不覆盖后来的编辑，不自动重试。
-function markDirty(password, rename) {
+function markDirty(rename) {
   const config = clone(mdl.cfg), revision = ++mdl.revision;
   mdl.dirty = true; mdl.pending++; refreshDirty();
   mdl.queue = mdl.queue.then(async () => {
     try {
-      const res = await api('/api/models', 'PUT', { config, password: password || undefined, rename });
+      const res = await api('/api/models', 'PUT', { config, rename });
       if (!res.ok) { failApi(res); return false; }
       mdl.baseline = config; mdl.saved = revision;
       if (res.data.restart_required) showRestart();
@@ -2194,10 +2194,6 @@ $('md-add-provider').addEventListener('click', () => openProviderEditor(null));
 $('md-edit-provider').addEventListener('click', () => openProviderEditor(mdl.cfg.providers.find(provider => provider.name === mdl.provider)));
 $('md-add-model').addEventListener('click', () => openModelEditor(null));
 
-function providerNeedsPassword(before, next) {
-  const keyed = !!(next.api_key_env || next.api_key_ref);
-  return before ? before.base_url !== next.base_url || before.api_key_env !== next.api_key_env || (before.api_key_ref || null) !== next.api_key_ref || (keyed && (before.protocol !== next.protocol || before.name !== next.name)) : keyed;
-}
 function openProviderEditor(provider) {
   const original = provider, isNew = !provider;
   provider = provider || { name: '', protocol: (mdl.choices.protocols || ['openai'])[0], ...mdl.defaults.providers };
@@ -2212,7 +2208,6 @@ function openProviderEditor(provider) {
     api_key_env: editorField('环境变量名', provider.api_key_env, { hint: 'AUREUS_KEY_ 开头' }),
     timeout: editorField('超时（秒）', provider.timeout_seconds, { type: 'number', min: 1, required: true, step: 'any' }),
     retry: editorField('失败重试次数', provider.max_retry, { type: 'number', min: 0, required: true, step: 1 }),
-    password: editorField('当前密码', '', { type: 'password', hint: '修改地址、密钥名或添加带密钥的API供应商时填写' }),
   };
   const apply = () => {
     if (!validFields(fields)) return;
@@ -2221,15 +2216,13 @@ function openProviderEditor(provider) {
       api_key_ref: fields.key.input.value.startsWith('vault:') ? fields.key.input.value.slice(6) : null,
       timeout_seconds: fieldNumber(fields.timeout), max_retry: fieldNumber(fields.retry) };
     if (mdl.cfg.providers.some(item => item !== original && item.name === next.name)) { toast('API供应商名称已存在。', 'error'); return; }
-    const password = fields.password.input.value;
-    if (providerNeedsPassword(original, next) && !password) { toast('这项修改需要当前密码，填写后会自动保存。', 'error'); return; }
     const rename = original && original.name !== next.name ? ['providers', original.name, next.name] : undefined;
     if (original) {
       for (const model of mdl.cfg.models) if (model.provider === original.name) model.provider = next.name;
       Object.assign(original, next);
     } else mdl.cfg.providers.push(next);
-    mdl.provider = next.name; fields.password.input.value = '';
-    markDirty(password, rename).then(ok => {
+    mdl.provider = next.name;
+    markDirty(rename).then(ok => {
       if (!ok || !state.loggedIn) return;
       refreshCatalog(next);
       renderModels();
@@ -2253,10 +2246,14 @@ function openProviderEditor(provider) {
   body.append(el('div', {class:'row'}, keyStatus,
     el('button', {class:'btn small', text:'管理密钥', onclick:() => { $('editor-dialog').close(); showPage('keys'); }})));
   if (original) {
+    const restorePassword = editorField('恢复默认地址的确认密码', '', {type:'password'});
+    const restoreAddress = el('details', {class:'stack'}, el('summary', {text:'恢复默认地址'}), restorePassword.node);
+    addModelRestore(restoreAddress, '请求地址', 'providers', original, 'base_url',
+      () => openProviderEditor(original), restorePassword.input);
+    fields.base_url.node.append(restoreAddress);
     for (const [field, control, label] of [
-      ['base_url', fields.base_url, '请求地址'], ['timeout_seconds', fields.timeout, '超时（秒）'], ['max_retry', fields.retry, '失败重试次数'],
-    ]) addModelRestore(control.node, label, 'providers', original, field, () => openProviderEditor(original),
-      field === 'base_url' ? fields.password.input : undefined);
+      ['timeout_seconds', fields.timeout, '超时（秒）'], ['max_retry', fields.retry, '失败重试次数'],
+    ]) addModelRestore(control.node, label, 'providers', original, field, () => openProviderEditor(original));
     body.append(el('button', { class: 'btn danger', text: '删除API供应商', onclick: () => removeProvider(original) }));
   }
 }
@@ -2311,7 +2308,7 @@ function openModelEditor(model, identifier = '') {
       for (const organ of Object.values(mdl.cfg.organs)) organ.models = organ.models.map(item => item === original.name ? name : item);
       Object.assign(original, next);
     } else mdl.cfg.models.push(next);
-    markDirty(undefined, rename); renderModels(); renderOrgans();
+    markDirty(rename); renderModels(); renderOrgans();
     if (isNew) $('editor-dialog').close();
   };
   const body = editorForm(isNew ? '添加模型' : '编辑模型 · 自动保存', fields, () => { if (!isNew) apply(); },

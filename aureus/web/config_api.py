@@ -259,8 +259,12 @@ def register_config_routes(
                     raise HTTPException(422, detail=f"{kind}器官不可删除，可以清空它使用的模型。")
                 if set(submitted.organs).difference(current.organs, BUILTIN_ORGANS):
                     raise HTTPException(422, detail="器官由程序登记，不能在配置页新增。")
-                if models_require_password(current, submitted):
-                    _confirm(auth, body, request)
+                if (
+                    models_require_password(current, submitted)
+                    and request.headers.get("origin")
+                    != f"{request.url.scheme}://{request.url.netloc}"
+                ):
+                    raise HTTPException(403, detail="请从当前网页保存API供应商。")
                 if current != submitted or list(current.organs) != list(submitted.organs):
                     prepared = (
                         await asyncio.to_thread(model_runtime.prepare, submitted)
