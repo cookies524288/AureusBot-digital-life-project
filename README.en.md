@@ -10,7 +10,7 @@ It is first a companion. It talks with you in a human-like way and offers emotio
 
 ## Status
 
-The cognitive kernel has completed Phases 0 through 2. Phase 3 has rehearsed the migration of MaiBot memories, expressions, and relationships and tested message delivery and recall in simulated QQ groups. Live group testing and the production cutover are still pending. Kernel validation is scheduled for after Phase 3 or Phase 4. [Roadmap](docs/08-roadmap.md) · [Migration acceptance record](docs/tasks/3.9.md) (in Chinese)
+The cognitive kernel has completed Phases 0 through 2. Phase 3 migrated XiaoDou’s MaiBot memories, expressions, slang, and relationship history into Aureus. XiaoDou now uses the existing Aureus persona in the designated QQ group and in direct messages with the maintainer. Live message delivery and recall of pre-migration memories have been verified. Kernel validation is scheduled for after Phase 3 or Phase 4. [Roadmap](docs/08-roadmap.md) · [Migration acceptance record](docs/tasks/3.9.md) (in Chinese)
 
 ## Quick start
 

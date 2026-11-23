@@ -68,6 +68,8 @@ digital-life-core 值得借鉴的设计：用 `genome.json` 声明每种激素�
 
 ### 2.6 QQ 通道与网页访问
 
+在正式运行目录的 config/aureus.toml 中，将 [qq] 下的 allowed_group_id 设置为带引号的群号。该设置同时限制接收和发送，放行指定群及已绑定维护者的普通私聊，重启后继续生效。修改端点后，可在 Aureus 聊天终端输入 /restart 重新加载。Windows 上如果 SnowLuma 显示 listen EACCES，先核查 TCP 排除范围，再将桥与 Aureus 改到同一个可监听的回环端口。
+
 在 Aureus 数据根目录的 `aureus.toml` 设置 `[qq]`。默认关闭，部署时显式填写 `enabled`、SnowLuma 的正向 WebSocket `endpoint` 和机器人 `account_id`。如果端点启用了令牌，用 `aureus keys set AUREUS_KEY_QQ_ONEBOT` 录入，并填写 `token_key = "AUREUS_KEY_QQ_ONEBOT"`。令牌通过既有密钥接口读取，握手同时提交 Bearer 头和 OneBot 的查询参数。端点与账号由部署者提供，回环以外的连接使用 WSS。连接后用 `get_login_info` 核对机器人账号，再接受消息或发送回复。具体协议对照见[第三方清单](../THIRD_PARTY.md)。
 
 网页设置中的「QQ 账号关联」要求先登录并改掉默认口令。填要绑定的 QQ 号，将网页生成的命令从该账号的普通 QQ 私聊发送给机器人，再回到同一网页会话确认。验证码五分钟内有效、单次使用，可在网页撤销，退出时作废。已有其他人物档案的号码交由人际整合处理。验证码命令不进入对话或器官上下文。已验证账号的普通私聊按用户消息处理，群聊与临时私聊按外部对话处理。消息仍进入同一时间线与记忆链。

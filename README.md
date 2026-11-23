@@ -12,7 +12,7 @@ AureusBot 运行在你自己的电脑上。它连续、独立、唯一，不依�
 
 ## 当前状态
 
-认知内核的 Phase 0 至 Phase 2 已完成。Phase 3 已完成 MaiBot 记忆、表达和人际关系的迁移预演，并通过模拟 QQ 群聊的收发与召回测试。真实群聊验收和生产切换仍在进行准备。内核验证安排在 Phase 3 或 Phase 4 之后。[路线图](docs/08-roadmap.md) · [迁移验收记录](docs/tasks/3.9.md)
+认知内核的 Phase 0 至 Phase 2 已完成。Phase 3 已将小豆的 MaiBot 记忆、表达、黑话和人际资料迁入 Aureus。小豆沿用现有 Aureus 人格，在指定 QQ 群和维护者私聊中正式运行，已通过真实收发与旧记忆召回验收。内核验证安排在 Phase 3 或 Phase 4 之后。[路线图](docs/08-roadmap.md) · [迁移验收记录](docs/tasks/3.9.md)
 
 ## 快速开始
 
