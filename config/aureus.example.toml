@@ -51,6 +51,13 @@ config_version = 1
 # inbox_debounce_max_restarts = 4
 # 各精力档位都由规划器决定回不回。器官名要和 models.toml 里的 [organs.名字] 一致。
 # plan_organ = "planner"
+# QQ 表情收集与回复选择。配置 [organs.emoji] 可使用专门的文字模型。
+# qq_emoji_collection_enabled = true
+# qq_emoji_selection_enabled = true
+# 可选语义匹配优先调用文本向量模型，无有效匹配时继续使用文字模型。
+# qq_emoji_semantic_enabled = false
+# qq_emoji_semantic_refresh_seconds = 300.0
+# qq_emoji_semantic_threshold = 0.3
 # 节省档时带上最近多少条对话；低电量和透支保护时带多少条。都不会超过 recent_message_limit。
 # saving_message_limit = 10
 # low_message_limit = 5

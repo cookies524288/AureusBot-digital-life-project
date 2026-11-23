@@ -18,7 +18,9 @@ from aureus.common.sqlite import open_connection
 from aureus.heartbeat import MediaReference, MessageRoute
 from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
+from aureus.memory import EmojiStore
 from aureus.organs import ModelPreference, OrganRequest, OrganResponse
+from aureus.safety import CallRejectedError
 from aureus.timeline import ActorType, TimelineRecord
 from tests.channels.test_qq_inbox import Receiver
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, event
@@ -29,6 +31,71 @@ SPEECH = b"ID3fake-audio"
 
 def segment(kind: str, file_id: str) -> dict[str, Any]:
     return {"type": kind, "data": {"file": file_id, "url": "http://example.invalid/bad"}}
+
+
+@pytest.mark.asyncio
+async def test_qq_collects_marked_emoji_and_preserves_moderation(tmp_path: Path) -> None:
+    now = datetime(2026, 11, 23, tzinfo=UTC)
+    clock = ManualClock(now)
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, clock)
+    store.open()
+    inbox = InboxStore(tmp_path / "inbox.db", clock)
+    source = decode_message(
+        event(
+            50,
+            2100,
+            "",
+            message=[
+                {"type": "image", "data": {"file": "one.png", "sub_type": 1}},
+                {"type": "image", "data": {"file": "two.png", "sub_type": 4, "summary": "[图片]"}},
+            ],
+        ),
+        str(ACCOUNT),
+    )
+    assert source is not None
+    persisted = inbox.add(source)
+    assert persisted is not None
+    [message] = inbox.list_unread(persisted.conversation)
+    assert message.perception.attachments == (
+        MediaReference("image", "one.png", True),
+        MediaReference("image", "two.png"),
+    )
+
+    async def read(_source: object, attachment: MediaReference) -> tuple[bytes, str]:
+        return IMAGE + attachment.file_id.encode(), "image/png"
+
+    rejected = True
+
+    async def recognize(request: OrganRequest) -> OrganResponse:
+        if rejected:
+            raise CallRejectedError(request.organ_id, "测试拒绝")
+        return OrganResponse(request.organ_id, "打招呼的笑脸")
+
+    flow = InboxMedia(recognize, store)
+    flow.read = read
+    flow.available = frozenset({"vlm"})
+    record = TimelineRecord(
+        id=1,
+        timestamp=now,
+        actor_type=ActorType.PERSON,
+        event_type="message",
+        content=source.content,
+        visibility=source.visibility,
+    )
+    await flow.enrich([record], [message.perception], ModelPreference.PREFERRED)
+    [entry] = store.browse("", 0, 10)
+    assert entry.collection_count == 1 and not entry.is_registered
+
+    rejected = False
+    await flow.enrich([record], [message.perception], ModelPreference.PREFERRED)
+    [entry] = store.candidates()
+    assert entry.description == "打招呼的笑脸" and entry.collection_count == 2
+    assert entry.digest is not None
+    store.set_status(entry.digest, is_registered=False, is_banned=True)
+    await flow.enrich([record], [message.perception], ModelPreference.PREFERRED)
+    assert not store.candidates()
+    [entry] = store.browse("", 0, 10)
+    assert entry.collection_count == 3 and entry.is_banned and not entry.is_registered
 
 
 @pytest.mark.asyncio

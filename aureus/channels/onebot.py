@@ -114,7 +114,13 @@ def _read_segments(
                 quoted = quoted or _read_id(data.get("id"), _MESSAGE_ID)
             case "image" | "record" as kind:
                 if file_id := media_file_id(data.get("file")):
-                    attachments.append(MediaReference(kind, file_id))
+                    subtype = data.get("sub_type", data.get("subType"))
+                    summary = data.get("summary")
+                    is_emoji = kind == "image" and (
+                        (str(subtype).isdigit() and str(subtype).lstrip("0") not in {"", "4", "9"})
+                        or (isinstance(summary, str) and summary.strip() not in {"", "[图片]"})
+                    )
+                    attachments.append(MediaReference(kind, file_id, is_emoji))
     return "".join(parts).strip(), mentioned, quoted, tuple(attachments)
 
 
@@ -123,7 +129,10 @@ def encode_message(
 ) -> dict[str, Any]:
     """按 SnowLuma 的通用 send_msg 动作编码，引用本次回复的原消息"""
     part = (
-        {"type": "image", "data": {"file": "base64://" + b64encode(image).decode("ascii")}}
+        {
+            "type": "image",
+            "data": {"file": "base64://" + b64encode(image).decode("ascii"), "sub_type": 1},
+        }
         if image is not None
         else {"type": "text", "data": {"text": message.content}}
     )

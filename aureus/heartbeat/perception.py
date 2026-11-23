@@ -54,6 +54,7 @@ class MediaReference:
 
     kind: Literal["image", "record"]
     file_id: str
+    is_emoji: bool = False
 
 
 @dataclass(frozen=True)

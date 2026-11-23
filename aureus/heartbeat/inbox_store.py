@@ -128,9 +128,7 @@ def _message(row: Row) -> InboxMessage:
         quoted_message_id=row["quoted_message_id"],
         source_timestamp=row["source_timestamp"],
         source_message_id=row["source_message_id"],
-        attachments=tuple(
-            MediaReference(kind, file_id) for kind, file_id in json.loads(row["attachments"])
-        ),
+        attachments=tuple(MediaReference(*value) for value in json.loads(row["attachments"])),
     )
     return InboxMessage(
         row["id"],
@@ -253,7 +251,12 @@ class InboxStore:
                     source_timestamp,
                     perception.source_message_id,
                     timestamp.isoformat(),
-                    json.dumps([(item.kind, item.file_id) for item in perception.attachments]),
+                    json.dumps(
+                        [
+                            (item.kind, item.file_id, item.is_emoji)
+                            for item in perception.attachments
+                        ]
+                    ),
                 ),
             ).fetchone()
             if added is None:

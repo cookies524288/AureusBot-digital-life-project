@@ -35,6 +35,7 @@ from aureus.heartbeat.context import (
 )
 from aureus.heartbeat.diary_runner import DiaryOutcome
 from aureus.heartbeat.downtime import Downtime
+from aureus.heartbeat.emoji_selection import EMOJI_CONTEXT_LIMIT, EMOJI_PLAN_NOTE, EmojiSelector
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
@@ -58,6 +59,7 @@ from aureus.heartbeat.planning import (
     parse_plan,
 )
 from aureus.heartbeat.recall import MAX_RECALL_CHARS, format_recall, heuristic_keywords
+from aureus.heartbeat.reply_outbox import EmojiReplyPart
 from aureus.heartbeat.reply_segments import ReplyDraft, prepare_reply
 from aureus.heartbeat.reply_strategy import ReplyStrategy, judge_allowed
 from aureus.hormones import (
@@ -68,7 +70,7 @@ from aureus.hormones import (
     make_triggers_from_judgment,
 )
 from aureus.identity import Identity, IdentityLayer
-from aureus.memory import LanguageStore, MemoryHit, MemoryIndex
+from aureus.memory import EmojiStore, LanguageStore, MemoryHit, MemoryIndex
 from aureus.mood import MoodReading
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse, join_prompt
 from aureus.people import AffinityBook, HistoricalEntry, PeopleDirectory
@@ -158,6 +160,7 @@ class _ReplyJob:
     inbox_attention: bool = False
     media_sources: tuple[Perception, ...] = ()
     planner_run: "_PlannerRun | None" = None
+    emoji_history: Sequence[TimelineRecord] | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +194,7 @@ class _ThoughtOutcome:
     recall_source_keys: tuple[str, ...] = ()
     review_reason: str | None = None
     reply_segments: tuple[str, ...] = ()
+    emoji: EmojiReplyPart | None = None
 
 
 @dataclass(frozen=True)
@@ -286,6 +290,7 @@ class ConversationFlow:
         empathy: EmpathyConfig | None,
         agenda: AgendaStore | None,
         memory: MemoryIndex | None = None,
+        emoji_store: EmojiStore | None = None,
         memory_config: MemoryConfig | None = None,
         language: LanguageStore | None = None,
         language_config: LanguageConfig | None = None,
@@ -295,11 +300,18 @@ class ConversationFlow:
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
-        self.inbox_media = InboxMedia(call)
+        self.inbox_media = InboxMedia(
+            call, emoji_store if config.qq_emoji_collection_enabled else None
+        )
         self._judge, self._hormones, self._affinity = judge, hormones, affinity
         self._empathy, self._agenda = empathy, agenda
         self._judge_missing_logged = False
         self._memory = memory
+        self._emoji_selector = (
+            EmojiSelector(emoji_store, call, clock, config, timezone)
+            if config.qq_emoji_selection_enabled and emoji_store is not None
+            else None
+        )
         self._memory_config = memory_config or MemoryConfig()
         self.has_text_embedding = False
         self.has_fast_model = False
@@ -482,6 +494,15 @@ class ConversationFlow:
             working_context=working_context,
             people_history=people_history,
             inbox_attention=inbox_attention,
+            emoji_history=(
+                [
+                    record
+                    for record in self._recent_history(target, EMOJI_CONTEXT_LIMIT)
+                    if record.id not in batch_ids
+                ]
+                if self._emoji_selector is not None and target.channel == "qq" and target.route
+                else None
+            ),
         )
         return self._apply_hormones(job, ())
 
@@ -606,8 +627,25 @@ class ConversationFlow:
             sections = (text,)
         if not sections:
             return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
+        emoji = None
+        if (
+            self._emoji_selector is not None
+            and job.emoji_history is not None
+            and outcome.plan is not None
+            and outcome.plan.emoji is not None
+        ):
+            emoji = await self._emoji_selector.select(
+                outcome.plan.emoji,
+                [*job.emoji_history, *job.messages][-EMOJI_CONTEXT_LIMIT:],
+                job.user_name,
+                job.strategy.model_preference,
+                has_embedding=self.has_text_embedding,
+            )
         return replace(
-            outcome, response=replace(response, suggestion=text), reply_segments=sections
+            outcome,
+            response=replace(response, suggestion=text),
+            reply_segments=sections,
+            emoji=emoji,
         )
 
     async def _suggest_reply_splits(self, job: _ReplyJob, draft: ReplyDraft) -> str | None:
@@ -742,6 +780,8 @@ class ConversationFlow:
             heuristic_recall=heuristic_recall,
             review_reason=review_reason,
         )
+        if job.emoji_history is not None:
+            prompt = join_prompt([prompt, EMOJI_PLAN_NOTE])
         if job.inbox_attention:
             inbox_note = (
                 "如想在空闲时翻阅平台收件箱，可在 JSON 中加 read_inbox: true。"

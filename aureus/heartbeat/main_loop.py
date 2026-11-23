@@ -113,7 +113,14 @@ from aureus.hormones import (
     kind_enabled,
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
-from aureus.memory import BATCH_SIZE, DiaryBook, LanguageSample, LanguageStore, MemoryIndex
+from aureus.memory import (
+    BATCH_SIZE,
+    DiaryBook,
+    EmojiStore,
+    LanguageSample,
+    LanguageStore,
+    MemoryIndex,
+)
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
 from aureus.organs import CallPurpose, OrganRequest, OrganResponse
 from aureus.organs.topology import resolve_task_organ
@@ -222,6 +229,7 @@ class Heartbeat:
         reader: WebReader | None = None,
         has_exploration_organ: bool = True,
         memory: MemoryIndex | None = None,
+        emoji_store: EmojiStore | None = None,
         memory_config: MemoryConfig | None = None,
         language: LanguageStore | None = None,
         language_config: LanguageConfig | None = None,
@@ -273,6 +281,7 @@ class Heartbeat:
             reader: 只读网页工具；不给时按探索配置构造。
             has_exploration_organ: 总结器官是否已注册；运行时传入真实登记结果。
             memory: 已打开的记忆索引；不给就不召回（D80）。
+            emoji_store: 已打开的 QQ 表情资源库，供收集与回复选择。
             memory_config: 记忆索引和召回的开关及上限（D80）。
             language: 统一的习得语言库（D89）。
             language_config: 语言召回、增量学习和参考字数配置。
@@ -344,6 +353,7 @@ class Heartbeat:
             empathy=empathy,
             agenda=agenda,
             memory=memory,
+            emoji_store=emoji_store,
             memory_config=memory_config,
             language=language,
             language_config=self._language_config,
@@ -1076,7 +1086,7 @@ class Heartbeat:
         def after_delivery() -> None:
             self._after_reply_delivery(thought, outcome.plan, person_id, reply_record)
 
-        self._deliver_reply(target, reply_record, segments, after_delivery)
+        self._deliver_reply(target, reply_record, segments, after_delivery, emoji=outcome.emoji)
 
     def allows_emoji_delivery(self) -> bool:
         """通道实际发送表情前再次核对暂停、停机和回复权限。"""

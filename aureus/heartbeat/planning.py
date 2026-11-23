@@ -103,6 +103,14 @@ class Resolution:
 
 
 @dataclass(frozen=True)
+class EmojiIntent:
+    """规划器提出的表情用途及相对于文字的位置。"""
+
+    emotion: str = ""
+    before_text: bool = False
+
+
+@dataclass(frozen=True)
 class Plan:
     """读懂了的规划器建议。"""
 
@@ -125,6 +133,7 @@ class Plan:
     read_inbox: bool = False
     special_contact: bool | None = None
     stay_in_conversation: bool | None = None
+    emoji: EmojiIntent | None = None
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -147,6 +156,11 @@ class Plan:
             }
         if self.stay_in_conversation is not None:
             metadata["stay_in_conversation"] = self.stay_in_conversation
+        if self.emoji is not None:
+            metadata["select_emoji"] = {
+                "emotion": self.emoji.emotion,
+                "before_text": self.emoji.before_text,
+            }
         return metadata
 
 
@@ -180,6 +194,7 @@ def parse_plan(text: str) -> Plan | None:
     )
     expression_intent = data.get("expression_intent")
     expression_intent = expression_intent if isinstance(expression_intent, dict) else {}
+    emoji = data.get("select_emoji")
     return Plan(
         should_reply=should_reply,
         intent=intent,
@@ -195,6 +210,16 @@ def parse_plan(text: str) -> Plan | None:
             for item in _expression_terms(expression_intent.get(field))
         ),
         expression_avoid=_expression_terms(expression_intent.get("avoid")),
+        emoji=(
+            EmojiIntent(
+                clean_text(emoji.get("emotion"), _MAX_INTENT_CHARS),
+                emoji.get("before_text") is True,
+            )
+            if isinstance(emoji, dict)
+            else EmojiIntent()
+            if emoji is True
+            else None
+        ),
         read_inbox=data.get("read_inbox") is True,
         special_contact=(
             data["special_contact"] if isinstance(data.get("special_contact"), bool) else None

@@ -79,6 +79,11 @@ class HeartbeatConfig(BaseModel):
     inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
     # 规划用哪个器官，models.toml 里必须有它。
     plan_organ: str = Field(default="planner", min_length=1)
+    qq_emoji_collection_enabled: bool = True
+    qq_emoji_selection_enabled: bool = True
+    qq_emoji_semantic_enabled: bool = False
+    qq_emoji_semantic_refresh_seconds: float = Field(default=300.0, gt=0, allow_inf_nan=False)
+    qq_emoji_semantic_threshold: float = Field(default=0.3, ge=0, le=1, allow_inf_nan=False)
     # 节省档、低电量（含透支保护）时带上最近多少条对话；都不会超过 recent_message_limit。
     saving_message_limit: int = Field(default=10, ge=1)
     low_message_limit: int = Field(default=5, ge=1)

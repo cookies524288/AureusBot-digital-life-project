@@ -60,6 +60,10 @@ models = ["example-chat"]
 # [organs.fast_model]
 # models = ["example-chat"]
 
+# QQ 表情文字选择。没有绑定时沿用回复器的模型。
+# [organs.emoji]
+# models = ["example-chat"]
+
 # 总结器官用于小探索（D79），也用来写日记（D80）；按需启用。
 # [organs.summarizer]
 # models = ["example-chat"]
