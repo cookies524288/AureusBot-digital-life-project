@@ -673,16 +673,18 @@ def build_initiative_reply_prompt(
     intent: str = "",
     *,
     length: ReplyLength | str | None = None,
+    with_splits: bool = False,
 ) -> str:
     """主动开口的回复提示词，不伪造一条刚收到的用户消息（D76）。"""
-    return join_prompt(
-        [
-            _initiative_history(history, user_name, timezone),
-            _INITIATIVE_INTENT.fill(intent=_one_line(intent)),
-            _length_text(length or ReplyLength.SHORT),
-            _REPLY_INSTRUCTION.fill(),
-        ]
-    )
+    parts = [
+        _initiative_history(history, user_name, timezone),
+        _INITIATIVE_INTENT.fill(intent=_one_line(intent)),
+        _length_text(length or ReplyLength.SHORT),
+        _REPLY_INSTRUCTION.fill(),
+    ]
+    if with_splits:
+        parts.append(_REPLY_SPLITS.fill())
+    return join_prompt(parts)
 
 
 def build_judge_prompt(

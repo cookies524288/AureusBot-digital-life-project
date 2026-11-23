@@ -77,6 +77,8 @@ class InitiativeOrgans(ScriptedOrgans):
             )
             if isinstance(result, BaseException):
                 raise result
+        elif task == "reply_segments":
+            result = "[]"
         elif request.organ_id == "planner":
             result = self.normal_plans.pop(0) if self.normal_plans else PLAN
         else:
@@ -222,6 +224,48 @@ async def test_initiative_has_honest_reasons_optional_calls_and_expectation(env:
     assert "这是你主动找阿明" in context and metadata["reasons"][0] in context
     assert "不是在回复" in context and "【身体状态】" in context
     assert rig.heartbeat._last_conversation_at == NOW
+
+
+async def test_initiative_uses_optional_segmentation_and_records_pending_parts(env: Env) -> None:
+    rig = env.build(
+        heartbeat=HeartbeatConfig(
+            typing_han_seconds=0.5,
+            typing_other_seconds=0.5,
+            typing_jitter_min_seconds=0,
+            typing_jitter_max_seconds=0,
+        )
+    )
+    rig.heartbeat.update_available_organs(frozenset({"planner", "replyer", "fast_model"}))
+    await rig.exchange("你好")
+    rig.sent.clear()
+    env.organs.requests.clear()
+    env.organs.replies = ["想问问近况，<n><!>明天\n  有空吗？"]
+    await consider(env, rig)
+
+    plan, reply, split = env.organs.requests
+    assert [request.context["task"] for request in (plan, reply, split)] == [
+        "initiative_plan",
+        "initiative_reply",
+        "reply_segments",
+    ]
+    assert all(request.purpose is CallPurpose.OPTIONAL for request in (plan, reply, split))
+    assert "<n>" in reply.prompt and "<!>" in reply.prompt
+    assert "双休日" not in split.prompt and "想问问近况" in split.prompt
+    [message] = [record for record in rig.records("message") if record.metadata.get("initiative")]
+    assert message.metadata["reply_segments"] == ["想问问近况", "明天\n  有空吗？"]
+    assert [sent.content for sent in rig.sent] == ["想问问近况"]
+    assert not rig.heartbeat.is_thinking
+    [considered] = rig.records(EVENT_INITIATIVE_CONSIDERED)
+    assert considered.metadata["sent"] is True
+    assert env.feedback.get(considered.metadata["feedback_id"]) is not None
+
+    env.clock.advance(timedelta(seconds=3.9))
+    rig.heartbeat.beat()
+    assert [sent.content for sent in rig.sent] == ["想问问近况"]
+    env.clock.advance(timedelta(seconds=0.6))
+    rig.heartbeat.beat()
+    assert [sent.content for sent in rig.sent] == ["想问问近况", "明天\n  有空吗？"]
+    assert len(rig.records(EVENT_INITIATIVE_CONSIDERED)) == 1
 
 
 async def test_skip_counts_as_consideration_and_waits_three_hours(env: Env) -> None:

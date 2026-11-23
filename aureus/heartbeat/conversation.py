@@ -591,7 +591,7 @@ class ConversationFlow:
         """再审通过后才整理实际发言；快速模型只看到要分段的文字。"""
         draft = prepare_reply(response.suggestion)
         if not draft.sections:
-            return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
+            return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
         text = draft.text.strip()
         if self._config.split_reply_enabled:
             suggestion = (
@@ -605,7 +605,7 @@ class ConversationFlow:
         else:
             sections = (text,)
         if not sections:
-            return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
+            return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
         return replace(
             outcome, response=replace(response, suggestion=text), reply_segments=sections
         )

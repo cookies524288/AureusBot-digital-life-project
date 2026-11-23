@@ -104,7 +104,6 @@ from aureus.heartbeat.recall import MemoryTracker
 from aureus.heartbeat.reply_outbox import ReplyOutbox
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
-from aureus.heartbeat.speech import split_reply
 from aureus.hormones import (
     HormoneEffects,
     HormoneKind,
@@ -1115,21 +1114,11 @@ class Heartbeat:
         self,
         target: Perception,
         record: TimelineRecord,
-        parts: Sequence[str] | None = None,
+        parts: Sequence[str],
         after_delivery: Callable[[], None] | None = None,
         after_failure: Callable[[], None] | None = None,
     ) -> bool:
         """投递已记录的各段。返回本次调用中是否已交给通道。"""
-        if parts is None:
-            parts = (
-                split_reply(
-                    record.content,
-                    max_messages=self._config.max_reply_messages,
-                    min_chars=self._config.min_message_chars,
-                )
-                if self._config.split_reply_enabled
-                else ()
-            ) or (record.content,)
         if self._stop_requested and self._config.typing_delay_enabled:
             delivered = self._send_reply_part(target, parts[0], record)
             finish = after_delivery if delivered else after_failure
@@ -1759,6 +1748,7 @@ class Heartbeat:
                         self._timezone,
                         plan.intent,
                         length=conversation.strategy.length_limit,
+                        with_splits=self._config.split_reply_enabled,
                     ),
                     system_context=conversation.replyer_context,
                     purpose=CallPurpose.OPTIONAL,
@@ -1766,7 +1756,9 @@ class Heartbeat:
             )
             if not response.suggestion.strip():
                 return _ThoughtOutcome(initiative_plan=plan, notice="回复器返回空内容")
-            return _ThoughtOutcome(initiative_plan=plan, response=response)
+            return await self._conversation._finish_reply(
+                conversation, _ThoughtOutcome(initiative_plan=plan, response=response), response
+            )
         except CallRejectedError as error:
             return _ThoughtOutcome(initiative_plan=plan, notice=error.reason)
         except Exception as error:
@@ -1784,6 +1776,17 @@ class Heartbeat:
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if target is not None and target.channel not in self._sinks:
             target = None
+
+        def send(
+            destination: Perception,
+            record: TimelineRecord,
+            after_delivery: Callable[[], None],
+            after_failure: Callable[[], None],
+        ) -> None:
+            self._deliver_reply(
+                destination, record, outcome.reply_segments, after_delivery, after_failure
+            )
+
         message_id = self._initiative.complete(
             {
                 "reasons": list(job.reasons),
@@ -1793,7 +1796,8 @@ class Heartbeat:
             outcome.initiative_plan,
             outcome.response,
             target,
-            self._deliver_reply,
+            outcome.reply_segments,
+            send,
             outcome.notice or (permission.reason if not permission.allowed else ""),
         )
         if job.finding_id is not None and message_id is not None:

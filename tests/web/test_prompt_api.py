@@ -144,7 +144,9 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         ),
         "reply": _request("replyer", build_reply_prompt([], incoming, user, UTC), full),
         "initiative_reply_first": _request(
-            "replyer", build_initiative_reply_prompt([], user, UTC, "意图样本"), reply
+            "replyer",
+            build_initiative_reply_prompt([], user, UTC, "意图样本", with_splits=True),
+            reply,
         ),
         "judge_context": _request(
             "judge", build_judge_prompt(history, incoming, user, UTC), build_judge_context(IDENTITY)

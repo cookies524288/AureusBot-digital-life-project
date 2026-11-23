@@ -280,14 +280,16 @@ def build_prompt_scenes(
             "initiative_reply",
             "initiative_reply",
             "主动发言",
-            build_initiative_reply_prompt(_HISTORY, user, intent=_INTENT, length=_LENGTH),
+            build_initiative_reply_prompt(
+                _HISTORY, user, intent=_INTENT, length=_LENGTH, with_splits=True
+            ),
             system(full=False, rich=True, initiative=True),
         )
         add(
             "initiative_reply",
             "initiative_reply_first",
             "主动发言 · 无历史",
-            build_initiative_reply_prompt([], user, intent=_INTENT),
+            build_initiative_reply_prompt([], user, intent=_INTENT, with_splits=True),
             system(full=False, initiative=True),
         )
     add(

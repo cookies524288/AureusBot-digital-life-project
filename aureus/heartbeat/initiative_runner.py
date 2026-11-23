@@ -113,16 +113,18 @@ class InitiativeTracker:
             },
         )
 
-    def record_sent(self, message: TimelineRecord, now: datetime, *, delivered: bool) -> int | None:
-        """消息已落盘就占次数并等待；发送失败也占用，实际发送后才记反馈预期（D78）。"""
+    def _note_recorded(self, message: TimelineRecord) -> None:
+        """消息已落盘就占次数并等待，发送失败也占用（D78）。"""
         self._message = message
         count = self.state.contacts_today
-        if self._day != self._calendar.day_of(now):
+        day = self._calendar.day_of(message.timestamp)
+        if self._day != day:
             count = 0
-            self._day = self._calendar.day_of(now)
-        count += self._calendar.day_of(message.timestamp) == self._day
-        self.state = replace(self.state, contacts_today=count, pending_since=message.timestamp)
-        if delivered and self._feedback is not None:
+            self._day = day
+        self.state = replace(self.state, contacts_today=count + 1, pending_since=message.timestamp)
+
+    def _record_expectation(self, message: TimelineRecord) -> int | None:
+        if self._feedback is not None:
             try:
                 return self._feedback.record_expectation(
                     PROACTIVE_CONTACT, message.metadata["initiative_expected"], source_id=message.id
@@ -154,12 +156,11 @@ class InitiativeTracker:
         plan: InitiativePlan | None,
         response: OrganResponse | None,
         target: Perception | None,
-        send: Callable[[Perception, TimelineRecord], bool],
+        parts: tuple[str, ...],
+        send: Callable[[Perception, TimelineRecord, Callable[[], None], Callable[[], None]], None],
         failure: str,
     ) -> int | None:
         """收器官建议后先记消息、再发出；独立尝试反馈和考虑记录，不缓存失败材料。"""
-        sent, feedback_id = False, None
-        message_id = None
         metadata = {**metadata, "plan": plan.to_metadata() if plan is not None else None}
         if plan is not None and plan.reach_out and target is None:
             failure = failure or "通道不在了"
@@ -171,6 +172,17 @@ class InitiativeTracker:
             and not failure
         ):
             try:
+                route = target.route
+                route_metadata = (
+                    {
+                        "account_id": route.account_id,
+                        "recipient_id": route.recipient_id,
+                        "message_type": route.kind,
+                        "temporary_group_id": route.temporary_group_id,
+                    }
+                    if route is not None
+                    else {}
+                )
                 message = self.record_message(
                     response.suggestion.strip(),
                     target.visibility,
@@ -179,33 +191,46 @@ class InitiativeTracker:
                         "to_user": True,
                         "channel": target.channel,
                         "organ_id": response.organ_id,
+                        "reply_segments": list(parts),
+                        **route_metadata,
                     },
                 )
                 metadata["message_id"] = message.id
-                message_id = message.id
-                sent = send(target, message)
-                feedback_id = self.record_sent(message, message.timestamp, delivered=sent)
-                failure = "通道发送失败" if not sent else ("反馈预期没记上" if self.failed else "")
+                self._note_recorded(message)
+
+                def finish(*, sent: bool) -> None:
+                    feedback_id = self._record_expectation(message) if sent else None
+                    self.record_considered(
+                        {
+                            **metadata,
+                            "decided": "reach_out" if sent else "failed",
+                            "sent": sent,
+                            "failure": (
+                                ("反馈预期没记上" if self.failed else "")
+                                if sent
+                                else "通道发送失败"
+                            ),
+                            "feedback_id": feedback_id,
+                        }
+                    )
+
+                send(target, message, lambda: finish(sent=True), lambda: finish(sent=False))
+                return message.id
             except Exception:
                 self.failed = True
                 logger.exception("主动联系没能发出，这一拍不再主动")
                 failure = "主动联系读写状态失败"
-        decided = (
-            "reach_out"
-            if sent
-            else ("skip" if plan is not None and not plan.reach_out and not failure else "failed")
-        )
+        decided = "skip" if plan is not None and not plan.reach_out and not failure else "failed"
         self.record_considered(
             {
                 **metadata,
                 "decided": decided,
-                "sent": sent,
+                "sent": False,
                 "failure": failure,
-                "feedback_id": feedback_id,
+                "feedback_id": None,
             }
         )
-
-        return message_id
+        return None
 
     def note_user_message(self, now: datetime) -> None:
         """用户开口立即清退避；有等待时按消息时刻判定，边界算窗口外。"""
