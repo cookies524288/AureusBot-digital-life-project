@@ -4,6 +4,7 @@ from aureus.memory.diary import DiaryBook
 from aureus.memory.edits import MAX_MEMORY_TEXT, MemoryKind
 from aureus.memory.emoji import EmojiRecord, EmojiStore
 from aureus.memory.flow import MemoryEvent, MemoryEventType
+from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphSource
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -58,6 +59,9 @@ __all__ = [
     "MemoryEvent",
     "MemoryEventType",
     "MemoryEvidence",
+    "MemoryGraph",
+    "MemoryGraphEvidence",
+    "MemoryGraphSource",
     "MemoryHit",
     "MemoryIndex",
     "MemoryKind",

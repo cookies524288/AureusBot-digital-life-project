@@ -13,6 +13,7 @@ import msgpack
 from aureus.memory import (
     HistoricalMemory,
     MemoryEvidence,
+    MemoryGraphSource,
     MemoryIndex,
     MemorySnapshotConflictError,
     MemorySource,
@@ -20,6 +21,7 @@ from aureus.memory import (
 )
 from aureus.tools.migrate.maibot import open_readonly_database
 from aureus.tools.migrate.maibot_catalog import MigrationError
+from aureus.tools.migrate.maibot_memory_graph import graph_sources
 from aureus.tools.migrate.maibot_memory_media import (
     AttachmentArchive,
     components,
@@ -98,6 +100,7 @@ class _Projection:
         self.memory: dict[str, dict[str, StagedRow]] = {}
         self.links: dict[tuple[str, str], list[MemoryEvidence]] = defaultdict(list)
         self.link_rows: dict[str, tuple[MemoryEvidence, ...]] = {}
+        self.graph_links: list[StagedRow] = []
         self.counts: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         self.media: dict[tuple[str, str], MemorySource] = {}
 
@@ -123,7 +126,7 @@ class _Projection:
             for row in self.staged.rows("main", table):
                 if identifier := _text(row.values, field):
                     self.media[table, identifier] = row.source
-        for table in (*dict.fromkeys(_LINK_TARGETS.values()), "image_assets"):
+        for table in (*dict.fromkeys(_LINK_TARGETS.values()), "deleted_relations", "image_assets"):
             self.memory[table] = {
                 str(row.source.key[0]): row for row in self.staged.rows("memory", table)
             }
@@ -136,6 +139,8 @@ class _Projection:
         ):
             for row in self.staged.rows("memory", name):
                 raw = row.values
+                if name in ("paragraph_entities", "paragraph_relations"):
+                    self.graph_links.append(row)
                 identifier = _text(raw, target_field)
                 link_kind = kind or _text(raw, "evidence_type") or _text(raw, "target_type")
                 related = self._reference(link_kind, identifier)
@@ -314,6 +319,15 @@ class _Projection:
                         counts["unresolved_links"] += 1
                 yield record
 
+    def graph_sources(self) -> Iterator[MemoryGraphSource]:
+        """只使用同快照暂存行的原字段，保留源状态与无法解析的端点。"""
+        statuses: dict[str, MemoryStatus] = {
+            row.source.encode(): _source_status(row)
+            for table in ("entities", "relations", "deleted_relations")
+            for row in self.memory[table].values()
+        }
+        yield from graph_sources(self.memory, self.graph_links, statuses)
+
 
 def _source_status(row: StagedRow) -> MemoryStatus:
     raw, table = row.values, row.source.table
@@ -349,7 +363,9 @@ def publish_maibot_memory(
         index.open()
         try:
             snapshot = instance, projection.staged.fingerprint(str(zone))
-            index.publish(projection.records(), snapshot=snapshot)
+            index.publish(
+                projection.records(), snapshot=snapshot, graph_sources=projection.graph_sources()
+            )
         except MemorySnapshotConflictError as error:
             raise MigrationError("memory_snapshot_conflict") from error
         finally:

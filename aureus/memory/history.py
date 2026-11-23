@@ -182,18 +182,17 @@ def publish_history(
     records: Iterable[HistoricalMemory],
     snapshot: tuple[str, str] | None,
 ) -> int:
-    """按来源原子发布一批，返回首次发布或更新的条数。"""
+    """在调用方事务内按来源发布一批，返回首次发布或更新的条数。"""
     written = 0
-    with conn:
-        if snapshot is not None:
-            conn.execute("INSERT OR IGNORE INTO memory_history_snapshots VALUES (?, ?)", snapshot)
-            match = conn.execute(
-                "SELECT fingerprint FROM memory_history_snapshots WHERE instance = ?", snapshot[:1]
-            ).fetchone()
-            if match[0] != snapshot[1]:
-                raise MemorySnapshotConflictError
-        for record in records:
-            written += put_history_record(conn, record)
+    if snapshot is not None:
+        conn.execute("INSERT OR IGNORE INTO memory_history_snapshots VALUES (?, ?)", snapshot)
+        match = conn.execute(
+            "SELECT fingerprint FROM memory_history_snapshots WHERE instance = ?", snapshot[:1]
+        ).fetchone()
+        if match[0] != snapshot[1]:
+            raise MemorySnapshotConflictError
+    for record in records:
+        written += put_history_record(conn, record)
     return written
 
 

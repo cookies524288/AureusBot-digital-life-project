@@ -29,6 +29,7 @@ from aureus.memory.edits import (
     write_edit,
 )
 from aureus.memory.flow import MemoryEvent, MemoryEventType, browse_flow, open_flow, publish_events
+from aureus.memory.graph import MemoryGraph, MemoryGraphSource, put_graph_sources, read_graph
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -195,12 +196,24 @@ class MemoryIndex:
         return len(records)
 
     def publish(
-        self, records: Iterable[HistoricalMemory], *, snapshot: tuple[str, str] | None = None
+        self,
+        records: Iterable[HistoricalMemory],
+        *,
+        snapshot: tuple[str, str] | None = None,
+        graph_sources: Iterable[MemoryGraphSource] = (),
     ) -> int:
         """写入长期记忆原件及派生索引，保留归档记录。"""
         if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
-        return publish_history(self._conn, records, snapshot)
+        with self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            written = publish_history(self._conn, records, snapshot)
+            put_graph_sources(self._conn, graph_sources)
+        return written
+
+    def read_graph(self, *, allowed_sources: Collection[MemorySource]) -> MemoryGraph:
+        """显式获准的原件范围内读取图来源；不初始化、扩权或推测关系。"""
+        return read_graph(self._db_path, allowed_sources=allowed_sources, now=self._clock.now())
 
     def get_history(self, source: MemorySource) -> HistoricalMemory | None:
         """读指定来源的原文及证据，包括归档记录。"""
