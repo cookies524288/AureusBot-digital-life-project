@@ -693,7 +693,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="md-missing" class="empty hidden"></div>
 <div id="md-content" class="model-library hidden">
 <aside class="model-vendors" aria-label="API供应商"><h3>API供应商</h3><div id="md-providers" class="provider-list"></div><button id="md-add-provider" class="btn"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加供应商</button></aside>
-<div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或供应商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option><option value="llm">llm</option><option value="embedding">embedding</option></select><button id="md-test-provider" class="btn" disabled>网络测速</button><button id="md-edit-provider" class="btn" disabled>编辑供应商</button><button id="md-add-model" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加模型</button></div>
+<div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或供应商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option></select><button id="md-test-provider" class="btn" disabled>网络测速</button><button id="md-edit-provider" class="btn" disabled>编辑供应商</button><button id="md-add-model" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加模型</button></div>
 <div id="md-results" style="display:grid;gap:inherit;min-width:0"><div id="md-catalog"></div>
 <div class="model-table-wrap"><table class="model-table" aria-label="模型列表"><thead><tr><th>模型</th><th>API供应商</th><th>类型</th><th class="model-vision">视觉</th><th class="model-price">价格（输入/输出）</th><th class="model-owners">负责的工作</th><th>操作</th></tr></thead><tbody id="md-models"></tbody></table></div>
 <div id="md-cards" class="model-cards"></div><div id="md-empty" class="empty hidden">没有匹配的模型。先添加供应商，再添加模型。</div></div>
@@ -1824,6 +1824,9 @@ PAGES.persona = { load: loadPersona };
 // 参考提交及文件见 docs/tasks/2.12.md 第 2 轮；只参考交互，未复制代码。
 const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], connections: [], provider: '',
   dirty: false, revision: 0, saved: 0, pending: 0, queue: Promise.resolve() };
+const MODEL_KIND_LABELS = { llm: '语言模型', embedding: '文本嵌入', image_embedding: '图片嵌入', transcription: '语音转写' };
+const MODEL_KIND_OPTIONS = Object.entries(MODEL_KIND_LABELS).map(([value, label]) => ({ value, label }));
+$('md-kind').append(...MODEL_KIND_OPTIONS.map(({ value, label }) => el('option', { value, text: label })));
 const clone = value => JSON.parse(JSON.stringify(value));
 const emptyOrgan = () => clone(mdl.defaults.organs);
 
@@ -2035,12 +2038,12 @@ function renderModelRows() {
       role: 'img', title: visionStatus, 'aria-label': visionStatus });
     table.append(el('tr', {},
       el('td', {}, el('strong', { text: model.name }), el('div', { class: 'muted mono model-id', text: model.identifier })),
-      el('td', { text: model.provider }), el('td', { text: model.kind }), el('td', { class: 'model-vision' }, vision()),
+      el('td', { text: model.provider }), el('td', { text: MODEL_KIND_LABELS[model.kind] }), el('td', { class: 'model-vision' }, vision()),
       el('td', { class: 'model-price', text: model.price_in === null || model.price_in === undefined ? '未知' : model.price_in + ' / ' + (model.price_out ?? '未知') }),
       el('td', { class: 'model-owners', text: owners.join('、') || '未使用' }), el('td', {}, actions())));
     mobile.append(el('div', { class: 'card model-compact' }, el('h3', { text: model.name }),
       el('div', { class: 'muted model-id', text: model.provider + ' · ' + model.identifier }),
-      el('div', { class: 'row' }, el('span', { text: model.kind }),
+      el('div', { class: 'row' }, el('span', { text: MODEL_KIND_LABELS[model.kind] }),
         el('span', { class: 'model-vision-status' }, el('span', { 'aria-hidden': 'true', text: '视觉' }), vision()),
         el('span', { class: 'muted', text: owners.join('、') || '未使用' })), actions()));
   }
@@ -2109,14 +2112,15 @@ async function testModel(model) {
     const res = await api('/api/models/test', 'POST', {model: savedModel.name});
     if (!res.ok) { probeNotice('模型测试失败', savedModel.name + ' · ' + errorText(res)); return; }
     const data = res.data, passed = data.checks.filter(check => !check.error).length;
-    const label = data.kind === 'llm' ? '首字延迟' : '向量响应耗时';
+    const labels = { llm: '首字延迟', embedding: '向量响应耗时', image_embedding: '向量响应耗时', transcription: '转写响应耗时' };
+    const label = labels[data.kind];
     const latency = data.latency_ms == null ? '' : ' · ' + label + ' ' + data.latency_ms + ' ms';
     probeNotice(passed === data.checks.length ? '模型测试通过' : '模型测试 ' + passed + '/' + data.checks.length + ' 通过',
       data.model + ' · ' + data.provider + latency, () => showProbeDetails(data));
   });
 }
 function showProbeDetails(data) {
-  const labels = {text:'文本', vision:'视觉', tools:'工具调用', embedding:'Embedding'};
+  const labels = {text:'文本', vision:'视觉', tools:'工具调用', ...MODEL_KIND_LABELS};
   const body = el('div', {class:'probe-detail'});
   for (const check of data.checks) {
     const name = labels[check.capability] || check.capability.replace('reasoning/', '思考等级 · ');
@@ -2230,7 +2234,7 @@ function openModelEditor(model, identifier = '') {
     provider: editorField('API供应商', model.provider, { values: mdl.cfg.providers.map(provider => provider.name) }),
     identifier: editorField('模型标识符', model.identifier, { required: true }),
     name: editorField('模型名称', model.name, { hint: '留空使用 [供应商名称]模型标识符' }),
-    kind: editorField('模型类型', model.kind, { values: ['llm', 'embedding'] }),
+    kind: editorField('模型类型', model.kind, { values: MODEL_KIND_OPTIONS }),
     price_in: editorField('输入价格（元 / 百万 token）', model.price_in, { type: 'number', min: 0, step: 'any' }),
     price_out: editorField('输出价格（元 / 百万 token）', model.price_out, { type: 'number', min: 0, step: 'any' }),
     price_cache_in: editorField('缓存命中输入价格', model.price_cache_in, { type: 'number', min: 0, step: 'any' }),
@@ -2395,6 +2399,15 @@ PAGES.keys = {load:loadKeysPage};
 
 // ---------- 器官工作卡片：选择卡片后，在右侧抽屉里编辑；模型选择立即自动保存 ----------
 let organGraph;
+function supportsOrganModel(name, model, provider) {
+  switch (name) {
+    case 'vlm': return model.kind === 'llm' && model.vision;
+    case 'voice': return model.kind === 'transcription' && ['openai', 'openai_responses'].includes(provider.protocol);
+    case 'text_embedding': return model.kind === 'embedding';
+    case 'image_embedding': return model.kind === 'image_embedding';
+    default: return model.kind === 'llm';
+  }
+}
 function organCard(name, organ) {
   const missing = organ.models.some(model => !mdl.cfg.models.some(item => item.name === model));
   const binding = organ.models.join(' → ') || '未配置模型';
@@ -2447,7 +2460,7 @@ function openOrganEditor(name) {
     const query = search.value.trim().toLowerCase();
     for (const provider of mdl.cfg.providers) {
       const group = el('optgroup', { label: provider.name });
-      for (const model of mdl.cfg.models) if (model.provider === provider.name && model.kind === 'llm' && !organ.models.includes(model.name)
+      for (const model of mdl.cfg.models) if (model.provider === provider.name && supportsOrganModel(name, model, provider) && !organ.models.includes(model.name)
         && (model.name + ' ' + provider.name).toLowerCase().includes(query)) group.append(el('option', { value: model.name, text: model.name }));
       if (group.children.length) picker.append(group);
     }
