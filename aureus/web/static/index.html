@@ -663,7 +663,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
       <button class="btn small" data-learning-tab="emoji" aria-pressed="false">表情包</button>
     </div>
     <form id="learning-search" class="row" style="flex-wrap:wrap">
-      <input name="q" aria-label="搜索学习内容" placeholder="搜索词、释义或例句" maxlength="200">
+      <input type="search" name="q" aria-label="搜索学习内容" placeholder="搜索词、释义或例句" maxlength="200">
       <label><input name="disabled" type="checkbox"> 显示停用</label>
       <label class="hidden">表情状态 <select name="emoji_status">
         <option value="">全部</option><option value="registered">已登记</option>
@@ -690,7 +690,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
           <button class="btn small" data-memory-query="profiles" aria-pressed="false">人物画像</button>
         </div>
         <form id="memory-search" class="row" style="flex-wrap:wrap;flex:1">
-          <input name="q" aria-label="搜索记忆" placeholder="搜索内容、名称或来源 ID" maxlength="200" style="flex:1;min-width:0">
+          <input type="search" name="q" aria-label="搜索记忆" placeholder="搜索内容、名称或来源 ID" maxlength="200" style="flex:1;min-width:0">
           <select name="type" aria-label="记忆类型">
             <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="mai_messages">迁入消息</option><option value="live">本地经历</option>
           </select>
@@ -709,7 +709,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
     <div id="memory-panel-images" class="stack hidden">
       <div class="row" role="group" aria-label="图片来源"><button class="btn small primary" data-image-source="archive" aria-pressed="true">迁入图片</button><button class="btn small" data-image-source="live" aria-pressed="false">收件箱图片</button></div>
       <div id="image-source-archive" class="stack">
-        <form id="archived-images-search" class="row"><input name="q" aria-label="搜索迁入图片" placeholder="搜索迁入图片" maxlength="200"><button class="btn small">查询</button></form>
+        <form id="archived-images-search" class="row"><input type="search" name="q" aria-label="搜索迁入图片" placeholder="搜索迁入图片" maxlength="200"><button class="btn small">查询</button></form>
         <div id="archived-images-result" class="stack" aria-live="polite"></div><button id="archived-images-more" class="btn small hidden">加载更多</button>
       </div>
       <div id="image-source-live" class="stack hidden"><button id="images-reset" class="btn small hidden">返回图片列表</button><div id="images-result" class="stack" aria-live="polite"></div><button id="images-more" class="btn small hidden">加载更多</button></div>
