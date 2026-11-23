@@ -288,6 +288,12 @@ def test_base_pythonw_is_derived_only_from_the_project_venv(
     )
     monkeypatch.setattr(debug_restart, "sys", runtime)
     assert debug_restart._base_pythonw_path(root) == pythonw
+    for invalid in (python, "", None):
+        runtime._base_executable = invalid
+        assert debug_restart._base_pythonw_path(root) is None
+    del runtime._base_executable
+    assert debug_restart._base_pythonw_path(root) is None
+    runtime._base_executable = str(python)
     pythonw.unlink()
     assert debug_restart._base_pythonw_path(root) is None
     runtime.prefix = str(tmp_path / "other-venv")

@@ -34,7 +34,10 @@ def _base_pythonw_path(root: Path) -> Path | None:
     try:
         if Path(sys.prefix).resolve(strict=True) != (root / ".venv").resolve(strict=True):
             return None
-        base_executable = Path(sys._base_executable).resolve(strict=True)
+        base_path = getattr(sys, "_base_executable", None)
+        if not isinstance(base_path, str) or not base_path:
+            return None
+        base_executable = Path(base_path).resolve(strict=True)
         if (
             Path(sys.base_prefix).resolve(strict=True) == Path(sys.prefix).resolve(strict=True)
             or base_executable.name.lower() != "python.exe"
