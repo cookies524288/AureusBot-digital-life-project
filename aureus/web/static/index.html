@@ -773,6 +773,12 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div></div></div></section>
 <section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2></div><span id="og-status" class="tag" role="status">已自动保存</span></div>
 <div class="page-body stack"><div id="og-missing" class="empty hidden"></div><div id="og-content" class="hidden"><div class="og-board">
+<h3 class="og-map-title">器官配置与调用关系</h3>
+<button id="og-search-settings" type="button" class="btn small">配置网页搜索（WEB_SEARCH）</button>
+<div class="og-toolbar"><div class="og-legend" aria-label="逻辑流向图例"><span><i></i>核心调用</span><span><i class="return"></i>器官返回</span><span><i class="relay"></i>经 CORE 衔接</span></div><button id="og-reset" type="button" class="btn small">复位布局</button></div>
+<div id="og-grid" class="og-stage" role="group" aria-label="器官逻辑流向" aria-describedby="og-help"></div>
+<div class="og-footer" id="og-help">拖动模块调整布局，也可聚焦后用方向键移动。点击器官配置模型。</div>
+<details class="og-details"><summary>查看流程说明</summary><ul id="og-routes"></ul></details>
 <section class="og-overview" aria-labelledby="og-flow-title">
 <div class="og-flow-head"><h3 id="og-flow-title">一轮来信处理</h3><div class="og-flow-legend"><span>进入本轮后</span><span>条件分支</span></div></div>
 <ol class="og-flow">
@@ -793,12 +799,6 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <li><div class="og-step conditional"><b>分段并发回原会话</b><p>分条开启时，已通过再审的回复可交给快速模型（FAST_MODEL）建议切点，正文由回复器提供。权限允许时，心跳先记下全部分段。开启打字延迟后，首段无需等待打字，后续段按打字时间和随机延迟依次发出。心跳可在等待期间继续处理来信，每段发送前都重新检查权限。</p></div></li>
 <li><div class="og-step"><b>结束本轮</b><p>器官在后台工作，心跳在后续拍收回结果。回复、学习、整理等任务按各自条件调用器官。</p></div></li>
 </ol></section>
-<h3 class="og-map-title">器官配置与调用关系</h3>
-<button id="og-search-settings" type="button" class="btn small">配置网页搜索（WEB_SEARCH）</button>
-<div class="og-toolbar"><div class="og-legend" aria-label="逻辑流向图例"><span><i></i>核心调用</span><span><i class="return"></i>器官返回</span><span><i class="relay"></i>经 CORE 衔接</span></div><button id="og-reset" type="button" class="btn small">复位布局</button></div>
-<div id="og-grid" class="og-stage" role="group" aria-label="器官逻辑流向" aria-describedby="og-help"></div>
-<div class="og-footer" id="og-help">拖动模块调整布局，也可聚焦后用方向键移动。点击器官配置模型。</div>
-<details class="og-details"><summary>查看流程说明</summary><ul id="og-routes"></ul></details>
 </div></div></div></section>
 <section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
