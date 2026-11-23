@@ -83,6 +83,7 @@ def open_web(
             set_maintenance_paused=core.heartbeat.set_maintenance_paused,
             run_model_test=core.gateway.test_model,
             qq_link=core.qq_link,
+            inbox_store=core.inbox_store,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

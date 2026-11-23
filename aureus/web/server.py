@@ -33,6 +33,7 @@ from aureus.channels import WebChannel
 from aureus.common import Clock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
+from aureus.heartbeat.inbox_store import InboxStore
 from aureus.identity import Identity
 from aureus.organs import OrganResponse
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleError
@@ -48,6 +49,7 @@ from .auth import (
 )
 from .config_api import register_config_routes
 from .config_files import ConfigService
+from .inbox_api import register_inbox_routes
 from .prompt_api import register_prompt_routes
 from .session import SessionStore
 from .settings import SettingsService
@@ -213,6 +215,7 @@ def create_app(
     run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
     | None = None,
     qq_link: AccountLink | None = None,
+    inbox_store: InboxStore | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -427,6 +430,8 @@ def create_app(
 
     if settings is not None:
         register_settings_routes(app, settings, require_ready)
+
+    register_inbox_routes(app, inbox_store, require_ready)
 
     if maintenance_paused is not None and set_maintenance_paused is not None:
 
