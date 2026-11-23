@@ -216,14 +216,21 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .ov-label,.ov-card-head{display:flex;align-items:center;gap:9px}.ov-label{color:var(--tile-muted);font-size:14px;font-weight:600}.ov-card-head{justify-content:space-between;margin-bottom:12px}
 .ov-status-body{display:flex;align-items:center;gap:clamp(16px,2.5vw,32px)}.ov-emitter{display:block;flex:none;width:160px;height:auto;shape-rendering:crispEdges;color:var(--signal)}
 /* 所有轮廓和位移都落在 32 格画布的整格上；四象限复用同一块像素图形。 */
-.ov-idle-arc{fill:var(--signal);animation:ov-wave-travel 4.8s steps(5,end) infinite,ov-wave-fade 4.8s ease-out infinite}
+.ov-emitter{--star-gold:#b87e18;--star-glint:#ffe295;--star-edge:#796023;--wave-period:4.8s;--spark-period:3.2s;--spark-phase:-.7s;color:var(--star-gold)}
+:root[data-theme='dark'] .ov-emitter{--star-gold:#d4a13a;--star-glint:#ffedaa;--star-edge:#765216}
+.ov-emitter[data-state='paused']{--star-gold:#786132;--star-glint:#b59b61;--star-edge:#5d4b2b}
+:root[data-theme='dark'] .ov-emitter[data-state='paused']{--star-gold:#8b703a;--star-glint:#c3a467;--star-edge:#624c27}
+.ov-idle-arc{fill:currentColor;animation:ov-wave-travel var(--wave-period) steps(5,end) infinite,ov-wave-fade var(--wave-period) ease-out infinite}
 .ov-thought-stars,.ov-unknown-arc{display:none}
 .ov-emitter:not([data-state='idle']) .ov-idle-arc{display:none;animation:none}
-.ov-emitter[data-state='thinking'] .ov-thought-stars{display:inline;fill:var(--signal)}
+.ov-emitter[data-state='thinking'] .ov-thought-stars{display:inline;fill:currentColor}
 .ov-emitter[data-state='thinking'] .ov-thought-star{animation:ov-twinkle var(--spark-period) steps(4,end) var(--spark-phase) infinite}
+.ov-emitter[data-state='idle'] .ov-star-body{animation:ov-star-glow var(--wave-period) ease-out infinite}
+.ov-emitter[data-state='thinking'] .ov-star-body{animation:ov-star-glow var(--spark-period) steps(4,end) var(--spark-phase) infinite}
 .ov-emitter[data-state='unknown'] .ov-unknown-arc{display:inline;fill:var(--tile-muted);animation:ov-seek 4s steps(1,end) infinite}
 @keyframes ov-wave-travel{from{transform:translateY(0)}to{transform:translateY(-5px)}}
 @keyframes ov-wave-fade{0%,100%{opacity:0}16%{opacity:.82}80%{opacity:.16}95%{opacity:0}}
+@keyframes ov-star-glow{0%,100%{filter:none}16%,24%{filter:brightness(1.18)}80%{filter:none}}
 @keyframes ov-twinkle{0%,64%,100%{opacity:0}12%{opacity:.55}24%{opacity:1}44%{opacity:.78}}
 @keyframes ov-seek{0%,72%,100%{opacity:.52}78%,90%{opacity:.88}}
 .ov-readout{font-size:clamp(28px,3.1vw,44px);font-weight:700;line-height:1.25;overflow-wrap:anywhere}.ov-status-body .ov-label{margin-bottom:5px}
@@ -588,7 +595,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="page-body stack"><div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div><div id="ov-missing" class="empty hidden"></div>
 <div id="ov-content" class="ov-grid hidden">
 <article class="ov-slot"><div class="ov-face"><div class="ov-status-body">
-<svg id="ov-emitter" class="ov-emitter" data-state="idle" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+<svg id="ov-emitter" class="ov-emitter" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
 <defs>
 <path id="ov-star" d="M15 6h2v4h1v2h2v2h2v1h4v2h-4v1h-2v2h-2v2h-1v4h-2v-4h-1v-2h-2v-2h-2v-1H6v-2h4v-1h2v-2h2v-2h1Z"/>
 <path id="ov-rest-rail" d="M8 8h2V7h2V6h2V5h4v1h2v1h2v1h2v1h-2V8h-2V7h-2V6h-4v1h-2v1h-2v1H8Z"/>
@@ -600,11 +607,11 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <g transform="rotate(180 16 16)"><use class="ov-idle-arc" href="#ov-rest-rail"/><use class="ov-unknown-arc" href="#ov-broken-rail"/></g>
 <g transform="rotate(270 16 16)"><use class="ov-idle-arc" href="#ov-rest-rail"/><use class="ov-unknown-arc" href="#ov-broken-rail"/></g>
 <g class="ov-thought-stars">
-  <use class="ov-thought-star" href="#ov-spark" x="3" y="3" style="--spark-period:3.2s;--spark-phase:-.7s"/>
+  <use class="ov-thought-star" href="#ov-spark" x="3" y="3"/>
   <use class="ov-thought-star" href="#ov-spark" x="27" y="18" style="--spark-period:3.7s;--spark-phase:-1.6s"/>
   <use class="ov-thought-star" href="#ov-spark" x="10" y="26" style="--spark-period:4.3s;--spark-phase:-3.3s"/>
 </g>
-<use href="#ov-star" y="1" fill="var(--signal-edge)"/><use href="#ov-star" fill="currentColor"/><path fill="var(--signal-glint)" d="M15 11h1v4h-1v1h-4v-1h3v-1h1Z"/>
+<g class="ov-star-body"><use href="#ov-star" y="1" fill="var(--star-edge)"/><use href="#ov-star" fill="currentColor"/><path fill="var(--star-glint)" d="M15 11h1v4h-1v1h-4v-1h3v-1h1Z"/></g>
 </svg>
 <div><h3 class="ov-label">运行状态</h3><div id="ov-thinking" class="ov-readout" role="status" aria-atomic="true"></div></div></div>
 <div class="ov-task"><span>当前任务</span><strong id="ov-task"></strong></div></div></article>
@@ -1247,15 +1254,15 @@ function showOverviewSignal(snapshot) {
   power.dataset.action = paused ? 'start' : 'stop';
   power.title = paused ? '开机' : '关机';
   power.setAttribute('aria-label', power.title);
-  const signal = thinking === true ? 'thinking' : thinking === false ? 'idle' : 'unknown';
+  const signal = paused ? 'paused' : thinking === true ? 'thinking' : thinking === false ? 'idle' : 'unknown';
   const indicator = $('ov-emitter');
   if (indicator.dataset.state !== signal) {
     indicator.dataset.state = signal;
     if (signal === 'thinking') indicator.querySelectorAll('.ov-thought-star').forEach(placeOverviewSpark);
   }
-  const label = {idle:'空闲', thinking:'正在想', unknown:'状态未知'}[signal];
+  const label = {paused:'已关机', idle:'空闲', thinking:'正在想', unknown:'状态未知'}[signal];
   const task = snapshot ? snapshot.current_task || '待机' : '—';
-  setLiveText($('ov-thinking'), paused ? '已关机' : label);
+  setLiveText($('ov-thinking'), label);
   setLiveText($('ov-task'), paused ? '—' : task);
 }
 
