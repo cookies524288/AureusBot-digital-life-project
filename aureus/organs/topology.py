@@ -1,6 +1,6 @@
 """器官页的结构图。None 端点代表核心，以免与旧配置里的器官名冲突。"""
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 
 from aureus.common.config import RuntimeConfig
@@ -30,13 +30,38 @@ ORGAN_DEFINITIONS = {
         ),
     ),
     "summarizer": OrganDefinition("提交待整理的材料", "返回整理结果"),
+    "memory": OrganDefinition("提取有原文依据的事实与偏好", "返回候选记忆"),
+    "utils": OrganDefinition("在专职器官未配置时整理材料", "返回摘要或整理建议"),
+    "fast_model": OrganDefinition("在判断器官未配置时判断来信", "返回判断建议"),
+    "vlm": OrganDefinition("理解 QQ 来信中的图片", "返回图片描述"),
+    "voice": OrganDefinition("转写 QQ 来信中的语音", "返回转写文本"),
+    "text_embedding": OrganDefinition("向量化记忆与检索词", "返回文本向量"),
+    "image_embedding": OrganDefinition("向量化入站图片", "返回图片向量"),
 }
 BUILTIN_ORGANS = tuple(ORGAN_DEFINITIONS)
+_FALLBACK_ORGANS = {
+    "judge": "fast_model",
+    "exploration_summary": "utils",
+    "diary": "utils",
+    "persona_review": "utils",
+    "language_learning": "utils",
+}
 
 
-def organ_tasks(runtime: RuntimeConfig) -> dict[str, str]:
+def resolve_task_organ(primary: str, task: object, available: Collection[str]) -> str:
+    """按模型配置选器官，保留专职绑定和旧版记忆整理的默认路线。"""
+    if task == "memory_consolidation" and "memory" in available:
+        return "memory"
+    if primary not in available and isinstance(task, str):
+        fallback = _FALLBACK_ORGANS.get(task)
+        if fallback is not None and fallback in available:
+            return fallback
+    return primary
+
+
+def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict[str, str]:
     """从启动配置取得各调用任务实际交给哪个器官。"""
-    return {
+    tasks = {
         "plan": runtime.heartbeat.plan_organ,
         "initiative_plan": runtime.heartbeat.plan_organ,
         "reply": runtime.heartbeat.reply_organ,
@@ -48,11 +73,14 @@ def organ_tasks(runtime: RuntimeConfig) -> dict[str, str]:
         "language_learning": runtime.language.organ,
         "memory_consolidation": "summarizer",
     }
+    return {task: resolve_task_organ(primary, task, available) for task, primary in tasks.items()}
 
 
-def organ_connections(names: Iterable[str], runtime: RuntimeConfig) -> list[dict[str, str | None]]:
+def organ_connections(
+    names: Iterable[str], runtime: RuntimeConfig, available: Collection[str] = ()
+) -> list[dict[str, str | None]]:
     """由本次运行的职责分配生成布线；流程是可能执行的路径，分支取决于当次心跳。"""
-    tasks = organ_tasks(runtime)
+    tasks = organ_tasks(runtime, available)
     routes: dict[str, tuple[str, ...]] = {role: (role,) for role in ORGAN_DEFINITIONS}
     routes.update(
         {

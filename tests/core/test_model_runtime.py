@@ -311,3 +311,45 @@ def test_availability_reload_keeps_tracker_execution_records_and_core_objects(
             assert exploration.failed is exploration._restored is True
             assert runtime.bus is bus and core.gateway is gateway and core.ledger is ledger
             assert core.gateway._permissions is permissions
+
+
+@pytest.mark.asyncio
+async def test_text_roles_use_configured_routes_across_reload(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path / "home")
+    paths.ensure_directories()
+    paths.identity_file.write_text(IDENTITY, encoding="utf-8")
+    paths.runtime_config_file.write_text(
+        '[memory]\nconsolidation_enabled = true\n', encoding="utf-8"
+    )
+    with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
+        models = core.models
+        assert models is not None
+        raw = config_for("dummy").model_dump(mode="json")
+        changes = (
+            (
+                {"summarizer", "judge", "utils", "fast_model", "memory"},
+                ("summarizer", "judge", "memory"),
+            ),
+            ({"utils", "fast_model"}, ("utils", "fast_model", "summarizer")),
+            ({"summarizer", "judge"}, ("summarizer", "judge", "summarizer")),
+        )
+        calls = (
+            ("summarizer", "diary"),
+            ("judge", "judge"),
+            ("summarizer", "memory_consolidation"),
+        )
+        for configured, expected in changes:
+            for name in ("summarizer", "judge", "utils", "fast_model", "memory"):
+                raw["organs"][name] = {"models": ["chosen"] if name in configured else []}
+            models.apply(models.prepare(ModelsConfig.model_validate(raw)))
+            assert core.heartbeat._diary is not None
+            assert core.heartbeat._diary.has_organ
+            assert core.heartbeat._memory_consolidator is not None
+            assert core.heartbeat._memory_consolidator.has_organ is bool(
+                {"memory", "summarizer"} & configured
+            )
+            responses = [
+                await core.heartbeat._call_organ(OrganRequest(primary, "测试", {"task": task}))
+                for primary, task in calls
+            ]
+            assert tuple(response.organ_id for response in responses) == expected

@@ -38,7 +38,6 @@ def register_prompt_routes(
     require_ready: Callable[..., Awaitable[str]],
 ) -> None:
     """提示词接口继承高级配置的会话及密码状态检查。"""
-    routes = organ_tasks(runtime)
     guard = [Depends(require_ready)]
 
     async def organs() -> dict[str, set[str]]:
@@ -46,6 +45,7 @@ def register_prompt_routes(
             _, config = await asyncio.to_thread(files.read_models)
         except ConfigError as error:
             raise HTTPException(422, detail=str(error)) from None
+        routes = organ_tasks(runtime, config.configured_text_organs())
         return {
             name: {task for task, assigned in routes.items() if assigned == name}
             for name in dict.fromkeys((*BUILTIN_ORGANS, *config.organs, *routes.values()))

@@ -254,7 +254,9 @@ class ConfigService:
             "key_status": self.key_status(names, refs),
             "key_entries": self.view_keys()["entries"],
             "builtin_organs": list(BUILTIN_ORGANS),
-            "organ_connections": organ_connections(config.organs, self._runtime),
+            "organ_connections": organ_connections(
+                config.organs, self._runtime, config.configured_text_organs()
+            ),
             "warnings": config.warnings(),
         }
 

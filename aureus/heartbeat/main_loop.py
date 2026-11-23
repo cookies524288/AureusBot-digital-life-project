@@ -16,6 +16,7 @@ import logging
 import sqlite3
 from collections import deque
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import datetime, tzinfo
 from enum import Enum, auto
 from typing import Any, cast
@@ -111,7 +112,8 @@ from aureus.hormones import (
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.memory import BATCH_SIZE, DiaryBook, LanguageSample, LanguageStore, MemoryIndex
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
-from aureus.organs import CallPurpose
+from aureus.organs import CallPurpose, OrganRequest, OrganResponse
+from aureus.organs.topology import resolve_task_organ
 from aureus.people import (
     AffinityBook,
     AffinityEvent,
@@ -321,11 +323,13 @@ class Heartbeat:
         self._language = language
         self._language_config = language_config or LanguageConfig()
         self._language_samples: deque[LanguageSample] = deque()
+        # 模型热重载提供当前路线；清空备用器官的模型即可关闭其路由。
+        self._available_organs: frozenset[str] = frozenset()
         self._conversation = ConversationFlow(
             clock=clock,
             timeline=timeline,
             config=config,
-            call=lambda request: self._organs.call(request),
+            call=self._call_organ,
             timezone=timezone,
             judge=judge,
             hormones=hormones,
@@ -415,13 +419,32 @@ class Heartbeat:
 
     def update_available_organs(self, available: frozenset[str]) -> None:
         """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
+        self._available_organs = available
         self._conversation.has_text_embedding = "text_embedding" in available
         self._conversation.inbox_media.available = available
-        for tracker in (self._diary, self._persona_growth, self._exploration):
+        for task, tracker in (
+            ("diary", self._diary),
+            ("persona_review", self._persona_growth),
+            ("exploration_summary", self._exploration),
+        ):
             if tracker is not None:
-                tracker.has_organ = tracker.config.organ in available
+                tracker.has_organ = (
+                    resolve_task_organ(tracker.config.organ, task, available) in available
+                )
         if self._memory_consolidator is not None:
-            self._memory_consolidator.has_organ = MEMORY_CONSOLIDATION_ORGAN in available
+            self._memory_consolidator.has_organ = (
+                resolve_task_organ(MEMORY_CONSOLIDATION_ORGAN, "memory_consolidation", available)
+                in available
+            )
+
+    async def _call_organ(self, request: OrganRequest) -> OrganResponse:
+        """在安全网关检查和记账之前选择实际承担该任务的器官。"""
+        organ = resolve_task_organ(
+            request.organ_id, request.context.get("task"), self._available_organs
+        )
+        if organ != request.organ_id:
+            request = replace(request, organ_id=organ)
+        return await self._organs.call(request)
 
     def attach_channel(self, name: str, sink: MessageSink) -> None:
         """接上一个通道：发往这个通道的消息交给 sink。
@@ -1282,7 +1305,7 @@ class Heartbeat:
         ]
         task = asyncio.create_task(
             language_runner.learn_language(
-                self._language, self._language_config.organ, self._organs.call, samples
+                self._language, self._language_config.organ, self._call_organ, samples
             ),
             name=language_runner.TASK_NAME,
         )
@@ -1392,7 +1415,7 @@ class Heartbeat:
                 tracker.config,
                 tracker.search,
                 tracker.reader,
-                self._organs.call,
+                self._call_organ,
                 self._permissions,
                 started.metadata["query"],
             ),
@@ -1413,7 +1436,7 @@ class Heartbeat:
             busy=bool(self._stop_requested or self._thought or self._unanswered or self._pending),
         )
         if job is not None:
-            task = asyncio.create_task(write_diary(job, self._organs.call), name="aureus-diary")
+            task = asyncio.create_task(write_diary(job, self._call_organ), name="aureus-diary")
             task.add_done_callback(self._on_thought_done)
             self._thought = _Thought(task, (), self._current_strategy())
 
@@ -1433,7 +1456,7 @@ class Heartbeat:
         )
         if job is not None:
             task = asyncio.create_task(
-                growth.review_persona(job, self._organs.call), name="aureus-persona-review"
+                growth.review_persona(job, self._call_organ), name="aureus-persona-review"
             )
             task.add_done_callback(self._on_thought_done)
             self._thought = _Thought(task, (), self._current_strategy())
@@ -1456,7 +1479,7 @@ class Heartbeat:
             return
         strategy = self._current_strategy()
         task = asyncio.create_task(
-            consolidator.run(self._organs.call, strategy.model_preference),
+            consolidator.run(self._call_organ, strategy.model_preference),
             name="aureus-memory-consolidation",
         )
         task.add_done_callback(self._on_thought_done)
@@ -1467,7 +1490,7 @@ class Heartbeat:
         conversation = job.conversation
         plan: InitiativePlan | None = None
         try:
-            response = await self._organs.call(
+            response = await self._call_organ(
                 _organ_request(
                     conversation,
                     organ_id=self._config.plan_organ,
@@ -1484,7 +1507,7 @@ class Heartbeat:
                 return _ThoughtOutcome(notice="规划器返回的内容看不懂")
             if not plan.reach_out:
                 return _ThoughtOutcome(initiative_plan=plan, declined=True)
-            response = await self._organs.call(
+            response = await self._call_organ(
                 _organ_request(
                     conversation,
                     organ_id=self._config.reply_organ,
