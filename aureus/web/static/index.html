@@ -3271,6 +3271,31 @@ PAGES.monitor = { load: loadMonitor };
 setInterval(() => { if (state.loggedIn && state.page === 'monitor') loadMonitor(); }, MONITOR_REFRESH_MS);
 
 // ---------- 启动：先问登录状态，再决定显示登录页、改密码页还是主界面 ----------
+async function watchLauncherExit() {
+  const marker = /^aureus-launcher=(\d{1,5}\/[a-f0-9]{32})$/;
+  if (marker.test(location.hash.slice(1))) {
+    window.name = location.hash.slice(1);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+  const channel = marker.exec(window.name)?.[1];
+  if (!channel) return;
+  while (true) {
+    try {
+      const response = await fetch('http://127.0.0.1:' + channel, { credentials: 'omit' });
+      if (response.ok && await response.text() === 'exited') break;
+    } catch {
+      // 切到后台可能中断连接，重连后仍要等启动器确认退出。
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  window.name = '';
+  document.title = 'Aureus 已退出';
+  $('shutdown-title').textContent = 'Aureus 已退出，可以关闭这个标签页。';
+  showAuth('shutdown');
+  window.close();
+}
+
+watchLauncherExit();
 enter();
 </script>
 </body>

@@ -299,6 +299,34 @@ def test_shutdown_request_is_only_sent_after_confirming() -> None:
     )
 
 
+def test_launcher_exit_requires_confirmation_and_keeps_a_closed_page() -> None:
+    run_page_script(
+        """
+        const token = '8123/00000000000000000000000000000001';
+        let connections = 0, closes = 0;
+        window.close = () => { closes++; };
+        fetch = async url => {
+          assert.equal(url, 'http://127.0.0.1:' + token);
+          if (++connections === 1) throw new Error('连接中断');
+          return {ok: true, text: async () => 'exited'};
+        };
+        await watchLauncherExit();
+        assert.equal(connections, 0);
+        location.hash = '#aureus-launcher=' + token;
+        const waiting = watchLauncherExit();
+        await Promise.resolve();
+        assert.equal(window.name, 'aureus-launcher=' + token);
+        assert.equal(closes, 0);
+        timers.pop()();
+        await waiting;
+        assert.equal(closes, 1);
+        assert.equal(window.name, '');
+        assert.equal($('shutdown').classList.contains('hidden'), false);
+        assert.match($('shutdown-title').textContent, /Aureus 已退出/);
+        """
+    )
+
+
 @pytest.mark.parametrize("probe", ["valid", "offline"])
 def test_wrong_password_does_not_log_out_a_valid_session(probe: str) -> None:
     run_page_script(

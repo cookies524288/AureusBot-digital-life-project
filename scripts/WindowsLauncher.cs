@@ -56,18 +56,29 @@ internal static class WindowsLauncher
                     process.WaitForExit();
                     if (status.Attached)
                     {
-                        window.Ready(status.Url);
-                        if (status.Owner > 0)
+                        Process owner;
+                        try { owner = Process.GetProcessById(status.Owner); }
+                        catch (ArgumentException)
                         {
-                            try { using (Process owner = Process.GetProcessById(status.Owner)) owner.WaitForExit(); }
-                            catch (ArgumentException) { }
+                            window.Failure("正在运行的 Aureus 实例已退出，请重新打开。");
+                            return 1;
+                        }
+                        using (owner)
+                        {
+                            window.Ready(status.Url);
+                            owner.WaitForExit();
+                            window.Exited();
                         }
                         return 0;
                     }
                     if (process.ExitCode != 0 && process.ExitCode != RestartExitCode && status.Url == null)
                         window.Failure(status.Error ?? ("网页服务启动失败，退出码 " + process.ExitCode + "。"));
                     if (process.ExitCode != RestartExitCode)
+                    {
+                        if (process.ExitCode == 0 || status.Url != null)
+                            window.Exited();
                         return process.ExitCode;
+                    }
                 }
                 info.Arguments = arguments + " --restarted";
             }
@@ -102,6 +113,8 @@ internal static class WindowsLauncher
         using (var context = new ApplicationContext())
         using (var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Aureus.Tray.ico"))
         using (var icon = new Icon(stream))
+        using (var smallIcon = new Icon(icon, SystemInformation.SmallIconSize))
+        using (var menuIcon = smallIcon.ToBitmap())
         using (var tray = new NotifyIcon())
         using (var menu = new ContextMenuStrip())
         using (var timer = new System.Windows.Forms.Timer { Interval = 200 })
@@ -112,7 +125,7 @@ internal static class WindowsLauncher
                 if (url != null && !process.HasExited)
                     window.Open(url);
             };
-            var open = menu.Items.Add("打开主页面");
+            var open = menu.Items.Add("打开主页面", menuIcon);
             open.Click += delegate { openPage(); };
             var restart = menu.Items.Add("重启");
             var exit = menu.Items.Add("退出");
@@ -134,7 +147,7 @@ internal static class WindowsLauncher
                 open.Enabled = false;
                 process.StandardInput.Close();
             };
-            tray.Icon = icon ?? SystemIcons.Application;
+            tray.Icon = smallIcon;
             tray.Text = "AureusBot";
             tray.ContextMenuStrip = menu;
             tray.MouseClick += delegate(object sender, MouseEventArgs args)
@@ -152,7 +165,7 @@ internal static class WindowsLauncher
                 {
                     string[] fields = value.Substring(attachPrefix.Length).Split(new[] { ' ' }, 2);
                     int owner;
-                    if (fields.Length == 2 && int.TryParse(fields[0], out owner) && LocalUrl(fields[1]) != null)
+                    if (fields.Length == 2 && int.TryParse(fields[0], out owner) && owner > 0 && LocalUrl(fields[1]) != null)
                     {
                         status.Owner = owner;
                         status.Attached = true;
