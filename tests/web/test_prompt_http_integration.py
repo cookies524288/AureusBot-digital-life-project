@@ -1,7 +1,7 @@
 """集成新增记忆、人际和语言片段，并在 MockTransport 捕获模型 HTTP 请求。"""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -9,12 +9,14 @@ from typing import Any
 import httpx
 import pytest
 
+from aureus.common import MemoryConfig
 from aureus.common.language_prompts import (
     LANGUAGE_EXPRESSION_ITEM,
     LANGUAGE_JARGON_ITEM,
     language_reference_block,
 )
 from aureus.common.time_format import format_local_time
+from aureus.heartbeat import TrustLevel
 from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
@@ -36,6 +38,8 @@ from aureus.organs import (
     OrganRequest,
 )
 from aureus.organs.api_keys import KeyResolver
+from aureus.timeline import ActorType, VisibilityScope
+from tests.heartbeat.test_recall_flow import CountingIndex, MemoryEnv
 from tests.web.config_rig import ConfigRig
 from tests.web.test_prompt_api import IDENTITY
 from tests.web.test_timeline_api import NOW
@@ -80,6 +84,66 @@ def _expanded_messages(
         assert "〔" not in content
         expanded.append({"role": message["role"], "content": content})
     return expanded
+
+
+async def _check_derived_recall(
+    path: Path, adapter: Callable[[str], LLMOrgan], captured: list[dict[str, Any]]
+) -> None:
+    """将正常心跳产生的规划和回复请求送过模拟 HTTP，核对原文和可见范围。"""
+    config = MemoryConfig(
+        consolidation_enabled=True,
+        consolidation_extract_enabled=True,
+        heuristic_recall_enabled=True,
+        max_results=1,
+    )
+    for name, trust, scope, allowed in (
+        ("owner", TrustLevel.VERIFIED_USER, VisibilityScope.USER_ONLY, True),
+        ("group", TrustLevel.VERIFIED_USER, VisibilityScope.GROUP, False),
+        ("contact", TrustLevel.VERIFIED_CONTACT, VisibilityScope.USER_ONLY, False),
+    ):
+        root = path / name
+        root.mkdir()
+        env = MemoryEnv(root)
+        try:
+            env.index.close()
+            env.index = CountingIndex(
+                root / "aureus.db", env.timeline, clock=env.clock, config=config
+            )
+            env.index.open()
+            original = env.timeline.append(
+                "message",
+                "我喜欢那颗有冰壳的卫星。",
+                ActorType.USER,
+                visibility=VisibilityScope.USER_ONLY,
+            )
+            env.index_more()
+            batch = env.index.consolidation_batch(1)
+            assert batch is not None
+            derived = "偏好木卫二"
+            assert env.index.save_consolidation(batch, [("preference", derived, batch.items[0])])
+            await env.exchange(env.build(config), trust=trust, visibility=scope)
+            assert [req.organ_id for req in env.organs.requests] == ["planner", "replyer"]
+            for request in env.organs.requests:
+                count = len(captured)
+                await adapter(request.organ_id).process(request)
+                assert len(captured) == count + 1
+                messages = captured[-1]["messages"]
+                assert [message["role"] for message in messages] == ["system", "user"]
+                content = messages[1]["content"]
+                assert (original.content in content) == allowed
+                assert derived not in content
+                assert "待回应的群消息：" in content
+            reply = captured[-1]["messages"][1]["content"]
+            assert "已编辑按需召回标题" in reply
+            assert f"命中：{int(allowed)} 条" in reply
+            assert env.records("message")[-1].metadata["recall_record_ids"] == (
+                [original.id] if allowed else []
+            )
+        finally:
+            for heart in env.rigs:
+                await heart.shut_down()
+            for store in (env.index, env.findings, env.people, env.timeline):
+                store.close()
 
 
 @pytest.mark.asyncio
@@ -333,6 +397,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         for key, source in edits.items():
             assert rig.client.put(f"/api/prompts/{key}", json={"source": source}).status_code == 200
         edited = await compare()
+        await _check_derived_recall(rig.paths.home, adapter, captured)
         assert edited["memory_consolidation"].startswith('合成提取：{"1": "模拟发言甲"')
         assert "待回应的群消息：" in edited["plan_references"]
         assert "已编辑人物资料：动态人物资料样例" in edited["reply_references"]
