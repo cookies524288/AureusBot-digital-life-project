@@ -32,8 +32,15 @@ from tests.heartbeat.test_judging_flow import NOW
 
 
 class CountingIndex(MemoryIndex):
-    def __init__(self, path: Path, timeline: TimelineDatabase) -> None:
-        super().__init__(path, timeline)
+    def __init__(
+        self,
+        path: Path,
+        timeline: TimelineDatabase,
+        *,
+        clock: ManualClock | None = None,
+        config: MemoryConfig | None = None,
+    ) -> None:
+        super().__init__(path, timeline, clock, config=config)
         self.searches: list[tuple[tuple[str, ...], tuple[int, ...], int]] = []
 
     def search(
@@ -45,10 +52,17 @@ class CountingIndex(MemoryIndex):
         person_key: str | None = None,
         since: datetime | None = None,
         before: datetime | None = None,
+        include_user_extractions: bool = True,
     ) -> list[MemoryHit]:
         self.searches.append((tuple(keywords), tuple(exclude_ids), limit))
         return super().search(
-            keywords, exclude_ids, limit, person_key=person_key, since=since, before=before
+            keywords,
+            exclude_ids,
+            limit,
+            person_key=person_key,
+            since=since,
+            before=before,
+            include_user_extractions=include_user_extractions,
         )
 
 
@@ -317,6 +331,96 @@ async def test_heuristic_empty_search_keeps_both_prompts_clear(env: MemoryEnv) -
     await env.exchange(env.build(MemoryConfig(heuristic_recall_enabled=True)))
     assert len(env.index.searches) == 1
     assert all("启发式记忆" not in request.prompt for request in env.organs.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_derived_preference_recalls_original_in_reply(env: MemoryEnv, enabled: bool) -> None:
+    config = MemoryConfig(
+        consolidation_enabled=enabled,
+        consolidation_extract_enabled=True,
+        heuristic_recall_enabled=True,
+        max_results=1,
+    )
+    original = env.timeline.append(
+        "message",
+        "我最喜欢那颗有冰壳的卫星。",
+        ActorType.USER,
+        visibility=VisibilityScope.USER_ONLY,
+    )
+    env.index_more()
+    batch = env.index.consolidation_batch(1)
+    assert batch is not None
+    assert env.index.save_consolidation(batch, [("preference", "偏好木卫二", batch.items[0])])
+    # 两组使用同一份已整理的材料，只改变正常运行时的开关。
+    env.index.close()
+    env.index = CountingIndex(env.path / "aureus.db", env.timeline, clock=env.clock, config=config)
+    env.index.open()
+    await env.exchange(env.build(config))
+    planner, replyer = env.organs.requests
+    assert (original.content in replyer.prompt) == enabled
+    assert (original.content in planner.prompt) == enabled
+    assert env.records("message")[-1].metadata["recall_record_ids"] == (
+        [original.id] if enabled else []
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "days,viewer,scope,expect_fact",
+    [
+        (0, TrustLevel.VERIFIED_USER, VisibilityScope.USER_ONLY, True),
+        (2, TrustLevel.VERIFIED_USER, VisibilityScope.USER_ONLY, False),
+        (0, TrustLevel.VERIFIED_CONTACT, VisibilityScope.GROUP, False),
+        (0, TrustLevel.VERIFIED_CONTACT, VisibilityScope.USER_ONLY, False),
+    ],
+)
+async def test_fact_decay_and_visibility_change_reply_evidence(
+    env: MemoryEnv, days: int, viewer: TrustLevel, scope: VisibilityScope, expect_fact: bool
+) -> None:
+    config = MemoryConfig(
+        consolidation_enabled=True,
+        consolidation_extract_enabled=True,
+        consolidation_half_life_days=1.0,
+        max_results=1,
+    )
+    env.index.close()
+    env.index = CountingIndex(env.path / "aureus.db", env.timeline, clock=env.clock, config=config)
+    env.index.open()
+    original = env.timeline.append(
+        "message",
+        "冰壳下面是液态水。",
+        ActorType.USER,
+        visibility=VisibilityScope.USER_ONLY,
+        metadata={"person_id": 17},
+    )
+    env.index_more()
+    batch = env.index.consolidation_batch(1)
+    assert batch is not None
+    assert env.index.save_consolidation(batch, [("fact", "木卫二存在地下海洋", batch.items[0])])
+    source = MemorySource("synthetic", "memory", "paragraphs", (1,))
+    historical = HistoricalMemory(source, "木卫二观测记录", recorded_at=NOW)
+    env.index.publish([historical])
+    env.clock.advance(timedelta(days=days))
+    env.organs.plan = '{"reply":true,"intent":"查旧资料","recall":["木卫二","地下海洋"]}'
+    await env.exchange(env.build(config), trust=viewer, visibility=scope)
+    prompt = env.organs.requests[-1].prompt
+    assert "命中：1 条" in prompt
+    assert (original.content in prompt) == expect_fact
+    assert (historical.text in prompt) != expect_fact
+    reply = env.records("message")[-1]
+    assert reply.metadata["recall_record_ids"] == ([original.id] if expect_fact else [])
+    assert reply.metadata.get("recall_source_keys", []) == (
+        [] if expect_fact else [source.encode()]
+    )
+    assert env.index.get_history(source) == historical
+    assert not env.index.search(["地下海洋"], (), 1, person_key="aureus:18")
+    assert not env.index.search(["地下海洋"], (), 1, before=NOW)
+    assert not env.index.search(["地下海洋"], (), 1, since=NOW + timedelta(seconds=1))
+    matches = env.index.search(["地下海洋"], (), 1, person_key="aureus:17", since=NOW)
+    assert [hit.record_id for hit in matches] == [original.id]
+    assert not env.index.search(["地下海洋"], [original.id], 1)
+    assert not env.index.search(["不相关的关键词"], (), 1)
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from aureus.memory.consolidation import (
     open_consolidation,
     read_batch,
     read_candidates,
+    retention_weight,
     save_batch,
 )
 from aureus.memory.history import (
@@ -97,7 +98,7 @@ class MemoryHit:
     source: MemorySource | None = None
     time_precision: str | None = None
     evidence: tuple[MemoryEvidence, ...] = ()
-    relevance: int = 0
+    relevance: float = 0
     sparse_score: float = 0.0
 
 
@@ -221,6 +222,7 @@ class MemoryIndex:
         person_key: str | None = None,
         since: datetime | None = None,
         before: datetime | None = None,
+        include_user_extractions: bool = True,
     ) -> list[MemoryHit]:
         """在同一次查询内召回历史与新经历，按稳定人物键和时间过滤。"""
         clauses, terms = keyword_conditions(keywords, "memory_index", "rowid")
@@ -242,10 +244,14 @@ class MemoryIndex:
         if exclude_ids:
             where.append("record_id NOT IN (" + ",".join("?" for _ in exclude_ids) + ")")
             parameters.extend(exclude_ids)
+        evidence_where = where[1:] if clauses else where
+        evidence_parameters = parameters[len(terms) :]
         parameters.append(limit)
         rank_prefix, score, rank_parameters = ranked_matches(keywords, "memory_index")
         conn = open_connection(self._db_path)
         try:
+            conn.execute("BEGIN")
+            now = self._clock.now()
             rows = conn.execute(
                 rank_prefix
                 + "SELECT record_id, recorded_at, actor_label, content, "
@@ -257,6 +263,60 @@ class MemoryIndex:
                 + "CAST(record_id AS INTEGER) DESC LIMIT ?",
                 [*rank_parameters, *terms, *parameters],
             ).fetchall()
+            if (
+                clauses
+                and include_user_extractions
+                and self._config.consolidation_enabled
+                and self._config.consolidation_extract_enabled
+            ):
+                aliases, alias_terms = keyword_conditions(keywords, "memory_extracted_fts", "rowid")
+                conn.create_function("retention_weight", 3, retention_weight, deterministic=True)
+                # 派生词只扩大匹配入口，返回的编号、内容、人物和时间全部取自证据。
+                # 先在有效原件中取每个来源的最高分，再与直接命中共同裁剪。
+                rows.extend(
+                    conn.execute(
+                        "WITH matches AS (SELECT rowid, "
+                        + relevance_expression(aliases)
+                        + " AS words FROM memory_extracted_fts WHERE "
+                        + " OR ".join(aliases)
+                        + ") "
+                        + "SELECT m.record_id, m.recorded_at, m.actor_label, m.content, "
+                        + "max(words * retention_weight(?, c.last_seen, ?)) AS relevance, "
+                        + "0.0 AS sparse_score FROM matches JOIN memory_candidates c "
+                        + "ON c.rowid = matches.rowid JOIN memory_candidate_evidence e "
+                        + "ON e.fingerprint = c.fingerprint JOIN memory_index m "
+                        + "ON m.rowid = CAST(substr(e.reference, 10) AS INTEGER) "
+                        + "JOIN timeline t ON t.id = m.rowid AND t.content = m.content "
+                        + "WHERE e.reference = 'timeline:' || m.rowid AND t.actor_type='user' "
+                        + "AND t.visibility='user_only' AND t.event_type='message' "
+                        + "AND c.kind IN ('fact', 'preference') "
+                        + "".join(" AND " + clause for clause in evidence_where)
+                        + " GROUP BY m.rowid ORDER BY relevance DESC, "
+                        "m.recorded_at DESC, m.rowid DESC LIMIT ?",
+                        [
+                            *alias_terms,
+                            *alias_terms,
+                            now.timestamp(),
+                            self._config.consolidation_half_life_days,
+                            *evidence_parameters,
+                            limit,
+                        ],
+                    ).fetchall()
+                )
+                rows.sort(
+                    key=lambda r: (
+                        r["relevance"],
+                        r["recorded_at"],
+                        -r["sparse_score"],
+                        int(r["record_id"]),
+                    ),
+                    reverse=True,
+                )
+                # 同一原件可由多个词、建议及原文命中，只占一个位置。
+                distinct = {}
+                for row in rows:
+                    distinct.setdefault(int(row["record_id"]), row)
+                rows = list(distinct.values())[:limit]
             hits = [
                 MemoryHit(
                     int(r["record_id"]),
@@ -272,7 +332,7 @@ class MemoryIndex:
                 conn,
                 keywords,
                 limit,
-                now=self._clock.now(),
+                now=now,
                 person_key=person_key,
                 since=since,
                 before=before,
