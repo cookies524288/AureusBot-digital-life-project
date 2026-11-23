@@ -75,15 +75,35 @@ class QQChannel:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     def _allows_route(self, route: MessageRoute) -> bool:
-        return self._test_group is None or (
-            route.kind == "group" and route.recipient_id == self._test_group
-        )
+        group = self._config.allowed_group_id
+        if self._test_group is not None and (
+            route.kind != "group" or route.recipient_id != self._test_group
+        ):
+            return False
+        if group is None:
+            return True
+        if route.account_id != self._config.account_id or route.temporary_group_id is not None:
+            return False
+        if route.kind == "group":
+            return route.recipient_id == group
+        return route.kind == "private" and self._is_owner(route.recipient_id)
 
     def _receive(self, payload: dict[str, Any]) -> None:
         perception = decode_message(payload, self._config.account_id)
         if perception is None or perception.route is None:
             return
         route = perception.route
+        # 临时来源可能没有有效群号；解码为普通回址前的原始标志也要核对。
+        if (
+            self._config.allowed_group_id is not None
+            and route.kind == "private"
+            and (
+                payload.get("sub_type") not in (None, "friend", "normal")
+                or payload.get("temp_source") not in (None, -1)
+                or payload.get("group_id") is not None
+            )
+        ):
+            return
         if not self._allows_route(route):
             return
         key = QQ_CHANNEL_NAME, route.account_id, route.message_id
@@ -109,12 +129,12 @@ class QQChannel:
         route = message.route
         if message.kind is not MessageKind.REPLY:
             return
-        if self._test_group is not None and route is None:
-            raise OneBotError("QQ 测试群模式缺少群地址")
         if route is None:
+            if self._test_group is not None or self._config.allowed_group_id is not None:
+                raise OneBotError("QQ 范围内的消息需要明确目的地址")
             return
         if not self._allows_route(route):
-            raise OneBotError("QQ 目的地超出本次测试群范围")
+            raise OneBotError("QQ 目的地超出允许范围")
         socket = self._transport.socket
         if socket is None or len(self._sending) >= _OUTGOING_LIMIT:
             raise OneBotError("QQ 连接未就绪或发送队列已满")

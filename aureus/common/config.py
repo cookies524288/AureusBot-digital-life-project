@@ -263,6 +263,8 @@ class QQConfig(BaseModel):
     enabled: bool = False
     endpoint: str = ""
     account_id: str = Field(default="", pattern=r"^(?:[1-9][0-9]{0,19})?$")
+    # D93：配置后仅允许该群及运行库中本人的普通私聊。
+    allowed_group_id: str | None = Field(default=None, pattern=r"^[1-9][0-9]{0,19}$")
     token_key: str = Field(default="", pattern=r"^(?:AUREUS_KEY_[A-Z0-9_]+)?$")
     action_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     reconnect_seconds: float = Field(default=5.0, gt=0, le=120)

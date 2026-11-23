@@ -81,9 +81,23 @@ async def test_only_test_group_reaches_heartbeat_and_wire_after_reconnect(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("restricted", [False, True])
+@pytest.mark.parametrize(
+    ("test_only", "persistent", "bound", "sent"),
+    [
+        (False, False, False, True),
+        (True, False, False, False),
+        (False, True, False, False),
+        (False, True, True, True),
+        (True, True, True, False),
+    ],
+)
 async def test_old_conversation_drives_initiative_but_private_send_obeys_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restricted: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    test_only: bool,
+    persistent: bool,
+    bound: bool,
+    sent: bool,
 ) -> None:
     clock = ManualClock(START)
     timeline = TimelineDatabase(AureusPaths(tmp_path).database_file, clock)
@@ -98,18 +112,23 @@ async def test_old_conversation_drives_initiative_but_private_send_obeys_scope(
         monkeypatch,
         clock,
         initiative=True,
-        qq_test_group=str(GROUP) if restricted else None,
+        qq_test_group=str(GROUP) if test_only else None,
+        allowed_group_id=str(GROUP) if persistent else None,
     ) as replay:
         # 醒来时从时间线恢复的是对话时刻。另注入已知私聊回址，单独挑战发送边界。
         target = decode_message(event(90, 2100, "旧私聊"), str(ACCOUNT))
         assert target is not None
+        if bound:
+            owner = replay.core.people.find("web", "local")
+            assert owner and owner.is_user
+            replay.core.people.bind_verified_account(owner, "qq", target.sender_id, None)
         monkeypatch.setattr(replay.core.heartbeat, "_last_user_contact", target)
         replay.planner.plan = {"reach_out": True, "intent": "问候", "reason": "好久没聊"}
         await replay.step()
         [decision] = replay.records(EVENT_INITIATIVE_CONSIDERED)
         assert decision.metadata["social_need"] > 0.7
-        assert decision.metadata["sent"] is (not restricted)
-        if restricted:
+        assert decision.metadata["sent"] is sent
+        if not sent:
             assert decision.metadata["decided"] == "failed"
             assert replay.fake.messages.empty()
         else:

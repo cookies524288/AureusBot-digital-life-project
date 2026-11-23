@@ -116,6 +116,7 @@ async def open_replay(
     heuristic: bool = False,
     cortisol: bool | None = None,
     qq_test_group: str | None = None,
+    allowed_group_id: str | None = None,
     initiative: bool = False,
 ) -> AsyncIterator[Replay]:
     paths = AureusPaths(home)
@@ -174,6 +175,7 @@ enabled = false
 enabled = true
 account_id = "{ACCOUNT}"
 endpoint = "ws://127.0.0.1:{port}/onebot"
+{f'allowed_group_id = "{allowed_group_id}"' if allowed_group_id is not None else ""}
 {regulation}""",
             encoding="utf-8",
         )
