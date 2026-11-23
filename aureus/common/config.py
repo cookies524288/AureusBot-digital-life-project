@@ -74,6 +74,7 @@ class HeartbeatConfig(BaseModel):
     planning_enabled: bool = True
     # D94：只关闭自主翻阅及规划器的特别关心调整，保留重要来信唤醒。
     inbox_attention_enabled: bool = True
+    inbox_read_limit: int = Field(default=35, ge=1, le=200)
     # 规划用哪个器官；planning_enabled 打开时，models.toml 里必须有它。
     plan_organ: str = Field(default="planner", min_length=1)
     # 节省档、低电量（含透支保护）时带上最近多少条对话；都不会超过 recent_message_limit。
@@ -92,6 +93,16 @@ class HeartbeatConfig(BaseModel):
     # 所有身体信号机制都不起作用，系统上下文里只写一段固定的「你有精力和心情」让模型自己演。
     # 月度上限、失控拦截、急停、权限检查这些安全检查照常生效。
     roleplay_mode: bool = False
+    working_memory_enabled: bool = True
+    working_memory_capacity: int = Field(default=80, ge=2, le=300)
+    working_memory_retain: int = Field(default=25, ge=1)
+
+    @model_validator(mode="after")
+    def validate_working_memory_window(self) -> Self:
+        """保留的近期焦点必须比工作记忆容量小。"""
+        if self.working_memory_retain >= self.working_memory_capacity:
+            raise ValueError("working_memory_retain 必须小于 working_memory_capacity")
+        return self
 
 
 class BodyConfig(BaseModel):

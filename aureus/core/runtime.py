@@ -385,7 +385,7 @@ def open_core(
                 inbox_store=inbox_store,
                 on_inbox_message=heartbeat.on_inbox_message,
             )
-            heartbeat.set_inbox_route_filter(qq.allows_inbox_perception)
+            heartbeat.set_inbox_route_filter(qq.allows_inbox_conversation)
             inbox_images = InboxImageIndex(
                 paths.database_file,
                 gateway.call,

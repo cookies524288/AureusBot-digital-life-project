@@ -297,6 +297,7 @@ class Heartbeat:
                 people,
                 ((account.platform, account.id) for account in identity.user.accounts),
                 enabled=config.inbox_attention_enabled and not config.roleplay_mode,
+                read_limit=config.inbox_read_limit,
             )
             if inbox_store is not None
             else None
@@ -474,7 +475,7 @@ class Heartbeat:
         self._wake.set()
         return True
 
-    def set_inbox_route_filter(self, allows: Callable[[Perception], bool]) -> None:
+    def set_inbox_route_filter(self, allows: Callable[[ConversationKey], bool]) -> None:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
@@ -680,7 +681,20 @@ class Heartbeat:
             thought.task.cancel()
             for heard in thought.replying_to:
                 priority = Priority.USER if heard.is_user else Priority.CONTACT
-                self._unanswered.add(heard, priority, _reply_address(heard.perception))
+                if (
+                    priority is Priority.CONTACT
+                    and self._platform_inbox is not None
+                    and "inbox_message_id" in heard.record.metadata
+                    and self._platform_inbox.is_priority(heard.perception)
+                ):
+                    priority = Priority.SPECIAL
+                self._unanswered.add(
+                    heard,
+                    priority,
+                    _reply_address(
+                        heard.perception, browsed=heard.record.metadata.get("inbox_browsed") is True
+                    ),
+                )
         self._wake.set()
 
     def wake_up(self) -> Downtime:
@@ -836,7 +850,7 @@ class Heartbeat:
                     ),
                 )
             )
-            self._take_in_perceptions()
+            self._take_in_perceptions(browsing=True)
         self._maybe_start_thought()
         self._maybe_learn_language()
         self._maybe_start_initiative()
@@ -959,10 +973,11 @@ class Heartbeat:
             judgment_record = self._record_judgment(thought, outcome.judge)
             self._record_triggers(outcome.judge.triggers)
             self._record_affinity(person_id, outcome.judge.judgment, judgment_record)
-        if outcome.declined and outcome.plan is not None:
-            if self._hormones is not None:
-                self._hormones.note_decline(person_id, self._clock.now())
-            self._record_declined(thought, outcome.plan, target, outcome.effects)
+        if outcome.declined:
+            if outcome.plan is not None:
+                if self._hormones is not None:
+                    self._hormones.note_decline(person_id, self._clock.now())
+                self._record_declined(thought, outcome.plan, target, outcome.effects)
             return
         if outcome.response is None:
             self._deliver(target, outcome.notice, MessageKind.NOTICE)
@@ -1178,7 +1193,7 @@ class Heartbeat:
             if message.perception.channel in self._sinks and message.id not in existing_ids
         )
 
-    def _take_in_perceptions(self) -> None:
+    def _take_in_perceptions(self, *, browsing: bool = False) -> None:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
         while self._pending:
             perception, inbox_message = self._pending[0]
@@ -1219,6 +1234,10 @@ class Heartbeat:
                 metadata.update(
                     inbox_message_id=inbox_message.id, sender_name=inbox_message.sender_name
                 )
+                if browsing:
+                    metadata["inbox_browsed"] = True
+                if person is not None and person.name:
+                    metadata["person_name"] = person.name
             record = self._timeline.append(
                 event_type=EVENT_MESSAGE,
                 content=perception.content,
@@ -1253,7 +1272,11 @@ class Heartbeat:
                 record,
                 person is not None and person.is_user and priority is Priority.USER,
             )
-            self._unanswered.add(heard, priority, _reply_address(perception))
+            self._unanswered.add(
+                heard,
+                priority,
+                _reply_address(perception, browsed=browsing and inbox_message is not None),
+            )
             if priority is Priority.USER:
                 self._last_user_contact = perception
                 self._initiative.note_user_message(record.timestamp)
@@ -1903,9 +1926,11 @@ def _conversation_of(perception: Perception) -> tuple[str, str]:
     return (perception.channel, perception.sender_id)
 
 
-def _reply_address(perception: Perception) -> tuple[tuple[str, str], ConversationKey | None]:
+def _reply_address(
+    perception: Perception, *, browsed: bool = False
+) -> tuple[tuple[str, str] | None, ConversationKey | None]:
     route = ConversationKey.from_perception(perception) if perception.route is not None else None
-    return _conversation_of(perception), route
+    return (None if browsed and route is not None else _conversation_of(perception)), route
 
 
 def _priority_of(perception: Perception, person: Person | None) -> Priority | None:

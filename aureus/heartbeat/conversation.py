@@ -148,6 +148,7 @@ class _ReplyJob:
     history_ids: tuple[int, ...] = ()
     people_history: tuple[HistoricalEntry, ...] = ()
     inbox_attention: bool = False
+    require_inbox_plan: bool = False
     media_sources: tuple[Perception, ...] = ()
 
 
@@ -309,6 +310,11 @@ class ConversationFlow:
         inbox_attention: bool = False,
     ) -> _ReplyJob:
         """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
+        require_inbox_plan = any(
+            record.metadata.get("inbox_browsed") is True for record in messages
+        )
+        if require_inbox_plan:
+            strategy = replace(strategy, plan_first=True)
         batch_ids = {record.id for record in messages}
         contact = target.trust is not TrustLevel.VERIFIED_USER
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
@@ -420,6 +426,7 @@ class ConversationFlow:
             history_ids=tuple(record.id for record in [*history, *messages]),
             people_history=people_history,
             inbox_attention=inbox_attention,
+            require_inbox_plan=require_inbox_plan,
         )
         return self._apply_hormones(job, ())
 
@@ -501,8 +508,10 @@ class ConversationFlow:
                 return _ThoughtOutcome(
                     notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
                 )
+            if job.require_inbox_plan and plan is None:
+                return _ThoughtOutcome(declined=True, judge=attempt, effects=job.effects)
             if plan is not None and not plan.should_reply:
-                if job.effects is None or not job.effects.must_reply:
+                if job.require_inbox_plan or job.effects is None or not job.effects.must_reply:
                     return _ThoughtOutcome(
                         plan=plan, declined=True, judge=attempt, effects=job.effects
                     )

@@ -704,14 +704,14 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="og-flow-head"><h3 id="og-flow-title">一轮来信处理</h3><div class="og-flow-legend"><span>进入本轮后</span><span>条件分支</span></div></div>
 <ol class="og-flow">
 <li><div class="og-lanes">
-<div class="og-step conditional"><b>QQ 来信 → 平台收件箱</b><p>已绑定用户和特别关心的人来信会唤醒心跳。普通 QQ 来信留在收件箱，等空闲时自主翻阅。心跳先取这些优先未读，再按条件翻阅普通会话。</p></div>
+<div class="og-step conditional"><b>QQ 来信 → 平台收件箱</b><p>已绑定用户和特别关心的人来信可以优先唤醒心跳。空闲时自主翻阅先取未读私聊，再用剩余条数翻阅未读群聊。一次翻阅可选多个会话，合计条数受运行设置限制。</p></div>
 <div class="og-step conditional"><b>网页、终端来信 → 感知队列</b><p>直接唤醒心跳。日程等内部事件由心跳另行检查，符合条件时也可启动其他任务。</p></div>
 </div></li>
-<li><div class="og-step"><b>心跳收下新来信</b><p>识别来源，追加来信到时间线。收件箱里的来信记下后标为已读。身份无法确认时只记录。</p></div></li>
+<li><div class="og-step"><b>心跳收下新来信</b><p>识别来源，追加来信到时间线。收件箱按会话记录已读进度，优先唤醒时跳过的旧来信仍能翻阅。身份无法确认时只记录。</p></div></li>
 <li><div class="og-step"><b>检查本轮能否开始处理</b><p>有待回信、当前空闲、允许调用器官且等待时间已到时，按优先级挑出同一会话的一批来信。没到条件时，本拍继续等待或结束。</p></div></li>
 <li><div class="og-lanes">
 <div class="og-step conditional"><b>按需判断</b><p>满足判断配置和触发条件时，请判断器官提供情绪建议。心跳可把产生的变化带入后续处理。</p></div>
-<div class="og-step conditional"><b>按档位规划</b><p>判断之后或跳过判断时，当前档位允许才请规划器建议怎么回应。其他情况下直接请回复器处理。规划可建议不回，以及后续翻阅或特别关心。</p></div>
+<div class="og-step conditional"><b>按会话规划</b><p>自主翻阅时逐个会话请规划器判断是否回应，收到明确的回复建议才继续。其他来信按当前档位决定是否先规划。规划也可建议后续翻阅或特别关心。</p></div>
 </div></li>
 <li><div class="og-lanes">
 <div class="og-step conditional"><b>沉默</b><p>采纳不回复的计划时，心跳记录该决定并结束本轮。器官调用受限或无法生成回复时，也可能只有系统提示。</p></div>
@@ -2675,6 +2675,7 @@ const CFG_FIELDS = {
   'heartbeat.broadcast_cognitive_state': ['状态变化记录', '是否把认知状态的变化记进时间线。'],
   'heartbeat.shutdown_grace_seconds': ['关机等待上限（秒）', '关机时最多给正在执行的任务多少秒收尾。'],
   'heartbeat.recent_message_limit': ['常规对话条数', '平时回复时可以参考最近多少条对话。'],
+  'heartbeat.inbox_read_limit': ['自主翻阅条数上限', '每次自主翻阅从所有选中会话合计读取的消息条数。优先唤醒的来信单独处理。保存后重启生效。'],
   'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
   'heartbeat.low_message_limit': ['低电量对话条数', '低电量时可以参考最近多少条对话。'],
   'heartbeat.reply_organ': ['回复器官', '选择负责生成回复的器官。'],

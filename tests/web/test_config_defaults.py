@@ -91,6 +91,38 @@ def test_runtime_restore_removes_only_that_override_and_restart_reads_new_defaul
         shutdown_logging()
 
 
+def test_inbox_read_limit_saves_and_restores_for_restart(rig: ConfigRig) -> None:
+    client = rig.client
+    path = rig.paths.runtime_config_file
+    assert client.get("/api/config").json()["config"]["heartbeat"]["inbox_read_limit"] == 35
+
+    saved = client.put(
+        "/api/config",
+        json={"changes": {"heartbeat": {"inbox_read_limit": 72, "recent_message_limit": 27}}},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["restart_required"] is True
+    assert client.get("/api/config").json()["config"]["heartbeat"]["inbox_read_limit"] == 72
+    assert load_runtime_config(rig.paths).heartbeat.inbox_read_limit == 72
+
+    before = path.read_bytes()
+    for invalid in (0, 201, 35.5):
+        rejected = client.put(
+            "/api/config", json={"changes": {"heartbeat": {"inbox_read_limit": invalid}}}
+        )
+        assert rejected.status_code == 422
+    assert path.read_bytes() == before
+
+    restored = client.post(RUNTIME_RESTORE, json={"field": "heartbeat.inbox_read_limit"})
+    assert restored.status_code == 200
+    assert restored.json() == {"value": 35, "changed": True, "restart_required": True}
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["heartbeat"] == {
+        "recent_message_limit": 27,
+    }
+    assert client.get("/api/config").json()["config"]["heartbeat"]["inbox_read_limit"] == 35
+    assert load_runtime_config(rig.paths).heartbeat.inbox_read_limit == 35
+
+
 @pytest.mark.parametrize(
     "field",
     [

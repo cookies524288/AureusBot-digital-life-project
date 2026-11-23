@@ -101,7 +101,7 @@ class QQChannel:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _allows_route(self, route: MessageRoute) -> bool:
+    def _allows_route(self, route: MessageRoute | ConversationKey) -> bool:
         group = self._config.allowed_group_id
         if self._test_group is not None and (
             route.kind != "group" or route.recipient_id != self._test_group
@@ -156,12 +156,16 @@ class QQChannel:
 
     def allows_inbox_perception(self, perception: Perception) -> bool:
         """恢复未读时重新检查接收账号和当前允许的 QQ 范围。"""
-        route = perception.route
+        return perception.route is not None and self.allows_inbox_conversation(
+            ConversationKey.from_perception(perception)
+        )
+
+    def allows_inbox_conversation(self, conversation: ConversationKey) -> bool:
+        """先核对收件账号和接收范围，再读取该会话的未读页。"""
         return (
-            perception.channel == QQ_CHANNEL_NAME
-            and route is not None
-            and route.account_id == self._config.account_id
-            and self._allows_route(route)
+            conversation.platform == QQ_CHANNEL_NAME
+            and conversation.account_id == self._config.account_id
+            and self._allows_route(conversation)
         )
 
     async def read_inbox_attachment(

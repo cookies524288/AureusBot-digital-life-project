@@ -8,6 +8,7 @@ import pytest
 from aureus.body import Body
 from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, ManualClock
 from aureus.heartbeat import Heartbeat, MediaReference, OutgoingMessage, Perception, TrustLevel
+from aureus.heartbeat.inbox_attention import InboxAttention
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.perception import MessageRoute
 from aureus.identity import Identity
@@ -26,6 +27,74 @@ class Organs:
         self.requests.append(request)
         suggestion = {"planner": self.plan, "vlm": "识别出的内容"}.get(request.organ_id, "收到。")
         return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
+
+
+def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    store = InboxStore(database, clock)
+    attention = InboxAttention(
+        store, TimelineDatabase(database, clock), None, [], enabled=True, read_limit=35
+    )
+
+    def save(group: str, message: str) -> None:
+        assert (
+            store.add(
+                Perception(
+                    "qq",
+                    "visitor",
+                    message,
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("bot", "group", group, message),
+                )
+            )
+            is not None
+        )
+
+    save("busy", "oldest")
+    for number in range(45):
+        save("backlog", str(number))
+    save("busy", "newest")
+    assert attention.browse(clock.now(), can_browse=True) == []
+    clock.advance(timedelta(minutes=5))
+    rows = attention.browse(clock.now(), can_browse=True)
+    assert [row.perception.content for row in rows[:2]] == ["oldest", "newest"]
+    assert len(rows) == 35
+
+
+def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    store = InboxStore(database, clock)
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    try:
+        attention = InboxAttention(
+            store, timeline, None, [("qq", "owner")], enabled=True, read_limit=35
+        )
+        attention.allows = lambda conversation: conversation.recipient_id == "current"
+        for number in range(26):
+            route = MessageRoute(
+                "bot", "group", "former" if number < 25 else "current", str(number)
+            )
+            assert (
+                store.add(
+                    Perception(
+                        "qq",
+                        "owner",
+                        str(number),
+                        VisibilityScope.GROUP,
+                        TrustLevel.VERIFIED_CONTACT,
+                        route=route,
+                    )
+                )
+                is not None
+            )
+        assert [row.perception.content for row in attention.priority_messages()] == ["25"]
+        assert sum(row.unread_count for row in store.list_conversations()) == 26
+    finally:
+        timeline.close()
 
 
 @pytest.mark.asyncio
@@ -140,7 +209,8 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         await heart.wait_for_thought()
         heart.beat()
         assert sent[-1].route == priority.route
-        assert sum(row.unread_count for row in store.list_conversations()) == 1
+        assert sum(row.unread_count for row in store.list_conversations()) == 2
+        assert sum(item.route == priority.route for item in sent) == 1
         assert ordinary.route is not None
         assert not any(item.route == ordinary.route for item in sent)
 
@@ -149,7 +219,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         heart.beat()
         assert heart.maintenance_paused and not heart.is_thinking
         assert not any(item.route == buffered.route for item in sent)
-        assert sum(row.unread_count for row in store.list_conversations()) == 2
+        assert sum(row.unread_count for row in store.list_conversations()) == 3
 
         heart.set_maintenance_paused(False)
         heart.beat()

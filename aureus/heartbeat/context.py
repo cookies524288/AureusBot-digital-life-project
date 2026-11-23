@@ -367,6 +367,13 @@ def build_judge_context(identity: Identity) -> str:
 def _speaker(record: TimelineRecord, user_name: str) -> str:
     if record.actor_type == ActorType.ME:
         return "你"
+    if "inbox_message_id" in record.metadata:
+        sender = record.metadata.get("sender_name") or record.actor_id
+        person = record.metadata.get("person_name")
+        identity = f"发言者 {_one_line(str(sender))}（账号 {_one_line(record.actor_id or '')}）"
+        if isinstance(person, str) and person:
+            identity += f"，关联人物 {_one_line(person)}"
+        return identity
     if record.actor_type == ActorType.USER:
         return user_name
     return record.actor_id or str(record.actor_type)
@@ -376,6 +383,14 @@ def _dialogue_line(record: TimelineRecord, user_name: str, timezone: tzinfo | No
     # 对话可能跨好几天（中间停过机），所以带上日期。
     moment = record.timestamp.astimezone(timezone)
     labels = [f"{moment:%m-%d %H:%M}"]
+    source = record.metadata.get("source_timestamp")
+    if type(source) is int:
+        try:
+            source_time = datetime.fromtimestamp(source, timezone)
+        except (OverflowError, OSError, ValueError):
+            pass
+        else:
+            labels.insert(0, f"源时间 {source_time:%Y-%m-%d %H:%M:%S %z}")
     # QQ 的引用编号指向原消息，和本次回复使用的时间线编号各有用途。
     if isinstance(message_id := record.metadata.get("message_id"), str) and message_id:
         labels.append(f"消息 {_one_line(message_id)}")

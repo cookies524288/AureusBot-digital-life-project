@@ -42,6 +42,8 @@ config_version = 1
 # 精力正常时，先由规划器决定回不回、说什么、多长，再由回复器写成话（两次调用）。
 # 关掉后每次都合并成一次调用。精力进了节省档或更低时，本来就合并成一次。
 # planning_enabled = true
+# 每次自主翻阅在所有选中会话合计读取的条数，范围 1–200。
+# inbox_read_limit = 35
 # 规划用哪个器官；planning_enabled 打开时，models.toml 里必须有 [organs.这个名字]。
 # plan_organ = "planner"
 # 节省档时带上最近多少条对话；低电量和透支保护时带多少条。都不会超过 recent_message_limit。
@@ -59,6 +61,10 @@ config_version = 1
 # （精力、疲劳、压力、睡眠、状态摘要、样本），只在提示词里写一段「你有精力和心情」让模型自己演。
 # 月度上限、失控拦截、急停等安全检查照常生效。只用来和真实信号的做法做对比，平时不要开。
 # roleplay_mode = false
+# 工作记忆达到容量时整理最早的（容量减保留条数）条，保留近期焦点。
+# working_memory_enabled = true
+# working_memory_capacity = 80
+# working_memory_retain = 25
 
 # 身体信号（设计见 docs/04-body-signals.md、docs/10-decisions.md 的 D56、D57）。
 # 精力来自每月 token 上限：每日额度 = 本月剩余额度 ÷ 本月剩余天数，
