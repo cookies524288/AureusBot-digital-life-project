@@ -219,7 +219,7 @@ class MemoryIndex:
         exclude_ids: Collection[int],
         limit: int,
         *,
-        person_key: str | None = None,
+        person_key: str | tuple[str, ...] | None = None,
         since: datetime | None = None,
         before: datetime | None = None,
         include_user_extractions: bool = True,
@@ -232,9 +232,10 @@ class MemoryIndex:
             return []
         parameters: list[str | int | float] = list(terms)
         where = ["(" + " OR ".join(clauses) + ")"] if clauses else []
-        if person_key is not None:
-            where.append("person_key = ?")
-            parameters.append(person_key)
+        person_keys = (person_key,) if isinstance(person_key, str) else person_key
+        if person_keys is not None:
+            where.append("person_key IN (" + ",".join("?" for _ in person_keys) + ")")
+            parameters.extend(person_keys)
         if since is not None:
             where.append("julianday(recorded_at) >= julianday(?)")
             parameters.append(since.isoformat())
@@ -333,7 +334,7 @@ class MemoryIndex:
                 keywords,
                 limit,
                 now=now,
-                person_key=person_key,
+                person_keys=person_keys,
                 since=since,
                 before=before,
             )

@@ -238,13 +238,13 @@ def search_history(
     limit: int,
     *,
     now: datetime,
-    person_key: str | None,
+    person_keys: tuple[str, ...] | None,
     since: datetime | None,
     before: datetime | None,
 ) -> list[tuple[HistoricalMemory, int, float]]:
     """只查当前有效的资料。起始时间包含端点，截止时间排除端点。"""
     clauses, terms = keyword_conditions(keywords, "memory_history_fts", "id")
-    if not clauses and person_key is None and since is None and before is None:
+    if not clauses and person_keys is None and since is None and before is None:
         return []
     # 上游的有效区间为 [valid_from, valid_to)，查询时刻来自 Aureus 时钟。
     where = [
@@ -259,7 +259,7 @@ def search_history(
         parameters.extend(terms)
     elif keywords:
         return []
-    _append_filters(where, parameters, person_key, since, before)
+    _append_filters(where, parameters, person_keys, since, before)
     parameters.append(limit)
     rank_prefix, score, rank_parameters = ranked_matches(keywords, "memory_history_fts")
     rows = conn.execute(
@@ -278,13 +278,13 @@ def search_history(
 def _append_filters(
     where: list[str],
     parameters: list[str | int | float],
-    person_key: str | None,
+    person_keys: tuple[str, ...] | None,
     since: datetime | None,
     before: datetime | None,
 ) -> None:
-    if person_key is not None:
-        where.append("person_key = ?")
-        parameters.append(person_key)
+    if person_keys is not None:
+        where.append("person_key IN (" + ",".join("?" for _ in person_keys) + ")")
+        parameters.extend(person_keys)
     if since is not None:
         where.append("recorded_at >= ?")
         parameters.append(since.timestamp())

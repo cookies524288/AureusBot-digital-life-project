@@ -49,7 +49,7 @@ class CountingIndex(MemoryIndex):
         exclude_ids: Collection[int],
         limit: int,
         *,
-        person_key: str | None = None,
+        person_key: str | tuple[str, ...] | None = None,
         since: datetime | None = None,
         before: datetime | None = None,
         include_user_extractions: bool = True,

@@ -664,11 +664,17 @@ class ConversationFlow:
         if self._memory is None:
             return None
         try:
+            person_keys = None
+            if "我说过" in job.messages[-1].content:
+                if job.person_id is None or self._people is None:
+                    return []
+                person_keys = self._people.memory_person_keys(job.person_id)
             return await asyncio.to_thread(
                 self._memory.search,
                 words,
                 job.history_ids,
                 self._memory_config.max_results,
+                person_key=person_keys,
                 include_user_extractions=(
                     job.viewer_is_user and job.messages[-1].visibility is VisibilityScope.USER_ONLY
                 ),
