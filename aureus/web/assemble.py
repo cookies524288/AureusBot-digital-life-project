@@ -86,6 +86,7 @@ def open_web(
             inbox_store=core.inbox_store,
             resource_language=core.language,
             resource_memory=core.memory,
+            resource_images=core.inbox_images,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

@@ -565,6 +565,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="nav-group"><span class="nav-label" style="--i:4">资源管理</span></div>
 <button class="nav-item" data-page="learning" aria-label="学习"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-persona"/></svg><span class="nav-label" style="--i:5">学习</span></button>
 <button class="nav-item" data-page="memory" aria-label="长期记忆"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-timeline"/></svg><span class="nav-label" style="--i:6">长期记忆</span></button>
+<button class="nav-item" data-page="images" aria-label="图片"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-model"/></svg><span class="nav-label" style="--i:7">图片</span></button>
 <div class="nav-group"><span class="nav-label" style="--i:4">配置</span></div>
 <button class="nav-item" data-page="persona" aria-label="人设"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-persona"/></svg><span class="nav-label" style="--i:5">人设</span></button>
 <button class="nav-item" data-page="models" aria-label="模型"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-model"/></svg><span class="nav-label" style="--i:6">模型</span></button>
@@ -643,6 +644,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div></section>
 <section id="page-learning" class="page"><div class="page-head"><h2>学习</h2></div><div class="page-body stack"><form id="learning-search" class="row" style="flex-wrap:wrap"><label>关键词 <input name="q" maxlength="200"></label><label>类型 <select name="kind"><option value="expression">表达</option><option value="jargon">黑话</option></select></label><button class="btn small">搜索</button></form><div id="learning-result" class="stack" aria-live="polite"></div><button id="learning-more" class="btn small hidden">加载更多</button></div></section>
 <section id="page-memory" class="page"><div class="page-head"><h2>长期记忆</h2></div><div class="page-body stack"><form id="memory-search" class="row" style="flex-wrap:wrap"><label>关键词 <input name="q" maxlength="200"></label><label>类型 <select name="kind"><option value="history">迁入记忆</option><option value="live">本地经历</option></select></label><label>状态 <select name="status"><option value="">全部</option><option value="active">可用</option><option value="inactive">停用</option><option value="conflicted">冲突</option><option value="superseded">已替代</option><option value="retracted">已撤回</option><option value="deleted">已删除</option><option value="missing">缺失</option></select></label><button class="btn small">搜索</button></form><div id="memory-result" class="stack" aria-live="polite"></div><button id="memory-more" class="btn small hidden">加载更多</button></div></section>
+<section id="page-images" class="page"><div class="page-head"><h2>图片</h2><button id="images-reset" class="btn small hidden">返回图片列表</button></div><div class="page-body stack"><div id="images-result" class="stack" aria-live="polite"></div><button id="images-more" class="btn small hidden">加载更多</button></div></section>
 <section id="page-inbox" class="page"><div class="page-head"><h2>收件箱</h2><button id="inbox-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class="page-body">
 <p id="inbox-empty" class="empty hidden" role="status"></p>
@@ -1322,6 +1324,42 @@ for (const key of ['learning', 'memory']) {
   more.addEventListener('click', () => read(true));
   PAGES[key] = { load: () => read(false) };
 }
+let imagePageCursor = null, imagePageRequest = 0;
+async function loadImages({similarTo, append = false} = {}) {
+  const request = ++imagePageRequest;
+  const list = $('images-result');
+  const more = $('images-more');
+  const query = new URLSearchParams();
+  if (similarTo) query.set('similar_to', similarTo);
+  if (append) query.set('before', imagePageCursor);
+  if (!append) list.textContent = '读取中…';
+  more.disabled = true;
+  const res = await api('/api/resources/images?' + query);
+  if (request !== imagePageRequest) return;
+  more.disabled = false;
+  if (!res.ok) { if (!append) list.textContent = '读取失败'; fail(res); return; }
+  if (!append) list.replaceChildren();
+  $('images-reset').classList.toggle('hidden', !similarTo);
+  if (!append && !res.data.items.length) list.textContent = similarTo ? '没有找到相似图片' : '暂无已索引的图片';
+  for (const item of res.data.items) {
+    const card = el('article', {class:'card stack', style:'overflow-wrap:anywhere'},
+      el('strong', {text:item.conversation}),
+      el('time', {datetime:item.timestamp, text:fmtTime(item.timestamp, true)}),
+      el('span', {text:'附件 ' + item.attachment}));
+    if (item.score != null) card.append(el('span', {text:'相似度 ' + Number(item.score).toFixed(3)}));
+    else {
+      const button = el('button', {class:'btn small', text:'查找相似图片'});
+      button.addEventListener('click', () => loadImages({similarTo:item.id}));
+      card.append(button);
+    }
+    list.append(card);
+  }
+  imagePageCursor = res.data.next_before;
+  more.classList.toggle('hidden', imagePageCursor === null);
+}
+$('images-reset').addEventListener('click', () => loadImages());
+$('images-more').addEventListener('click', () => loadImages({append:true}));
+PAGES.images = {load: () => loadImages()};
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------
 // 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
 const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };

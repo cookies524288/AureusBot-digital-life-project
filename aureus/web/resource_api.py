@@ -5,8 +5,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 
+from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.memory import LanguageKind, LanguageStore, MemoryIndex
 
 DEFAULT_SIZE = 30
@@ -18,8 +19,30 @@ def register_resource_routes(
     require_ready: Callable[..., Awaitable[str]],
     language: LanguageStore | None,
     memory: MemoryIndex | None,
+    images: InboxImageIndex | None = None,
 ) -> None:
     """注册只读资源浏览，独立连接在工作线程中查询。"""
+
+    @app.get("/api/resources/images")
+    async def browse_images(
+        _token: Annotated[str, Depends(require_ready)],
+        before: Annotated[int | None, Query(gt=0)] = None,
+        similar_to: Annotated[int | None, Query(gt=0)] = None,
+        limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
+    ) -> dict[str, Any]:
+        if images is None:
+            return {"enabled": False, "items": [], "next_before": None}
+        if similar_to is not None:
+            matches = await asyncio.to_thread(images.similar, similar_to, limit)
+            if matches is None:
+                raise HTTPException(404, "这张图片没有索引。")
+            return {"enabled": True, "items": matches, "next_before": None}
+        rows = await asyncio.to_thread(images.browse, before, limit + 1)
+        return {
+            "enabled": True,
+            "items": rows[:limit],
+            "next_before": rows[limit - 1]["id"] if len(rows) > limit else None,
+        }
 
     @app.get("/api/resources/learning")
     async def browse_learning(

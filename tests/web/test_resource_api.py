@@ -3,14 +3,72 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from aureus.common import ManualClock
+from aureus.heartbeat.inbox_images import InboxImageIndex
+from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception, TrustLevel
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore, MemoryIndex
 from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource
-from aureus.timeline import TimelineDatabase
+from aureus.organs import OrganRequest, OrganResponse
+from aureus.timeline import TimelineDatabase, VisibilityScope
 from aureus.web.resource_api import register_resource_routes
+
+
+@pytest.mark.asyncio
+async def test_image_resource_returns_ranked_sources_only_to_signed_in_user(tmp_path: Path) -> None:
+    path = tmp_path / "images.db"
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    inbox = InboxStore(path, clock)
+    calls = []
+
+    async def embed(request: OrganRequest) -> OrganResponse:
+        calls.append(request)
+        vector = (1.0, 0.1) if request.embedding_inputs == (b"two",) else (1.0, 0.0)
+        space = "other" if request.embedding_inputs == (b"three",) else "same"
+        return OrganResponse(
+            request.organ_id, "", metadata={"embedding_space": space}, embeddings=(vector,)
+        )
+
+    images = InboxImageIndex(path, embed, lambda: True)
+    for name in ("one", "two", "three"):
+        attachment = MediaReference("image", name)
+        perception = Perception(
+            "qq",
+            "test",
+            "图片",
+            VisibilityScope.USER_ONLY,
+            TrustLevel.VERIFIED_USER,
+            route=MessageRoute("account", "private", "test", name),
+            attachments=(attachment,),
+        )
+        inbox.add(perception, conversation_name="合成私聊")
+        await images.index(perception, attachment, name.encode())
+        await images.index(perception, attachment, name.encode())
+    assert len(calls) == 3
+
+    async def require_ready(request: Request) -> str:
+        if request.cookies.get("session") != "test":
+            raise HTTPException(401)
+        return "test"
+
+    app = FastAPI()
+    register_resource_routes(app, require_ready, None, None, images)
+    with TestClient(app) as client:
+        endpoint = "/api/resources/images"
+        assert client.get(endpoint).status_code == 401
+        client.cookies.set("session", "test")
+        first = client.get(endpoint, params={"limit": 1}).json()
+        assert first["items"][0]["attachment"] == "three"
+        second = client.get(endpoint, params={"before": first["next_before"]}).json()
+        [match] = client.get(endpoint, params={"similar_to": second["items"][1]["id"]}).json()[
+            "items"
+        ]
+        assert match["attachment"] == "two" and match["conversation"] == "合成私聊"
+        assert "vector" not in match and match["score"] > 0.9
 
 
 def test_learning_resources_filter_and_page_real_observations(tmp_path: Path) -> None:
