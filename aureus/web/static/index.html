@@ -58,6 +58,7 @@ nav.side:hover,nav.side:has(:focus-visible){width:var(--nav-open);border-right-c
 .brand .nav-label{flex:none;transform:none}
 nav.side:is(:hover,:has(:focus-visible)) .brand-content,#app:has(.nav-trigger:hover) .brand-content{transform:translateX(calc(-50% - 4px))}
 .catalog-row select{flex:1;min-width:0}
+.catalog-search{width:100%;margin-bottom:6px}
 .brand-mark{flex:none;width:32px;height:32px;object-fit:contain;display:block}
 .brand-mark-bg{fill:var(--brand-mark-bg,var(--bg))}
 :root[data-theme='dark'] .brand-mark{--brand-mark-bg:transparent;filter:invert(1)}
@@ -1996,7 +1997,7 @@ function refreshCatalog(provider) {
   }
   return request;
 }
-function mountCatalog(host, name, choose) {
+function mountCatalog(host, name, choose, searchable = false) {
   host.replaceChildren();
   const saved = mdl.baseline?.providers.find(p => p.name === name);
   const draft = mdl.cfg.providers.find(p => p.name === name);
@@ -2004,29 +2005,43 @@ function mountCatalog(host, name, choose) {
   const key = catalogKey(saved);
   if (!catalogs.has(key)) refreshCatalog(saved);
   const select = el('select', { 'aria-label': 'API供应商可选模型' });
-  const refresh = el('button', { class: 'btn small', 'aria-label': '刷新可选模型' }, pixelIcon('refresh'), '刷新');
+  const search = searchable ? el('input', { type: 'search', class: 'catalog-search',
+    'aria-label': '搜索供应商模型', placeholder: '搜索供应商模型' }) : null;
+  const refresh = el('button', { type:'button', class: 'btn small', 'aria-label': '刷新可选模型' }, pixelIcon('refresh'), '刷新');
   const status = el('div', { class: 'muted', role: 'status' });
   const row = el('div', { class: 'row catalog-row' }, select, refresh);
   row.dataset.catalog = key;
+  if (search) host.append(search);
   host.append(row, status);
+  let ids = [];
+  function renderOptions() {
+    const query = search?.value.trim().toLowerCase() || '';
+    const matches = ids.filter(id => id.toLowerCase().includes(query));
+    const options = matches.map(id => el('option', { value: id, text: id }));
+    select.replaceChildren(el('option', { value: '', text: '选择API供应商模型' }), ...options);
+    select.disabled = !matches.length;
+    status.textContent = !ids.length ? 'API供应商没有返回可选模型。' :
+      !matches.length ? '没有匹配的模型。' : '';
+  }
   async function load() {
     const request = catalogs.get(key);
     refresh.disabled = true; select.disabled = true;
+    if (search) search.disabled = true;
     status.textContent = '';
     select.replaceChildren(el('option', { text: '正在读取可选模型…' }));
     const res = await request;
     if (catalogs.get(key) !== request || !host.contains(row)) return;
     refresh.disabled = false;
-    const ids = res.ok ? res.data?.models || [] : [];
-    const options = ids.map(id => el('option', { value: id, text: id }));
-    select.replaceChildren(el('option', { value: '', text: '选择API供应商模型' }), ...options);
-    select.disabled = !ids.length;
-    if (res.ok) status.textContent = ids.length ? '' : 'API供应商没有返回可选模型。';
-    else if (notBuilt(res) && (!res.data?.detail || res.data.detail === 'Not Found' || res.data.detail === 'Method Not Allowed')) {
+    ids = res.ok ? res.data?.models || [] : [];
+    if (search) search.disabled = !ids.length;
+    renderOptions();
+    if (res.ok) return;
+    if (notBuilt(res) && (!res.data?.detail || res.data.detail === 'Not Found' || res.data.detail === 'Method Not Allowed')) {
       status.textContent = '当前 Aureus 进程未加载模型目录接口，请重启 Aureus 后再试。';
     } else status.textContent = errorText(res);
   }
   row.addEventListener('catalogupdate', load);
+  search?.addEventListener('input', renderOptions);
   refresh.addEventListener('click', () => refreshCatalog(saved));
   select.addEventListener('change', () => {
     if (select.value) choose(select.value);
@@ -2319,7 +2334,7 @@ function openModelEditor(model, identifier = '') {
     fields.identifier.input.value = id;
     updateName();
     if (!isNew) apply();
-  });
+  }, true);
   fields.provider.input.addEventListener('change', loadChoices);
   loadChoices();
   const choices = el('div', { class: 'row' });
