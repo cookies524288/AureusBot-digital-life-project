@@ -14,6 +14,10 @@ SnowLuma 的正向 WebSocket 使用本机回环端口 23104。OneBot 已核实�
 
 ## 下一步
 
+**2026-11-24 重启处理更正：**语言改动后的 `debug-restart.ps1 --restart` 并未成功提交重启请求。我之前把脚本单独创建的 PowerShell 窗口误当成实例的 CLI 终端，这是错误的。排查时确认 Aureus 进程和 28976 监听都已停止，启动器推导出的现有数据目录仍是本节所记正式目录；随后用同一项目根目录的 `Aureus.exe` 正常恢复，而不是声称 `/restart` CLI 成功。当前恢复链为 `Aureus.exe` PID 18128 → 项目 `.venv` 中转 PID 19124 → 监听内核 PID 42180；监听 `127.0.0.1:28976`，首页返回 HTTP 200，`resource-management.js` 与本地 `main` 字节校验一致。没有发送群消息或调用真实模型。
+
+CLI 命令 `/restart` 属于仍在运行的 Aureus 交互终端：该终端把命令传给同一实例的 `TerminalChannel`，再通知 Windows 启动器以正常退出码重启子进程。它不是 PowerShell 可独立执行的命令，也不适用于已停止的实例。网页的「打开终端」可打开这一实例的交互终端；登录网页后在 Aureus 终端里输入 `/restart` 才是 CLI 路径。根目录 `debug-restart.ps1 --restart` 则是另一套网页登录/API 路径，需密码和交互输入，并额外验证启动器进程链。我之前反复以非交互窗口调用后者，是本次重启混乱的直接原因。
+
 语言学习会话分批与证据实现 `78de236`、验收文档 `82a179e` 已复审后快进合入本地 `main`。主会话独立重跑 `tests/test_language_runtime.py`、`tests/memory/test_language.py`、`tests/web/test_prompt_http_integration.py`、`tests/channels/test_qq_behavior_replay.py` 与 `tests/channels/test_qq_runtime.py`，**36 项通过**；此前七文件联合专项 105 项通过。全检结果为 2649 通过、8 失败、4 跳过；其中 5 项为已有基线失败，另外 3 项已在 `25ff850` 基线复现。Ruff 规范与架构检查通过；格式检查有两个未改文件，Pyright 有可选依赖缺失问题。合并前复核通过，未调用真实模型或 QQ。发布后，旧内核 `13912` 已退出；同一启动器 `22536` 下由 `.venv` 进程 `45584` 启动的新内核 `43548` 接管端口 `28976`。首页及资源脚本返回 HTTP 200，脚本 SHA-256 与 `main` 上 `aureus/web/static/resource-management.js` 一致。未发送群消息。语言提示词新布局见 `docs/tasks/language-session-evidence.md`；它只对齐逐条 `user` 材料顺序，不代表表达/黑话抽取及黑话释义流程已完整移植。
 
 **本地发布已核实。** 关系图来源复审 `7f6f3f4` 已快进合并到 `main`；检查期间另有打字延迟提交 `7210f69`，未回退。原内核 20872 已退出，启动器 22536 经虚拟环境进程 49376 启动新内核 13912，继续监听原端口 28976；首页与资源脚本 HTTP 200，资源脚本 SHA-256 与本地发布文件相同。未发测试消息。全检 2648 通过、6 失败、4 跳过，格式和类型检查未全过；其中 5 项已在旧基线复现，第 6 项心跳示例默认值用例在 `7210f69` 上独立复跑通过。因为完整检查期间 HEAD 变化，不能称最终版本全绿。已回收本次全检与配置复查夹具及上轮 final-fixtures；保留检查日志和 8 个 Chrome 进程仍在使用的临时目录。
