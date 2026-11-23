@@ -79,3 +79,99 @@ def test_provider_select_lists_only_api_keys_and_preserves_missing_reference() -
         assert.equal(options.some(node => node.textContent === '引用的 API key 已删除'), true);
         """
     )
+
+
+def test_provider_key_creation_retries_and_selects_key_in_the_same_draft() -> None:
+    run_page_script(
+        r"""
+        mdl.cfg = {providers:[],models:[],organs:{}};
+        mdl.defaults = {providers:{timeout_seconds:60,max_retry:2}};
+        const existing = {id:'a'.repeat(32),name:'原密钥',kind:'api_key'};
+        const created = {id:'b'.repeat(32),name:'新增密钥',kind:'api_key'};
+        mdl.entries = [existing];
+        openProviderEditor(null);
+        const parent = $('editor-body').children[0];
+        const control = (label, body = parent) => body.children.flatMap(node => node.children)
+          .find(node => node.attributes['aria-label'] === label);
+        const trigger = parent.children.at(-1).children[1];
+        const source = control('API key');
+        const name = control('API供应商名称');
+        assert.deepEqual(Array.from(source.children, node => node.textContent),
+          ['不使用密钥','原密钥']);
+        assert.equal(control('环境变量名'), undefined);
+        name.value = '供应商草稿';
+        source.value = 'vault:' + existing.id;
+        trigger.listeners.click[0]({currentTarget:trigger});
+        assert.equal($('editor-dialog').open, true);
+        assert.equal($('provider-key-dialog').open, true);
+        const footer = $('provider-key-footer');
+        footer.children[1].listeners.click[0]();
+        assert.equal($('editor-dialog').open, true);
+        assert.equal($('provider-key-dialog').open, false);
+        assert.equal(source.value, 'vault:' + existing.id);
+
+        trigger.listeners.click[0]({currentTarget:trigger});
+        const child = $('provider-key-body').children[0];
+        const save = footer.children[0];
+        for (const field of child.children) field.children.at(-1).reportValidity = () => true;
+        const secret = control('密钥原文', child), password = control('当前密码', child);
+        control('名称', child).value = created.name;
+        assert.equal(control('类型', child).children.length, 1);
+        const requests = [];
+        api = async (path, method, data) => {
+          assert.equal(path, '/api/keys');
+          if (method === 'POST') {
+            requests.push({...data});
+            if (requests.length === 1) return {ok:false, status:403, data:{detail:'请重试'}};
+            return {ok:true, data:{id:created.id}};
+          }
+          return {ok:true, data:{entries:[existing, created]}};
+        };
+        secret.value = 'synthetic-key'; password.value = 'wrong-password';
+        await save.listeners.click[0]();
+        assert.equal($('provider-key-dialog').open, true);
+        assert.equal(save.disabled, false);
+        assert.equal(secret.value, ''); assert.equal(password.value, '');
+        assert.equal(source.value, 'vault:' + existing.id);
+        secret.value = 'synthetic-key'; password.value = 'synthetic-password';
+        await save.listeners.click[0]();
+        assert.deepEqual(requests.map(({kind,password}) => [kind,password]),
+          [['api_key','wrong-password'],['api_key','synthetic-password']]);
+        assert.equal($('provider-key-dialog').open, false);
+        assert.equal($('editor-dialog').open, true);
+        assert.equal(source.value, 'vault:' + created.id);
+        assert.equal(name.value, '供应商草稿');
+        assert.equal(mdl.cfg.providers.length, 0);
+        """
+    )
+
+
+def test_editing_other_provider_fields_keeps_its_existing_environment_reference() -> None:
+    run_page_script(
+        r"""
+        const provider = {name:'旧供应商',protocol:'openai',base_url:null,
+          api_key_env:'AUREUS_KEY_FIXTURE',timeout_seconds:60,max_retry:2};
+        mdl.cfg = {providers:[provider],models:[],organs:{}};
+        mdl.entries = [];
+        openProviderEditor(provider);
+        const fields = $('editor-body').children[0].children.flatMap(node => node.children)
+          .filter(node => ['INPUT','SELECT'].includes(node.tagName));
+        const source = fields.find(node => node.attributes['aria-label'] === 'API key');
+        const timeout = fields.find(node => node.attributes['aria-label'] === '超时（秒）');
+        assert.deepEqual(Array.from(source.children, node => node.textContent),
+          ['不使用密钥','环境变量 · AUREUS_KEY_FIXTURE']);
+        for (const field of fields) field.reportValidity = () => true;
+        markDirty = async () => false;
+        timeout.value = '75';
+        timeout.listeners.change[0]();
+        assert.equal(provider.api_key_env, 'AUREUS_KEY_FIXTURE');
+        assert.equal(provider.timeout_seconds, 75);
+        source.value = '';
+        source.listeners.change[0]();
+        assert.equal(provider.api_key_env, null);
+        openProviderEditor(provider);
+        const reopened = $('editor-body').children[0].children.flatMap(node => node.children)
+          .find(node => node.attributes['aria-label'] === 'API key');
+        assert.deepEqual(Array.from(reopened.children, node => node.textContent), ['不使用密钥']);
+        """
+    )

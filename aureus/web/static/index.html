@@ -860,6 +860,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text" closedby="any"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
 <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="provider-key-dialog" class="editor-dialog" aria-labelledby="provider-key-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="provider-key-title"></h3><form method="dialog"><button class="btn small" aria-label="关闭新增 API 密钥"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header><div id="provider-key-body" class="dialog-body"></div><footer id="provider-key-footer" class="dialog-foot"></footer></div></dialog>
 <dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title" closedby="any"><div class="dialog-shell">
 <header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" aria-label="关闭预览" autofocus><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header>
 <div id="prompt-preview-scene"></div><div id="prompt-preview-body" class="dialog-body" tabindex="0"></div></div></dialog>
@@ -942,27 +943,31 @@ function confirmAction(message) {
     dialog.showModal();
   });
 }
-function openEditor(title, body, drawer, actions) {
-  editorGeneration++;
-  clearEditorSecrets();
-  const dialog = $('editor-dialog');
+function openEditor(title, body, drawer, actions, editor = 'editor') {
+  if (editor === 'editor') editorGeneration++;
+  clearEditorSecrets(editor);
+  const dialog = $(editor + '-dialog');
   dialog.className = 'editor-dialog' + (drawer ? ' drawer' : '');
-  $('editor-title').textContent = title;
-  $('editor-body').replaceChildren(body);
-  $('editor-footer').replaceChildren(...(actions || []));
-  $('editor-footer').classList.toggle('hidden', !(actions && actions.length));
+  $(editor + '-title').textContent = title;
+  $(editor + '-body').replaceChildren(body);
+  $(editor + '-footer').replaceChildren(...(actions || []));
+  $(editor + '-footer').classList.toggle('hidden', !(actions && actions.length));
   if (!dialog.open) dialog.showModal();
 }
 $('editor-close').addEventListener('click', () => $('editor-dialog').close());
-function clearEditorSecrets() {
-  for (const input of $('editor-body').querySelectorAll('input[type="password"], textarea[data-secret]')) input.value = '';
+function clearEditorSecrets(editor = 'editor') {
+  for (const input of $(editor + '-body').querySelectorAll('input[type="password"], textarea[data-secret]')) input.value = '';
 }
-$('editor-dialog').addEventListener('close', () => {
-  if ($('editor-dialog').open) return;
-  clearEditorSecrets();
-  $('editor-body').replaceChildren();
-  $('editor-footer').replaceChildren();
-});
+for (const editor of ['editor', 'provider-key']) {
+  const dialog = $(editor + '-dialog');
+  dialog.addEventListener('close', () => {
+    if (dialog.open) return;
+    clearEditorSecrets(editor);
+    $(editor + '-body').replaceChildren();
+    $(editor + '-footer').replaceChildren();
+    if (editor === 'provider-key') $('editor-dialog').setAttribute('closedby', 'any');
+  });
+}
 
 function showBanner(id, text) {
   const box = $(id);
@@ -1124,7 +1129,7 @@ function showAuth(view, message) {
   state.loaded = {};
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
-  for (const id of ['editor-dialog', 'confirm-dialog']) if ($(id).open) $(id).close();
+  for (const id of ['provider-key-dialog', 'editor-dialog', 'confirm-dialog']) if ($(id).open) $(id).close();
   if (typeof closeSocket === 'function') closeSocket();
   $('app').classList.add('hidden');
   $('login').classList.toggle('hidden', view !== 'login');
@@ -1992,10 +1997,10 @@ function editorField(label, value, options) {
   input.value = value === null || value === undefined ? '' : value;
   return { input, node: el('div', { class: 'field' }, el('label', { text: label }), input) };
 }
-function editorForm(title, fields, onChange, action) {
+function editorForm(title, fields, onChange, action, editor) {
   const body = el('div', { class: 'stack' }, ...Object.values(fields).map(field => field.node));
   for (const field of Object.values(fields)) field.input.addEventListener('change', onChange);
-  openEditor(title, body, false, action ? [action] : []);
+  openEditor(title, body, false, action ? [action] : [], editor);
   return body;
 }
 const fieldText = field => field.input.value.trim();
@@ -2267,22 +2272,23 @@ $('md-add-model').addEventListener('click', () => openModelEditor(null));
 function openProviderEditor(provider) {
   const original = provider, isNew = !provider;
   provider = provider || { name: '', protocol: (mdl.choices.protocols || ['openai'])[0], ...mdl.defaults.providers };
-  const selected = provider.api_key_ref ? 'vault:' + provider.api_key_ref : provider.api_key_env ? 'legacy' : '';
-  const keyChoices = [{value:'', label:'不使用密钥'}, ...(mdl.entries || []).filter(entry => entry.kind === 'api_key').map(entry => ({value:'vault:' + entry.id, label:entry.name})), {value:'legacy', label:'环境变量 / 旧配置'}];
+  const legacyKey = original?.api_key_env || null;
+  const selected = provider.api_key_ref ? 'vault:' + provider.api_key_ref : legacyKey ? 'legacy' : '';
+  const keyChoices = [{value:'', label:'不使用密钥'}, ...(mdl.entries || []).filter(entry => entry.kind === 'api_key').map(entry => ({value:'vault:' + entry.id, label:entry.name}))];
+  if (selected === 'legacy') keyChoices.push({value:'legacy', label:'环境变量 · ' + legacyKey});
   if (provider.api_key_ref && !keyChoices.some(item => item.value === selected)) keyChoices.push({value:selected, label:'引用的 API key 已删除'});
   const fields = {
     name: editorField('API供应商名称', provider.name, { required: true }),
     protocol: editorField('协议', provider.protocol, { values: mdl.choices.protocols || [provider.protocol] }),
     base_url: editorField('请求地址', provider.base_url, { hint: '留空使用该协议的默认地址' }),
     key: editorField('API key', selected, { values: keyChoices }),
-    api_key_env: editorField('环境变量名', provider.api_key_env, { hint: 'AUREUS_KEY_ 开头' }),
     timeout: editorField('超时（秒）', provider.timeout_seconds, { type: 'number', min: 1, required: true, step: 'any' }),
     retry: editorField('失败重试次数', provider.max_retry, { type: 'number', min: 0, required: true, step: 1 }),
   };
   const apply = () => {
     if (!validFields(fields)) return;
     const next = { name: fieldText(fields.name), protocol: fields.protocol.input.value, base_url: fieldText(fields.base_url) || null,
-      api_key_env: fields.key.input.value === 'legacy' ? fieldText(fields.api_key_env) || null : null,
+      api_key_env: fields.key.input.value === 'legacy' ? legacyKey : null,
       api_key_ref: fields.key.input.value.startsWith('vault:') ? fields.key.input.value.slice(6) : null,
       timeout_seconds: fieldNumber(fields.timeout), max_retry: fieldNumber(fields.retry) };
     if (mdl.cfg.providers.some(item => item !== original && item.name === next.name)) { toast('API供应商名称已存在。', 'error'); return; }
@@ -2302,10 +2308,9 @@ function openProviderEditor(provider) {
   const keyStatus = el('span');
   const updateSource = () => {
     const source = fields.key.input.value;
-    fields.api_key_env.node.classList.toggle('hidden', source !== 'legacy');
     const present = source.startsWith('vault:')
       ? (mdl.entries || []).some(entry => entry.id === source.slice(6) && entry.kind === 'api_key')
-      : mdl.keys[fieldText(fields.api_key_env)];
+      : mdl.keys[legacyKey];
     const missing = source && (present === false || source.startsWith('vault:') && !present);
     keyStatus.className = missing ? 'danger-text' : 'muted';
     keyStatus.textContent = !source ? '未使用密钥' : source === 'legacy' && present === undefined ? '环境变量引用' : present ? 'API key 已配置' : '引用的 API key 未配置或已删除';
@@ -2314,7 +2319,18 @@ function openProviderEditor(provider) {
     isNew ? el('button', { class: 'btn primary', text: '添加API供应商', onclick: apply }) : null);
   updateSource();
   body.append(el('div', {class:'row'}, keyStatus,
-    el('button', {class:'btn small', text:'管理密钥', onclick:() => { $('editor-dialog').close(); showPage('keys'); }})));
+    el('button', {class:'btn small', text:'新增 API 密钥', onclick:event => {
+      event.currentTarget.focus();
+      // 同一次 Escape 只允许关闭最上层的密钥弹窗。
+      $('editor-dialog').setAttribute('closedby', 'none');
+      openKeyEditor(null, 'create', entry => {
+        const value = 'vault:' + entry.id;
+        fields.key.input.append(el('option', {value, text:entry.name}));
+        fields.key.input.value = value;
+        updateSource();
+        if (!isNew) apply();
+      });
+    }})));
   if (original) {
     const restorePassword = editorField('恢复默认地址的确认密码', '', {type:'password'});
     const restoreAddress = el('details', {class:'stack'}, el('summary', {text:'恢复默认地址'}), restorePassword.node);
@@ -2451,15 +2467,17 @@ function keyValueField(label, kind, value = '') {
   field.input.setAttribute('maxlength', '4096');
   return field;
 }
-function openKeyEditor(entry, action = 'create') {
+function openKeyEditor(entry, action = 'create', onProviderKey) {
   const creating = action === 'create', renaming = action === 'rename', removing = action === 'remove';
+  const editor = onProviderKey ? 'provider-key' : 'editor';
   const fields = {};
   if (creating || renaming) {
     fields.name = editorField('名称', entry ? entry.name : '', {required:true});
     fields.name.input.setAttribute('maxlength', '128');
+    if (onProviderKey) fields.name.input.setAttribute('autofocus', '');
   }
   if (creating) {
-    fields.kind = editorField('类型', 'api_key', {values:KEY_TYPES});
+    fields.kind = editorField('类型', 'api_key', {values:onProviderKey ? KEY_TYPES.slice(0, 1) : KEY_TYPES});
     fields.value = keyValueField('密钥原文', 'api_key');
     fields.kind.input.addEventListener('change', () => {
       const previous = fields.value.input;
@@ -2479,8 +2497,13 @@ function openKeyEditor(entry, action = 'create') {
     remove:['删除密钥', '确定删除', '密钥已删除。'],
   }[action];
   const button = el('button', {class:removing ? 'btn danger' : 'btn primary', text:saveLabel});
-  const body = editorForm(removing || action === 'update' ? title + ' · ' + entry.name : title, fields, () => {}, button);
+  const heading = onProviderKey ? '新增 API 密钥' : removing || action === 'update' ? title + ' · ' + entry.name : title;
+  const body = editorForm(heading, fields, () => {}, button, editor);
   const generation = editorGeneration;
+  const dialog = $(editor + '-dialog');
+  if (onProviderKey) $(editor + '-footer').append(el('button', {
+    class:'btn', text:'取消', onclick:() => dialog.close(),
+  }));
   button.addEventListener('click', async () => {
     if (button.disabled || !validFields(fields)) return;
     const data = {password:fields.password.input.value};
@@ -2493,7 +2516,14 @@ function openKeyEditor(entry, action = 'create') {
     delete data.value; delete data.password;
     button.disabled = false;
     if (!res.ok) { failApi(res); return; }
-    if (generation === editorGeneration) $('editor-dialog').close();
+    if (onProviderKey) {
+      const created = {id:res.data.id, name:data.name, kind:data.kind};
+      mdl.entries = [...(mdl.entries || []), created];
+      if (dialog.open && $('editor-dialog').open && body.parentElement === $('provider-key-body') && generation === editorGeneration) {
+        dialog.close();
+        onProviderKey(created);
+      }
+    } else if (generation === editorGeneration) dialog.close();
     toast(success, 'ok');
     if (res.data.restart_required) showRestart();
     await loadKeysPage();
