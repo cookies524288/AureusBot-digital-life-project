@@ -92,8 +92,8 @@ class HeartbeatConfig(BaseModel):
     # 一条至少多少个字；更短的句子并进相邻的一句。
     min_message_chars: int = Field(default=4, ge=1)
     typing_delay_enabled: bool = True
-    typing_han_seconds: float = Field(default=0.4, ge=0, allow_inf_nan=False)
-    typing_other_seconds: float = Field(default=0.1, ge=0, allow_inf_nan=False)
+    typing_han_seconds: float = Field(default=0.9, ge=0, allow_inf_nan=False)
+    typing_other_seconds: float = Field(default=0.38, ge=0, allow_inf_nan=False)
     typing_jitter_min_seconds: float = Field(default=0.3, ge=0, allow_inf_nan=False)
     typing_jitter_max_seconds: float = Field(default=1.7, ge=0, allow_inf_nan=False)
     # 用户在 identity.toml 里改了设定后，这次运行的系统上下文里告诉它哪几层被改了（D62）。

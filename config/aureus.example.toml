@@ -67,8 +67,8 @@ config_version = 1
 # 关掉后跳过打字等待，仍按会话顺序发送。
 # typing_delay_enabled = true
 # 后续段按其中的汉字与其他字符分别累加打字秒数。
-# typing_han_seconds = 0.4
-# typing_other_seconds = 0.1
+# typing_han_seconds = 0.9
+# typing_other_seconds = 0.38
 # 每个后续段额外加上这个范围内的均匀随机秒数。
 # typing_jitter_min_seconds = 0.3
 # typing_jitter_max_seconds = 1.7
