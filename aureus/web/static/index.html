@@ -737,7 +737,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="card-head"><h3>锁定</h3></div>
 
 <div id="ps-locks"></div>
-<div class="row" style="justify-content:flex-end"><button id="ps-save-locks" class="btn primary">保存锁定</button></div>
+<div class="row" style="justify-content:flex-end"><button id="ps-save-locks" class="btn primary" disabled>保存锁定</button></div>
 </div>
 <div class="card">
 <div class="card-head"><h3>设定</h3><span class="tag warn">需要密码</span></div>
@@ -756,7 +756,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="field" style="margin-top:14px"><label for="ps-immutable">不变人格</label><textarea id="ps-immutable" rows="8"></textarea></div>
 <div class="row" style="margin-top:14px;justify-content:flex-end">
 <input id="ps-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px">
-<button id="ps-save-baseline" class="btn primary">保存设定</button>
+<button id="ps-save-baseline" class="btn primary" disabled>保存设定</button>
 </div>
 </div>
 </div></section>
@@ -1774,6 +1774,38 @@ const FREE_LAYERS = [
   ['expression_style', '表达风格'],
 ];
 
+const PERSONA_BASELINE_FIELDS = ['name', 'aliases', 'gender', 'birthday', 'user-name', 'accounts', 'immutable'];
+let personaBaseline = null;
+let personaLocks = null;
+let personaSaving = false;
+
+function readPersonaBaseline() {
+  return PERSONA_BASELINE_FIELDS.map(field => $('ps-' + field).value);
+}
+function readPersonaLocks() {
+  return Object.fromEntries(FREE_LAYERS.map(([key]) => [key, $('ps-lock-' + key).checked]));
+}
+function refreshPersonaSaveButtons() {
+  $('ps-save-baseline').disabled = !personaBaseline || readPersonaBaseline().every((value, i) => value === personaBaseline[i]);
+  $('ps-save-locks').disabled = !personaLocks || FREE_LAYERS.every(([key]) => $('ps-lock-' + key).checked === personaLocks[key]);
+}
+for (const field of PERSONA_BASELINE_FIELDS) $('ps-' + field).addEventListener('input', refreshPersonaSaveButtons);
+$('ps-locks').addEventListener('change', refreshPersonaSaveButtons);
+
+async function confirmPersonaChange(message, write) {
+  if (personaSaving) return;
+  personaSaving = true;
+  const body = $('page-persona').querySelector('.page-body');
+  try {
+    if (message && !await confirmAction(message)) return;
+    body.inert = true;
+    await write();
+  } finally {
+    body.inert = false;
+    personaSaving = false;
+  }
+}
+
 async function savePersona(body, okText) {
   const res = await api('/api/settings', 'PUT', body);
   if (!res.ok) { fail(res); return false; }
@@ -1785,18 +1817,25 @@ async function savePersona(body, okText) {
 function personaLayerCard(key, title, content, history) {
   const area = el('textarea', { id: 'ps-' + key, rows: '5' });
   area.value = content;
-  const save = el('button', { class: 'btn primary', text: '保存' + title, onclick: () => { savePersona({ text: { [key]: area.value } }, title + '已保存，下一次回复就会用新的。'); } });
+  const original = area.value;
+  const save = el('button', { class: 'btn primary', text: '保存' + title, disabled: true, onclick: () => {
+    const text = area.value;
+    if (text === original) return;
+    return confirmPersonaChange('确定要保存「' + title + '」的修改吗？',
+      () => savePersona({ text: { [key]: text } }, title + '已保存，下一次回复就会用新的。'));
+  } });
+  area.addEventListener('input', () => { save.disabled = area.value === original; });
   const rows = history.length ? history.map(item => el('div', { class: 'version-row' },
     el('span', { class: 'tag', text: item.source }),
     el('span', { class: 'muted', text: fmtTime(item.time, true) }),
     el('span', { class: 'preview', text: item.content ? item.content.replace(/\s+/g, ' ').slice(0, 60) : '（空）' }),
-    el('button', { class: 'btn small', text: '用这个版本', onclick: async () => {
-      if (!await confirmAction('确定要回退吗？')) return;
-      const res = await api('/api/settings/rollback', 'POST', { layer: key, version_id: item.id });
-      if (!res.ok) { fail(res); return; }
-      toast(title + '已回退：所选内容存成了一个新版本。', 'ok');
-      await loadPersona();
-    } }))) : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有历史版本。' })];
+    el('button', { class: 'btn small', text: '用这个版本', onclick: () =>
+      confirmPersonaChange('确定要使用「' + title + '」的这个历史版本吗？', async () => {
+        const res = await api('/api/settings/rollback', 'POST', { layer: key, version_id: item.id });
+        if (!res.ok) { fail(res); return; }
+        toast(title + '已回退：所选内容存成了一个新版本。', 'ok');
+        await loadPersona();
+      }) }))) : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有历史版本。' })];
   return el('div', { class: 'card layer-card' },
     el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }))),
     area,
@@ -1830,35 +1869,30 @@ async function loadPersona() {
   $('ps-accounts').value = user.accounts.map(a => a.platform + ':' + a.id).join('\n');
   $('ps-immutable').value = v.layers.immutable;
   $('ps-password').value = '';
+  personaBaseline = readPersonaBaseline();
+  personaLocks = readPersonaLocks();
+  refreshPersonaSaveButtons();
 }
 
 async function restorePersonaLock(key, input, button) {
-  const locks = $('ps-locks'), save = $('ps-save-locks');
-  locks.inert = true; save.disabled = true;
-  try {
+  await confirmPersonaChange(null, async () => {
     const res = await api('/api/settings/locks/restore-default', 'POST', { layer: key });
     if (!res.ok) { fail(res); return; }
-    input.checked = res.data.value;
+    input.checked = personaLocks[key] = res.data.value;
+    refreshPersonaSaveButtons();
     toast('已恢复默认。', 'ok');
-  } finally {
-    locks.inert = false; save.disabled = false; button.focus();
-  }
+  });
+  button.focus();
 }
 
-// 保留已有请求格式，编辑器仅写入实际改变的开关。
-$('ps-save-locks').addEventListener('click', async () => {
-  const panel = $('ps-locks'), save = $('ps-save-locks');
-  const locks = {};
-  for (const [key] of FREE_LAYERS) locks[key] = $('ps-lock-' + key).checked;
-  panel.inert = true; save.disabled = true;
-  try {
-    await savePersona({ locks }, '锁定已保存。');
-  } finally {
-    panel.inert = false; save.disabled = false;
-  }
+$('ps-save-locks').addEventListener('click', () => {
+  if ($('ps-save-locks').disabled) return;
+  const locks = readPersonaLocks();
+  return confirmPersonaChange('确定要保存人设锁定的修改吗？', () => savePersona({ locks }, '锁定已保存。'));
 });
 
-$('ps-save-baseline').addEventListener('click', async () => {
+$('ps-save-baseline').addEventListener('click', () => {
+  if ($('ps-save-baseline').disabled) return;
   const accounts = [];
   for (const line of $('ps-accounts').value.split('\n')) {
     const text = line.trim();
@@ -1869,14 +1903,17 @@ $('ps-save-baseline').addEventListener('click', async () => {
   }
   const password = $('ps-password').value;
   if (!password) { toast('修改设定需要输入当前密码。', 'error'); return; }
-  $('ps-password').value = '';
   const aliases = $('ps-aliases').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-  await savePersona({
+  const settings = {
     password,
     text: { immutable: $('ps-immutable').value },
     facts: { name: $('ps-name').value.trim(), alias_names: aliases, gender: $('ps-gender').value.trim(), birthday: $('ps-birthday').value.trim() },
     user: { name: $('ps-user-name').value.trim(), accounts },
-  }, '设定已保存。');
+  };
+  return confirmPersonaChange('确定要保存设定的修改吗？', () => {
+    $('ps-password').value = '';
+    return savePersona(settings, '设定已保存。');
+  });
 });
 PAGES.persona = { load: loadPersona };
 // ---------- 模型库与器官分工（D86）：参考 MaiBot 公开界面交互，保留本页视觉 ----------
