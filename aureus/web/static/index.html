@@ -841,10 +841,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </main>
 </div>
 
-<dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
-<dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg>关闭</button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
-<dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title"><div class="dialog-shell">
-<header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" autofocus>关闭预览</button></form></header>
+<dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text" closedby="any"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
+<dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title" closedby="any"><div class="dialog-shell">
+<header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" aria-label="关闭预览" autofocus><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header>
 <div id="prompt-preview-scene"></div><div id="prompt-preview-body" class="dialog-body" tabindex="0"></div></div></dialog>
 
 <script src="/assets/organ-graph.js"></script>
