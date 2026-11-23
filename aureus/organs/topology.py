@@ -17,7 +17,9 @@ class OrganDefinition:
 
 # 登记新器官时在同一处说明职责和后续步骤。所有器官都遵循请求 / 建议协议。
 ORGAN_DEFINITIONS = {
-    "replyer": OrganDefinition("生成回复", "返回回复文本"),
+    "replyer": OrganDefinition(
+        "生成回复", "返回回复文本", (("fast_model", "核心将再审后的回复交给快速模型建议切点"),)
+    ),
     "planner": OrganDefinition(
         "请求行动规划", "返回行动建议", (("replyer", "核心采纳发言计划后传递回复意图"),)
     ),
@@ -32,7 +34,7 @@ ORGAN_DEFINITIONS = {
     "summarizer": OrganDefinition("提交待整理的材料", "返回整理结果"),
     "memory": OrganDefinition("提取有原文依据的事实与偏好", "返回候选记忆"),
     "utils": OrganDefinition("在专职器官未配置时整理材料", "返回摘要或整理建议"),
-    "fast_model": OrganDefinition("在判断器官未配置时判断来信", "返回判断建议"),
+    "fast_model": OrganDefinition("建议回复切点，也可代替判断器官", "返回切点或判断建议"),
     "vlm": OrganDefinition("理解 QQ 来信中的图片", "返回图片描述"),
     "voice": OrganDefinition("转写 QQ 来信中的语音", "返回转写文本"),
     "text_embedding": OrganDefinition("向量化记忆与检索词", "返回文本向量"),
@@ -75,6 +77,8 @@ def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict
         "memory_consolidation": "summarizer",
         "working_memory_summary": "summarizer",
     }
+    if runtime.heartbeat.split_reply_enabled:
+        tasks["reply_segments"] = "fast_model"
     return {task: resolve_task_organ(primary, task, available) for task, primary in tasks.items()}
 
 
@@ -117,6 +121,8 @@ def organ_connections(
     relays: dict[tuple[str, str], list[str]] = {}
     for role, definition in ORGAN_DEFINITIONS.items():
         for successor, label in definition.next_steps:
+            if role == "replyer" and successor == "fast_model" and "reply_segments" not in tasks:
+                continue
             for source in routes[role]:
                 for target in routes[successor]:
                     if source in endpoints and target in endpoints:

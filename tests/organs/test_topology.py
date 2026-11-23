@@ -30,7 +30,7 @@ def test_flow_follows_the_running_role_names_and_supports_a_shared_organ() -> No
     )
     edges = organ_connections(["legacy"], runtime)
     relays = {(e["source"], e["target"]) for e in edges if e["kind"] == "relay"}
-    assert relays == {("judge", "legacy"), ("legacy", "legacy")}
+    assert relays == {("judge", "legacy"), ("legacy", "legacy"), ("legacy", "fast_model")}
     assert any(
         e["source"] is None and e["target"] == "legacy" and "生成回复" in (e["label"] or "")
         for e in edges

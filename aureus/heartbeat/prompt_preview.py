@@ -37,6 +37,7 @@ from aureus.heartbeat.recall import (
     REPLYER_MEMORY_REFERENCE_MARKER,
     recall_reference,
 )
+from aureus.heartbeat.reply_segments import SEGMENT_PROMPT, prepare_reply
 from aureus.identity import Identity
 from aureus.organs import EMPTY_SYSTEM_MESSAGE, OrganRequest, PromptTemplate, prompt_template_keys
 
@@ -49,6 +50,7 @@ _REVIEW_SENTINEL = "reply_review_0123456789abcdef0123456789abcdef"
 _CONDITIONAL = {
     "plan": "按开关和本轮输入附加黑话、表达意图、日程、兴趣及召回。再审时附回复器的理由。",
     "reply": "有命中时附记忆、人际与习得表达。规划后附回复意图和再审协议，标记每次更新。",
+    "reply_segments": "启用分段且有快速模型时，在回复再审通过后请求切点。",
     "language_learning": "启用增量学习且收到未处理的新样本时调用。",
     "memory_consolidation": "夜间空闲且整理达到批量门槛，启用提取、有可用器官和可提取发言时调用。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
@@ -91,6 +93,7 @@ def registered_templates() -> tuple[PromptTemplate, ...]:
         PEOPLE_CONTEXT_TEMPLATE,
         HEURISTIC_MEMORY_REFERENCE_MARKER,
         REPLYER_MEMORY_REFERENCE_MARKER,
+        SEGMENT_PROMPT,
     )
 
 
@@ -202,6 +205,7 @@ def build_prompt_scenes(
                 intent=_INTENT,
                 plan_reason=_PLAN_REASON,
                 review_sentinel=_REVIEW_SENTINEL,
+                with_splits=True,
                 length=_LENGTH,
                 recall=recall_reference("〔记忆召回：查询词、命中数、时间、说话人和记录〕"),
                 expressions=expression,
@@ -220,6 +224,7 @@ def build_prompt_scenes(
                 intent=_INTENT,
                 plan_reason=_PLAN_REASON,
                 review_sentinel=_REVIEW_SENTINEL,
+                with_splits=True,
             ),
             system(full=False, rich=True, contact=True),
         )
@@ -249,6 +254,7 @@ def build_prompt_scenes(
                 intent=_INTENT,
                 plan_reason=_PLAN_REASON,
                 review_sentinel=_REVIEW_SENTINEL,
+                with_splits=True,
                 length=_LENGTH,
                 recall=recall_reference("〔记忆召回：查询词、命中数、时间、说话人和记录〕"),
                 expressions=expression,
@@ -284,6 +290,13 @@ def build_prompt_scenes(
             build_initiative_reply_prompt([], user, intent=_INTENT),
             system(full=False, initiative=True),
         )
+    add(
+        "reply_segments",
+        "reply_segments",
+        "建议回复切点",
+        prepare_reply("原来如此。明天再聊吧。<n><!>示例代码：`print(1)`").prompt(),
+        "",
+    )
     if "judge" in tasks:
         judge = build_judge_context(identity)
         add("judge", "judge", "情绪判断", build_judge_prompt([], _INPUT, user), judge)

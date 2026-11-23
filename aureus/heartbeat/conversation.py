@@ -58,6 +58,7 @@ from aureus.heartbeat.planning import (
     parse_plan,
 )
 from aureus.heartbeat.recall import MAX_RECALL_CHARS, format_recall, heuristic_keywords
+from aureus.heartbeat.reply_segments import ReplyDraft, prepare_reply
 from aureus.heartbeat.reply_strategy import ReplyStrategy, judge_allowed
 from aureus.hormones import (
     HormoneEffects,
@@ -189,6 +190,7 @@ class _ThoughtOutcome:
     recall_record_ids: tuple[int, ...] = ()
     recall_source_keys: tuple[str, ...] = ()
     review_reason: str | None = None
+    reply_segments: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -300,6 +302,7 @@ class ConversationFlow:
         self._memory = memory
         self._memory_config = memory_config or MemoryConfig()
         self.has_text_embedding = False
+        self.has_fast_model = False
         self._language = language
         self._language_config = language_config or LanguageConfig()
         self._people = people
@@ -389,11 +392,7 @@ class ConversationFlow:
         contact = target.trust is not TrustLevel.VERIFIED_USER
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
         memory = self._working_memory
-        if (
-            memory is not None
-            and memory.config.working_memory_enabled
-            and memory.is_ready
-        ):
+        if memory is not None and memory.config.working_memory_enabled and memory.is_ready:
             history, working_context, experience_ids = self._working_context(
                 memory, target, batch_ids, strategy.message_limit
             )
@@ -561,6 +560,8 @@ class ConversationFlow:
             outcome = _ThoughtOutcome(plan=plan, declined=True)
         else:
             outcome = await self._reply_with_review(job, plan, automatic)
+            if outcome.response is not None:
+                outcome = await self._finish_reply(job, outcome, outcome.response)
         return replace(outcome, judge=attempt, effects=job.effects)
 
     async def _reply_with_review(
@@ -583,6 +584,46 @@ class ConversationFlow:
             return _ThoughtOutcome(declined=True)
         outcome = await self._reply(job, revised, automatic)
         return outcome if outcome.review_reason is None else _ThoughtOutcome(declined=True)
+
+    async def _finish_reply(
+        self, job: _ReplyJob, outcome: _ThoughtOutcome, response: OrganResponse
+    ) -> _ThoughtOutcome:
+        """再审通过后才整理实际发言；快速模型只看到要分段的文字。"""
+        draft = prepare_reply(response.suggestion)
+        if not draft.sections:
+            return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
+        text = draft.text.strip()
+        if self._config.split_reply_enabled:
+            suggestion = (
+                await self._suggest_reply_splits(job, draft) if self.has_fast_model else None
+            )
+            sections = draft.segments(
+                suggestion,
+                max_messages=self._config.max_reply_messages,
+                min_chars=self._config.min_message_chars,
+            )
+        else:
+            sections = (text,)
+        if not sections:
+            return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
+        return replace(
+            outcome, response=replace(response, suggestion=text), reply_segments=sections
+        )
+
+    async def _suggest_reply_splits(self, job: _ReplyJob, draft: ReplyDraft) -> str | None:
+        try:
+            response = await self._call(
+                OrganRequest(
+                    "fast_model",
+                    draft.prompt(),
+                    context={"task": "reply_segments"},
+                    model_preference=job.strategy.model_preference,
+                )
+            )
+        except (CallRejectedError, OrganCallError, ValueError) as failure:
+            logger.warning("快速模型未能建议切点，按文字分段：%s", failure)
+            return None
+        return response.suggestion
 
     async def _judge_emotion(self, job: _ReplyJob) -> _JudgeAttempt | None:
         """先调判断器官（D68）。不调用时返回 None；调用了就一定返回结果，任何失败都不影响回复。
@@ -889,6 +930,7 @@ class ConversationFlow:
                 intent=plan.intent,
                 plan_reason=plan.reason,
                 review_sentinel=sentinel,
+                with_splits=self._config.split_reply_enabled,
                 length=length,
                 recall=recall_text,
                 expressions=await self._expression_reference(job, plan),
