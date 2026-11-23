@@ -17,7 +17,7 @@
 | 收件会话选择：`select_conversations` 使用独立的候选 JSON、顺序和私聊优先规则，不传完整会话或人设。 | 上游焦点规划与 `context/history` 工具选择材料，未找到同样的未读候选请求。 | 不替换，本地模型只能从已授权候选中建议读哪个会话。 |
 | 工作记忆：`WorkingMemory` 合成短会话摘要；回复切点：`ReplyDraft.prompt`；情绪：`ConversationFlow._judge_emotion`。 | `context_compaction{,_focus}.prompt` 属规划器会话压缩，其五键 JSON 和原工具结果不同；上游分段算法已单独登记；未找到同样的独立情绪/受冲判断输出。 | 不用上游五字段替换本地摘要格式，不让切点模型重写原文，不改判断的情绪枚举、强度和可信度约束。 |
 | 记忆整理：`MemoryConsolidator.run` 编号批次、证据校验后写入；`ConversationFlow._rerank_memory` 做向量重排。 | `a_memorix_chat_summary.prompt` 提取增量事实、实体、关系、图片引用；`heuristic_memory_impression.prompt` 是另一类印象任务；已移植的召回展示见清单。 | 夜间提取与上游增量写入格式、证据及触发不同，不移植完整指令。向量重排没有对话提示词；只送当前查询及已经筛选的候选文本。 |
-| 语言学习：`learn_language` 以一次请求抽取增量表达和黑话。 | `learn_style.prompt`、`learn_jargon.prompt`、`jargon_inference*.prompt`，以及导入用 `text_learning_{expression,jargon}.prompt`。 | 各上游任务分别处理且输出键不同；保留程序编号校验和同一批任务协议，不能把网页候选当作在线自动学习。细节见[学习核对](maibot-learning-parity.md)。 |
+| 语言学习：`learn_language` 按可信会话分批，以一次请求抽取增量表达和黑话；规则为 `system`，从 1 编号的样本各占一条 `user`，最后一条 `user` 是输出要求。 | `src/learners/expression_learner.py`、`jargon_learner.py` 同样逐条用 `user` 提交编号样本；上游另有 `learn_style.prompt`、`learn_jargon.prompt`、`jargon_inference*.prompt` 及导入模板。 | 只对齐角色和消息顺序，保持合并的 `proposals` 协议；不复制独立请求或多阶段释义。只接受实际展示且有原件支持的批内编号。细节见[会话分批与证据](language-session-evidence.md)。 |
 | 主动 `initiative_plan` / `initiative_reply`、探索摘要、日记、人设回顾。 | 无对应的本项目真实社交需要、外部资料隔离、以日记为依据的人设审核和仅用户可改身份约束。 | 维持原流程及上下文可见性；主动回复复用共通的正文指令，但不冒充上游主动工作流。搜索器本身是 SearXNG 查询，不注入聊天提示。 |
 | `voice` 转写、`text_embedding`、`image_embedding`、模型连通性探测。 | 上游可有同类能力，未确认有等价会话提示。 | 转写和向量适配是专用载荷；通用模型探测及缺省系统消息是连接机制，不对应任何聊天模板。实验能量调用使用专用测试请求，不算正式聊天。 |
 
@@ -32,3 +32,7 @@
 - [x] `test_integrated_prompt_scenes_match_captured_http_and_template_edits` 捕获最终 HTTP 请求，逐条对照网页预览和角色顺序，确认历史、来信和参考各出现一次；在同一联测里用真实心跳的合成会话验证本群历史可见、另一群和用户私聊的原文不可见，外部聊天和参考不放入首条 `system`。
 - [x] `test_interrupted_group_plan_keeps_review_and_summary_in_its_conversation`、`test_actual_planner_and_replyer_get_saved_summary` 和 `test_pending_replies_are_split_at_working_memory_capacity` 验证保留工作记忆、再审和收到新消息时的规划行为。不带平台会话地址的历史按可见范围筛选；未确认是用户的私聊不读取旧私聊历史。
 - [x] 16 文件联合专项先通过 184 项；剩余 6 项旧夹具与回放断言修正后，与新增的 HTTP 隔离一起复跑，13 项均通过。另跑媒体、流式读与取消、分段及 QQ 语言回放，26 项通过。该轮 23 个 Python 文件 Ruff、格式检查和 Pyright 均通过。未调用真实模型或发送真实 QQ。
+
+## 语言学习布局
+
+实际请求和预览使用同一构建器，预览只填合成样本。`test_integrated_prompt_scenes_match_captured_http_and_template_edits` 捕获模拟 HTTP 请求，验证系统规则、逐条资料和末尾输出要求；正文中的 `[id:99]`、`[speaker:SELF]`、`$samples` 原样留在单条 `user` 资料内。原 `language_learner_prompt` 的覆盖键和占位符仍有效；`$samples` 现在是固定的后续样本格式说明，`$output_format` 指向最后一条消息。已有自定义文案若写的是「以下 JSON」或「样本已经内嵌」，维护者可改为「后续逐条提供样本」；本次不读改正式覆盖。

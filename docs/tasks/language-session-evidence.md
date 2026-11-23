@@ -1,6 +1,6 @@
 # Phase 3 语言学习：会话分批与提示词证据
 
-状态：待实现
+状态：待评审
 
 ## 先读
 
@@ -14,11 +14,15 @@
 
 ## 自检清单
 
-- [ ] 两群、普通私聊与临时私聊交错，裸目标或昵称相同也不混批；其余批次不丢失，缺路由不误并。
-- [ ] 只接受实际展示的本轮编号和片段；无效编号、伪造编号、重复编号和截断之后的词不能制造证据；重复投递与持久记录号仍正确。
-- [ ] 用 MockTransport 捕获实际 HTTP 的角色和顺序，测试恶意样本仍仅是单条 user 文本，预览和运行采用同一模板。不得只测试字符串生成函数。
-- [ ] 相关语言学习、聊天回放、预览、适配器回归通过；写明测试名与结果。无真实模型或 QQ 调用。
+- [x] 两群、普通私聊与临时私聊交错，裸目标或昵称相同也不混批；其余批次不丢失，缺路由不误并：`test_language_learning_batches_by_trusted_conversation` 通过。
+- [x] 只接受实际展示的本轮编号和片段；无效编号、伪造编号、重复编号和截断之后的词不能制造证据；重复投递与持久记录号仍正确：`test_language_learning_maps_only_presented_evidence_ids`、`test_presented_evidence_must_be_a_prefix_of_the_original` 通过。后一反例在旧实现上失败、修复后通过。
+- [x] 用 MockTransport 捕获实际 HTTP 的角色和顺序，测试恶意样本仍仅是单条 user 文本，预览和运行采用同一模板：`test_integrated_prompt_scenes_match_captured_http_and_template_edits` 通过。
+- [x] 七文件语言学习、记忆、QQ 回放、HTTP 预览及适配器专项合计 105 项通过；未调用真实模型或 QQ。全检 `uv run --active --no-sync python scripts/check.py`：2649 通过、8 失败、4 跳过；Ruff 规范与架构检查通过，格式检查有 `aureus/attention/working_memory.py`、`tests/core/test_model_runtime.py` 两处既有差异；Pyright 有 `aureus/lab/charts.py`（matplotlib）与 `aureus/monitor/page.py`（pandas、streamlit）4 项缺失可选依赖。全检 8 项失败中，5 项旧基线失败，另有回复分段 2 项及记忆批量移除浏览器 1 项；这 3 项均在任务基线提交 `25ff850` 独立复现。
 
 ## 不做
 
 不沿用混批作为失败回退，不将分批键授予旧资料召回权；不改正式人格或私人库，不推送。遇到无法证明可信路由的通道记录反例，不自行放开。
+
+## 验收意见
+
+实现提交与专项、全检快照见 `docs/handoff.md`。全检中的三项额外失败已在 `25ff850` 基线工作树独立复现，不属于本任务引入；不修与本任务无关的浏览器、回复分段或基线失败。
