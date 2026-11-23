@@ -170,6 +170,47 @@ class PeopleDirectory:
                     )
             return self._load(conn, user_id)
 
+    def imported_contact(self, platform: str, account_id: str) -> int | None:
+        """只有来源人物键和唯一平台账号同时明确时，允许验证已有联系人。"""
+        conn = self._require_open()
+        row = conn.execute(
+            "SELECT a.person_id FROM accounts a JOIN people p ON p.id = a.person_id "
+            "WHERE a.platform = ? AND a.account_id = ? AND p.kind = 'contact' "
+            "AND EXISTS (SELECT 1 FROM historical_person_keys k WHERE k.person_id = p.id) "
+            "AND (SELECT count(*) FROM accounts WHERE person_id = p.id) = 1",
+            (platform, account_id),
+        ).fetchone()
+        return int(row[0]) if row else None
+
+    def bind_verified_account(
+        self, user: Person, platform: str, account_id: str, original_contact: int | None
+    ) -> None:
+        """验证完成后原子关联账号与迁入资料，原联系人编号留给既有时间线。"""
+        conn = self._require_open()
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not user.is_user:
+                raise PeopleError("绑定目标须为本机用户。")
+            if original_contact is None:
+                if self.find(platform, account_id) is not None:
+                    raise PeopleError("验证期间账号归属已变更。")
+                conn.execute(
+                    "INSERT INTO accounts VALUES (?, ?, ?)", (platform, account_id, user.id)
+                )
+                return
+            if self.imported_contact(platform, account_id) != original_contact:
+                raise PeopleError("验证期间账号归属已变更。")
+            conn.execute(
+                "UPDATE accounts SET person_id = ? WHERE platform = ? AND account_id = ?",
+                (user.id, platform, account_id),
+            )
+            for statement in (
+                "UPDATE historical_person_keys SET person_id = ? WHERE person_id = ?",
+                "UPDATE people_history SET person_id = ? WHERE person_id = ?",
+                "UPDATE people_history SET other_person_id = ? WHERE other_person_id = ?",
+            ):
+                conn.execute(statement, (user.id, original_contact))
+
     def find(self, platform: str, account_id: str) -> Person | None:
         """按账号找人；没见过的账号返回 None。"""
         conn = self._require_open()

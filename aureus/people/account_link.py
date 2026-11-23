@@ -18,6 +18,7 @@ class _Challenge:
     account_id: str
     code: str
     expires_at: datetime
+    original_contact: int | None
     verified: bool = False
 
 
@@ -43,10 +44,13 @@ class AccountLink:
         """生成指定 QQ 账号可用的短时验证码"""
         if account_id == self._bot_account_id:
             raise PeopleError("不能绑定机器人自己的账号。")
-        if self._directory.find(self._platform, account_id) is not None:
+        contact = self._directory.imported_contact(self._platform, account_id)
+        if contact is None and self._directory.find(self._platform, account_id) is not None:
             raise PeopleError("这个 QQ 账号已经有档案，无法自动关联。")
         code = secrets.token_urlsafe(16)
-        self._pending = _Challenge(session, account_id, code, self._clock.now() + LINK_LIFETIME)
+        self._pending = _Challenge(
+            session, account_id, code, self._clock.now() + LINK_LIFETIME, contact
+        )
         return code
 
     def receive(self, account_id: str, text: str, *, is_direct: bool) -> bool:
@@ -76,7 +80,9 @@ class AccountLink:
         user = self._directory.find(*self._web_account)
         if user is None or not user.is_user:
             raise PeopleError("当前网页登录账号无法确认用户身份。")
-        self._directory.ensure_user(user.name, [(self._platform, pending.account_id)])
+        self._directory.bind_verified_account(
+            user, self._platform, pending.account_id, pending.original_contact
+        )
         self._pending = None
         return pending.account_id
 
