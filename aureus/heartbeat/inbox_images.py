@@ -2,10 +2,12 @@
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from contextlib import closing
 from math import hypot, sumprod
 from pathlib import Path
+from sqlite3 import Error as SQLiteError
 from sqlite3 import Row
 from typing import Any
 
@@ -14,6 +16,8 @@ from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.perception import MediaReference, Perception
 from aureus.organs import OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox_image_vectors (
@@ -48,8 +52,16 @@ class InboxImageIndex:
 
     async def index(self, perception: Perception, attachment: MediaReference, image: bytes) -> None:
         """收到有效图片时保存向量；被网关拒绝或模型失败时保留原消息。"""
-        if not self._enabled() or perception.route is None:
+        if not self._enabled() or perception.route is None or attachment.kind != "image":
             return
+        try:
+            await self._index(perception, attachment, image)
+        except SQLiteError:
+            logger.exception("图片向量索引写入失败")
+
+    async def _index(
+        self, perception: Perception, attachment: MediaReference, image: bytes
+    ) -> None:
         message_id = await asyncio.to_thread(self._unindexed_source, perception, attachment)
         if message_id is None:
             return
