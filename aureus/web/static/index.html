@@ -113,7 +113,7 @@ linear-gradient(90deg,var(--border),transparent 85%) left bottom/100% 1px no-rep
 #app{grid-template-columns:1fr;grid-template-rows:1fr auto}
 #pages{grid-column:1;grid-row:1;margin:0;border:0;border-radius:0;box-shadow:none}
 nav.side,nav.side:hover,nav.side:has(:focus-visible){position:static;grid-row:2;width:auto;flex-direction:row;gap:0;padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:var(--surface);border-right:0;border-top:1px solid var(--border);box-shadow:none;overflow-x:auto;overflow-y:hidden}
-.brand,.nav-group,.nav-spacer,.nav-foot #theme-btn,.nav-foot #terminal-btn{display:none}
+.brand,.nav-group,.nav-spacer,.nav-foot #terminal-btn{display:none}
 .nav-foot{display:contents}
 nav.side .nav-item{flex:1 1 0;min-width:0;flex-direction:column;justify-content:center;gap:2px;height:auto;padding:6px 2px;font-size:11px;text-align:center}
 nav.side .nav-item::before{display:none}
@@ -564,7 +564,6 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button class="nav-item" data-page="config" aria-label="设置"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-sliders"/></svg><span class="nav-label" style="--i:9">设置</span></button>
 <div class="nav-spacer"></div>
 <div class="nav-foot">
-<button id="theme-btn" class="nav-item" aria-label="切换主题"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-theme"/></svg><span class="nav-label" style="--i:9">切换主题</span></button>
 <button id="restart-btn" class="nav-item hidden" aria-label="重启程序" title="重启程序"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-refresh"/></svg><span class="nav-label" style="--i:10">重启</span></button>
 <button id="shutdown-btn" class="nav-item" aria-label="退出程序" title="退出程序"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-logout"/></svg><span class="nav-label" style="--i:10">退出</span></button>
 <button id="terminal-btn" class="nav-item hidden" aria-label="打开 CLI 窗口" title="打开 CLI 窗口"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-terminal"/></svg><span class="nav-label" style="--i:11">打开 CLI</span></button>
@@ -572,7 +571,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </nav>
 <main id="pages">
 <section id="page-overview" class="page">
-<div class="page-head ov-head"><div><h2>总览</h2><div class="ov-meta"><b>AUREUS <span id="ov-version" class="mono"></span></b><time id="ov-date"></time></div></div><div class="row"><button id="ov-power" type="button" class="btn small hidden">关机</button><button id="ov-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div></div>
+<div class="page-head ov-head"><div><h2>总览</h2><div class="ov-meta"><b>AUREUS <span id="ov-version" class="mono"></span></b><time id="ov-date"></time></div></div><div class="row"><button id="ov-power" type="button" class="btn small hidden">关机</button><button id="ov-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="theme-btn" type="button" class="btn small" aria-label="切换主题" title="切换主题"><svg class="ico" aria-hidden="true"><use href="#i-theme"/></svg></button></div></div>
 <div class="page-body stack"><div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div><div id="ov-missing" class="empty hidden"></div>
 <div id="ov-content" class="ov-grid hidden">
 <article class="ov-slot"><div class="ov-face"><div class="ov-status-body">
