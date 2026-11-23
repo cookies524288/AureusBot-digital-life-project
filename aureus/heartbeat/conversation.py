@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import tzinfo
 from math import hypot, sumprod
 from typing import Protocol
+from uuid import uuid4
 
 from aureus.agenda import AgendaStore
 from aureus.agenda.findings import FindingStore
@@ -51,6 +52,7 @@ from aureus.heartbeat.planning import (
     InitiativePlan,
     Plan,
     ReplyLength,
+    clean_text,
     parse_plan,
 )
 from aureus.heartbeat.recall import MAX_RECALL_CHARS, format_recall, heuristic_keywords
@@ -81,6 +83,8 @@ from aureus.timeline import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_STRANGER_AFFINITY = PeopleConfig().stranger_affinity
+_REVIEW_SENTINEL_PREFIX = "reply_review_"
+_MAX_REVIEW_REASON_CHARS = 500
 
 
 def recent_dialogue(
@@ -183,6 +187,7 @@ class _ThoughtOutcome:
     recall_keywords: tuple[str, ...] = ()
     recall_record_ids: tuple[int, ...] = ()
     recall_source_keys: tuple[str, ...] = ()
+    review_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -479,12 +484,7 @@ class ConversationFlow:
         return describe_body_state(reading, body.config, strategy.describe())
 
     async def _think(self, job: _ReplyJob) -> _ThoughtOutcome:
-        """在后台调用器官：档位允许时先规划，再回复。
-
-        不写任何状态；除了被取消，任何情况都返回结果而不是抛异常。
-        规划器出任何问题（调用失败、建议看不懂）都不影响回复：改成合并的一次调用，
-        和没有规划器时一样，由回复器自己决定怎么回应（D59）。
-        """
+        """在后台先规划，明确需要开口才调用回复器。"""
         if job.media_sources:
             messages = await self.inbox_media.enrich(
                 job.messages, job.media_sources, job.strategy.model_preference
@@ -493,33 +493,43 @@ class ConversationFlow:
         attempt = await self._judge_emotion(job)
         if attempt is not None and attempt.triggers:
             job = self._apply_hormones(job, attempt.triggers)
-        plan: Plan | None = None
         automatic: tuple[tuple[str, ...], list[MemoryHit]] | None = None
-        forced_reply = False
-        if job.strategy.plan_first:
-            if self._memory_config.heuristic_recall_enabled and self._can_recall():
-                words = heuristic_keywords(job.messages)
-                if words and (hits := await self._retrieve(job, words)):
-                    automatic = words, hits
-            try:
-                plan = await self._plan(job, automatic)
-            except CallRejectedError as rejection:
-                # 网关的拒绝（月度上限、失控拦截）对回复器同样成立，不必再试一次。
-                return _ThoughtOutcome(
-                    notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
-                )
-            if job.require_inbox_plan and plan is None:
-                return _ThoughtOutcome(declined=True, judge=attempt, effects=job.effects)
-            if plan is not None and not plan.should_reply:
-                if job.require_inbox_plan or job.effects is None or not job.effects.must_reply:
-                    return _ThoughtOutcome(
-                        plan=plan, declined=True, judge=attempt, effects=job.effects
-                    )
-                # 这场冲突里已经不回过一次：这次必须回，由回复器自己决定怎么回（D69 第 3 条）。
-                plan = None
-                forced_reply = True
+        if self._memory_config.heuristic_recall_enabled and self._can_recall():
+            words = heuristic_keywords(job.messages)
+            if words and (hits := await self._retrieve(job, words)):
+                automatic = words, hits
+        try:
+            plan = await self._plan(job, automatic)
+        except CallRejectedError as rejection:
+            return _ThoughtOutcome(
+                notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
+            )
+        if plan is None or not plan.should_reply:
+            outcome = _ThoughtOutcome(plan=plan, declined=True)
+        else:
+            outcome = await self._reply_with_review(job, plan, automatic)
+        return replace(outcome, judge=attempt, effects=job.effects)
+
+    async def _reply_with_review(
+        self,
+        job: _ReplyJob,
+        plan: Plan,
+        automatic: tuple[tuple[str, ...], list[MemoryHit]] | None,
+    ) -> _ThoughtOutcome:
+        """把有效的驳回理由交给规划器重审一次。"""
         outcome = await self._reply(job, plan, automatic)
-        return replace(outcome, judge=attempt, effects=job.effects, forced_reply=forced_reply)
+        if outcome.review_reason is None:
+            return outcome
+        if not outcome.review_reason:
+            return _ThoughtOutcome(declined=True)
+        try:
+            revised = await self._plan(job, automatic, review_reason=outcome.review_reason)
+        except CallRejectedError:
+            return _ThoughtOutcome(declined=True)
+        if revised is None or not revised.should_reply:
+            return _ThoughtOutcome(declined=True)
+        outcome = await self._reply(job, revised, automatic)
+        return outcome if outcome.review_reason is None else _ThoughtOutcome(declined=True)
 
     async def _judge_emotion(self, job: _ReplyJob) -> _JudgeAttempt | None:
         """先调判断器官（D68）。不调用时返回 None；调用了就一定返回结果，任何失败都不影响回复。
@@ -612,7 +622,11 @@ class ConversationFlow:
         return self._affinity.config.stranger_affinity
 
     async def _plan(
-        self, job: _ReplyJob, automatic: tuple[tuple[str, ...], list[MemoryHit]] | None
+        self,
+        job: _ReplyJob,
+        automatic: tuple[tuple[str, ...], list[MemoryHit]] | None,
+        *,
+        review_reason: str = "",
     ) -> Plan | None:
         """调规划器，返回读懂的建议。调用失败或看不懂时返回 None（记日志）；网关的拒绝照常抛出。"""
         organ_id = self._config.plan_organ
@@ -632,6 +646,7 @@ class ConversationFlow:
             jargon=await self._jargon_reference(job),
             with_expressions=self._can_recall_language(),
             heuristic_recall=heuristic_recall,
+            review_reason=review_reason,
         )
         if job.inbox_attention:
             prompt += (
@@ -652,14 +667,14 @@ class ConversationFlow:
         except CallRejectedError:
             raise
         except OrganCallError as failure:
-            logger.warning("规划器调用失败，合并成一次调用照常回复：%s", failure)
+            logger.warning("规划器调用失败：%s", failure)
             return None
         except Exception:
-            logger.exception("调用规划器 %s 时出错，合并成一次调用照常回复", organ_id)
+            logger.exception("调用规划器 %s 时出错", organ_id)
             return None
         plan = parse_plan(response.suggestion)
         if plan is None:
-            logger.warning("规划器的建议看不懂，合并成一次调用照常回复")
+            logger.warning("规划器的建议看不懂")
         return plan
 
     def _can_recall(self) -> bool:
@@ -774,24 +789,21 @@ class ConversationFlow:
     async def _reply(
         self,
         job: _ReplyJob,
-        plan: Plan | None,
+        plan: Plan,
         automatic: tuple[tuple[str, ...], list[MemoryHit]] | None,
     ) -> _ThoughtOutcome:
-        """调回复器。有规划就按规划的意图和长度写；没有就由它自己决定（合并的一次调用）。"""
+        """让回复器按规划写成发言，或通过内部标记驳回。"""
         strategy = job.strategy
-        if plan is None:
-            system_context, intent, length = job.full_context, "", strategy.length_limit
-        else:
-            system_context, intent = job.replyer_context, plan.intent
-            length = (
-                plan.length.capped_at(strategy.length_limit)
-                if plan.length is not None
-                else strategy.length_limit
-            )
+        length = (
+            plan.length.capped_at(strategy.length_limit)
+            if plan.length is not None
+            else strategy.length_limit
+        )
+        sentinel = _REVIEW_SENTINEL_PREFIX + uuid4().hex
         recall_text = ""
         keywords: tuple[str, ...] = ()
         hits: list[MemoryHit] = []
-        if plan is not None and plan.recall and self._can_recall():
+        if plan.recall and self._can_recall():
             if (explicit := await self._retrieve(job, plan.recall)) is not None:
                 hits = explicit
                 keywords = plan.recall
@@ -808,10 +820,11 @@ class ConversationFlow:
                 job.messages,
                 job.user_name,
                 self._timezone,
-                intent=intent,
+                intent=plan.intent,
+                plan_reason=plan.reason,
+                review_sentinel=sentinel,
                 length=length,
                 recall=recall_text,
-                jargon=await self._jargon_reference(job) if plan is None else "",
                 expressions=await self._expression_reference(job, plan),
                 people_context=(
                     format_people_context(
@@ -823,7 +836,7 @@ class ConversationFlow:
                     else ""
                 ),
             ),
-            system_context=system_context,
+            system_context=job.replyer_context,
         )
         try:
             response = await self._call(request)
@@ -837,8 +850,17 @@ class ConversationFlow:
             return _ThoughtOutcome(
                 notice=f"调用模型时出错（{type(error).__name__}），这次没有回复，详情见日志。"
             )
-        if not response.suggestion.strip():
+        text = response.suggestion.strip()
+        if not text:
             return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
+        if _REVIEW_SENTINEL_PREFIX in text or "{sentinel}" in text:
+            opening, closing = f"<{sentinel}>", f"</{sentinel}>"
+            reason = ""
+            if text.startswith(opening) and text.endswith(closing):
+                body = text[len(opening) : -len(closing)].removesuffix("\\")
+                if _REVIEW_SENTINEL_PREFIX not in body and "{sentinel}" not in body:
+                    reason = clean_text(body, _MAX_REVIEW_REASON_CHARS)
+            return _ThoughtOutcome(review_reason=reason)
         return _ThoughtOutcome(
             response=response,
             plan=plan,

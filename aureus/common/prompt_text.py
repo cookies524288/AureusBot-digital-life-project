@@ -13,17 +13,19 @@ class PromptTemplateError(ValueError):
 class PromptTemplate:
     """用标准库的纯文字占位语法登记可编辑片段。"""
 
-    def __init__(self, key: str, label: str, default: str, *, editable: bool = True) -> None:
+    def __init__(
+        self, key: str, label: str, default: str | Template, *, editable: bool = True
+    ) -> None:
         self.key = key
         self.label = label
-        self.default = Template(default)
+        self.default = Template(default) if isinstance(default, str) else default
         self.editable = editable
         self.variables = tuple(self.default.get_identifiers())
-        self.compile(default)
+        self.compile(self.default.template)
 
     def compile(self, source: str) -> Template:
         """校验语法和变量集合。变量值在运行时单次插入。"""
-        template = Template(source)
+        template = type(self.default)(source)
         if not source.strip() or not template.is_valid():
             raise PromptTemplateError("请输入有效模板。变量用 $名称，美元符号用 $$。")
         variables = set(template.get_identifiers())

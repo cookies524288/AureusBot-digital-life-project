@@ -3,7 +3,8 @@
 正常档先规划再回复，低档位合并成一次，规划器出问题不影响回复。
 """
 
-from collections.abc import Iterator
+import re
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,13 +51,17 @@ CHANNEL = "terminal"
 MONTHLY_LIMIT = 1_400_000
 PLAN = '{"reply": true, "intent": "安慰一下，问问细节", "length": "短", "reason": "对方难过"}'
 DECLINE = '{"reply": false, "reason": "对方只是说了晚安"}'
+REVISED_PLAN = '{"reply": true, "intent": "自然地问后来呢", "reason": "还有话想聊"}'
+REVIEW_REASON = "原计划太像系统通知，改用简短口语"
 
 
 class ScriptedOrgans:
     """按器官名分别给出预设的结果或异常，并记下每次收到的请求。"""
 
     def __init__(
-        self, planner: list[str | BaseException], replyer: list[str | BaseException]
+        self,
+        planner: list[str | BaseException],
+        replyer: list[str | BaseException | Callable[[OrganRequest], str]],
     ) -> None:
         self.outcomes = {"planner": planner, "replyer": replyer}
         self.requests: list[OrganRequest] = []
@@ -66,6 +71,8 @@ class ScriptedOrgans:
         outcome = self.outcomes[request.organ_id].pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
+        if callable(outcome):
+            outcome = outcome(request)
         return OrganResponse(organ_id=request.organ_id, suggestion=outcome)
 
 
@@ -117,7 +124,7 @@ def make_rig(
     *,
     used_today: int = 0,
     planner: list[str | BaseException] | None = None,
-    replyer: list[str | BaseException] | None = None,
+    replyer: list[str | BaseException | Callable[[OrganRequest], str]] | None = None,
     **heartbeat: Any,
 ) -> Rig:
     clock = ManualClock(NOW)
@@ -202,6 +209,84 @@ async def test_normal_tier_plans_then_replies_with_the_planned_intent(
     assert reply.metadata["plan"]["intent"] == "安慰一下，问问细节"
     assert reply.metadata["strategy"]["plan_first"] is True
     assert [m.kind for m in rig.sent] == [MessageKind.REPLY]
+
+
+def review_reply(form: str) -> Callable[[OrganRequest], str]:
+    def respond(request: OrganRequest) -> str:
+        match = re.search(r"<(reply_review_[0-9a-f]{32})>", request.prompt)
+        assert match is not None
+        sentinel = match.group(1)
+        assert "规划器的回复理由：" in request.prompt
+        assert f"\\</{sentinel}>" in request.prompt
+        return form.format(sentinel=sentinel, reason=REVIEW_REASON)
+
+    return respond
+
+
+@pytest.mark.parametrize("closing_prefix", ["", "\\"])
+async def test_review_reason_returns_only_to_planner_then_sends_rewrite(
+    made: list[Rig], tmp_path: Path, closing_prefix: str
+) -> None:
+    rig = make_rig(
+        made,
+        tmp_path,
+        planner=[PLAN, REVISED_PLAN],
+        replyer=[review_reply("<{sentinel}>{reason}" + closing_prefix + "</{sentinel}>"), "后来呢"],
+    )
+    await rig.exchange("今天面试被拒了")
+
+    assert rig.organ_ids() == ["planner", "replyer", "planner", "replyer"]
+    first_plan, first_reply, second_plan, second_reply = rig.organs.requests
+    assert first_plan.context["in_reply_to"] == second_plan.context["in_reply_to"]
+    assert REVIEW_REASON in second_plan.prompt
+    assert REVIEW_REASON not in first_plan.prompt + first_reply.prompt + second_reply.prompt
+    assert "自然地问后来呢" in second_reply.prompt
+    [record] = rig.my_messages()
+    assert record.content == "后来呢"
+    assert record.metadata["plan"]["intent"] == "自然地问后来呢"
+    assert [(item.kind, item.content) for item in rig.sent] == [(MessageKind.REPLY, "后来呢")]
+
+
+@pytest.mark.parametrize("second_plan", [DECLINE, "坏格式", REVISED_PLAN])
+async def test_low_energy_review_silence_or_repeat_rejection_does_not_send(
+    made: list[Rig], tmp_path: Path, second_plan: str
+) -> None:
+    rejecting = review_reply("<{sentinel}>{reason}</{sentinel}>")
+    rig = make_rig(
+        made,
+        tmp_path,
+        used_today=90_000,
+        planner=[PLAN, second_plan],
+        replyer=[rejecting, rejecting],
+    )
+    await rig.exchange("今天面试被拒了")
+
+    expected = ["planner", "replyer", "planner"]
+    if second_plan == REVISED_PLAN:
+        expected.append("replyer")
+    assert rig.organ_ids() == expected
+    assert all(call.model_preference is ModelPreference.CHEAPEST for call in rig.organs.requests)
+    assert REVIEW_REASON in rig.organs.requests[2].prompt
+    assert rig.sent == rig.my_messages() == []
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "任务已提交。<{sentinel}>{reason}</{sentinel}>",
+        "<{sentinel}>{reason}",
+        "<{sentinel}></{sentinel}>",
+        "<{{sentinel}}>{reason}</{{sentinel}}>",
+    ],
+)
+async def test_malformed_review_returns_no_public_text(
+    made: list[Rig], tmp_path: Path, form: str
+) -> None:
+    rig = make_rig(made, tmp_path, replyer=[review_reply(form)])
+    await rig.exchange("今天面试被拒了")
+
+    assert rig.organ_ids() == ["planner", "replyer"]
+    assert rig.sent == rig.my_messages() == []
 
 
 @pytest.mark.parametrize(

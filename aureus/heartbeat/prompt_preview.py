@@ -44,9 +44,11 @@ _HISTORY = "〔聊天历史〕"
 _INPUT = "〔当前消息〕"
 _LENGTH = "〔回复长度〕"
 _INTENT = "〔规划意图〕"
+_PLAN_REASON = "〔规划理由〕"
+_REVIEW_SENTINEL = "reply_review_0123456789abcdef0123456789abcdef"
 _CONDITIONAL = {
-    "plan": "按开关和本轮输入附加黑话、表达意图、日程、兴趣及召回。",
-    "reply": "有命中时附记忆、人际与习得表达。合并回复才附黑话，规划后可附意图和长度。",
+    "plan": "按开关和本轮输入附加黑话、表达意图、日程、兴趣及召回。再审时附回复器的理由。",
+    "reply": "有命中时附记忆、人际与习得表达。规划后附回复意图和再审协议，标记每次更新。",
     "language_learning": "启用增量学习且收到未处理的新样本时调用。",
     "memory_consolidation": "夜间空闲且整理达到批量门槛，启用提取、有可用器官和可提取发言时调用。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
@@ -143,6 +145,13 @@ def build_prompt_scenes(
         add("plan", "plan", "回应规划", build_plan_prompt([], _INPUT, user), system())
         add(
             "plan",
+            "plan_review",
+            "回应规划 · 回复再审",
+            build_plan_prompt(_HISTORY, _INPUT, user, review_reason="〔再审理由〕"),
+            system(),
+        )
+        add(
+            "plan",
             "plan_context",
             "回应规划 · 含可选上下文",
             build_plan_prompt(
@@ -191,6 +200,8 @@ def build_prompt_scenes(
                 _INPUT,
                 user,
                 intent=_INTENT,
+                plan_reason=_PLAN_REASON,
+                review_sentinel=_REVIEW_SENTINEL,
                 length=_LENGTH,
                 recall=recall_reference("〔记忆召回：查询词、命中数、时间、说话人和记录〕"),
                 expressions=expression,
@@ -202,7 +213,14 @@ def build_prompt_scenes(
             "reply",
             "reply_contact",
             "规划后回复 · 陌生联系人",
-            build_reply_prompt(_HISTORY, _INPUT, user, intent=_INTENT),
+            build_reply_prompt(
+                _HISTORY,
+                _INPUT,
+                user,
+                intent=_INTENT,
+                plan_reason=_PLAN_REASON,
+                review_sentinel=_REVIEW_SENTINEL,
+            ),
             system(full=False, rich=True, contact=True),
         )
         add(
@@ -229,6 +247,8 @@ def build_prompt_scenes(
                 _INPUT,
                 user,
                 intent=_INTENT,
+                plan_reason=_PLAN_REASON,
+                review_sentinel=_REVIEW_SENTINEL,
                 length=_LENGTH,
                 recall=recall_reference("〔记忆召回：查询词、命中数、时间、说话人和记录〕"),
                 expressions=expression,

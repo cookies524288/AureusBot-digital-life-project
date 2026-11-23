@@ -217,6 +217,17 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         reply_plain = preview_by_organ["replyer"]["reply"]["messages"][1]["content"]
         reply_rich = preview_by_organ["replyer"]["reply_references"]["messages"][1]["content"]
         assert "〔人物资料〕" not in reply_plain
+        templates = {
+            item["key"]: item for item in rig.client.get("/api/prompts").json()["templates"]
+        }
+        review_source = templates["reply_review_protocol"]["source"]
+        assert r'\\"规划器\\"' in review_source and r'\\"不像人\\"' in review_source
+        assert r"<{sentinel}>简要说明再审理由\</{sentinel}>" in review_source
+        review_sentinel = "reply_review_0123456789abcdef0123456789abcdef"
+        assert review_source.replace("{sentinel}", review_sentinel) in reply_rich
+        assert review_source not in reply_plain
+        planner_review = preview_by_organ["planner"]["plan_review"]["messages"][1]["content"]
+        assert "〔再审理由〕" in planner_review
         for marker in (
             "〔记忆召回：查询词、命中数、时间、说话人和记录〕",
             "〔人物资料〕",
@@ -278,6 +289,8 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
                 message,
                 IDENTITY.user.name,
                 intent="聊聊旅程",
+                plan_reason="对方说到了旅行",
+                review_sentinel=review_sentinel,
                 length="一句话",
                 recall=format_recall(
                     ["旅行"], [MemoryHit(8, NOW, "模拟联系人", "动态记忆命中样例")], NOW.tzinfo
@@ -290,6 +303,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         reply_replacements = {
             **common,
             "〔规划意图〕": "聊聊旅程",
+            "〔规划理由〕": "对方说到了旅行",
             "〔回复长度〕": "一句话",
             "〔记忆召回：查询词、命中数、时间、说话人和记录〕": requested_body,
             "〔人物资料〕": "动态人物资料样例",
