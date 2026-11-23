@@ -275,7 +275,10 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .tl-item::before{content:'';position:absolute;left:-20px;top:16px;width:10px;height:10px;border-radius:50%;background:var(--surface);border:2px solid var(--text-2)}
 .tl-item.in-context::before{border-color:var(--accent);background:var(--accent)}
 .tl-item:hover{background:var(--surface-2)}
-.tl-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-2)}
+.tl-top{display:flex;gap:4px 10px;align-items:baseline;flex-wrap:wrap}
+.tl-event{color:var(--text);font-size:15px;font-weight:700;overflow-wrap:anywhere}
+.tl-meta{display:flex;min-width:0;gap:3px 9px;align-items:baseline;flex-wrap:wrap;color:var(--text-2);font-size:12px;overflow-wrap:anywhere}
+@media(max-width:680px){.tl-meta{flex-basis:100%}}
 .tl-content{margin-top:2px;white-space:pre-wrap;word-break:break-word}
 .tl-content.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .tl-divider{display:flex;align-items:center;gap:10px;margin:10px 0 10px -22px;color:var(--accent-strong);font-size:12px;font-weight:600}
@@ -1460,7 +1463,6 @@ const EVENT_NAMES = {
   diary_written: '写了日记', diary_failed: '日记没写成', persona_changed: '人设变了', persona_unchanged: '人设没变',
   persona_review_failed: '人设回顾失败', organ_call_rejected: '调用被拒', organ_call_failed: '调用失败',
 };
-const VISIBILITY_NAMES = { private: '仅自己可见', user_only: '仅用户可见', group: '群聊可见', public: '公开' };
 const tl = { filter: '', records: [], next: null, context: null };
 
 function renderTimelineChips() {
@@ -1479,12 +1481,13 @@ function renderTimelineChips() {
 function timelineItem(rec, inContext) {
   const actor = { user: '你', me: '它', person: '对方', system: '系统' }[rec.actor] || rec.actor;
   const top = el('div', { class: 'tl-top' },
-    el('span', { text: fmtTime(rec.time, true) }),
-    el('span', { class: 'tag ' + (rec.event_type === 'message' ? 'accent' : ''), text: EVENT_NAMES[rec.event_type] || rec.event_type }),
-    el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
-    rec.channel ? el('span', { class: 'tag', text: rec.channel }) : null,
-    el('span', { class: 'tag', text: VISIBILITY_NAMES[rec.visibility] || rec.visibility }),
-    el('span', { class: 'mono', text: '#' + rec.id }));
+    el('strong', { class: 'tl-event', text: EVENT_NAMES[rec.event_type] || rec.event_type }),
+    rec.visibility === 'user_only' ? el('span', { class: 'tag', text: '仅用户可见' }) : null,
+    el('div', { class: 'tl-meta' },
+      el('time', { datetime: rec.time, text: fmtTime(rec.time, true) }),
+      el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
+      rec.channel ? el('span', { text: rec.channel }) : null,
+      el('span', { class: 'mono', text: '#' + rec.id })));
   const content = el('div', { class: 'tl-content clamp', text: rec.content || '（没有正文）' });
   content.addEventListener('click', () => content.classList.toggle('clamp'));
   const keys = Object.keys(rec.metadata || {});
