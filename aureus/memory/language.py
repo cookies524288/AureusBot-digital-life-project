@@ -549,6 +549,37 @@ class LanguageStore:
         ]
         return entries if include_disabled else [entry for entry in entries if entry.is_enabled]
 
+    def browse_page(
+        self,
+        kind: LanguageKind,
+        offset: int,
+        limit: int,
+        *,
+        conversation_key: str = "",
+        text: str = "",
+        is_enabled: bool | None = None,
+        review: ExpressionReviewStatus | None = None,
+        is_removed: bool = False,
+    ) -> tuple[list[LanguageEntry], int]:
+        """按明确绑定和资料状态浏览，返回本页及筛选总数，不参与召回。"""
+        term = text.strip().casefold()
+        matches = [
+            entry
+            for entry in self.entries(kind, include_disabled=True)
+            if (not conversation_key or conversation_key in entry.scope_keys)
+            and entry.is_removed == is_removed
+            and (is_enabled is None or entry.is_enabled == is_enabled)
+            and (review is None or entry.review_status == review)
+            and (
+                not term
+                or any(
+                    term in field.casefold()
+                    for field in (entry.text, entry.detail, entry.example, *(entry.original or ()))
+                )
+            )
+        ]
+        return matches[offset : offset + limit], len(matches)
+
     @staticmethod
     def _apply_edit(entry: LanguageEntry, row: Row | None) -> LanguageEntry:
         if row is None:

@@ -1,6 +1,6 @@
 # MaiBot 学习功能逐项核对
 
-状态：源码审计完成；学习页已接通无损表情维护、语言包预览和导入导出、三类资源批量移除与恢复、表达人工审核及包记录会话映射。
+状态：源码审计完成；学习页已接通无损表情维护、语言包预览和导入导出、三类资源批量移除与恢复、表达人工审核、包记录会话映射和按明确绑定的会话浏览。
 
 ## 范围与证据
 
@@ -13,7 +13,7 @@
 | 行为 | 上游源码 | Aureus 对照与结论 | 合成证据 / 待验 |
 | --- | --- | --- | --- |
 | 查词、列表分页、详情、口径计数 | `UI/jargon/index.tsx`、`JargonList.tsx`、`JargonDialogs.tsx`；`API/jargon.py` 的 `/list`、详情、`/stats/summary` | **类似**。`learningView`、`browse_learning` 提供词、释义、例句查询和分页，详情展示原件/状态。没有上游统计总览、来源贡献统计和逐组证据消息回查。 | `test_learning_resources_filter_and_page_real_observations`、`test_learning_pagination_and_category_switch`；待测统计口径、保留/停用及证据源。 |
-| 搜索范围、有效黑话/非黑话、全局/单会话/多组 | `UI/jargon/index.tsx`，`API/jargon.py::apply_jargon_list_filters`、`get_chat_list`、`get_jargon_groups` | **边界不同**。资源接口按启用状态筛选，没有独立的有效黑话/非黑话归类，也没有可操作的单会话、关联组或全局范围筛选。停用不等于标记为非黑话。 | 资源查询/分页测试仅覆盖 Aureus 状态；待加两会话、多组、全局与缺释义的对照。 |
+| 搜索范围、有效黑话/非黑话、全局/单会话/多组 | `UI/jargon/index.tsx`，`API/jargon.py::apply_jargon_list_filters`、`get_chat_list`、`get_jargon_groups` | **部分**。可浏览单个已知会话明确绑定的黑话，可与文本、启用状态合用；共享给多个会话的包记录在同一列表不重复。「全部资料」不是全局授权。没有独立的全局、共享组、旧会话维度和有效黑话/非黑话归类；停用不等于标记为非黑话。 | `test_learning_browse_combines_explicit_conversation_and_filters`、`test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses`。 |
 | 新建、改内容、改所属范围、删除、批量改类和删除 | `UI/jargon/JargonDialogs.tsx`；`API/jargon.py` 的创建、更新、删除、`/batch/delete`、`/batch/set-jargon` | **部分**。`add_learning`、`update_learning` 可新建和以本地覆盖修改、停用单项，原件仍保留；未见可编辑作用域、批处理或删除。上游覆盖/删除不能直接照搬到只追加和保留原件的方案。 | `test_resource_filters_pages_and_reads_evidence`；待补范围和批处理，先定撤销及删除授权。 |
 | 独立黑话包导入导出、来源/目标会话映射和作用域去重 | `UI/jargon/JargonDialogs.tsx`；`API/jargon.py` 的 `/export`、`/import`、`scopes_overlap` | **部分**。学习页支持 `maibot.jargon.export` v1 JSON 导出、无写入预览及确认导入。保留原始目标信息；可手工绑定已知收件箱会话，未映射不参与召回，不覆盖同名现有记录。范围不随语言包导出。 | `test_language_package_preview_round_trip_and_deduplication`、`test_explicit_language_scope_filters_real_planner_and_replyer_requests`。 |
 | 从近期会话采样、并发/批次限制、收集证据与推断含义 | `src/maisaka/runtime.py` 学习轮及 `src/learners/jargon_learner.py`、`jargon_miner.py`：会话锁、已知词跟踪、证据分组/清洗、推断门槛、上下文推断与比较 | **边界不同**。`main_loop`、`language_runner.py`、`LanguageStore.observe/publish` 按已进入时间线的会话片段，经自身心跳、网关、去重和证据最低门槛学习。没有一比一迁入已知词缓存、会话证据组、独立推断/重推规则或插件钩子。 | `test_language_normal_inbound_across_group_and_private_after_restart`、`test_jargon_stays_out_of_retrieval_until_evidence_exists`；待测证据修订及多阶段释义。 |
@@ -23,7 +23,7 @@
 
 | 行为 | 上游源码 | Aureus 对照与结论 | 合成证据 / 待验 |
 | --- | --- | --- | --- |
-| 当前会话/分组/全局/旧会话浏览、统计、搜索排序、详情分页 | `UI/expression/index.tsx`、`ExpressionList.tsx`、`ExpressionScopeStatus.tsx`；`API/expression.py` 的 `/list`、`/chats`、`/chat-targets`、`/groups`、`/stats/summary` | **类似**。`learningView`、`browse_learning` 支持分页、文本/例句搜索、启用筛选、人工审核筛选和详情；没有独立会话/分组看板、旧会话筛选或统计。 | `test_learning_resources_filter_and_page_real_observations`、`test_learning_pagination_and_category_switch`；待测三层作用域与统计。 |
+| 当前会话/分组/全局/旧会话浏览、统计、搜索排序、详情分页 | `UI/expression/index.tsx`、`ExpressionList.tsx`、`ExpressionScopeStatus.tsx`；`API/expression.py` 的 `/list`、`/chats`、`/chat-targets`、`/groups`、`/stats/summary` | **部分**。可按已知会话明确绑定筛选，并与文本、启用状态、人工审核组合后分页；只改变浏览，不改变召回。没有上游分组、全局、旧格式或非当前账号会话的等效筛选或统计；未映射不视为全局。 | `test_learning_browse_combines_explicit_conversation_and_filters`、`test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses`。 |
 | 新增、修改、删除、批量删除、清空指定范围 | `UI/expression/ExpressionDialogs.tsx`；`API/expression.py` 的创建、更新、删除、`/batch/delete`、`/clear` | **部分**。学习页支持新增、覆盖和停用，不破坏迁入原件；没有选择会话作为写入目标、批量删除/停用或按会话清空。清空需另行授权，不能从上游交互推导。 | 资源接口合成测试覆盖查询与维护字段；待测安全的批量停用、恢复与保留来源。 |
 | 人工检查、拒绝、快速审核队列、批量审查、审核理由和自动过滤日志、从日志批准 | `UI/expression/index.tsx`、`ExpressionReviewLogPanel.tsx`、`hooks/useExpressionReview.ts`、`dashboard/src/components/expression-reviewer.tsx`；`API/expression.py` 的 `/review/*` 和 `/review-status`；`src/learners/expression_review_store.py` | **部分**。Aureus 可按待审、通过、拒绝筛选，或打开快速待审队列；单条/批量审核保存理由和历史，拒绝必填理由且排除回复候选，不删除原件。旧表达默认为待审，仍按原规则召回；通过不跨过停用、移除或待映射。上游单条拒绝只撤掉 `checked`，公开默认不按 `checked` 筛候选；上游批量拒绝删除表达。未移植自动过滤日志、自评或从自动日志批准；本地审核历史不写入 MaiBot v1 语言包。 | `test_expression_reviews_are_append_only_and_gate_reply_candidates`、`test_expression_quick_queue_filters_and_preserves_review_history`。 |
 | 表达包导入导出、旧库上传预览和会话匹配 | `UI/expression/hooks/useExpressionImportExport.ts`、`ExpressionDialogs.tsx`；`API/expression.py` 的 `/import`、`/export`、`/legacy-import/*` | **部分**。学习页支持 `maibot.expression.export` v1 JSON 导出、预览与确认；用可选的 `aureus_source_chat_name` 保留每条包记录的原会话名称。可预览并手工绑定已知收件箱会话，不会将未知会话当全局。未实现网页旧库上传。 | `test_language_package_preview_round_trip_and_deduplication`、`test_learning_scope_shows_preview_and_cancel_never_confirms`。 |

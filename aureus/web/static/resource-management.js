@@ -373,8 +373,13 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const disabled = el('label', {}, el('input', {name:'disabled', type:'checkbox'}), ' 显示停用和待映射');
     const removed = el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除');
     const reviewFilter = kind === 'expression' ? el('select', {name:'review', 'aria-label':'审核状态'}, ...reviewOptions('全部')) : null;
+    const scopeHint = el('p', {class:'muted', id:'learning-scope-hint-' + kind,
+      text:'会话筛选只浏览明确绑定的资料，不代表当前实际召回范围。'});
+    const all = el('option', {value:'', text:'全部资料'});
+    const scope = el('select', {name:'conversation_key', 'aria-label':'浏览会话',
+      'aria-describedby':scopeHint.id, disabled:true}, all);
     const toolbar = searchForm('搜索' + learningLabels[kind], '搜索词、释义或例句', disabled, removed,
-      reviewFilter && el('label', {}, '审核状态 ', reviewFilter));
+      reviewFilter && el('label', {}, '审核状态 ', reviewFilter), scope);
     const add = action('添加' + learningLabels[kind], () => editLearning(kind, pager.read));
     const upload = action('导入', () => importLearning(kind, pager.read));
     const download = action('导出', () => {
@@ -399,7 +404,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     for (const tool of tools) tool.disabled = true;
     toolbar.append(...tools, batch.remove, batch.restore);
     if (reviewBatch) toolbar.append(reviewBatch);
-    panel.append(toolbar);
+    panel.append(toolbar, scopeHint);
     function render(item) {
       const title = item.text + (item.is_removed ? ' · 已移除' : item.pending_scope ? ' · 待映射' : item.is_enabled ? '' : ' · 已停用')
         + (item.review_status ? ' · ' + reviewLabels[item.review_status] : '');
@@ -422,12 +427,29 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           })));
       return record(title, open, batch.checkbox(item));
     }
-    const pager = searchable({panel, id:'learning-' + kind, render, prepare:() => {
+    const pager = searchable({panel, id:'learning-' + kind, render,
+      empty:() => scope.value ? '该会话没有符合条件的已绑定资料' : '没有符合条件的记录', prepare:() => {
       batch.clear(); for (const tool of tools) tool.disabled = true;
     }, loaded:data => { for (const tool of tools) tool.disabled = !data.enabled; }}, toolbar, '/api/resources/learning',
     fields => ({kind, q:fields.q.value, recall:fields.disabled.checked || fields.removed.checked ? '' : 'enabled',
-      removed:fields.removed.checked, ...(fields.review?.value ? {review:fields.review.value} : {})}));
-    return pager;
+      removed:fields.removed.checked, conversation_key:scope.value,
+      ...(fields.review?.value ? {review:fields.review.value} : {})}));
+    let scopeGeneration = 0;
+    async function loadScopes() {
+      const generation = ++scopeGeneration;
+      const response = await api(scopeEndpoint);
+      if (generation !== scopeGeneration || !response.ok) return;
+      const current = scope.value;
+      scope.replaceChildren(all, ...response.data.items.map(target =>
+        el('option', {value:target.key, text:target.label})));
+      if ([...scope.options].some(option => option.value === current)) scope.value = current;
+      if (scope.value !== current) pager.apply();
+      scope.disabled = !response.data.items.length;
+    }
+    return {
+      show() { loadScopes(); return pager.show(); },
+      hide() { scopeGeneration++; pager.hide(); },
+    };
   }
 
   function mediaTile(title, source, placeholder, open) {

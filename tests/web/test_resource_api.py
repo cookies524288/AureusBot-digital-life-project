@@ -1,5 +1,6 @@
 """验证资源浏览、溯源与只读保护。"""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,11 +10,12 @@ from fastapi.testclient import TestClient
 
 from aureus.common import ManualClock
 from aureus.heartbeat.inbox_images import InboxImageIndex
-from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception, TrustLevel
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore, MemoryIndex
 from aureus.memory.emoji import EmojiStore
 from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource
+from aureus.memory.language import ExpressionReviewStatus, LanguageContent, LanguagePackageRow
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.timeline import TimelineDatabase, VisibilityScope
 from aureus.web.resource_api import register_resource_routes
@@ -110,6 +112,109 @@ def test_learning_resources_filter_and_page_real_observations(tmp_path: Path) ->
         [entry] = jargon["items"]
         assert entry["detail"] == "集合完成"
         assert entry["evidence_ids"] == [3, 4, 5, 6]
+
+
+@pytest.mark.parametrize("kind", [LanguageKind.JARGON, LanguageKind.EXPRESSION])
+def test_learning_browse_combines_explicit_conversation_and_filters(
+    tmp_path: Path, kind: LanguageKind
+) -> None:
+    database = tmp_path / "language.db"
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    inbox = InboxStore(database, clock)
+    keys = []
+    for chat_kind, recipient, name in (
+        ("group", "10", "同名群"),
+        ("group", "20", "同名群"),
+        ("private", "10", "私聊"),
+    ):
+        perception = Perception(
+            "qq",
+            "fixture",
+            "合成消息",
+            VisibilityScope.USER_ONLY,
+            TrustLevel.VERIFIED_USER,
+            route=MessageRoute("account", chat_kind, recipient, "1"),
+        )
+        inbox.add(perception, conversation_name=name)
+        keys.append(ConversationKey.from_perception(perception).language_scope_key())
+    first_group, second_group, private = keys
+    language = LanguageStore(database)
+    language.open()
+    language.add_entry(kind, LanguageContent("旧资料", "合成场景"))
+    for text, detail, targets in (
+        ("群内", "合成场景", [first_group]),
+        ("共享", "合成场景", [first_group, private]),
+        ("另一群", "合成场景", [second_group]),
+        ("未映射", "合成场景", []),
+        ("其他用途", "跑步", [first_group]),
+        ("停用", "合成场景", [first_group]),
+        ("待审", "合成场景", [first_group] if kind == LanguageKind.EXPRESSION else []),
+    ):
+        package = LanguagePackageRow(
+            LanguageContent(text, detail), 2, "同名群", json.dumps({"text": text})
+        )
+        assert language.save_package(kind, [package]) == 1
+        key = f"package:{package.digest}"
+        if targets:
+            language.package_scope(kind, key, targets, confirm=True)
+        if text == "停用":
+            assert language.update_entry(kind, key, None, is_enabled=False)
+        if kind == LanguageKind.EXPRESSION and text not in {"待审", "未映射"}:
+            assert (
+                language.review_expressions(
+                    [key], ExpressionReviewStatus.APPROVED, "合成审核", clock.now()
+                )
+                == 1
+            )
+    initial = language.entries(kind, include_disabled=True)
+
+    def references() -> list[str]:
+        return [
+            language.jargon_reference(
+                ["群内 共享 另一群 未映射 旧资料"], 2000, conversation_key=key
+            )
+            if kind == LanguageKind.JARGON
+            else language.expression_reference(
+                "合成场景", "合成场景", (), "fixture", 2000, conversation_key=key
+            )
+            for key in keys
+        ]
+
+    before = references()
+
+    async def require_ready() -> str:
+        return "test"
+
+    app = FastAPI()
+    register_resource_routes(app, require_ready, language, None, inbox=inbox)
+    endpoint = "/api/resources/learning"
+    with TestClient(app) as client:
+        targets = {
+            item["key"]: item["label"] for item in client.get(f"{endpoint}/scope").json()["items"]
+        }
+        assert set(targets) == set(keys)
+        assert all(targets[key].startswith("同名群") for key in keys[:2])
+        assert targets[first_group] != targets[second_group]
+        params = {"kind": kind, "q": "合成场景", "recall": "enabled", "limit": 1}
+        if kind == LanguageKind.EXPRESSION:
+            params["review"] = "approved"
+        first = client.get(endpoint, params={**params, "conversation_key": first_group}).json()
+        assert first["total"] == 2 and first["next_offset"] == 1
+        second = client.get(
+            endpoint, params={**params, "conversation_key": first_group, "offset": 1}
+        ).json()
+        assert second["total"] == 2 and second["next_offset"] is None
+        assert {item["text"] for item in first["items"] + second["items"]} == {"群内", "共享"}
+        for key, text in ((second_group, "另一群"), (private, "共享")):
+            result = client.get(endpoint, params={**params, "conversation_key": key}).json()
+            assert result["total"] == 1 and result["next_offset"] is None
+            assert [item["text"] for item in result["items"]] == [text]
+        all_entries = client.get(endpoint, params={"kind": kind}).json()
+        assert {item["text"] for item in all_entries["items"]} >= {"未映射", "旧资料"}
+        empty = client.get(endpoint, params={**params, "conversation_key": "同名群"}).json()
+        assert empty["total"] == 0 and empty["items"] == []
+    assert language.entries(kind, include_disabled=True) == initial
+    assert references() == before
 
 
 def test_resource_filters_pages_and_reads_evidence(tmp_path: Path) -> None:

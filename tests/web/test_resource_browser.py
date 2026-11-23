@@ -27,6 +27,7 @@ STAMP = "2026-11-23T00:00:00Z"
 TOTAL = 320
 MEMORY_BATCH_TOTAL = 15
 REVIEW_ENDPOINT = "/api/resources/learning/reviews"
+SCOPE_ENDPOINT = "/api/resources/learning/scope"
 
 
 def _items(path: str, kind: str) -> list[dict[str, object]]:
@@ -167,6 +168,16 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         elif url.path == REVIEW_ENDPOINT:
             entry_key = parse_qs(url.query)["entry_key"][0]
             self._send_json({"items": self.expression_reviews.get(entry_key, [])})
+        elif url.path == SCOPE_ENDPOINT:
+            self._send_json(
+                {
+                    "items": [
+                        {"key": "group-10", "label": "同名群 · 群聊 10"},
+                        {"key": "group-20", "label": "同名群 · 群聊 20"},
+                        {"key": "private-10", "label": "合成私聊 · 私聊 10"},
+                    ]
+                }
+            )
         elif url.path == "/api/resources/memory/inspection":
             self._send_json(
                 {
@@ -275,6 +286,10 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         limit = int(params.get("limit", ["50"])[0])
         results = [item for item in _items(path, kind) if query in str(item)]
         counts = {"paragraphs": len(results)}
+        if path.endswith("/learning") and (scope := params.get("conversation_key")):
+            targets = {"group-10": range(24), "group-20": range(23, 25)}
+            keys = {f"{kind}-{index}" for index in targets.get(scope[0], range(0))}
+            results = [item for item in results if item["entry_key"] in keys]
         if path.endswith("/learning") and kind == "expression":
             for item in results:
                 history = self.expression_reviews.get(str(item["entry_key"]), [])
@@ -544,6 +559,73 @@ def test_learning_pagination_and_category_switch(browser: Browser, width: int, h
       click('[data-learning-tab="jargon"]');
       await waitFor(() => text('合成黑话000'), '黑话不沿用表达查询');
       check(!find('input[type="search"]').value, '黑话搜索栏独立');
+    """,
+    )
+
+
+def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses(
+    browser: Browser,
+) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      const scope = () => find('select[name="conversation_key"]');
+      const result = () => find('#learning-jargon-result');
+      function select(key) {
+        scope().value = key;
+        scope().dispatchEvent(new Event('change', {bubbles:true}));
+      }
+      await waitFor(() => scope() && !scope().disabled && button('合成黑话000'), '会话就绪');
+      const capacity = result().childElementCount;
+      const allPages = Math.ceil(320 / capacity);
+      const groupPages = Math.ceil(24 / capacity);
+      check(scope().value === '' && scope().selectedOptions[0].textContent === '全部资料',
+        '默认全部');
+      check([...scope().options].slice(1, 3).map(option => option.textContent).join('|') ===
+        '同名群 · 群聊 10|同名群 · 群聊 20', '同名群可区分');
+      check(text('不代表当前实际召回范围'), '说明浏览与召回的区别');
+      press('下一页');
+      await waitFor(() => page() === `第 2 / ${allPages} 页`, '先翻到全部资料第二页');
+      select('group-10');
+      await waitFor(() => page() === `第 1 / ${groupPages} 页` && button('合成黑话000'),
+        '群筛选回首页');
+      const nativeFetch = window.fetch;
+      let delayed, finished = false;
+      window.fetch = (url, options) => {
+        const parsed = new URL(url, location.href);
+        if (parsed.pathname === '/api/resources/learning' &&
+            parsed.searchParams.get('conversation_key') === 'group-20') {
+          return new Promise(resolve => {
+            delayed = () => nativeFetch(url, options).then(response => {
+              resolve(response); finished = true;
+            });
+          });
+        }
+        return nativeFetch(url, options);
+      };
+      try {
+        select('group-20');
+        await waitFor(() => delayed, '拦住旧会话请求');
+        select('private-10');
+        await waitFor(() => page() === '第 0 / 0 页' &&
+          text('该会话没有符合条件的已绑定资料'), '空结果');
+        delayed();
+        await waitFor(() => finished, '旧请求返回');
+        await new Promise(resolve => setTimeout(resolve, 150));
+        check(page() === '第 0 / 0 页' && !button('合成黑话024'), '旧请求不能覆盖私聊选择');
+      } finally { window.fetch = nativeFetch; }
+      select('group-20');
+      await waitFor(() => button('合成黑话023') && button('合成黑话024'), '另一个同名群可独立筛选');
+      select('');
+      await waitFor(() => page() === `第 1 / ${allPages} 页` && button('合成黑话000'),
+        '清空恢复原首页');
+      click('[data-learning-tab="expression"]');
+      await waitFor(() => scope() && !scope().disabled && text('合成表达000'), '表达会话就绪');
+      check(scope().value === '', '表达默认全部');
+      select('group-20');
+      await waitFor(() => page() === '第 1 / 1 页' && text('合成表达024') &&
+        !text('合成表达000'), '表达筛选');
     """,
     )
 

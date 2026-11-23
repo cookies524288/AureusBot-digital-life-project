@@ -423,40 +423,25 @@ def register_resource_routes(
         recall: RecallFilter = "",
         review: ExpressionReviewStatus | None = None,
         removed: bool = False,
+        conversation_key: str = "",
         q: Annotated[str, Query(max_length=200)] = "",
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
     ) -> dict[str, Any]:
         def query() -> tuple[list[dict[str, Any]], int]:
-            if language is None:
+            if language is None or (conversation_key and conversation_key not in scope_targets()):
                 return [], 0
-            term = q.strip().casefold()
-            matches = (
-                entry
-                for entry in language.entries(kind, include_disabled=True)
-                if entry.is_removed == removed
-                if review is None or entry.review_status == review
-                if (not recall or entry.is_enabled == (recall == "enabled"))
-                and (
-                    not term
-                    or any(
-                        term in field.casefold()
-                        for field in (
-                            entry.text,
-                            entry.detail,
-                            entry.example,
-                            *(entry.original or ()),
-                        )
-                    )
-                )
+            rows, total = language.browse_page(
+                kind,
+                offset,
+                limit,
+                conversation_key=conversation_key,
+                text=q,
+                is_enabled=(recall == "enabled") if recall else None,
+                review=review,
+                is_removed=removed,
             )
-            rows = []
-            total = 0
-            for entry in matches:
-                if offset <= total < offset + limit:
-                    rows.append(asdict(entry))
-                total += 1
-            return rows, total
+            return [asdict(entry) for entry in rows], total
 
         rows, total = await asyncio.to_thread(query)
         return {
