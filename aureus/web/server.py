@@ -52,6 +52,7 @@ from .auth import (
 from .config_api import register_config_routes
 from .config_files import ConfigService
 from .inbox_api import register_inbox_routes
+from .memory_transfer_api import register_memory_transfer_routes
 from .prompt_api import register_prompt_routes
 from .resource_api import register_resource_routes
 from .session import SessionStore
@@ -440,6 +441,7 @@ def create_app(
         register_settings_routes(app, settings, require_ready)
 
     register_inbox_routes(app, inbox_store, require_ready)
+    register_memory_transfer_routes(app, require_ready, _same_http_origin, resource_memory)
     register_resource_routes(
         app,
         require_ready,
@@ -500,6 +502,7 @@ def create_app(
     index_html = INDEX_PAGE.read_bytes()
     organ_graph = INDEX_PAGE.with_name("organ-graph.js").read_bytes()
     resources_ui = INDEX_PAGE.with_name("resource-management.js").read_bytes()
+    memory_flow_ui = INDEX_PAGE.with_name("memory-flow-transfer.js").read_bytes()
     organ_tile = INDEX_PAGE.with_name("organ-tile.png").read_bytes()
 
     @app.get("/", include_in_schema=False)
@@ -522,6 +525,12 @@ def create_app(
     @app.get("/assets/organ-tile.png", include_in_schema=False)
     async def organ_tile_asset() -> Response:
         return Response(organ_tile, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.get("/assets/memory-flow-transfer.js", include_in_schema=False)
+    async def memory_flow_asset() -> Response:
+        return Response(
+            memory_flow_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
 
     @app.get("/assets/ark-pixel.woff2", include_in_schema=False)
     async def pixel_font() -> FileResponse:

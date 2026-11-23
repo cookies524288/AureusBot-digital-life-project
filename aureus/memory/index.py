@@ -6,6 +6,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import BinaryIO
 
 from aureus.common import Clock, MemoryConfig, SystemClock
 from aureus.common.sqlite import open_connection
@@ -27,6 +28,7 @@ from aureus.memory.edits import (
     open_edits,
     write_edit,
 )
+from aureus.memory.flow import MemoryFlowEntry, browse_flow
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -39,6 +41,7 @@ from aureus.memory.history import (
     search_history,
 )
 from aureus.memory.sparse import keyword_conditions, relevance_expression
+from aureus.memory.transfer import export_archive, import_archive
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
 
 # D80 第 4 条：单条记忆交给回复器时的正文上限。
@@ -236,6 +239,19 @@ class MemoryIndex:
         """按原来源统计已迁入的记忆。"""
         with closing(open_connection(self._db_path)) as conn:
             return count_history_sources(conn)
+
+    def browse_flow(self, offset: int, limit: int) -> list[MemoryFlowEntry]:
+        """从同一个运行库按发生时间读取长期原件和本地经历。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return browse_flow(conn, self._clock.now(), offset, limit)
+
+    def export_archive(self, output: BinaryIO) -> None:
+        """将此运行库的长期记忆原件和维护覆盖写入文件。"""
+        export_archive(self._db_path, output)
+
+    def import_archive(self, file: BinaryIO) -> tuple[int, int]:
+        """将文件追加到此运行库，返回新增和跳过条数。"""
+        return import_archive(self._db_path, file)
 
     def browse_live(
         self, query: str, offset: int, limit: int, *, recall: str = ""

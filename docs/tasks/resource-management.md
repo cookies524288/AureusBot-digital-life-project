@@ -17,6 +17,8 @@
 
 - 学习用 `POST /api/resources/learning` 新增，`PATCH /api/resources/learning` 按稳定标识修订或设置可用状态。维护者输入与本地学习、迁入证据分开保存。
 - 长期记忆用 `PATCH /api/resources/memory` 按类型和稳定编号修订或设置召回状态；同一数据库事务内维护修订及派生索引。源库状态、有效范围和时间线保持原样。
+- 记忆流用 `GET /api/resources/memory/flow` 分页，合并长期记忆和已索引的本地经历，按原发生时间由近到远显示，缺时刻的记录排在最后。
+- 文字记忆包用 `GET /api/resources/memory/transfer` 下载，用同一路径的 `POST` 追加。版本化 UTF-8 JSONL 包保留有稳定来源的长期记忆原件、证据和维护覆盖。图片资产、附件与本地时间线经历另行管理。导入跳过已经相同的条目，遇到同来源冲突或文件损坏时整批回滚。
 - 使用已有会话权限和数据库子系统接口。文本去掉首尾空白并限制长度，空文本及不存在的资源编号返回明确的错误。
 
 ## 子步骤
@@ -31,6 +33,7 @@
 - [x] `tests/web/test_assemble.py`、`tests/web/test_resource_api.py`、`tests/memory`、两项 MaiBot 语言和记忆迁移专项共 33 项通过。限定路径的 Ruff、Pyright、页面脚本 `node --check` 通过。按本次分工未跑全量。
 - [x] 正常 `open_core` 和 `open_web` 使用独立临时数据根目录、假器官与合成原件，能看到迁入黑话、人物画像、文字与附件。
 - [x] 用 Chrome 无头模式及 DevTools Protocol 将视口设为 500 × 850。通过正常网页服务登录后首次打开学习与长期记忆，点通黑话、表达方式、表情包、文字记录、人物画像和图片记忆，展开详情检查释义、证据和画像，勾选文字记录打开修正表单。归档的表情和图片均被浏览器解码，旧 `#images` 成功转至图片记忆，没有页面横向溢出或 JavaScript 异常。
+- [x] `test_memory_flow_orders_and_pages_history_and_live` 覆盖原发生时间、混合分页和登录权限。`test_memory_file_roundtrip_and_conflicts_are_atomic` 覆盖原件、来源、证据、修订与停用设置往返、重复导入、冲突与残缺文件回滚，以及导入来源检查。正常网页组装专项同时验证两个新接口与静态脚本路由。三项通过，限定路径的 Ruff、Pyright 和 `node --check` 通过。
 
 ## 交付记录
 

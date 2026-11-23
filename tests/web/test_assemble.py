@@ -162,6 +162,12 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
             assert client.get("/api/resources/media/" + digest).status_code == 401
             assert client.post("/api/login", json={"password": password}).status_code == 200
             assert client.get("/assets/resource-management.js").status_code == 200
+            assert client.get("/assets/memory-flow-transfer.js").status_code == 200
+            flow = client.get(memory + "/flow").json()["items"]
+            assert any(item["record_id"] == live.id for item in flow)
+            assert any(item["source"] and item["source"]["key"] == [43] for item in flow)
+            package = client.get(memory + "/transfer")
+            assert package.status_code == 200 and b'"records":1' in package.content
             [jargon] = client.get(learning, params={"kind": "jargon"}).json()["items"]
             assert jargon["source_refs"] == ["[7]", "[55]"]
             assert "合成释义" in core.language.jargon_reference(["灶台月"], 500)

@@ -21,6 +21,7 @@ type SourceValue = str | int | float | dict[str, str]
 type MemoryStatus = Literal[
     "active", "inactive", "conflicted", "superseded", "retracted", "deleted", "missing"
 ]
+MEDIA_ASSET_TABLES = ("images", "image_assets", "image_occurrences", "image_memory_links")
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,8 @@ def _date(value: float | None) -> datetime | None:
     return datetime.fromtimestamp(value, UTC) if value is not None else None
 
 
-def _decode(row: sqlite3.Row) -> HistoricalMemory:
+def decode_history_row(row: sqlite3.Row) -> HistoricalMemory:
+    """还原按来源存储的原件和证据。"""
     evidence: list[MemoryEvidence] = []
     for item in json.loads(row["evidence"]):
         source = item["source"]
@@ -191,42 +193,47 @@ def publish_history(
             if match[0] != snapshot[1]:
                 raise MemorySnapshotConflictError
         for record in records:
-            result = conn.execute(
-                """
-                INSERT INTO memory_history (
-                    source_key, content, actor_label, person_key, recorded_at, time_precision,
-                    status, valid_from, valid_to, evidence, received_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(source_key) DO UPDATE SET
-                    (content, actor_label, person_key, recorded_at, time_precision,
-                     status, valid_from, valid_to, evidence, received_at) =
-                    (excluded.content, excluded.actor_label, excluded.person_key,
-                     excluded.recorded_at, excluded.time_precision, excluded.status,
-                     excluded.valid_from, excluded.valid_to, excluded.evidence,
-                     excluded.received_at)
-                WHERE (content, actor_label, person_key, recorded_at, time_precision,
-                       status, valid_from, valid_to, evidence, received_at) IS NOT
-                      (excluded.content, excluded.actor_label, excluded.person_key,
-                       excluded.recorded_at, excluded.time_precision, excluded.status,
-                       excluded.valid_from, excluded.valid_to, excluded.evidence,
-                       excluded.received_at)
-                """,
-                (
-                    record.source.encode(),
-                    record.text,
-                    record.actor_label,
-                    record.person_key,
-                    _epoch(record.recorded_at),
-                    record.time_precision,
-                    record.status,
-                    _epoch(record.valid_from),
-                    _epoch(record.valid_to),
-                    json.dumps([asdict(item) for item in record.evidence], ensure_ascii=False),
-                    _epoch(record.received_at),
-                ),
-            )
-            written += result.rowcount
+            written += put_history_record(conn, record)
     return written
+
+
+def put_history_record(conn: sqlite3.Connection, record: HistoricalMemory) -> int:
+    """在调用方的事务中写入一条长期记忆。"""
+    result = conn.execute(
+        """
+        INSERT INTO memory_history (
+            source_key, content, actor_label, person_key, recorded_at, time_precision,
+            status, valid_from, valid_to, evidence, received_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_key) DO UPDATE SET
+            (content, actor_label, person_key, recorded_at, time_precision,
+             status, valid_from, valid_to, evidence, received_at) =
+            (excluded.content, excluded.actor_label, excluded.person_key,
+             excluded.recorded_at, excluded.time_precision, excluded.status,
+             excluded.valid_from, excluded.valid_to, excluded.evidence,
+             excluded.received_at)
+        WHERE (content, actor_label, person_key, recorded_at, time_precision,
+               status, valid_from, valid_to, evidence, received_at) IS NOT
+              (excluded.content, excluded.actor_label, excluded.person_key,
+               excluded.recorded_at, excluded.time_precision, excluded.status,
+               excluded.valid_from, excluded.valid_to, excluded.evidence,
+               excluded.received_at)
+        """,
+        (
+            record.source.encode(),
+            record.text,
+            record.actor_label,
+            record.person_key,
+            _epoch(record.recorded_at),
+            record.time_precision,
+            record.status,
+            _epoch(record.valid_from),
+            _epoch(record.valid_to),
+            json.dumps([asdict(item) for item in record.evidence], ensure_ascii=False),
+            _epoch(record.received_at),
+        ),
+    )
+    return result.rowcount
 
 
 def read_history(conn: sqlite3.Connection, source: MemorySource) -> HistoricalMemory | None:
@@ -234,7 +241,7 @@ def read_history(conn: sqlite3.Connection, source: MemorySource) -> HistoricalMe
     row = conn.execute(
         "SELECT * FROM memory_history WHERE source_key = ?", (source.encode(),)
     ).fetchone()
-    return _decode(row) if row is not None else None
+    return decode_history_row(row) if row is not None else None
 
 
 def browse_history(
@@ -294,7 +301,7 @@ def browse_history(
     ).fetchall()
     return [
         replace(
-            _decode(row),
+            decode_history_row(row),
             entry_id=row["id"],
             is_enabled=bool(row["is_enabled"]),
             is_recallable=bool(row["is_recallable"]),
@@ -362,7 +369,7 @@ def search_history(
     )
     return [
         (
-            replace(_decode(row), text=row["edited_content"] or row["content"]),
+            replace(decode_history_row(row), text=row["edited_content"] or row["content"]),
             row["relevance"],
             row["sparse_score"],
         )
