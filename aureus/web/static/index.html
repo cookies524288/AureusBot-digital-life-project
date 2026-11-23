@@ -808,8 +808,13 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="cf-tabs" class="cfg-tabs"></div>
 <div id="cf-details" class="cfg-details" role="region" aria-label="设置项" tabindex="0"><div class="stack">
 <div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
+<div id="cf-missing" class="empty hidden"></div>
+<div id="cf-content" class="stack hidden">
+<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px;margin-left:8px"></div>
+<div id="cf-section" class="card"></div>
+</div>
 <section id="qq-link" class="stack hidden" aria-labelledby="qq-link-title">
-<h3 id="qq-link-title">QQ 账号关联</h3>
+<h3 id="qq-link-title"></h3>
 <form id="qq-link-form" class="row">
 <label for="qq-link-account">QQ 号</label>
 <input id="qq-link-account" type="text" inputmode="numeric" pattern="[1-9][0-9]{0,19}" maxlength="20" required style="max-width:220px">
@@ -822,11 +827,6 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button id="qq-link-revoke" class="btn">撤销验证码</button></div>
 </div>
 </section>
-<div id="cf-missing" class="empty hidden"></div>
-<div id="cf-content" class="stack hidden">
-<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px;margin-left:8px"></div>
-<div id="cf-section" class="card"></div>
-</div>
 </div></div>
 </div></section>
 <section id="page-prompts" class="page wide"><div class="page-head"><h2>Prompt 管理</h2></div>
@@ -871,7 +871,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
 const $ = id => document.getElementById(id);
-const state = { loggedIn: false, page: '', loaded: {} };
+const state = { loggedIn: false, qqLink: false, page: '', loaded: {} };
 let editorGeneration = 0;
 
 function el(tag, props, ...kids) {
@@ -1145,7 +1145,8 @@ async function enter() {
     return;
   }
   state.loggedIn = true;
-  $('qq-link').classList.toggle('hidden', !res.data?.qq_link);
+  state.qqLink = Boolean(res.data?.qq_link);
+  refreshQQLinkVisibility();
   $('terminal-btn').classList.toggle('hidden', !res.data?.can_open_terminal);
   $('restart-btn').classList.toggle('hidden', !res.data?.restart_instance);
   $('login').classList.add('hidden');
@@ -2708,6 +2709,9 @@ async function openPromptPreview(organ) {
 $('og-reset').addEventListener('click', () => organGraph?.reset());
 
 // ---------- 设置：QQ 账号关联 ----------
+function refreshQQLinkVisibility() {
+  $('qq-link').classList.toggle('hidden', !state.qqLink || cf.tab !== '');
+}
 function clearQQLink() {
   $('qq-link-command').value = '';
   $('qq-link-account').value = '';
@@ -3016,6 +3020,9 @@ function settingTerm(name, hint, key) {
   return el('span', {class:'setting-term', tabindex:0, 'aria-describedby':id}, name,
     el('span', {id, class:'setting-help', role:'tooltip'}, el('b', {'aria-hidden':'true', text:'i'}), hint));
 }
+$('qq-link-title').append(settingTerm('QQ 账号关联',
+  '绑定本人的 QQ 账号。在网页生成验证码后，到 QQ 私聊小豆发送验证命令。', 'qq-link'));
+
 async function restoreConfigField(sec, field, button) {
   const key = cfKey(sec, field);
   const password = cf.pwSections.has(sec) ? $('cf-password').value : undefined;
@@ -3110,6 +3117,7 @@ async function loadConfigPage(force) {
   function selectSection(button) {
     for (const tab of buttons) tab.classList.toggle('active', tab === button);
     cf.tab = button.dataset.sec;
+    refreshQQLinkVisibility();
     renderConfigSection(cf.tab);
     refreshConfigDirty();
   }
