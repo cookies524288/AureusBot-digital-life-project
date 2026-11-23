@@ -119,7 +119,6 @@ from aureus.memory import (
     BATCH_SIZE,
     DiaryBook,
     EmojiStore,
-    LanguageSample,
     LanguageStore,
     MemoryIndex,
 )
@@ -340,7 +339,7 @@ class Heartbeat:
         self._agenda_hooks = AgendaHooks(agenda, timeline, clock, feedback, timezone)
         self._language = language
         self._language_config = language_config or LanguageConfig()
-        self._language_samples: deque[LanguageSample] = deque()
+        self._language_samples: deque[language_runner.QueuedLanguageSample] = deque()
         # 模型热重载提供当前路线；清空备用器官的模型即可关闭其路由。
         self._available_organs: frozenset[str] = frozenset()
         self._conversation = ConversationFlow(
@@ -1522,7 +1521,7 @@ class Heartbeat:
                 inbox.store.mark_read([inbox_message.id])
             if self._language is not None and self._language_config.learning_enabled:
                 self._language_samples.append(
-                    language_runner.language_sample(record, perception.source_message_id)
+                    language_runner.queue_language_sample(record, perception, inbox_message)
                 )
             priority = _priority_of(perception, person)
             if (
@@ -1612,10 +1611,7 @@ class Heartbeat:
             or not self._permissions.check(ACTION_CALL_ORGAN).allowed
         ):
             return
-        samples = [
-            self._language_samples.popleft()
-            for _ in range(min(BATCH_SIZE, len(self._language_samples)))
-        ]
+        samples = language_runner.take_language_batch(self._language_samples, BATCH_SIZE)
         task = asyncio.create_task(
             language_runner.learn_language(
                 self._language, self._language_config.organ, self._call_organ, samples

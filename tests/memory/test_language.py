@@ -63,6 +63,18 @@ def test_observing_existing_expression_keeps_example_and_counts_unique_messages(
     assert entry.speakers == {"person:1", "person:2"}
 
 
+def test_presented_evidence_must_be_a_prefix_of_the_original(tmp_path: Path) -> None:
+    store = LanguageStore(tmp_path / "language.sqlite")
+    store.open()
+    sample = LanguageSample("timeline:51", 51, "person:1", "真实用语，另有参考")
+    store.observe(
+        [sample],
+        [LanguageProposal(LanguageKind.EXPRESSION, "伪造词", "合成情景", (51,))],
+        presented_content={51: "伪造词"},
+    )
+    assert not store.entries(LanguageKind.EXPRESSION)
+
+
 def test_jargon_stays_out_of_retrieval_until_evidence_exists(tmp_path: Path) -> None:
     store = LanguageStore(tmp_path / "language.sqlite")
     store.open()

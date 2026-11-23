@@ -29,7 +29,7 @@ from aureus.organs import FakePlanner, KeyResolver, OrganBus, OrganRequest, Orga
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
 from aureus.web import PasswordStore
 from tests.prompt_assertions import dialogue_text
-from tests.test_language_runtime import LanguageOrgan
+from tests.test_language_runtime import LanguageOrgan, learning_samples
 
 ACCOUNT = 9000
 GROUP = 8000
@@ -171,14 +171,18 @@ def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None
                             "task": request.context["task"],
                             "prompt": dialogue_text(request),
                             "system_context": request.system_context,
-                            "source_ids": request.context.get("source_ids", []),
+                            "samples": learning_samples(request)
+                            if request.context["task"] == "language_learning"
+                            else [],
                             "in_reply_to": request.context.get("in_reply_to", []),
                         },
                         ensure_ascii=False,
                     )
                     + "\n"
                 )
-            if request.context["task"] == "language_learning" and "月兔冲线" not in request.prompt:
+            if request.context["task"] == "language_learning" and "月兔冲线" not in dialogue_text(
+                request
+            ):
                 return OrganResponse(organ_id=self.organ_id, suggestion='{"proposals":[]}')
             if request.context["task"] == "inbox_select":
                 return await FakePlanner(self.organ_id).process(request)
@@ -446,13 +450,13 @@ token_key = "{TOKEN_ENV}"
     ]
 
     requests = [json.loads(line) for line in request_log.read_text(encoding="utf-8").splitlines()]
-    learned_ids = [
-        source_id
+    learned_texts = [
+        sample["text"]
         for request in requests
         if request["task"] == "language_learning"
-        for source_id in request["source_ids"]
+        for sample in request["samples"]
     ]
-    assert learned_ids == [*evidence_ids, inbound[-1].id]
+    assert learned_texts == [row.content for row in inbound]
     private_requests = {
         request["organ"]: request
         for request in requests

@@ -35,7 +35,7 @@ from aureus.timeline import ActorType, TimelineQuery, TimelineRecord, Visibility
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, IDENTITY, FakeOneBot, event
 from tests.organs.test_llm_adapter import FakeCompletion, fixed_counter, make_config, make_response
 from tests.prompt_assertions import dialogue_text
-from tests.test_language_runtime import LanguageOrgan
+from tests.test_language_runtime import LanguageOrgan, learning_samples
 
 pytestmark = pytest.mark.asyncio
 START = datetime(2026, 11, 22, 12, tzinfo=UTC)
@@ -491,13 +491,16 @@ async def test_group_replay_language_learned_in_private_survives_restart(
         await replay.step()
         await replay.step()
         await replay.step()
-        [learning] = replay.learning_requests
+        await replay.step()
         inbound = [row for row in replay.records() if row.actor_type is ActorType.PERSON]
         assert [row.visibility for row in inbound] == [VisibilityScope.PRIVATE] * 4 + [
             VisibilityScope.GROUP
         ] * 4
         ids = [row.id for row in inbound]
-        assert learning.context["source_ids"] == ids
+        assert [learning_samples(request) for request in replay.learning_requests] == [
+            [{"id": number, "text": row.content} for number, row in enumerate(batch, 1)]
+            for batch in (inbound[:4], inbound[4:])
+        ]
         store = LanguageStore(replay.core.paths.database_file)
         [expression] = store.entries(LanguageKind.EXPRESSION)
         assert (expression.text, expression.evidence_ids) == ("月兔冲线", tuple(ids[:4]))

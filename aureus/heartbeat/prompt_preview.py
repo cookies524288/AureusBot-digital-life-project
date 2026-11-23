@@ -24,7 +24,7 @@ from aureus.heartbeat.context import (
     build_system_context,
 )
 from aureus.heartbeat.downtime import Downtime
-from aureus.heartbeat.language_runner import build_language_learning_prompt
+from aureus.heartbeat.language_runner import build_language_learning_request
 from aureus.heartbeat.memory_consolidation import (
     EXTRACTION_FORMAT,
     EXTRACTION_PROMPT,
@@ -376,8 +376,7 @@ def build_prompt_scenes(
         "language_learning",
         "language_learning",
         "增量语言学习",
-        build_language_learning_prompt("〔新入站样本 JSON〕"),
-        "",
+        build_language_learning_request(organ, ("〔新入站样本文本〕",)),
     )
     add(
         "memory_consolidation",

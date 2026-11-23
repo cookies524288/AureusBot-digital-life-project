@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -39,7 +39,8 @@ MAX_DETAIL = 160
 MAX_EXAMPLE = 2000
 MAX_REVIEW_REASON = 500
 BATCH_SIZE = 16
-_EXCLUDED_MARKERS = ("SELF", "[表情包", "[图片")
+_MEDIA_MARKERS = ("[表情包", "[图片")
+_EXCLUDED_MARKERS = ("SELF", *_MEDIA_MARKERS)
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS language_observations (
     source_key TEXT PRIMARY KEY,
@@ -186,12 +187,15 @@ def _is_learnable(sample: LanguageSample) -> bool:
     return (
         bool(normalize(sample.content))
         and not is_reference(sample.content)
-        and not any(marker in sample.content for marker in _EXCLUDED_MARKERS)
+        and sample.speaker != "SELF"
+        and not any(marker in sample.content for marker in _MEDIA_MARKERS)
     )
 
 
 def _supporting_samples(
-    proposal: LanguageProposal, samples: dict[int, LanguageSample]
+    proposal: LanguageProposal,
+    samples: dict[int, LanguageSample],
+    presented_content: Mapping[int, str] | None,
 ) -> list[LanguageSample]:
     term, detail = normalize(proposal.text), normalize(proposal.detail)
     if not term or not detail or len(term) > MAX_TEXT or len(detail) > MAX_DETAIL:
@@ -205,7 +209,13 @@ def _supporting_samples(
     return [
         samples[record_id]
         for record_id in dict.fromkeys(proposal.record_ids)
-        if record_id in samples and term in normalize(samples[record_id].content)
+        if record_id in samples
+        and term
+        in normalize(
+            samples[record_id].content
+            if presented_content is None
+            else presented_content.get(record_id, "")
+        )
     ]
 
 
@@ -258,9 +268,13 @@ class LanguageStore:
             ]
 
     def observe(
-        self, samples: Sequence[LanguageSample], proposals: Sequence[LanguageProposal]
+        self,
+        samples: Sequence[LanguageSample],
+        proposals: Sequence[LanguageProposal],
+        *,
+        presented_content: Mapping[int, str] | None = None,
     ) -> None:
-        """一次事务核验真实来源、记录观察，并保存证据支持的新语言提议。"""
+        """一次事务记录原文观察；提议只从本轮展示的原文前缀取证。"""
         with closing(open_connection(self._path)) as connection, connection:
             accepted: dict[int, LanguageSample] = {}
             for sample in samples:
@@ -274,8 +288,14 @@ class LanguageStore:
                     accepted[sample.record_id] = sample
             if accepted:
                 self._observe_existing(connection, accepted)
+                if presented_content is not None:
+                    presented_content = {
+                        record_id: content
+                        for record_id, content in presented_content.items()
+                        if record_id in accepted and accepted[record_id].content.startswith(content)
+                    }
                 for proposal in proposals:
-                    self._save_proposal(connection, proposal, accepted)
+                    self._save_proposal(connection, proposal, accepted, presented_content)
 
     @staticmethod
     def _observe_existing(connection: Connection, samples: dict[int, LanguageSample]) -> None:
@@ -312,9 +332,12 @@ class LanguageStore:
 
     @staticmethod
     def _save_proposal(
-        connection: Connection, proposal: LanguageProposal, samples: dict[int, LanguageSample]
+        connection: Connection,
+        proposal: LanguageProposal,
+        samples: dict[int, LanguageSample],
+        presented_content: Mapping[int, str] | None,
     ) -> None:
-        supporting = _supporting_samples(proposal, samples)
+        supporting = _supporting_samples(proposal, samples, presented_content)
         if not supporting:
             return
         keys = (proposal.kind, normalize(proposal.text), normalize(proposal.detail))
