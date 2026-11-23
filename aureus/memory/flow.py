@@ -1,67 +1,137 @@
-"""合并带原发生时间的长期原件与已索引的本地经历。"""
+"""长期记忆流的事件投影、筛选及分页。"""
 
+import json
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
-from aureus.memory.history import MEDIA_ASSET_TABLES, MemorySource, MemoryStatus
+from aureus.memory.history import MemorySnapshotConflictError, MemorySource
+
+type MemoryEventType = Literal[
+    "profile_created",
+    "profile_updated",
+    "profile_snapshot",
+    "profile_override_set",
+    "person_merged",
+    "relation_frozen",
+    "delete_executed",
+    "delete_restored",
+]
 
 
 @dataclass(frozen=True)
-class MemoryFlowEntry:
-    """原件或本地时间线条目的当前正文与出处。"""
+class MemoryEvent:
+    """由原件或本地实际操作支持的变动摘要。"""
 
-    kind: Literal["history", "live"]
-    text: str
-    actor_label: str
+    event_type: MemoryEventType
     recorded_at: datetime | None
-    source: MemorySource | None
-    record_id: int | None
-    time_precision: str | None
-    status: MemoryStatus
-    is_recallable: bool
+    summary: str
+    conversations: tuple[str, ...] = ()
+    source: MemorySource | None = None
 
 
-def _timeline_epoch(stamp: str) -> float:
-    return datetime.fromisoformat(stamp).timestamp()
+def open_flow(conn: sqlite3.Connection) -> None:
+    """建立迁入事件表，其内容可由同一已校验快照重建。"""
+    with conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memory_imported_events (
+                source TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                happened REAL,
+                summary TEXT NOT NULL,
+                conversations TEXT NOT NULL,
+                PRIMARY KEY (source, event_type)
+            )
+        """)
+
+
+def publish_events(
+    conn: sqlite3.Connection, events: Iterable[MemoryEvent], snapshot: tuple[str, str]
+) -> int:
+    """仅从已发布的同一母本追加真实事件，返回新登记数。"""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        match = conn.execute(
+            "SELECT fingerprint FROM memory_history_snapshots WHERE instance = ?", snapshot[:1]
+        ).fetchone()
+        if match is None or match[0] != snapshot[1]:
+            raise MemorySnapshotConflictError
+        written = 0
+        for event in events:
+            if event.source is None or event.source.instance != snapshot[0]:
+                raise ValueError("迁入事件缺少对应的原来源")
+            written += conn.execute(
+                """INSERT INTO memory_imported_events VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(source, event_type) DO NOTHING""",
+                (
+                    event.source.encode(),
+                    event.event_type,
+                    event.recorded_at.timestamp() if event.recorded_at else None,
+                    event.summary,
+                    json.dumps(event.conversations, ensure_ascii=False),
+                ),
+            ).rowcount
+    return written
 
 
 def browse_flow(
-    conn: sqlite3.Connection, now: datetime, offset: int, limit: int
-) -> list[MemoryFlowEntry]:
-    """按发生时间降序合并，缺失时间排在末尾。"""
-    conn.create_function("timeline_epoch", 1, _timeline_epoch, deterministic=True)
+    conn: sqlite3.Connection,
+    offset: int,
+    limit: int,
+    *,
+    event_type: MemoryEventType | None,
+    conversation: str,
+    start: datetime | None,
+    end: datetime | None,
+) -> tuple[list[MemoryEvent], list[str]]:
+    """在分页前筛选真实事件，返回事件和有明确归属的会话。"""
+    conn.execute("BEGIN")
+    people = conn.execute(
+        "SELECT 1 FROM sqlite_schema WHERE name = 'people_memory_events'"
+    ).fetchone()
+    select_events = """SELECT source, event_type, happened, summary, conversations
+                       FROM memory_imported_events"""
+    if people:
+        select_events += """
+            UNION ALL SELECT source, event_type, happened, summary, conversations
+            FROM people_memory_events AS people
+            WHERE NOT EXISTS (
+                SELECT 1 FROM memory_imported_events AS imported
+                WHERE imported.source = people.source AND imported.event_type = people.event_type
+            )
+        """
     rows = conn.execute(
-        """SELECT 'history' AS kind, history.id AS entry_id, source_key, actor_label,
-                  coalesce(edit.edited_content, content) AS text, recorded_at AS happened,
-                  time_precision, status,
-                  (status = 'active' AND (valid_from IS NULL OR valid_from <= ?)
-                   AND (valid_to IS NULL OR valid_to > ?) AND coalesce(edit.is_enabled, 1))
-                    AS is_recallable
-           FROM memory_history history LEFT JOIN memory_edits edit
-             ON edit.kind = 'history' AND edit.entry_id = history.id
-           WHERE json_extract(source_key, '$[2]') NOT IN (?, ?, ?, ?)
-           UNION ALL
-           SELECT 'live', memory_index.record_id, NULL, actor_label,
-                  coalesce(edit.edited_content, content), timeline_epoch(recorded_at), NULL,
-                  'active', coalesce(edit.is_enabled, 1)
-           FROM memory_index LEFT JOIN memory_edits edit
-             ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid
-           ORDER BY happened DESC, kind, entry_id DESC LIMIT ? OFFSET ?""",
-        (now.timestamp(), now.timestamp(), *MEDIA_ASSET_TABLES, limit, offset),
+        f"""SELECT * FROM ({select_events}) AS flow
+            WHERE (:event_type IS NULL OR event_type = :event_type)
+              AND (:conversation = '' OR EXISTS (
+                  SELECT 1 FROM json_each(flow.conversations) WHERE value = :conversation
+              ))
+              AND (:start IS NULL OR happened >= :start)
+              AND (:end IS NULL OR happened <= :end)
+            ORDER BY happened DESC, event_type, source, summary LIMIT :limit OFFSET :offset""",
+        {
+            "event_type": event_type,
+            "conversation": conversation,
+            "offset": offset,
+            "limit": limit,
+            "start": start.timestamp() if start else None,
+            "end": end.timestamp() if end else None,
+        },
     )
-    return [
-        MemoryFlowEntry(
-            row["kind"],
-            row["text"],
-            row["actor_label"],
+    items = [
+        MemoryEvent(
+            row["event_type"],
             datetime.fromtimestamp(row["happened"], UTC) if row["happened"] is not None else None,
-            MemorySource.decode(row["source_key"]) if row["source_key"] is not None else None,
-            row["entry_id"] if row["kind"] == "live" else None,
-            row["time_precision"],
-            row["status"],
-            bool(row["is_recallable"]),
+            row["summary"],
+            tuple(json.loads(row["conversations"])),
+            MemorySource.decode(row["source"]) if row["source"] else None,
         )
         for row in rows
     ]
+    conversations = conn.execute(
+        """SELECT DISTINCT value FROM memory_imported_events, json_each(conversations)
+           ORDER BY value"""
+    )
+    return items, [row[0] for row in conversations]

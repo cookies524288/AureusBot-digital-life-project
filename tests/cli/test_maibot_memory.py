@@ -118,6 +118,16 @@ def _make_memory(path: Path) -> None:
             INSERT INTO relations VALUES
                 ('r1', '木卫二', '出现于', '现场资料', 'p1', 0),
                 ('r2', '木卫二', '属于', '失活关联', 'p2', 1);
+            ALTER TABLE paragraphs ADD COLUMN source TEXT;
+            UPDATE paragraphs SET source = 'chat_summary:fixture-group' WHERE hash = 'p1';
+            ALTER TABLE relations ADD COLUMN inactive_since REAL;
+            UPDATE relations SET inactive_since = 1792627825 WHERE hash = 'r1';
+            CREATE TABLE delete_operations (
+                operation_id TEXT PRIMARY KEY, mode TEXT, status TEXT, selector TEXT,
+                created_at REAL, restored_at REAL
+            );
+            INSERT INTO delete_operations VALUES
+                ('d1', 'logical', 'restored', '{"hashes":["p1"]}', 1792627830, 1792627840);
             CREATE TABLE paragraph_relations (
                 paragraph_hash TEXT, relation_hash TEXT, PRIMARY KEY(paragraph_hash, relation_hash)
             );
@@ -284,6 +294,33 @@ def test_cli_import_publish_restart_and_rebuild(
     timeline.open()
     index = MemoryIndex(runtime, timeline, clock)
     index.open()
+    events_command = [
+        *prefix,
+        "publish-memory-events",
+        str(stage),
+        "--instance",
+        "fixture",
+        "--source-timezone",
+        "Asia/Shanghai",
+        "--target-home",
+        str(home),
+    ]
+    originals = index.count_history_sources()
+    assert main(events_command) == 0
+    assert json.loads(capsys.readouterr().out)["added"] == 3
+    assert main(events_command) == 0
+    assert json.loads(capsys.readouterr().out)["added"] == 0
+    assert index.count_history_sources() == originals
+    events, conversations = index.browse_flow(0, 3, conversation="fixture-group")
+    assert conversations == ["fixture-group"]
+    assert [event.event_type for event in events] == [
+        "delete_restored",
+        "delete_executed",
+        "relation_frozen",
+    ]
+    assert [event.recorded_at for event in events] == [
+        datetime.fromtimestamp(stamp, UTC) for stamp in (1792627840, 1792627830, 1792627825)
+    ]
     for number, expected in (
         (5, "legacy raw text"),
         (6, "broken JSON fallback"),

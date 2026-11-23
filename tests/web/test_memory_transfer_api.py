@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from aureus.common import ManualClock
 from aureus.memory import HistoricalMemory, MemoryEntry, MemoryEvidence, MemoryIndex, MemorySource
+from aureus.people import HistoricalKind, HistoricalRecord, PeopleDirectory
 from aureus.timeline import ActorType, TimelineDatabase
 from aureus.web.memory_transfer_api import register_memory_transfer_routes
 
@@ -25,7 +26,7 @@ def _open_memory(path: Path, clock: ManualClock) -> tuple[TimelineDatabase, Memo
     return timeline, memory
 
 
-def _client(memory: MemoryIndex) -> TestClient:
+def _client(memory: MemoryIndex, clock: ManualClock | None = None) -> TestClient:
     async def require_ready(request: Request) -> str:
         if request.cookies.get("session") != "test":
             raise HTTPException(401)
@@ -35,38 +36,84 @@ def _client(memory: MemoryIndex) -> TestClient:
         return request.headers.get("origin") == str(request.base_url).rstrip("/")
 
     app = FastAPI()
-    register_memory_transfer_routes(app, require_ready, same_origin, memory)
+    register_memory_transfer_routes(app, require_ready, same_origin, memory, clock)
     return TestClient(app)
 
 
-def test_memory_flow_orders_and_pages_history_and_live(tmp_path: Path) -> None:
+def test_memory_flow_uses_real_events_and_filters_before_paging(tmp_path: Path) -> None:
     now = datetime(2026, 11, 23, tzinfo=UTC)
     clock = ManualClock(now)
-    timeline, memory = _open_memory(tmp_path / "flow.db", clock)
+    path = tmp_path / "flow.db"
+    timeline, memory = _open_memory(path, clock)
+    people = PeopleDirectory(path, clock)
+    people.open()
     try:
-        local = timeline.append("message", "今天的经历", ActorType.USER)
+        timeline.append("message", "今天的经历", ActorType.USER)
         memory.index_more(10, lambda record: MemoryEntry("用户", record.content))
         old = MemorySource("test", "memory", "episodes", (1,))
         unknown = MemorySource("test", "memory", "episodes", (2,))
         media = MemorySource("test", "memory", "image_assets", (3,))
+        snapshot = ("test", "same-fingerprint")
         memory.publish(
             [
                 HistoricalMemory(old, "前天的记忆", recorded_at=now - timedelta(days=2)),
                 HistoricalMemory(unknown, "时间未记录"),
                 HistoricalMemory(media, "图片资产", recorded_at=now),
+            ],
+            snapshot=snapshot,
+        )
+        people.publish_history(
+            [
+                HistoricalRecord(
+                    instance="test",
+                    kind=HistoricalKind.PROFILE,
+                    source_key='["person"]',
+                    subject_key="person",
+                    account=("qq", "200"),
+                ),
+                HistoricalRecord(
+                    instance="test",
+                    kind=HistoricalKind.PROFILE_SNAPSHOT,
+                    source_key="[1]",
+                    subject_key="person",
+                    profile_version=1,
+                    occurred_at=(now - timedelta(days=2)).timestamp(),
+                ),
+                HistoricalRecord(
+                    instance="test",
+                    kind=HistoricalKind.PROFILE_SNAPSHOT,
+                    source_key="[2]",
+                    subject_key="person",
+                    profile_version=2,
+                ),
             ]
         )
-        with _client(memory) as client:
+        user = people.ensure_user("维护者", [("web", "local")])
+        contact = people.imported_contact("qq", "200")
+        assert contact is not None
+        people.bind_verified_account(user, "qq", "200", contact)
+        with _client(memory, clock) as client:
             assert client.get(FLOW).status_code == 401
             client.cookies.set("session", "test")
             first = client.get(FLOW, params={"limit": 1}).json()
             second = client.get(FLOW, params={"limit": 1, "offset": first["next_offset"]}).json()
             third = client.get(FLOW, params={"limit": 1, "offset": second["next_offset"]}).json()
-        assert first["items"][0]["record_id"] == local.id
+            assert client.get(FLOW, params={"event_type": "message"}).status_code == 422
+            assert client.get(FLOW, params={"start": "2026-11-01T00:00"}).status_code == 422
+            reversed_range = {"start": now.isoformat(), "end": "2026-11-01T00:00Z"}
+            assert client.get(FLOW, params=reversed_range).status_code == 422
+            recent = client.get(FLOW, params={"hours": 24}).json()
+            assert [entry["event_type"] for entry in recent["items"]] == ["person_merged"]
+            assert client.get(FLOW, params={"conversation": "another"}).json()["items"] == []
+            latest = client.get(FLOW, params={"event_type": "profile_updated", "limit": 1}).json()
+        assert first["items"][0]["event_type"] == "person_merged"
         assert second["items"][0]["source"]["key"] == [1]
+        assert second["items"][0]["event_type"] == "profile_created"
         assert third["items"][0]["recorded_at"] is None
         assert third["next_offset"] is None
+        assert latest["items"] == third["items"]
     finally:
+        people.close()
         memory.close()
         timeline.close()
 

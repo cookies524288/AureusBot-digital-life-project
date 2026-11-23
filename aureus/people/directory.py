@@ -104,6 +104,7 @@ class PeopleDirectory:
             """
         )
         history.init_schema(conn)
+        history.open_flow(conn)
         conn.commit()
 
     def _require_open(self) -> sqlite3.Connection:
@@ -220,6 +221,13 @@ class PeopleDirectory:
                 "UPDATE people_history SET other_person_id = ? WHERE other_person_id = ?",
             ):
                 conn.execute(statement, (user.id, original_contact))
+            conn.execute(
+                "INSERT INTO people_account_merges (happened, summary) VALUES (?, ?)",
+                (
+                    self._clock.now().timestamp(),
+                    f"联系人 #{original_contact} 的迁入人物资料已归入用户 #{user.id}",
+                ),
+            )
 
     def find(self, platform: str, account_id: str) -> Person | None:
         """按账号找人；没见过的账号返回 None。"""

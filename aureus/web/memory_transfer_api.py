@@ -3,14 +3,17 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import asdict
+from datetime import timedelta
 from tempfile import TemporaryFile
 from typing import Annotated, Any, BinaryIO, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import AwareDatetime
 from starlette.background import BackgroundTask
 
-from aureus.memory import MemoryIndex
+from aureus.common import Clock, SystemClock
+from aureus.memory import MemoryEventType, MemoryIndex
 from aureus.memory.transfer import (
     ARCHIVE_MEDIA_TYPE,
     MemoryArchiveConflictError,
@@ -34,20 +37,49 @@ def register_memory_transfer_routes(
     require_ready: Callable[..., Awaitable[str]],
     same_origin: Callable[[Request], bool],
     memory: MemoryIndex | None,
+    clock: Clock | None = None,
 ) -> None:
     """注册记忆流及文件交换，数据库和文件操作交给后台线程。"""
+    flow_clock = clock or SystemClock()
 
     @app.get(_FLOW_PATH)
     async def memory_flow(
         _token: Annotated[str, Depends(require_ready)],
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
+        event_type: MemoryEventType | None = None,
+        conversation: Annotated[str, Query(max_length=250)] = "",
+        start: AwareDatetime | None = None,
+        end: AwareDatetime | None = None,
+        hours: Annotated[int | None, Query(ge=1, le=720)] = None,
     ) -> dict[str, Any]:
-        rows = await asyncio.to_thread(memory.browse_flow, offset, limit + 1) if memory else []
+        if hours is not None:
+            if start is not None or end is not None:
+                raise HTTPException(422, "请选择快捷范围或指定开始、结束时间。")
+            end = flow_clock.now()
+            start = end - timedelta(hours=hours)
+        if start is not None and end is not None and start > end:
+            raise HTTPException(422, "开始时间须早于或等于结束时间。")
+        rows, conversations = (
+            await asyncio.to_thread(
+                memory.browse_flow,
+                offset,
+                limit + 1,
+                event_type=event_type,
+                conversation=conversation,
+                start=start,
+                end=end,
+            )
+            if memory
+            else ([], [])
+        )
         return {
             "enabled": memory is not None,
             "items": [asdict(entry) for entry in rows[:limit]],
             "next_offset": offset + limit if len(rows) > limit else None,
+            "conversations": conversations,
+            "start": start,
+            "end": end,
         }
 
     @app.get(_TRANSFER_PATH)

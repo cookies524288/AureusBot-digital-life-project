@@ -441,7 +441,7 @@ def create_app(
         register_settings_routes(app, settings, require_ready)
 
     register_inbox_routes(app, inbox_store, require_ready)
-    register_memory_transfer_routes(app, require_ready, _same_http_origin, resource_memory)
+    register_memory_transfer_routes(app, require_ready, _same_http_origin, resource_memory, clock)
     register_resource_routes(
         app,
         require_ready,

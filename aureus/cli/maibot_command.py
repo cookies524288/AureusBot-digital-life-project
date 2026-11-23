@@ -17,6 +17,7 @@ from aureus.tools.migrate.maibot import inspect_database, open_readonly_database
 from aureus.tools.migrate.maibot_catalog import BUSINESS_TABLES, MigrationError
 from aureus.tools.migrate.maibot_language import publish_language
 from aureus.tools.migrate.maibot_memory import publish_maibot_memory
+from aureus.tools.migrate.maibot_memory_events import publish_maibot_memory_events
 from aureus.tools.migrate.maibot_package import Source, export_package, preview_package
 from aureus.tools.migrate.maibot_people import publish_people
 from aureus.tools.migrate.maibot_staging import import_package, restore_snapshot
@@ -71,6 +72,11 @@ def configure_maibot_parser(parser: argparse.ArgumentParser) -> None:
     memory.add_argument(
         "--target-home", required=True, type=Path, help="独立 Aureus 目标数据根目录"
     )
+    events = actions.add_parser("publish-memory-events", help="从同一已发布快照追加记忆流事件")
+    events.add_argument("staging", type=Path, metavar="SQLite 暂存库")
+    events.add_argument("--instance", required=True, help="暂存时使用的逻辑实例名")
+    events.add_argument("--source-timezone", required=True, help="源库本地时间的 IANA 时区")
+    events.add_argument("--target-home", required=True, type=Path, help="已有 Aureus 数据根目录")
 
 
 def _run_migration(args: argparse.Namespace) -> dict[str, object]:
@@ -78,7 +84,7 @@ def _run_migration(args: argparse.Namespace) -> dict[str, object]:
         return publish_people(args.staging, args.instance, args.home, SystemClock())
     if args.action == "publish-language":
         return publish_language(args.instance, args.staging, args.target)
-    if args.action == "publish-memory":
+    if args.action in {"publish-memory", "publish-memory-events"}:
         return _publish_memory(args)
     return _run_package_command(args, Source(args.instance, args.role))
 
@@ -129,6 +135,8 @@ def _publish_memory(args: argparse.Namespace) -> dict[str, object]:
     paths = AureusPaths(args.target_home.resolve())
     stage = args.staging.resolve(strict=True)
     target = paths.database_file
+    if args.action == "publish-memory-events" and not target.is_file():
+        raise MigrationError("not_aureus_memory_target")
     if target.exists() and target.samefile(stage):
         raise MigrationError("staging_is_memory_target")
     if target.exists():
@@ -141,6 +149,11 @@ def _publish_memory(args: argparse.Namespace) -> dict[str, object]:
                 is None
             ):
                 raise MigrationError("not_aureus_memory_target")
+    if not target.resolve().is_relative_to(paths.home):
+        raise MigrationError("memory_target_outside_home")
+    index = MemoryIndex(target, TimelineDatabase(target))
+    if args.action == "publish-memory-events":
+        return publish_maibot_memory_events(stage, args.instance, zone, index)
     roots = {"main": args.main_media_root, "memory": args.memory_media_root}
     for root in roots.values():
         if root is not None and root.resolve().is_relative_to(paths.home):
@@ -148,7 +161,6 @@ def _publish_memory(args: argparse.Namespace) -> dict[str, object]:
     for location in (paths.data_dir, target, paths.memory_dir):
         if not location.resolve().is_relative_to(paths.home):
             raise MigrationError("memory_target_outside_home")
-    index = MemoryIndex(target, TimelineDatabase(target))
     return publish_maibot_memory(stage, args.instance, zone, index, roots, paths.memory_dir)
 
 

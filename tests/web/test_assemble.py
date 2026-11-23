@@ -164,8 +164,9 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
             assert client.get("/assets/resource-management.js").status_code == 200
             assert client.get("/assets/memory-flow-transfer.js").status_code == 200
             flow = client.get(memory + "/flow").json()["items"]
-            assert any(item["record_id"] == live.id for item in flow)
-            assert any(item["source"] and item["source"]["key"] == [43] for item in flow)
+            [profile_event] = flow
+            assert profile_event["event_type"] == "profile_snapshot"
+            assert profile_event["source"]["key"] == [3]
             package = client.get(memory + "/transfer")
             assert package.status_code == 200 and b'"records":1' in package.content
             [jargon] = client.get(learning, params={"kind": "jargon"}).json()["items"]

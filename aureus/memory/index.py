@@ -28,7 +28,7 @@ from aureus.memory.edits import (
     open_edits,
     write_edit,
 )
-from aureus.memory.flow import MemoryFlowEntry, browse_flow
+from aureus.memory.flow import MemoryEvent, MemoryEventType, browse_flow, open_flow, publish_events
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -144,6 +144,7 @@ class MemoryIndex:
             _open_live_index(conn)
             open_edits(conn)
             open_consolidation(conn)
+            open_flow(conn)
         except BaseException:
             conn.close()
             raise
@@ -240,10 +241,32 @@ class MemoryIndex:
         with closing(open_connection(self._db_path)) as conn:
             return count_history_sources(conn)
 
-    def browse_flow(self, offset: int, limit: int) -> list[MemoryFlowEntry]:
-        """从同一个运行库按发生时间读取长期原件和本地经历。"""
+    def publish_events(self, events: Iterable[MemoryEvent], snapshot: tuple[str, str]) -> int:
+        """从相同迁入快照追加缺失的事件，保留原记忆。"""
         with closing(open_connection(self._db_path)) as conn:
-            return browse_flow(conn, self._clock.now(), offset, limit)
+            return publish_events(conn, events, snapshot)
+
+    def browse_flow(
+        self,
+        offset: int,
+        limit: int,
+        *,
+        event_type: MemoryEventType | None = None,
+        conversation: str = "",
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple[list[MemoryEvent], list[str]]:
+        """读取按原发生时间排序的长期记忆事件和有依据的会话。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return browse_flow(
+                conn,
+                offset,
+                limit,
+                event_type=event_type,
+                conversation=conversation,
+                start=start,
+                end=end,
+            )
 
     def export_archive(self, output: BinaryIO) -> None:
         """将此运行库的长期记忆原件和维护覆盖写入文件。"""

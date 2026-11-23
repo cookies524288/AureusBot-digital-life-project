@@ -2,6 +2,7 @@
 
 from aureus.memory.diary import DiaryBook
 from aureus.memory.edits import MAX_MEMORY_TEXT, MemoryKind
+from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -51,6 +52,8 @@ __all__ = [
     "LanguageStore",
     "LanguageTargetError",
     "MemoryEntry",
+    "MemoryEvent",
+    "MemoryEventType",
     "MemoryEvidence",
     "MemoryHit",
     "MemoryIndex",

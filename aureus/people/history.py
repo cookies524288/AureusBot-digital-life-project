@@ -120,6 +120,38 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+def open_flow(conn: sqlite3.Connection) -> None:
+    """公开历史画像与本地资料合并事件的只读投影。"""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS people_account_merges (
+            id INTEGER PRIMARY KEY,
+            happened REAL NOT NULL,
+            summary TEXT NOT NULL
+        )
+        """)
+    conn.execute("""
+        CREATE VIEW IF NOT EXISTS people_memory_events AS
+        SELECT json_array(history.instance, 'memory', history.kind, json(source_key)) AS source,
+               CASE WHEN history.kind != 'person_profile_snapshots' THEN 'profile_override_set'
+                    WHEN json_extract(record, '$.profile_version') = 1 THEN 'profile_created'
+                    WHEN json_extract(record, '$.profile_version') > 1 THEN 'profile_updated'
+                    ELSE 'profile_snapshot' END AS event_type,
+               CASE WHEN json_type(record, '$.occurred_at') IN ('integer', 'real')
+                    THEN json_extract(record, '$.occurred_at') END AS happened,
+               coalesce(nullif(person.name, ''), json_extract(record, '$.subject_key'), '人物')
+                 || CASE WHEN history.kind != 'person_profile_snapshots' THEN ' · 手工维护画像'
+                         ELSE ' · 画像版本 '
+                              || coalesce(json_extract(record, '$.profile_version'), '未记录')
+                    END AS summary,
+               '[]' AS conversations
+        FROM people_history history LEFT JOIN people person ON person.id = history.person_id
+        WHERE history.kind IN ('person_profile_snapshots', 'person_profile_overrides',
+                       'person_profile_alias_overrides') AND json_valid(source_key)
+        UNION ALL
+        SELECT NULL, 'person_merged', happened, summary, '[]' FROM people_account_merges
+        """)
+
+
 def _entry(row: sqlite3.Row) -> HistoricalEntry:
     return HistoricalEntry(
         row["id"],
