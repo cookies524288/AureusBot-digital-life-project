@@ -379,6 +379,10 @@ nav.side .nav-label{text-align:center}
 .model-table th,.model-table td{padding:12px 9px;border-bottom:1px solid var(--border);text-align:left;overflow-wrap:anywhere;vertical-align:middle}
 .model-table th{background:var(--surface-2);font-weight:600}
 .model-table th:first-child{width:25%}.model-table th:last-child{width:130px}
+.model-table .model-vision{text-align:center;width:52px}
+.vision-light{display:inline-block;width:11px;height:11px;border:1.5px solid var(--text-2);border-radius:50%;vertical-align:middle}
+.vision-light.enabled{border-color:var(--ok);background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+.model-vision-status{display:inline-flex;align-items:center;gap:7px;color:var(--text-2)}
 .model-table td .row{gap:6px;flex-wrap:nowrap}
 .model-table tr:last-child td{border-bottom:0}
 .model-id{font-size:12px;overflow-wrap:anywhere;line-height:1.5;margin-top:3px}
@@ -390,7 +394,6 @@ nav.side .nav-label{text-align:center}
 .model-action.delete:hover{background:#850000;border-color:#850000;color:#fff}
 .vision-field{display:flex;align-items:center;gap:8px;width:max-content;cursor:pointer}
 .vision-field input{width:16px;height:16px;margin:0;accent-color:#358238}
-.model-type{display:inline-flex;gap:6px;align-items:center}
 #model-test-status{position:fixed;z-index:52;top:max(20px,env(safe-area-inset-top));right:18px;display:grid;gap:6px;max-height:75dvh;overflow:auto}
 .probe-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 .model-test-notice{width:min(320px,calc(100vw - 36px));padding:12px 28px;color:#292d2e;overflow-wrap:anywhere;
@@ -677,7 +680,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <aside class="model-vendors" aria-label="API供应商"><h3>API供应商</h3><div id="md-providers" class="provider-list"></div><button id="md-add-provider" class="btn"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加供应商</button></aside>
 <div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或供应商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option><option value="llm">llm</option><option value="embedding">embedding</option></select><button id="md-test-provider" class="btn" disabled>网络测速</button><button id="md-edit-provider" class="btn" disabled>编辑供应商</button><button id="md-add-model" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加模型</button></div>
 <div id="md-results" style="display:grid;gap:inherit;min-width:0"><div id="md-catalog"></div>
-<div class="model-table-wrap"><table class="model-table" aria-label="模型列表"><thead><tr><th>模型</th><th>API供应商</th><th>类型</th><th class="model-price">价格（输入/输出）</th><th class="model-owners">负责的工作</th><th>操作</th></tr></thead><tbody id="md-models"></tbody></table></div>
+<div class="model-table-wrap"><table class="model-table" aria-label="模型列表"><thead><tr><th>模型</th><th>API供应商</th><th>类型</th><th class="model-vision">视觉</th><th class="model-price">价格（输入/输出）</th><th class="model-owners">负责的工作</th><th>操作</th></tr></thead><tbody id="md-models"></tbody></table></div>
 <div id="md-cards" class="model-cards"></div><div id="md-empty" class="empty hidden">没有匹配的模型。先添加供应商，再添加模型。</div></div>
 </div></div></div></section>
 <section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2></div><span id="og-status" class="tag" role="status">已自动保存</span></div>
@@ -1956,16 +1959,19 @@ function renderModelRows() {
       modelAction('zap', '测速', model, () => testModel(model)),
       modelAction('pencil', '编辑', model, () => openModelEditor(model)),
       modelAction('trash', '删除', model, () => removeModel(model)));
-    const type = () => el('span', { class: 'model-type' }, model.kind,
-      model.vision ? el('span', { class: 'tag ok', text: '视觉' }) : null);
+    const visionStatus = model.vision ? '视觉已开启' : '视觉未开启';
+    const vision = () => el('span', { class: 'vision-light' + (model.vision ? ' enabled' : ''),
+      role: 'img', title: visionStatus, 'aria-label': visionStatus });
     table.append(el('tr', {},
       el('td', {}, el('strong', { text: model.name }), el('div', { class: 'muted mono model-id', text: model.identifier })),
-      el('td', { text: model.provider }), el('td', {}, type()),
+      el('td', { text: model.provider }), el('td', { text: model.kind }), el('td', { class: 'model-vision' }, vision()),
       el('td', { class: 'model-price', text: model.price_in === null || model.price_in === undefined ? '未知' : model.price_in + ' / ' + (model.price_out ?? '未知') }),
       el('td', { class: 'model-owners', text: owners.join('、') || '未使用' }), el('td', {}, actions())));
     mobile.append(el('div', { class: 'card model-compact' }, el('h3', { text: model.name }),
       el('div', { class: 'muted model-id', text: model.provider + ' · ' + model.identifier }),
-      el('div', { class: 'row' }, type(), el('span', { class: 'muted', text: owners.join('、') || '未使用' })), actions()));
+      el('div', { class: 'row' }, el('span', { text: model.kind }),
+        el('span', { class: 'model-vision-status' }, el('span', { 'aria-hidden': 'true', text: '视觉' }), vision()),
+        el('span', { class: 'muted', text: owners.join('、') || '未使用' })), actions()));
   }
   $('md-empty').classList.toggle('hidden', models.length > 0);
   $('md-add-model').disabled = !cfg.providers.length;
