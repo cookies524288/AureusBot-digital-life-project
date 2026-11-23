@@ -43,12 +43,12 @@ immutable = "Preserve this personality."
 
 
 def event(
-    message_id: int, sender: int, text: str, *, group: int | None = None, **extra: Any
+    message_id: int, sender_id: int, text: str, *, group: int | None = None, **extra: Any
 ) -> dict[str, Any]:
     return {
         "post_type": "message",
         "self_id": ACCOUNT,
-        "user_id": sender,
+        "user_id": sender_id,
         "message_id": message_id,
         "message_type": "group" if group else "private",
         "time": 1_795_360_000,
@@ -77,6 +77,9 @@ class FakeOneBot:
             if request["action"] == "get_login_info":
                 await self.send(remote, **response, data={"user_id": ACCOUNT})
                 self.connections.put_nowait(remote)
+                continue
+            if request["action"] == "get_group_info":
+                await self.send(remote, **response, data={"group_name": "合成群"})
                 continue
             assert request["action"] == "send_msg"
             self.messages.put_nowait(request["params"])

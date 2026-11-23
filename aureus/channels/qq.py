@@ -5,6 +5,7 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import replace
+from sqlite3 import Error as SQLiteError
 from types import TracebackType
 from typing import Any, Self
 
@@ -21,6 +22,7 @@ from aureus.heartbeat import (
     TrustLevel,
     VisibilityScope,
 )
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 
 from .onebot import QQ_CHANNEL_NAME, decode_message, encode_message
 from .onebot_transport import OneBotError, OneBotTransport
@@ -30,6 +32,10 @@ logger = logging.getLogger(__name__)
 # 跨连接保留最近收取的消息，限制进程长期运行的占用。
 _RECENT_MESSAGE_LIMIT = 16_384
 _OUTGOING_LIMIT = 64
+
+
+def _display_name(value: object) -> str:
+    return " ".join(value.split()) if isinstance(value, str) else ""
 
 
 class QQChannel:
@@ -44,18 +50,24 @@ class QQChannel:
         consume_command: Callable[[Perception], bool] | None = None,
         *,
         test_group: str | None = None,
+        inbox_store: InboxStore | None = None,
+        on_inbox_message: Callable[[InboxMessage], None] | None = None,
     ) -> None:
         self._test_group = test_group
         self._config = config
         self._heartbeat = heartbeat
         self._is_owner = is_owner
         self._consume_command = consume_command
+        self._inbox_store = inbox_store
+        self._on_inbox_message = on_inbox_message
         self._transport = OneBotTransport(
             config, token.get_secret_value() if token else None, self._receive
         )
         self._seen: OrderedDict[tuple[str, str, str], None] = OrderedDict()
         self._sending: set[asyncio.Task[None]] = set()
         self._connection: asyncio.Task[None] | None = None
+        self._group_lookups: dict[str, asyncio.Task[None]] = {}
+        self._group_names: dict[str, str] = {}
 
     async def __aenter__(self) -> Self:
         self._connection = asyncio.create_task(self._transport.run(), name="aureus-onebot")
@@ -67,7 +79,7 @@ class QQChannel:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        tasks = list(self._sending)
+        tasks = [*self._sending, *self._group_lookups.values()]
         if self._connection is not None:
             tasks.append(self._connection)
         for task in tasks:
@@ -118,11 +130,75 @@ class QQChannel:
                 perception = replace(
                     perception, trust=TrustLevel.VERIFIED_USER, visibility=VisibilityScope.USER_ONLY
                 )
-            if not self._heartbeat.submit(perception):
+            if self._inbox_store is not None:
+                if not self._save_inbox(perception, route, payload):
+                    return
+            elif not self._heartbeat.submit(perception):
                 return
         self._seen[key] = None
         if len(self._seen) > _RECENT_MESSAGE_LIMIT:
             self._seen.popitem(last=False)
+
+    def allows_inbox_perception(self, perception: Perception) -> bool:
+        """恢复未读时重新检查接收账号和当前允许的 QQ 范围。"""
+        route = perception.route
+        return (
+            perception.channel == QQ_CHANNEL_NAME
+            and route is not None
+            and route.account_id == self._config.account_id
+            and self._allows_route(route)
+        )
+
+    def _save_inbox(
+        self, perception: Perception, route: MessageRoute, payload: dict[str, Any]
+    ) -> bool:
+        assert self._inbox_store is not None
+        sender = payload.get("sender")
+        nickname = _display_name(sender.get("nickname")) if isinstance(sender, dict) else ""
+        card = _display_name(sender.get("card")) if isinstance(sender, dict) else ""
+        group = route.kind == "group"
+        group_id = route.recipient_id
+        name = _display_name(payload.get("group_name")) if group else nickname
+        if group and name:
+            self._group_names[group_id] = name
+        try:
+            message = self._inbox_store.add(
+                perception,
+                sender_name=(card or nickname) if group else nickname,
+                conversation_name=(name or self._group_names.get(group_id, "")) if group else name,
+            )
+        except SQLiteError:
+            logger.exception("QQ 收件箱写入失败")
+            return False
+        if message is not None:
+            if self._on_inbox_message is not None:
+                self._on_inbox_message(message)
+            socket = self._transport.socket
+            if (
+                group
+                and socket is not None
+                and group_id not in self._group_names
+                and (group_id not in self._group_lookups)
+            ):
+                self._group_lookups[group_id] = asyncio.create_task(
+                    self._lookup_group_name(socket, message.conversation),
+                    name="aureus-qq-group-name",
+                )
+        return True
+
+    async def _lookup_group_name(self, socket: ClientConnection, key: ConversationKey) -> None:
+        group_id = key.recipient_id
+        try:
+            data = await self._transport.call(socket, "get_group_info", {"group_id": group_id})
+            name = _display_name(data.get("group_name"))
+            if name and group_id not in self._group_names:
+                assert self._inbox_store is not None
+                self._inbox_store.rename(key, name)
+                self._group_names[group_id] = name
+        except (OSError, TimeoutError, WebSocketException, OneBotError, SQLiteError):
+            logger.debug("QQ 群名暂不可用")
+        finally:
+            self._group_lookups.pop(group_id, None)
 
     def show(self, message: OutgoingMessage) -> None:
         """把已通过心跳检查的回复交给后台发送，避免网络阻塞心跳"""

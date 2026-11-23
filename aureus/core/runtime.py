@@ -44,6 +44,7 @@ from aureus.core.model_runtime import ModelRuntime
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat, Perception, registered_templates
+from aureus.heartbeat.inbox_store import InboxStore
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
@@ -73,6 +74,7 @@ class Core:
     models: ModelRuntime | None = None
     qq: QQChannel | None = None
     qq_link: AccountLink | None = None
+    inbox_store: InboxStore | None = None
 
 
 def open_people(
@@ -290,6 +292,7 @@ def open_core(
             except sqlite3.Error:
                 language = None
                 logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
+        inbox_store = InboxStore(paths.database_file, the_clock) if runtime.qq.enabled else None
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -329,6 +332,7 @@ def open_core(
             has_diary_organ=runtime.diary.organ in models.available_organs,
             persona_growth=persona_growth,
             has_persona_organ=persona_growth.organ in models.available_organs,
+            inbox_store=inbox_store,
         )
         models.on_reload = heartbeat.update_available_organs
         heartbeat.update_available_organs(models.available_organs)
@@ -362,8 +366,16 @@ def open_core(
                 )
 
             qq = QQChannel(
-                runtime.qq, token, heartbeat, is_qq_owner, consume_qq_link, test_group=qq_test_group
+                runtime.qq,
+                token,
+                heartbeat,
+                is_qq_owner,
+                consume_qq_link,
+                test_group=qq_test_group,
+                inbox_store=inbox_store,
+                on_inbox_message=heartbeat.on_inbox_message,
             )
+            heartbeat.set_inbox_route_filter(qq.allows_inbox_perception)
             heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show)
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
@@ -382,4 +394,5 @@ def open_core(
             models,
             qq,
             qq_link,
+            inbox_store,
         )
