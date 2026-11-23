@@ -711,7 +711,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <li><div class="og-step"><b>检查本轮能否开始处理</b><p>有待回信、当前空闲、允许调用器官且等待时间已到时，按优先级挑出同一会话的一批来信。没到条件时，本拍继续等待或结束。</p></div></li>
 <li><div class="og-lanes">
 <div class="og-step conditional"><b>按需判断</b><p>满足判断配置和触发条件时，请判断器官提供情绪建议。心跳可把产生的变化带入后续处理。</p></div>
-<div class="og-step conditional"><b>按档位规划</b><p>先判断，再在当前档位允许时请规划器建议怎么回应。也可能直接请回复器处理。规划可建议不回，以及后续翻阅或特别关心。</p></div>
+<div class="og-step conditional"><b>按档位规划</b><p>判断之后或跳过判断时，当前档位允许才请规划器建议怎么回应。其他情况下直接请回复器处理。规划可建议不回，以及后续翻阅或特别关心。</p></div>
 </div></li>
 <li><div class="og-lanes">
 <div class="og-step conditional"><b>沉默</b><p>采纳不回复的计划时，心跳记录该决定并结束本轮。器官调用受限或无法生成回复时，也可能只有系统提示。</p></div>
@@ -720,6 +720,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <li><div class="og-step"><b>结束本轮</b><p>器官在后台工作，心跳在后续拍收回结果。回复、学习、整理等任务按各自条件调用器官。</p></div></li>
 </ol></section>
 <h3 class="og-map-title">器官配置与调用关系</h3>
+<button id="og-search-settings" type="button" class="btn small">配置网页搜索（WEB_SEARCH）</button>
 <div class="og-toolbar"><div class="og-legend" aria-label="逻辑流向图例"><span><i></i>核心调用</span><span><i class="return"></i>器官返回</span><span><i class="relay"></i>经 CORE 衔接</span></div><button id="og-reset" type="button" class="btn small">复位布局</button></div>
 <div id="og-grid" class="og-stage" role="group" aria-label="器官逻辑流向" aria-describedby="og-help"></div>
 <div class="og-footer" id="og-help">拖动模块调整布局，也可聚焦后用方向键移动。点击器官配置模型。</div>
@@ -2776,6 +2777,7 @@ const CFG_FIELDS = {
   'exploration.enabled': ['自主探索', '是否允许围绕兴趣主动查找资料。'],
   'exploration.organ': ['探索总结器官', '选择负责整理探索资料的器官。'],
   'exploration.search_provider': ['搜索服务', '探索时使用哪个搜索服务。'],
+  'exploration.search_endpoint': ['搜索服务地址', '填写 SearXNG 的完整搜索地址，例如 https://search.example.com/search。'],
   'exploration.max_per_day': ['每日探索上限', '一天最多发起多少次探索。'],
   'exploration.min_interval_hours': ['探索间隔下限（小时）', '两次探索至少相隔多少小时。'],
   'exploration.max_results': ['搜索结果上限', '一次探索最多查看多少条搜索结果。'],
@@ -3003,6 +3005,13 @@ async function loadConfigPage(force) {
   refreshConfigDirty();
 }
 PAGES.config = { load: () => loadConfigPage(false) };
+$('og-search-settings').addEventListener('click', async () => {
+  await showPage('config');
+  if (state.page !== 'config') return;
+  const tab = document.querySelector('#cf-tabs [data-sec="exploration"]');
+  tab?.click();
+  tab?.focus();
+});
 
 $('cf-save').addEventListener('click', async () => {
   if (cf.invalid.size) { toast('有的数字填得不对（' + [...cf.invalid].join('、') + '），改好再保存。', 'error'); return; }
