@@ -871,8 +871,17 @@ def test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence(browser:
         const transfer = new DataTransfer(); files.forEach(file => transfer.items.add(file));
         input.files = transfer.files; input.dispatchEvent(new Event('change', {{bubbles:true}}));
       }};
-      press('批量上传'); choose();
+      press('批量上传');
       let dialog = document.querySelector('#editor-dialog');
+      const uploadButton = () => [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent.trim() === '上传所选图片');
+      check(uploadButton().disabled, '尚未选择文件时不可提交');
+      choose();
+      check(!uploadButton().disabled, '选择文件后可提交');
+      const input = dialog.querySelector('input[type="file"]');
+      input.value = ''; input.dispatchEvent(new Event('change', {{bubbles:true}}));
+      check(uploadButton().disabled, '清空选择后再次不可提交');
+      choose();
       check(dialog.innerText.includes('已选择 3 张'), '确认前显示文件数');
       document.querySelector('#editor-close').click();
       check(requests.length === 0, '取消不发上传请求');

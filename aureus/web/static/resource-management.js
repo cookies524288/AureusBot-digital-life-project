@@ -482,13 +482,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const file = el('input', {type:'file', accept:'image/png,image/jpeg,image/gif,image/webp', multiple:true, required:true});
     const summary = el('p', {class:'muted', 'aria-live':'polite', text:'尚未选择图片'});
     const results = el('div', {class:'stack', 'aria-live':'polite'});
-    const submit = el('button', {type:'submit', class:'btn primary small', text:'上传所选图片'});
+    const submit = el('button', {type:'submit', class:'btn primary small', text:'上传所选图片', disabled:true});
     const controls = el('fieldset', {class:'stack'},
       el('label', {class:'stack'}, '图片文件', file), summary, results, submit);
     const form = el('form', {class:'stack'}, controls);
     file.addEventListener('change', () => {
       summary.textContent = `已选择 ${file.files.length} 张图片。每张最多 5 MB。`;
       results.replaceChildren();
+      submit.disabled = !file.files.length;
     });
     form.addEventListener('submit', async event => {
       event.preventDefault();
@@ -504,7 +505,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           results.append(el('p', {text:image.name + '：' + outcome}));
         }
         await refresh();
-      } finally { controls.disabled = false; }
+      } finally { controls.disabled = false; submit.disabled = !file.files.length; }
     });
     openEditor('批量上传表情', form);
   }

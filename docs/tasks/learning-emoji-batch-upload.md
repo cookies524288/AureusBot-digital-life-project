@@ -21,3 +21,9 @@
 - [x] `test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence`：取消零请求；执行时再次提交仍只发每文件一次；混合批次逐文件显示上传、重复和失败结果。
 - [x] `test_emoji_sequential_upload_keeps_existing_metadata_after_bad_file`：真实 API 上重复上传不改原件、来源、计数及登记/禁用状态；坏文件返回 422，之后的有效文件照常入库。
 - [x] 在独立开发树用原项目虚拟环境运行 `pytest -q tests/web/test_server.py tests/web/test_resource_browser.py -k emoji`：7 passed，42 deselected；运行前打印 `aureus.__file__` 确认为开发树。`ruff check`、`ruff format --check`（两份 Python 测试）、`node --check` 通过。对照表保留上游独立批量接口、直接登记上传与永久删除的差异；本步提交后由主会话复核，再决定合并和重启。
+
+## 第 1 轮返工说明（GPT，2026-11-23）
+
+- 初始未选择文件时禁用「上传所选图片」；选中可用，清空后重新禁用；批次执行结束后根据当前选择恢复按钮状态，继续防止执行中重复提交。
+- `test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence` 先补三段按钮状态断言，在提交 `1da88ee` 上红测：`尚未选择文件时不可提交`；最小修改后该用例 1 passed。原有取消、结果、重复提交和筛选断言保留。
+- 开发树专项 `pytest -q tests/web/test_server.py tests/web/test_resource_browser.py -k emoji`：7 passed，42 deselected；`ruff check` 和 `ruff format --check tests/web/test_resource_browser.py`、`node --check aureus/web/static/resource-management.js`、`git diff --check` 均通过。只提交返工文件，交由主会话复审。
