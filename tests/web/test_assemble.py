@@ -4,6 +4,7 @@ import textwrap
 from collections.abc import Iterator
 from contextlib import closing
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from sqlite3 import connect
 
@@ -22,6 +23,7 @@ from aureus.memory import (
     MemoryEvidence,
     MemorySource,
 )
+from aureus.memory.emoji import ImportedEmoji
 from aureus.organs import CallPurpose, OrganRequest
 from aureus.people import HistoricalKind, HistoricalRecord
 from aureus.timeline import ActorType
@@ -96,14 +98,38 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
     source = MemorySource("demo", "memory", "paragraphs", (43,))
     evidence = MemoryEvidence("message", "demo:55")
     record = HistoricalMemory(source, "合成原件木卫二", evidence=(evidence,))
-    digest = "a" * 64
+    emoji_source = MemorySource("demo", "main", "images", (4,))
+    image = b"GIF89a"
     with open_core(paths, fake_organs=True, clock=clock, to_console=False) as core:
-        assert core.memory and core.language
+        assert core.memory and core.language and core.emoji_store
+        digest = sha256(image).hexdigest()
+        archive = paths.memory_dir / "attachments"
+        archive.mkdir(exist_ok=True, parents=True)
+        (archive / digest).write_bytes(image)
+        core.emoji_store.import_records(
+            [
+                ImportedEmoji(
+                    emoji_source, digest, "测试表情", True, False, 1, 3, None, None, "{}"
+                ),
+                ImportedEmoji(
+                    MemorySource("demo", "main", "images", (5,)),
+                    "a" * 64,
+                    "缺件表情",
+                    False,
+                    True,
+                    1,
+                    0,
+                    None,
+                    None,
+                    "{}",
+                ),
+            ]
+        )
         core.memory.publish(
             [
                 record,
                 HistoricalMemory(
-                    MemorySource("demo", "main", "images", (4,)),
+                    emoji_source,
                     "测试表情",
                     evidence=(MemoryEvidence("attachment_archived", f"attachments/{digest}"),),
                 ),
@@ -139,10 +165,6 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
         )
         live = core.timeline.append("message", "本地记录纸鸢", ActorType.USER)
         assert core.memory.index_more(100, lambda row: MemoryEntry("合成用户", row.content)) > 0
-    archive = paths.memory_dir / "attachments"
-    archive.mkdir(exist_ok=True, parents=True)
-    (archive / digest).write_bytes(b"GIF89a")
-
     with (
         open_core(paths, fake_organs=True, clock=clock, to_console=False) as core,
         open_web(core, clock) as server,
@@ -212,10 +234,17 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
             profile = client.get("/api/resources/profiles", params={"q": "合成"}).json()["items"][0]
             assert profile["record"]["source_key"] == "[3]"
             assert profile["record"]["evidence"] == [55]
-            assert client.get("/api/resources/media").json()["items"][0]["digest"] == digest
-            assert (
-                client.get("/api/resources/media/" + digest).headers["content-type"] == "image/gif"
-            )
+            media = "/api/resources/media"
+            [entry] = client.get(media, params={"status": "registered"}).json()["items"]
+            assert entry["digest"] == digest and entry["has_file"] and entry["is_registered"]
+            assert entry["source"] == emoji_source.encode()
+            assert entry["use_count"] == 3
+            [missing] = client.get(media, params={"status": "banned"}).json()["items"]
+            assert missing["text"] == "缺件表情" and missing["digest"] is None
+            assert not missing["has_file"] and missing["is_banned"]
+            original = client.get(f"{media}/{digest}", params={"kind": "emoji"})
+            assert original.headers["content-type"] == "image/gif" and original.content == image
+            assert client.get(f"{media}/{'a' * 64}", params={"kind": "emoji"}).status_code == 404
             for kind, entry_id, old, revised in (
                 ("history", history["entry_id"], "木卫二", "土卫六"),
                 ("live", live.id, "纸鸢", "风筝架"),

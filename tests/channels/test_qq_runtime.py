@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sys
+from base64 import b64encode
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -15,12 +16,14 @@ import httpx
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
+from aureus.channels.onebot import decode_message
 from aureus.common import AureusPaths, HeartbeatConfig, ManualClock, QQConfig
 from aureus.core import runtime
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import main_loop
 from aureus.heartbeat.inbox_attention import InboxAttention
 from aureus.heartbeat.inbox_store import InboxConversation
+from aureus.heartbeat.reply_outbox import EmojiReplyPart
 from aureus.memory import LanguageKind, LanguageStore
 from aureus.organs import FakePlanner, KeyResolver, OrganBus, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
@@ -455,6 +458,73 @@ token_key = "{TOKEN_ENV}"
     assert "GG：抵达终点" in private_requests["planner"]["prompt"]
     assert "当「庆祝跑步成绩」时，可用「月兔冲线」" in private_requests["replyer"]["prompt"]
     assert "Preserve this personality." in private_requests["replyer"]["system_context"]
+
+
+@pytest.mark.asyncio
+async def test_qq_emoji_order_scope_and_successful_use(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path / "home")
+    paths.ensure_directories()
+    paths.identity_file.write_bytes(IDENTITY)
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    fake = FakeOneBot()
+    fake.reply_with[:] = ["failed", "ok", "ok", "ok"]
+    image = b"GIF89a synthetic image"
+
+    async with asyncio.timeout(10), serve(fake.handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        paths.runtime_config_file.write_text(
+            f'[qq]\nenabled = true\naccount_id = "{ACCOUNT}"\n'
+            f'endpoint = "ws://127.0.0.1:{port}"\nallowed_group_id = "{GROUP}"\n'
+            "[heartbeat]\ntyping_delay_enabled = false\n",
+            encoding="utf-8",
+        )
+        with runtime.open_core(paths, fake_organs=True, clock=clock, to_console=False) as core:
+            channel, store = core.qq, core.emoji_store
+            assert channel is not None and store is not None
+            digest = store.collect(image).digest
+            assert digest is not None
+            store.set_status(digest, is_registered=True, is_banned=False)
+            record = core.timeline.append("message", "测试回复", ActorType.ME)
+            async with channel:
+                await fake.connections.get()
+                while channel._transport.socket is None:
+                    await asyncio.sleep(0)
+                target = decode_message(event(1, 2100, "表情", group=GROUP), str(ACCOUNT))
+                other = decode_message(event(2, 2100, "表情", group=GROUP + 1), str(ACCOUNT))
+                assert target is not None and other is not None
+                delivered = core.heartbeat._deliver_reply
+                assert not delivered(other, record, ("拒绝",), emoji=EmojiReplyPart(digest))
+
+                assert delivered(target, record, ("前置",), emoji=EmojiReplyPart(digest, True))
+                assert delivered(target, record, ("后置",), emoji=EmojiReplyPart(digest))
+                messages = [await fake.messages.get() for _ in range(4)]
+                assert {message["group_id"] for message in messages} == {str(GROUP)}
+                parts = [message["message"][1] for message in messages]
+                expected = {
+                    "type": "image",
+                    "data": {"file": "base64://" + b64encode(image).decode()},
+                }
+                assert parts == [
+                    expected,
+                    {"type": "text", "data": {"text": "前置"}},
+                    {"type": "text", "data": {"text": "后置"}},
+                    expected,
+                ]
+                await asyncio.gather(*channel._sending)
+                assert store.browse("", 0, 10)[0].use_count == 1
+
+                assert delivered(target, record, ("暂停前",), emoji=EmojiReplyPart(digest))
+                core.heartbeat.set_maintenance_paused(True)
+                assert (await fake.messages.get())["message"][1]["data"]["text"] == "暂停前"
+                await asyncio.gather(*channel._sending)
+                assert fake.messages.empty() and store.browse("", 0, 10)[0].use_count == 1
+
+                core.heartbeat.set_maintenance_paused(False)
+                assert delivered(target, record, ("急停前",), emoji=EmojiReplyPart(digest))
+                assert core.heartbeat.halt("合成急停")
+                assert (await fake.messages.get())["message"][1]["data"]["text"] == "急停前"
+                await asyncio.gather(*channel._sending)
+                assert fake.messages.empty() and store.browse("", 0, 10)[0].use_count == 1
 
 
 @pytest.mark.asyncio

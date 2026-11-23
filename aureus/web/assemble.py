@@ -89,6 +89,7 @@ def open_web(
             resource_images=core.inbox_images,
             resource_people=core.people,
             resource_memory_dir=core.paths.memory_dir,
+            resource_emojis=core.emoji_store,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

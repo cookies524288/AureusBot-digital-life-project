@@ -18,12 +18,14 @@ from aureus.memory import (
     MAX_EXAMPLE,
     MAX_MEMORY_TEXT,
     MAX_TEXT,
+    EmojiStore,
     LanguageContent,
     LanguageKind,
     LanguageStore,
     MemoryIndex,
     MemoryKind,
 )
+from aureus.memory.emoji import EmojiStatus, emoji_media_type
 from aureus.people import PeopleDirectory
 
 DEFAULT_SIZE = 30
@@ -77,6 +79,7 @@ def register_resource_routes(
     images: InboxImageIndex | None = None,
     people: PeopleDirectory | None = None,
     memory_dir: Path | None = None,
+    emojis: EmojiStore | None = None,
 ) -> None:
     """注册资源浏览和维护，使用工作线程里的独立数据库连接。"""
 
@@ -87,8 +90,27 @@ def register_resource_routes(
         q: Annotated[str, Query(max_length=200)] = "",
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
+        status: EmojiStatus = "",
     ) -> dict[str, Any]:
-        table = "images" if kind == "emoji" else "image_assets"
+        if kind == "emoji":
+            entries = (
+                await asyncio.to_thread(emojis.browse, q.strip(), offset, limit + 1, status)
+                if emojis is not None
+                else []
+            )
+            return {
+                "enabled": emojis is not None,
+                "next_offset": offset + limit if len(entries) > limit else None,
+                "items": [
+                    {
+                        **asdict(entry),
+                        "text": entry.description,
+                        "digest": entry.digest if entry.has_file else None,
+                        "media_kind": "emoji",
+                    }
+                    for entry in entries[:limit]
+                ],
+            }
         rows = (
             await asyncio.to_thread(
                 memory.browse_history,
@@ -96,8 +118,7 @@ def register_resource_routes(
                 "",
                 offset,
                 limit + 1,
-                source_table=table,
-                omit_image_type="image" if kind == "emoji" else "",
+                source_table="image_assets",
             )
             if memory
             else []
@@ -131,7 +152,17 @@ def register_resource_routes(
     async def read_media(
         digest: str,
         _token: Annotated[str, Depends(require_ready)],
+        kind: Literal["emoji", "image_assets"] = "image_assets",
     ) -> Response:
+        if kind == "emoji":
+            data = await asyncio.to_thread(emojis.read_catalog_media, digest) if emojis else None
+            if data is None:
+                raise HTTPException(404, "找不到表情原件。")
+            return Response(
+                data,
+                media_type=emoji_media_type(data),
+                headers={"X-Content-Type-Options": "nosniff"},
+            )
         if memory_dir is None or _ATTACHMENT.fullmatch(f"attachments/{digest}") is None:
             raise HTTPException(404, "找不到归档图片。")
         directory = (memory_dir / "attachments").resolve()
@@ -142,7 +173,7 @@ def register_resource_routes(
             data = await asyncio.to_thread(path.read_bytes)
         except FileNotFoundError:
             raise HTTPException(404, "找不到归档图片。") from None
-        media_type = _archive_image_type(data)
+        media_type = emoji_media_type(data)
         if media_type is None:
             raise HTTPException(415, "归档附件无法作为图片预览。")
         return Response(data, media_type=media_type, headers={"X-Content-Type-Options": "nosniff"})
@@ -317,15 +348,3 @@ def register_resource_routes(
         if not found:
             raise HTTPException(404, "找不到这条长期记忆。")
         return {"ok": True}
-
-
-def _archive_image_type(data: bytes) -> str | None:
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-        return "image/webp"
-    return None

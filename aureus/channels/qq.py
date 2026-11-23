@@ -67,6 +67,9 @@ class QQChannel:
         test_group: str | None = None,
         inbox_store: InboxStore | None = None,
         on_inbox_message: Callable[[InboxMessage], None] | None = None,
+        read_emoji: Callable[[str], bytes | None] | None = None,
+        record_emoji_use: Callable[[str], None] | None = None,
+        allows_emoji_delivery: Callable[[], bool] | None = None,
     ) -> None:
         self._test_group = test_group
         self._config = config
@@ -75,11 +78,15 @@ class QQChannel:
         self._consume_command = consume_command
         self._inbox_store = inbox_store
         self._on_inbox_message = on_inbox_message
+        self._read_emoji = read_emoji
+        self._record_emoji_use = record_emoji_use
+        self._allows_emoji_delivery = allows_emoji_delivery
         self._transport = OneBotTransport(
             config, token.get_secret_value() if token else None, self._receive
         )
         self._seen: OrderedDict[tuple[str, str, str], None] = OrderedDict()
         self._sending: set[asyncio.Task[None]] = set()
+        self._last_send: dict[ConversationKey, asyncio.Task[None]] = {}
         self._connection: asyncio.Task[None] | None = None
         self._group_lookups: dict[str, asyncio.Task[None]] = {}
         self._group_names: dict[str, str] = {}
@@ -262,17 +269,69 @@ class QQChannel:
             return
         if not self._allows_route(route):
             raise OneBotError("QQ 目的地超出允许范围")
+        if message.emoji_digest is not None and not self._allows_emoji(message, route):
+            raise OneBotError("QQ 表情目的地或当前权限不允许发送")
         socket = self._transport.socket
         if socket is None or len(self._sending) >= _OUTGOING_LIMIT:
             raise OneBotError("QQ 连接未就绪或发送队列已满")
-        task = asyncio.create_task(
-            self._send(socket, encode_message(message, route)), name="aureus-onebot-send"
+        conversation = ConversationKey(
+            message.channel,
+            route.account_id,
+            route.kind,
+            route.recipient_id,
+            route.temporary_group_id,
         )
+        task = asyncio.create_task(
+            self._send(socket, message, route, self._last_send.get(conversation)),
+            name="aureus-onebot-send",
+        )
+        self._last_send[conversation] = task
         self._sending.add(task)
-        task.add_done_callback(self._sending.discard)
 
-    async def _send(self, socket: ClientConnection, params: dict[str, Any]) -> None:
+        def drop(finished: asyncio.Task[None]) -> None:
+            self._sending.discard(finished)
+            if self._last_send.get(conversation) is finished:
+                del self._last_send[conversation]
+
+        task.add_done_callback(drop)
+
+    def _allows_emoji(self, message: OutgoingMessage, route: MessageRoute) -> bool:
+        return (
+            message.channel == QQ_CHANNEL_NAME
+            and route.account_id == self._config.account_id
+            and route.temporary_group_id is None
+            and self._allows_route(route)
+            and self._allows_emoji_delivery is not None
+            and self._allows_emoji_delivery()
+        )
+
+    async def _send(
+        self,
+        socket: ClientConnection,
+        message: OutgoingMessage,
+        route: MessageRoute,
+        previous: asyncio.Task[None] | None,
+    ) -> None:
         try:
+            if previous is not None:
+                await previous
+            if self._transport.socket is not socket or not self._allows_route(route):
+                return
+            image = None
+            digest = message.emoji_digest
+            if digest is not None:
+                if self._read_emoji is None or not self._allows_emoji(message, route):
+                    return
+                image = await asyncio.to_thread(self._read_emoji, digest)
+                if (
+                    image is None
+                    or self._transport.socket is not socket
+                    or not self._allows_emoji(message, route)
+                ):
+                    return
+            params = encode_message(message, route, image=image)
             await self._transport.call(socket, "send_msg", params)
-        except (OSError, TimeoutError, WebSocketException, OneBotError) as error:
+            if digest is not None and self._record_emoji_use is not None:
+                await asyncio.to_thread(self._record_emoji_use, digest)
+        except (OSError, TimeoutError, WebSocketException, OneBotError, SQLiteError) as error:
             logger.warning("QQ 发送失败（%s）", type(error).__name__)

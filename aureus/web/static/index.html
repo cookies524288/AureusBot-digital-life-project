@@ -664,7 +664,11 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
     </div>
     <form id="learning-search" class="row" style="flex-wrap:wrap">
       <input name="q" aria-label="搜索学习内容" placeholder="搜索词、释义或例句" maxlength="200">
-      <label><input name="disabled" type="checkbox"> 显示停用</label><button class="btn small">查询</button>
+      <label><input name="disabled" type="checkbox"> 显示停用</label>
+      <label class="hidden">表情状态 <select name="emoji_status">
+        <option value="">全部</option><option value="registered">已登记</option>
+        <option value="unregistered">未登记</option><option value="banned">已禁用</option>
+      </select></label><button class="btn small">查询</button>
     </form>
     <div id="learning-result" class="stack" aria-live="polite"></div>
     <button id="learning-more" class="btn small hidden">加载更多</button>

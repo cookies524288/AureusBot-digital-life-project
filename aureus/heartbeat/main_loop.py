@@ -101,7 +101,7 @@ from aureus.heartbeat.perception import (
 )
 from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
 from aureus.heartbeat.recall import MemoryTracker
-from aureus.heartbeat.reply_outbox import ReplyOutbox
+from aureus.heartbeat.reply_outbox import EmojiReplyPart, ReplyOutbox
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.hormones import (
@@ -1078,13 +1078,27 @@ class Heartbeat:
 
         self._deliver_reply(target, reply_record, segments, after_delivery)
 
-    def _send_reply_part(self, target: Perception, part: str, record: TimelineRecord) -> bool:
+    def allows_emoji_delivery(self) -> bool:
+        """通道实际发送表情前再次核对暂停、停机和回复权限。"""
+        return (
+            not self._maintenance_paused
+            and not self._stop_requested
+            and self._permissions.check(ACTION_REPLY_TO_USER).allowed
+        )
+
+    def _send_reply_part(
+        self, target: Perception, part: str | EmojiReplyPart, record: TimelineRecord
+    ) -> bool:
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if not permission.allowed:
             logger.warning("待发回复被权限检查拦下：%s", permission.reason)
             return False
         if self._maintenance_paused:
             return False
+        if isinstance(part, EmojiReplyPart):
+            if target.channel != "qq" or target.route is None or self._stop_requested:
+                return False
+            return self._deliver(target, "", MessageKind.REPLY, record, emoji_digest=part.digest)
         return self._deliver(target, part, MessageKind.REPLY, record)
 
     def _after_reply_delivery(
@@ -1117,6 +1131,8 @@ class Heartbeat:
         parts: Sequence[str],
         after_delivery: Callable[[], None] | None = None,
         after_failure: Callable[[], None] | None = None,
+        *,
+        emoji: EmojiReplyPart | None = None,
     ) -> bool:
         """投递已记录的各段。返回本次调用中是否已交给通道。"""
         if self._stop_requested and self._config.typing_delay_enabled:
@@ -1125,7 +1141,9 @@ class Heartbeat:
             if finish is not None:
                 finish()
             return delivered
-        return self._reply_outbox.enqueue(target, record, parts, after_delivery, after_failure)
+        return self._reply_outbox.enqueue(
+            target, record, parts, after_delivery, after_failure, emoji=emoji
+        )
 
     def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> TimelineRecord:
         """把判断器官的结果记进时间线，只有自己可见（D68 第 7、8 条）。"""
@@ -2123,6 +2141,8 @@ class Heartbeat:
         content: str,
         kind: MessageKind,
         record: TimelineRecord | None = None,
+        *,
+        emoji_digest: str | None = None,
     ) -> bool:
         """把消息交给通道。通道出错只记日志：任何通道出问题都不影响核心（03 号文档）。"""
         sender = self._identity.facts.name if kind is MessageKind.REPLY else NOTICE_SENDER
@@ -2135,6 +2155,7 @@ class Heartbeat:
             timeline_id=record.id if record is not None else None,
             timestamp=record.timestamp if record is not None else self._clock.now(),
             route=target.route,
+            emoji_digest=emoji_digest,
         )
         sink = self._sinks.get(message.channel)
         if sink is None:

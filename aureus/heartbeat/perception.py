@@ -98,6 +98,7 @@ class OutgoingMessage:
     timeline_id: int | None = None  # 同一历史回复拆出的各段共享序号
     timestamp: datetime | None = None
     route: MessageRoute | None = None
+    emoji_digest: str | None = None
 
 
 # 通道收消息的函数。必须很快返回、不能阻塞（心跳会直接调用它），出错只影响这个通道。

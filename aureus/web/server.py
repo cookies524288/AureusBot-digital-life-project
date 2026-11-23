@@ -36,7 +36,7 @@ from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.identity import Identity
-from aureus.memory import LanguageStore, MemoryIndex
+from aureus.memory import EmojiStore, LanguageStore, MemoryIndex
 from aureus.organs import OrganResponse
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
@@ -225,6 +225,7 @@ def create_app(
     resource_images: InboxImageIndex | None = None,
     resource_people: PeopleDirectory | None = None,
     resource_memory_dir: Path | None = None,
+    resource_emojis: EmojiStore | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -450,6 +451,7 @@ def create_app(
         resource_images,
         resource_people,
         resource_memory_dir,
+        resource_emojis,
     )
 
     if maintenance_paused is not None and set_maintenance_paused is not None:

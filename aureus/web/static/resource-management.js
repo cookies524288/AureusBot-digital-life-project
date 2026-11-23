@@ -96,7 +96,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     openEditor((item ? '编辑' : '新增') + title, form);
   }
   function renderLearning(item) {
-    if (learningKind === 'emoji') return renderMedia(item, item.media_kind === 'emoji' ? '已确认表情' : '待分类素材');
+    if (learningKind === 'emoji') return renderMedia(item, item.is_banned ? '已禁用' : item.is_registered ? '已登记' : '未登记');
     const kind = learningKind;
     return detailCard(item.text + (item.is_enabled ? '' : ' · 已停用'),
       el('div', {class:'stack'}, field(kind === 'jargon' ? '释义' : '使用场景', item.detail),
@@ -109,7 +109,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   const learning = pager('learning', fields => ({
     endpoint:learningKind === 'emoji' ? '/api/resources/media' : '/api/resources/learning',
-    params:{kind:learningKind, q:fields.q.value, recall:fields.disabled.checked ? '' : 'enabled'}
+    params:learningKind === 'emoji'
+      ? {kind:learningKind, q:fields.q.value, status:fields.emoji_status.value}
+      : {kind:learningKind, q:fields.q.value, recall:fields.disabled.checked ? '' : 'enabled'}
   }), renderLearning, null, data => { $('learning-add').disabled = !data.enabled || learningKind === 'emoji'; });
   const archivedImages = pager('archived-images', fields => ({
     endpoint:'/api/resources/media', params:{kind:'image_assets', q:fields.q.value}
@@ -206,6 +208,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     activate('data-learning-tab', learningKind);
     $('learning-add').classList.toggle('hidden', learningKind === 'emoji');
     $('learning-search').elements.disabled.closest('label').classList.toggle('hidden', learningKind === 'emoji');
+    $('learning-search').elements.emoji_status.closest('label').classList.toggle('hidden', learningKind !== 'emoji');
     learning.read();
   });
   for (const button of document.querySelectorAll('[data-memory-tab]')) button.addEventListener('click', () => showMemoryTab(button.dataset.memoryTab));
@@ -229,9 +232,9 @@ function renderMedia(item, category) {
   const title = document.createElement('summary');
   title.textContent = (category ? category + ' · ' : '') + (item.text || '未填写描述');
   card.append(title);
-  if (item.digest) {
+  if (item.digest && (item.media_kind !== 'emoji' || item.has_file)) {
     const image = document.createElement('img');
-    image.src = '/api/resources/media/' + item.digest;
+    image.src = '/api/resources/media/' + item.digest + (item.media_kind === 'emoji' ? '?kind=emoji' : '');
     image.alt = item.text || '迁入表情素材';
     image.loading = 'lazy';
     image.style.cssText = 'max-width:140px;max-height:140px;object-fit:contain';
@@ -240,5 +243,11 @@ function renderMedia(item, category) {
   const source = document.createElement('small');
   source.textContent = '来源：' + JSON.stringify(item.source);
   card.append(source);
+  if (item.media_kind === 'emoji') {
+    const usage = document.createElement('small');
+    usage.textContent = `收集 ${item.collection_count} 次 · 使用 ${item.use_count} 次`;
+    if (!item.has_file) usage.textContent += ' · 缺少原件';
+    card.append(usage);
+  }
   return card;
 }

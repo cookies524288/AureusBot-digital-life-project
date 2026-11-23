@@ -13,7 +13,16 @@ from aureus.heartbeat.perception import Perception
 from aureus.timeline import TimelineRecord
 
 type _Address = ConversationKey | tuple[str, str]
-type _Send = Callable[[Perception, str, TimelineRecord], bool]
+type _Part = str | EmojiReplyPart
+type _Send = Callable[[Perception, _Part, TimelineRecord], bool]
+
+
+@dataclass(frozen=True)
+class EmojiReplyPart:
+    """回复中的一份表情，按选择结果贴在文字前或后。"""
+
+    digest: str
+    before_text: bool = False
 
 
 def _address(target: Perception) -> _Address:
@@ -32,7 +41,7 @@ def _is_han(character: str) -> bool:
 class _Reply:
     target: Perception
     record: TimelineRecord
-    parts: deque[tuple[str, float]]
+    parts: deque[tuple[_Part, float]]
     on_delivered: Callable[[], None] | None
     on_failed: Callable[[], None] | None
     delivered: bool = False
@@ -84,15 +93,22 @@ class ReplyOutbox:
         parts: Sequence[str],
         on_delivered: Callable[[], None] | None,
         on_failed: Callable[[], None] | None,
+        *,
+        emoji: EmojiReplyPart | None = None,
     ) -> bool:
         """同一次回复的后续段计入打字时间，并立即投递已到期的段。"""
         address = _address(target)
         queue = self._conversations.get(address)
         if queue is None:
             queue = self._conversations[address] = _ConversationOutbox(deque(), self._clock.now())
-        timed_parts = deque(
+        timed_parts: deque[tuple[_Part, float]] = deque(
             (part, self._typing_delay(part) if index else 0.0) for index, part in enumerate(parts)
         )
+        if emoji is not None:
+            if emoji.before_text:
+                timed_parts.appendleft((emoji, 0.0))
+            else:
+                timed_parts.append((emoji, 0.0))
         reply = _Reply(target, record, timed_parts, on_delivered, on_failed)
         queue.replies.append(reply)
         self._deliver_due(address, queue)
@@ -127,7 +143,7 @@ class ReplyOutbox:
             queue.last_sent_at = self._clock.now()
             if not reply.parts:
                 queue.replies.popleft()
-            if delivered and not reply.delivered:
+            if isinstance(content, str) and delivered and not reply.delivered:
                 reply.delivered = True
                 if reply.on_delivered is not None:
                     reply.on_delivered()

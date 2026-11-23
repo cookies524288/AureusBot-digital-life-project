@@ -4,6 +4,7 @@
 """
 
 import re
+from base64 import b64encode
 from typing import Any
 
 from aureus.heartbeat import (
@@ -117,13 +118,20 @@ def _read_segments(
     return "".join(parts).strip(), mentioned, quoted, tuple(attachments)
 
 
-def encode_message(message: OutgoingMessage, route: MessageRoute) -> dict[str, Any]:
+def encode_message(
+    message: OutgoingMessage, route: MessageRoute, *, image: bytes | None = None
+) -> dict[str, Any]:
     """按 SnowLuma 的通用 send_msg 动作编码，引用本次回复的原消息"""
+    part = (
+        {"type": "image", "data": {"file": "base64://" + b64encode(image).decode("ascii")}}
+        if image is not None
+        else {"type": "text", "data": {"text": message.content}}
+    )
     params: dict[str, Any] = {
         "message_type": route.kind,
         "message": [
             {"type": "reply", "data": {"id": route.message_id}},
-            {"type": "text", "data": {"text": message.content}},
+            part,
         ],
     }
     if route.kind == "group":

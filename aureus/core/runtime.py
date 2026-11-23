@@ -51,7 +51,7 @@ from aureus.heartbeat.inbox_store import InboxStore
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
-from aureus.memory import DiaryBook, LanguageStore, MemoryIndex
+from aureus.memory import DiaryBook, EmojiStore, LanguageStore, MemoryIndex
 from aureus.mood import Mood
 from aureus.organs import (
     FakePlanner,
@@ -88,6 +88,7 @@ class Core:
     language: LanguageStore | None = None
     memory: MemoryIndex | None = None
     inbox_images: InboxImageIndex | None = None
+    emoji_store: EmojiStore | None = None
 
 
 def open_people(
@@ -305,6 +306,8 @@ def open_core(
                 language = None
                 logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         inbox_store = InboxStore(paths.database_file, the_clock) if runtime.qq.enabled else None
+        emoji_store = EmojiStore(paths.database_file, paths.memory_dir, the_clock)
+        emoji_store.open()
         heartbeat = Heartbeat(
             clock=the_clock,
             timeline=timeline,
@@ -350,6 +353,7 @@ def open_core(
             persona_growth=persona_growth,
             has_persona_organ=persona_growth.organ in models.available_organs,
             inbox_store=inbox_store,
+            emoji_store=emoji_store,
         )
         models.on_reload = heartbeat.update_available_organs
         heartbeat.update_available_organs(models.available_organs)
@@ -392,6 +396,9 @@ def open_core(
                 test_group=qq_test_group,
                 inbox_store=inbox_store,
                 on_inbox_message=heartbeat.on_inbox_message,
+                read_emoji=emoji_store.read_sendable,
+                record_emoji_use=emoji_store.record_use,
+                allows_emoji_delivery=heartbeat.allows_emoji_delivery,
             )
             heartbeat.set_inbox_route_filter(qq.allows_inbox_conversation)
             inbox_images = InboxImageIndex(
@@ -423,4 +430,5 @@ def open_core(
             language,
             memory,
             inbox_images,
+            emoji_store,
         )

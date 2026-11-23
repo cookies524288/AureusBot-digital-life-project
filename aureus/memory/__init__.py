@@ -2,6 +2,7 @@
 
 from aureus.memory.diary import DiaryBook
 from aureus.memory.edits import MAX_MEMORY_TEXT, MemoryKind
+from aureus.memory.emoji import EmojiRecord, EmojiStore
 from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.history import (
     HistoricalMemory,
@@ -42,6 +43,8 @@ __all__ = [
     "MAX_MEMORY_TEXT",
     "MAX_TEXT",
     "DiaryBook",
+    "EmojiRecord",
+    "EmojiStore",
     "HistoricalMemory",
     "ImportedLanguageRow",
     "LanguageContent",
