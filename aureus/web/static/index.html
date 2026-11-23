@@ -440,6 +440,17 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 @media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
 
 /* 器官关系图：颜色表示连线方向，所有器官共用一张像素块面。 */
+.og-overview{--step:#52756a;--branch:#957343;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:clamp(12px,2.5vw,24px)}
+:root[data-theme=dark] .og-overview{--step:#9fbeac;--branch:#d4b075}
+.og-flow-head{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:14px}.og-flow-head h3,.og-map-title{margin:0;font-size:17px}
+.og-flow{display:grid;gap:16px;list-style:none;margin:0;padding:0}.og-flow>li{position:relative;display:grid;gap:8px}
+.og-flow>li:not(:last-child)::after{content:"↓";position:absolute;top:100%;left:50%;translate:-50% 0;color:var(--step);font:700 16px/16px var(--font)}
+.og-lanes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.og-step{min-width:0;border:1px solid var(--border);border-inline-start:3px solid var(--step);border-radius:var(--radius);padding:9px 12px;background:var(--bg)}
+.og-step.conditional{border-inline-start:3px dashed var(--branch)}.og-step b{font-size:14px}.og-step p{margin:3px 0 0;color:var(--text-2);font-size:13px;line-height:1.55}
+.og-flow-legend{display:flex;gap:12px;color:var(--text-2);font-size:12px}.og-flow-legend span{padding-inline-start:6px;border-inline-start:3px solid var(--step)}.og-flow-legend span:last-child{border-inline-start:3px dashed var(--branch)}
+.og-map-title{margin:20px 0 8px}
+@media(max-width:680px){.og-lanes{grid-template-columns:minmax(0,1fr)}}
 .og-board{--og-call:#a77e2f;--og-return:#4e847a;--og-relay:#817499}
 :root[data-theme='dark'] .og-board{--og-call:#d3b65e;--og-return:#86b8a8;--og-relay:#ad9ac6}
 .og-toolbar,.og-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:10px 16px;font-size:12px;color:var(--text-2)}
@@ -687,6 +698,26 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div></div></div></section>
 <section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2></div><span id="og-status" class="tag" role="status">已自动保存</span></div>
 <div class="page-body stack"><div id="og-missing" class="empty hidden"></div><div id="og-content" class="hidden"><div class="og-board">
+<section class="og-overview" aria-labelledby="og-flow-title">
+<div class="og-flow-head"><h3 id="og-flow-title">一轮来信处理</h3><div class="og-flow-legend"><span>进入本轮后</span><span>条件分支</span></div></div>
+<ol class="og-flow">
+<li><div class="og-lanes">
+<div class="og-step conditional"><b>QQ 来信 → 平台收件箱</b><p>已绑定用户和特别关心的人来信会唤醒心跳。普通 QQ 来信留在收件箱，等空闲时自主翻阅。心跳先取这些优先未读，再按条件翻阅普通会话。</p></div>
+<div class="og-step conditional"><b>网页、终端来信 → 感知队列</b><p>直接唤醒心跳。日程等内部事件由心跳另行检查，符合条件时也可启动其他任务。</p></div>
+</div></li>
+<li><div class="og-step"><b>心跳收下新来信</b><p>识别来源，追加来信到时间线。收件箱里的来信记下后标为已读。身份无法确认时只记录。</p></div></li>
+<li><div class="og-step"><b>检查本轮能否开始处理</b><p>有待回信、当前空闲、允许调用器官且等待时间已到时，按优先级挑出同一会话的一批来信。没到条件时，本拍继续等待或结束。</p></div></li>
+<li><div class="og-lanes">
+<div class="og-step conditional"><b>按需判断</b><p>满足判断配置和触发条件时，请判断器官提供情绪建议。心跳可把产生的变化带入后续处理。</p></div>
+<div class="og-step conditional"><b>按档位规划</b><p>先判断，再在当前档位允许时请规划器建议怎么回应。也可能直接请回复器处理。规划可建议不回，以及后续翻阅或特别关心。</p></div>
+</div></li>
+<li><div class="og-lanes">
+<div class="og-step conditional"><b>沉默</b><p>采纳不回复的计划时，心跳记录该决定并结束本轮。器官调用受限或无法生成回复时，也可能只有系统提示。</p></div>
+<div class="og-step conditional"><b>回复</b><p>回复器生成文稿。心跳收回结果，重新检查发送权限。通过后把完整回复追加到时间线，再经原通道发送。发送权限拦截时，本轮没有回复记录。</p></div>
+</div></li>
+<li><div class="og-step"><b>结束本轮</b><p>器官在后台工作，心跳在后续拍收回结果。回复、学习、整理等任务按各自条件调用器官。</p></div></li>
+</ol></section>
+<h3 class="og-map-title">器官配置与调用关系</h3>
 <div class="og-toolbar"><div class="og-legend" aria-label="逻辑流向图例"><span><i></i>核心调用</span><span><i class="return"></i>器官返回</span><span><i class="relay"></i>经 CORE 衔接</span></div><button id="og-reset" type="button" class="btn small">复位布局</button></div>
 <div id="og-grid" class="og-stage" role="group" aria-label="器官逻辑流向" aria-describedby="og-help"></div>
 <div class="og-footer" id="og-help">拖动模块调整布局，也可聚焦后用方向键移动。点击器官配置模型。</div>
