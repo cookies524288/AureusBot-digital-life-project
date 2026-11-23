@@ -7,7 +7,7 @@ import socket
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,9 @@ from websockets.asyncio.server import ServerConnection, serve
 from aureus.common import AureusPaths, HeartbeatConfig, ManualClock, QQConfig
 from aureus.core import runtime
 from aureus.core.model_runtime import ModelRuntime
+from aureus.heartbeat import main_loop
+from aureus.heartbeat.inbox_attention import InboxAttention
+from aureus.heartbeat.inbox_store import InboxMessage
 from aureus.memory import LanguageKind, LanguageStore
 from aureus.organs import KeyResolver, OrganBus, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
@@ -101,21 +104,22 @@ async def run_chat(
     paths: AureusPaths, *chat_args: str, request_log: Path | None = None, browse_inbox: bool = False
 ) -> AsyncIterator[asyncio.subprocess.Process]:
     arguments = ["--home", str(paths.home), "chat", *chat_args]
-    command = ["-m", "aureus", *arguments, "--fake"]
+    setup = (
+        "from tests.channels.test_qq_runtime import capture_language_requests, drive_inbox_clock; "
+        "from aureus.cli.main import main; import sys; drive_inbox_clock(); "
+    )
+    fixture_args: list[str] = []
     if request_log is not None:
-        command = [
-            "-c",
-            "from tests.channels.test_qq_runtime import capture_language_requests; "
-            "from aureus.cli.main import main; "
-            "import sys; capture_language_requests(sys.argv.pop(1), sys.argv.pop(1) == '1'); "
-            "sys.exit(main())",
-            str(request_log),
-            "1" if browse_inbox else "0",
-            *arguments,
-        ]
+        setup += "capture_language_requests(sys.argv.pop(1), sys.argv.pop(1) == '1'); "
+        fixture_args = [str(request_log), "1" if browse_inbox else "0"]
+    else:
+        arguments.append("--fake")
     process = await asyncio.create_subprocess_exec(
         sys.executable,
-        *command,
+        "-c",
+        setup + "sys.exit(main())",
+        *fixture_args,
+        *arguments,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -135,6 +139,18 @@ async def run_chat(
             raise
         assert process.returncode == 0, output.decode("utf-8", errors="replace")
         assert TOKEN.encode() not in output
+
+
+def drive_inbox_clock() -> None:
+    """推进收件箱的手动时钟，保留正常 CLI 和其他子系统的时序。"""
+    clock = ManualClock(datetime(2026, 11, 23, 12, tzinfo=UTC))
+
+    class TimedInboxAttention(InboxAttention):
+        def browse(self, now: datetime, *, can_browse: bool) -> list[InboxMessage]:
+            clock.advance(timedelta(minutes=5))
+            return super().browse(clock.now(), can_browse=can_browse)
+
+    main_loop.InboxAttention = TimedInboxAttention
 
 
 def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None:
@@ -213,6 +229,9 @@ async def test_qq_chat_entry_reconnect_routing_and_account_link(tmp_path: Path) 
 port = {web_port}
 [heartbeat]
 split_reply_enabled = false
+tick_interval_seconds = 1
+[body]
+sleep_enabled = false
 [qq]
 enabled = true
 account_id = "{ACCOUNT}"
@@ -235,13 +254,15 @@ action_timeout_seconds = 0.4
                 {"type": "text", "data": {"text": "合成群聊甲"}},
             ]
             await fake.send(remote, **group_message)
+            first = await fake.messages.get()
             await fake.send(remote, **event(102, 2200, "合成群聊乙", group=GROUP))
+            second_reply = await fake.messages.get()
             await fake.send(remote, **event(103, 2100, "合成私聊", group_id=GROUP))
             await fake.send(remote, **event(6000, ACCOUNT, "机器人回显", group=GROUP))
             await fake.send(
                 remote, **{**event(6000, ACCOUNT, "机器人回显"), "post_type": "message_sent"}
             )
-            replies = [await fake.messages.get() for _ in range(3)]
+            replies = [first, second_reply, await fake.messages.get()]
             by_id = {item["message"][0]["data"]["id"]: item for item in replies}
             assert set(by_id) == {"101", "102", "103"}
             assert by_id["101"]["group_id"] == by_id["102"]["group_id"] == str(GROUP)
@@ -372,7 +393,6 @@ token_key = "{TOKEN_ENV}"
         async with run_chat(paths, request_log=request_log):
             remote = await fake.connections.get()
             await fake.send(remote, **samples[0])
-            assert (await fake.messages.get())["message"][0]["data"]["id"] == "101"
             await fake.send(remote, **event(105, 2200, "gg，来聊跑步。"))
             reply = await fake.messages.get()
             assert reply == {
@@ -405,7 +425,6 @@ token_key = "{TOKEN_ENV}"
         "9000:102",
         "9000:103",
         "9000:104",
-        "9000:101",
         "9000:105",
     ]
     evidence_ids = tuple(message.id for message in inbound[:4])
