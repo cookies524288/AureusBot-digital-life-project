@@ -478,6 +478,36 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     openEditor(item ? '编辑表情' : '上传表情', form);
   }
+  function emojiBatchForm(refresh) {
+    const file = el('input', {type:'file', accept:'image/png,image/jpeg,image/gif,image/webp', multiple:true, required:true});
+    const summary = el('p', {class:'muted', 'aria-live':'polite', text:'尚未选择图片'});
+    const results = el('div', {class:'stack', 'aria-live':'polite'});
+    const submit = el('button', {type:'submit', class:'btn primary small', text:'上传所选图片'});
+    const controls = el('fieldset', {class:'stack'},
+      el('label', {class:'stack'}, '图片文件', file), summary, results, submit);
+    const form = el('form', {class:'stack'}, controls);
+    file.addEventListener('change', () => {
+      summary.textContent = `已选择 ${file.files.length} 张图片。每张最多 5 MB。`;
+      results.replaceChildren();
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (controls.disabled || !file.files.length) return;
+      const files = [...file.files];
+      controls.disabled = true;
+      results.replaceChildren();
+      try {
+        for (const image of files) {
+          const response = await api('/api/resources/emoji', 'POST', image);
+          const outcome = response.ok ? response.data?.created ? '已上传' : '已存在，保留原有记录'
+            : errorText(response);
+          results.append(el('p', {text:image.name + '：' + outcome}));
+        }
+        await refresh();
+      } finally { controls.disabled = false; }
+    });
+    openEditor('批量上传表情', form);
+  }
   function emojiActions(item, refresh) {
     const actions = el('div', {class:'row'});
     const edit = action('编辑', () => emojiForm(refresh, item));
@@ -527,7 +557,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const batch = kind === 'emoji' ? batchControls(item => item.entry_key, '/api/resources/emoji/batch',
       (entry_keys, removed) => ({entry_keys, removed}), () => pager.read()) : null;
     const upload = kind === 'emoji' ? action('上传表情', () => emojiForm(pager.read)) : null;
+    const batchUpload = kind === 'emoji' ? action('批量上传', () => emojiBatchForm(pager.read)) : null;
     if (upload) { upload.disabled = true; form.append(upload); }
+    if (batchUpload) { batchUpload.disabled = true; form.append(batchUpload); }
     if (batch) form.append(batch.remove, batch.restore);
     panel.append(form);
     if (counts) panel.append(counts);
@@ -537,6 +569,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       },
       loaded:data => {
         if (upload) upload.disabled = !data.enabled;
+        if (batchUpload) batchUpload.disabled = !data.enabled;
         if (counts) {
           const total = data.counts;
           counts.textContent = total ? `全库 ${total.total} 条 · 已登记 ${total.registered} · 未登记 ${total.unregistered} · 已禁用 ${total.banned} · 已移除 ${total.removed}` : '';

@@ -147,6 +147,58 @@ def test_emoji_catalog_filters_actual_format_before_paging_and_keeps_global_coun
         rig.close()
 
 
+def test_emoji_sequential_upload_keeps_existing_metadata_after_bad_file(tmp_path: Path) -> None:
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, ManualClock(START))
+    store.open()
+    with BytesIO() as stream:
+        Image.new("RGB", (8, 8), "blue").save(stream, format="PNG")
+        first = stream.getvalue()
+    with BytesIO() as stream:
+        Image.new("RGB", (8, 8), "green").save(stream, format="JPEG")
+        second = stream.getvalue()
+    digest = sha256(first).hexdigest()
+    source = MemorySource("fixture", "main", "images", (7,))
+    store.import_records([ImportedEmoji(source, digest, "原说明", True, True, 4, 5, 0, None, "{}")])
+    rig = Rig(tmp_path, resource_emojis=store)
+    try:
+        with rig.client() as client:
+            set_password(rig)
+            assert login(client, GOOD).status_code == 200
+            endpoint = "/api/resources/emoji"
+            headers = {"Origin": "http://testserver", "Content-Type": "application/octet-stream"}
+            responses = [
+                client.post(endpoint, content=data, headers=headers)
+                for data in (first, b"invalid", second)
+            ]
+            assert [
+                (response.status_code, response.json().get("created")) for response in responses
+            ] == [(200, False), (422, None), (200, True)]
+            assert store.read_catalog_media(digest) == first
+            catalog = {row.digest: row for row in store.browse("", 0, 10)}
+            original = catalog[digest]
+            assert (original.description, original.is_registered, original.is_banned) == (
+                "原说明",
+                True,
+                True,
+            )
+            assert (original.collection_count, original.use_count, original.source) == (
+                4,
+                5,
+                source.encode(),
+            )
+            new = catalog[sha256(second).hexdigest()]
+            assert not new.is_registered and not new.is_banned and new.has_file
+            assert client.get("/api/resources/media").json()["counts"] == {
+                "total": 2,
+                "registered": 0,
+                "unregistered": 1,
+                "banned": 1,
+                "removed": 0,
+            }
+    finally:
+        rig.close()
+
+
 def test_emoji_catalog_upload_and_maintenance_preserve_originals(tmp_path: Path) -> None:
     store = EmojiStore(tmp_path / "emoji.db", tmp_path, ManualClock(START))
     store.open()

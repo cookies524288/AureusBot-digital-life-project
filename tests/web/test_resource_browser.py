@@ -829,6 +829,75 @@ def test_emoji_upload_edit_search_and_status_maintenance(browser: Browser) -> No
     )
 
 
+def test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    with BytesIO() as stream:
+        Image.new("RGB", (8, 8), "orange").save(stream, format="PNG")
+        image_data = base64.b64encode(stream.getvalue()).decode("ascii")
+    _run(
+        browser,
+        f"""
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      await waitFor(() => button('批量上传') && !button('批量上传').disabled, '表情列表加载');
+      const panel = document.querySelector('#learning-panel-emoji');
+      const countValue = () => Number(panel.querySelector('#emoji-library-counts')
+        ?.innerText.match(/全库 (\\d+) 条/)?.[1]);
+      await waitFor(() => Number.isFinite(countValue()), '初始全库统计可见');
+      const beforeCount = countValue();
+      const search = panel.querySelector('input[type="search"]');
+      search.value = '批次筛选'; search.form.requestSubmit();
+      const nativeFetch = window.fetch;
+      const requests = [];
+      let release;
+      const gate = new Promise(resolve => release = resolve);
+      window.fetch = async (url, options) => {{
+        if (url === '/api/resources/emoji' && options.method === 'POST') {{
+          requests.push(options.body.name);
+          if (requests.length === 1) await gate;
+          if (options.body.name === 'broken.svg')
+            return new Response(JSON.stringify({{detail:'图片格式不支持'}}),
+              {{status:422, headers:{{'Content-Type':'application/json'}}}});
+        }}
+        return nativeFetch(url, options);
+      }};
+      const image = new File([Uint8Array.from(atob('{image_data}'), byte => byte.charCodeAt(0))],
+        'first.png', {{type:'image/png'}});
+      const imageBytes = Uint8Array.from(atob('{image_data}'), byte => byte.charCodeAt(0));
+      const files = [image, new File([imageBytes], 'again.png', {{type:'image/png'}}),
+        new File(['invalid'], 'broken.svg', {{type:'image/svg+xml'}})];
+      const choose = () => {{
+        const input = document.querySelector('#editor-dialog input[type="file"]');
+        const transfer = new DataTransfer(); files.forEach(file => transfer.items.add(file));
+        input.files = transfer.files; input.dispatchEvent(new Event('change', {{bubbles:true}}));
+      }};
+      press('批量上传'); choose();
+      let dialog = document.querySelector('#editor-dialog');
+      check(dialog.innerText.includes('已选择 3 张'), '确认前显示文件数');
+      document.querySelector('#editor-close').click();
+      check(requests.length === 0, '取消不发上传请求');
+      press('批量上传'); choose();
+      dialog = document.querySelector('#editor-dialog');
+      dialog.querySelector('form').requestSubmit();
+      await waitFor(() => requests.length === 1 && dialog.querySelector('fieldset').disabled,
+        '第一张上传中禁用操作');
+      dialog.querySelector('form').requestSubmit();
+      check(requests.length === 1, '重复确认不增加请求');
+      release();
+      await waitFor(() => dialog.innerText.includes('first.png：已上传') &&
+        dialog.innerText.includes('again.png：已存在，保留原有记录') &&
+        dialog.innerText.includes('broken.svg：图片格式不支持') &&
+        !dialog.querySelector('fieldset').disabled, '逐张保留结果');
+      check(requests.length === 3, '每个文件仅上传一次');
+      await waitFor(() => countValue() === beforeCount + 1,
+        '刷新全库统计');
+      check(search.value === '批次筛选' && !button('未登记 · 未填写描述'),
+        '筛选保留且当前页不插入未命中图片');
+      window.fetch = nativeFetch;
+    """,
+    )
+
+
 def test_memory_pagination_details_and_button_states(browser: Browser) -> None:
     browser.open("memory", 390, 740)
     _run(
