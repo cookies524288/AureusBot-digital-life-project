@@ -101,6 +101,7 @@ from aureus.heartbeat.perception import (
 )
 from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
 from aureus.heartbeat.recall import MemoryTracker
+from aureus.heartbeat.reply_outbox import ReplyOutbox
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.heartbeat.speech import split_reply
@@ -395,6 +396,7 @@ class Heartbeat:
             else None
         )
         self._sinks: dict[str, MessageSink] = {}
+        self._reply_outbox = ReplyOutbox(clock, config, self._send_reply_part)
         self._interests = None if config.roleplay_mode else interests
         self._findings = findings
         exploration = exploration or ExplorationConfig()
@@ -428,6 +430,7 @@ class Heartbeat:
         """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
         self._available_organs = available
         self._conversation.has_text_embedding = "text_embedding" in available
+        self._conversation.has_fast_model = "fast_model" in available
         self._conversation.inbox_media.available = available
         for task, tracker in (
             ("diary", self._diary),
@@ -553,6 +556,8 @@ class Heartbeat:
             OSError: 标记文件写不进去，急停没有生效。
         """
         engaged = self._emergency_stop.engage(reason)
+        if engaged:
+            self._reply_outbox.clear()
         self._wake.set()
         return engaged
 
@@ -683,6 +688,7 @@ class Heartbeat:
     def request_stop(self) -> None:
         """请心跳停下来：跳完当前这一拍就开始关闭。"""
         self._stop_requested = True
+        self._reply_outbox.clear()
         self._wake.set()
 
     @property
@@ -697,6 +703,7 @@ class Heartbeat:
         self._maintenance_paused = paused
         if paused:
             self._inbox_followups.clear()
+            self._reply_outbox.clear()
         if paused and self._thought is not None:
             thought = self._thought
             self._thought = None
@@ -839,6 +846,7 @@ class Heartbeat:
         self._take_in_perceptions()
         if inbox is not None:
             self._take_inbox_followups(inbox)
+        self._reply_outbox.deliver_due()
         had_thought = self._thought is not None
         diary_running = bool(self._thought and self._thought.task.get_name() == "aureus-diary")
         self._collect_finished_thought()
@@ -918,6 +926,8 @@ class Heartbeat:
         status = self._emergency_stop.status()
         previous = self._halt_status
         self._halt_status = status
+        if status.halted:
+            self._reply_outbox.clear()
         if status.halted != previous.halted:
             self._timeline.append(
                 event_type=EVENT_EMERGENCY_STOP if status.halted else EVENT_EMERGENCY_RESUME,
@@ -1013,6 +1023,9 @@ class Heartbeat:
         if outcome.response is None:
             self._deliver(target, outcome.notice, MessageKind.NOTICE)
             return
+        segments = outcome.reply_segments
+        if not segments:
+            return
         reply_permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if not reply_permission.allowed:
             # 器官已经返回了，但此刻不允许说话：这句话不进时间线（它没有说出口）。
@@ -1023,13 +1036,15 @@ class Heartbeat:
                 MessageKind.NOTICE,
             )
             return
-        text = outcome.response.suggestion.strip()
+        text = "\n".join(segments)
         metadata: dict[str, Any] = {
             "channel": target.channel,
             "in_reply_to": [heard.record.id for heard in thought.replying_to],
             "organ_id": outcome.response.organ_id,
             "strategy": thought.strategy.to_metadata(),
         }
+        if len(segments) > 1:
+            metadata["reply_segments"] = list(segments)
         if outcome.plan is not None:
             metadata["plan"] = outcome.plan.to_metadata()
         if outcome.recall_keywords:
@@ -1058,40 +1073,70 @@ class Heartbeat:
             visibility=target.visibility,
             metadata=metadata,
         )
-        delivered = self._deliver_reply(target, reply_record)
-        if delivered and target.trust is TrustLevel.VERIFIED_USER:
+
+        def after_delivery() -> None:
+            self._after_reply_delivery(thought, outcome.plan, person_id, reply_record)
+
+        self._deliver_reply(target, reply_record, segments, after_delivery)
+
+    def _send_reply_part(self, target: Perception, part: str, record: TimelineRecord) -> bool:
+        permission = self._permissions.check(ACTION_REPLY_TO_USER)
+        if not permission.allowed:
+            logger.warning("待发回复被权限检查拦下：%s", permission.reason)
+            return False
+        if self._maintenance_paused:
+            return False
+        return self._deliver(target, part, MessageKind.REPLY, record)
+
+    def _after_reply_delivery(
+        self,
+        thought: _Thought,
+        plan: Plan | None,
+        person_id: int | None,
+        reply_record: TimelineRecord,
+    ) -> None:
+        heard = thought.replying_to[-1]
+        if heard.perception.trust is TrustLevel.VERIFIED_USER:
             self._last_conversation_at = self._clock.now()
-        if delivered and outcome.plan is not None and person_id is not None:
+        if plan is not None and person_id is not None:
             # 说出口了才算答应（D74 第 3 条）：规划器决定不回、或者没说出口时不记。
-            self._agenda_hooks._apply_agenda(outcome.plan, person_id, reply_record)
-            if outcome.plan.interest is not None and thought.replying_to[-1].is_user:
+            self._agenda_hooks._apply_agenda(plan, person_id, reply_record)
+            if plan.interest is not None and heard.is_user:
                 interest_changes.apply_interest(
                     self._interests,
                     self._timeline,
                     self._exploration.calendar,
-                    outcome.plan.interest,
-                    thought.replying_to[-1].record,
+                    plan.interest,
+                    heard.record,
                     self._clock.now(),
                 )
 
-    def _deliver_reply(self, target: Perception, record: TimelineRecord) -> bool:
-        """把回复拆成几条短消息发出（D60）。
-
-        时间线里仍然是完整的一条：它说的是一段话，拆开只是发出去的样子。
-        关掉拆分、或者拆不出东西时，整段一条发出。
-        """
-        text = record.content
-        parts: list[str] = []
-        if self._config.split_reply_enabled:
-            parts = split_reply(
-                text,
-                max_messages=self._config.max_reply_messages,
-                min_chars=self._config.min_message_chars,
-            )
-        delivered = False
-        for part in parts or [text]:
-            delivered = self._deliver(target, part, MessageKind.REPLY, record) or delivered
-        return delivered
+    def _deliver_reply(
+        self,
+        target: Perception,
+        record: TimelineRecord,
+        parts: Sequence[str] | None = None,
+        after_delivery: Callable[[], None] | None = None,
+        after_failure: Callable[[], None] | None = None,
+    ) -> bool:
+        """投递已记录的各段。返回本次调用中是否已交给通道。"""
+        if parts is None:
+            parts = (
+                split_reply(
+                    record.content,
+                    max_messages=self._config.max_reply_messages,
+                    min_chars=self._config.min_message_chars,
+                )
+                if self._config.split_reply_enabled
+                else ()
+            ) or (record.content,)
+        if self._stop_requested and self._config.typing_delay_enabled:
+            delivered = self._send_reply_part(target, parts[0], record)
+            finish = after_delivery if delivered else after_failure
+            if finish is not None:
+                finish()
+            return delivered
+        return self._reply_outbox.enqueue(target, record, parts, after_delivery, after_failure)
 
     def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> TimelineRecord:
         """把判断器官的结果记进时间线，只有自己可见（D68 第 7、8 条）。"""
@@ -1445,7 +1490,7 @@ class Heartbeat:
         if not batch or self._debounce_remaining(batch) > 0:
             return
         if self._working_memory is not None and self._config.working_memory_enabled:
-            batch = batch[:self._config.working_memory_capacity]
+            batch = batch[: self._config.working_memory_capacity]
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
         job = self._reply_job(batch)
         self._unanswered.remove(batch)
@@ -1522,7 +1567,10 @@ class Heartbeat:
                 effective_tier=self._current_strategy().effective_tier,
                 night=reading.sleep.night if reading is not None else False,
                 halted=self._halt_status.halted,
-                busy=self._thought is not None or bool(self._unanswered) or bool(self._pending),
+                busy=self._thought is not None
+                or bool(self._unanswered)
+                or bool(self._pending)
+                or (target is not None and self._reply_outbox.has_pending(target)),
                 cautious=self._mood.cautious if self._mood is not None else False,
                 has_channel=target is not None,
             )
@@ -1901,7 +1949,7 @@ class Heartbeat:
             )
             if remaining > 0:
                 interval = min(interval, remaining)
-        return interval
+        return min(interval, self._reply_outbox.seconds_until_due())
 
     def _debounce_remaining(self, batch: Sequence[_Heard]) -> float:
         if not self._config.inbox_debounce_enabled or not batch or _platform_key(batch[-1]) is None:

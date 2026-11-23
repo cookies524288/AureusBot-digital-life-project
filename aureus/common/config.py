@@ -88,6 +88,11 @@ class HeartbeatConfig(BaseModel):
     max_reply_messages: int = Field(default=4, ge=1)
     # 一条至少多少个字；更短的句子并进相邻的一句。
     min_message_chars: int = Field(default=4, ge=1)
+    typing_delay_enabled: bool = True
+    typing_han_seconds: float = Field(default=0.4, ge=0, allow_inf_nan=False)
+    typing_other_seconds: float = Field(default=0.1, ge=0, allow_inf_nan=False)
+    typing_jitter_min_seconds: float = Field(default=0.3, ge=0, allow_inf_nan=False)
+    typing_jitter_max_seconds: float = Field(default=1.7, ge=0, allow_inf_nan=False)
     # 用户在 identity.toml 里改了设定后，这次运行的系统上下文里告诉它哪几层被改了（D62）。
     # 只说哪几层，不给旧内容；时间线照样记，关掉只影响它知不知道。
     identity_changes_in_prompt: bool = True
@@ -98,6 +103,13 @@ class HeartbeatConfig(BaseModel):
     working_memory_enabled: bool = True
     working_memory_capacity: int = Field(default=80, ge=2, le=300)
     working_memory_retain: int = Field(default=25, ge=1)
+
+    @model_validator(mode="after")
+    def validate_typing_jitter(self) -> Self:
+        """打字随机延迟的下限不能超过上限。"""
+        if self.typing_jitter_min_seconds > self.typing_jitter_max_seconds:
+            raise ValueError("typing_jitter_min_seconds 不能超过 typing_jitter_max_seconds")
+        return self
 
     @model_validator(mode="after")
     def validate_working_memory_window(self) -> Self:

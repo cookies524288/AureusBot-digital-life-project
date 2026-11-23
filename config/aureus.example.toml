@@ -40,6 +40,9 @@ config_version = 1
 # 回复用哪个器官，名字要和 models.toml 里的 [organs.名字] 一致。
 # reply_organ = "replyer"
 # 各精力档位都由规划器决定回不回，再由回复器写成话。
+# planning_enabled = true
+# 自主翻阅和规划器调整特别关心的总开关。
+# inbox_attention_enabled = true
 # 每次自主翻阅在所有选中会话合计读取的条数，范围 1–200。
 # inbox_read_limit = 35
 # 开启后合并同会话来信，规划器用流式请求。思考期间新来信可重开本轮规划。
@@ -57,6 +60,14 @@ config_version = 1
 # max_reply_messages = 4
 # 一条至少多少个字，更短的句子并进相邻的一句。
 # min_message_chars = 4
+# 后续分段模拟打字。关掉后不等打字时长，仍按会话顺序发送。
+# typing_delay_enabled = true
+# 后续段按其中的汉字与其他字符分别累加打字秒数。
+# typing_han_seconds = 0.4
+# typing_other_seconds = 0.1
+# 每个后续段额外加上这个范围内的均匀随机秒数。
+# typing_jitter_min_seconds = 0.3
+# typing_jitter_max_seconds = 1.7
 # 你在 identity.toml 里改了设定后，告诉它这次醒来前哪几层被改了（不给旧内容）；时间线照样记。
 # identity_changes_in_prompt = true
 # 扮演模式（实验对照组，设计见 docs/10-decisions.md 的 D65）：打开后关掉所有身体信号机制
@@ -329,13 +340,12 @@ config_version = 1
 # max_changes_per_day = 3
 
 [exploration]
-# 小探索默认关闭；启用前须开启 interests。搜索暂只提供 none。
+# 小探索默认关闭；启用前须开启 interests。
 # enabled = false
 # organ = "summarizer"
 # search_provider = "none"
-# 使用 SearXNG 时填写启用了 JSON 格式的完整搜索端点。
-# search_provider = "searxng"
-# search_endpoint = "http://127.0.0.1:8080/search"
+# 使用 SearXNG 时将 search_provider 改为 "searxng"，并填写启用了 JSON 的搜索端点，例如 http://127.0.0.1:8080/search。
+# search_endpoint = ""
 # max_per_day = 3
 # min_interval_hours = 4.0
 # max_results = 5

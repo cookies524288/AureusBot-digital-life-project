@@ -80,6 +80,15 @@ _CONTACT_NOTICE = _template(
 _REPLY_INSTRUCTION = _template(
     "reply_instruction", "发言要求", "请直接写出你要说的话，不要加名字或时间前缀。"
 )
+_REPLY_SPLITS = _template(
+    "reply_splits",
+    "回复分段标记",
+    "需要分成两条消息时，在切点插入 <n>。需要保留当前一段的完整格式时，"
+    "请在该段开头加 <!>，其作用范围到下一个 <n> 或回复结尾。"
+    "指令、长文本和代码要各自保持完整，请用 <!> 保护，且不要在它们内部加 <n>。"
+    "这两个标记只用于控制发送格式。",
+    editable=False,
+)
 _REPLY_PLAN_REASON = _template("reply_plan_reason", "规划理由", "规划器的回复理由：$reason")
 _REPLY_REVIEW = PromptTemplate(
     "reply_review_protocol",
@@ -436,7 +445,19 @@ def _dialogue_line(record: TimelineRecord, user_name: str, timezone: tzinfo | No
         labels.append(f"引用消息 {_one_line(quoted_id)}")
     if record.metadata.get("mentioned") is True:
         labels.append("点名你")
-    return f"[{' | '.join(labels)}] {_speaker(record, user_name)}：{_one_line(record.content)}"
+    prefix = f"[{' | '.join(labels)}] {_speaker(record, user_name)}"
+    segments = record.metadata.get("reply_segments")
+    if (
+        record.actor_type is ActorType.ME
+        and isinstance(segments, list)
+        and segments
+        and all(isinstance(segment, str) for segment in segments)
+    ):
+        return "\n".join(
+            f"{prefix}（第 {index}/{len(segments)} 段）：{_one_line(segment)}"
+            for index, segment in enumerate(segments, start=1)
+        )
+    return f"{prefix}：{_one_line(record.content)}"
 
 
 def _one_line(text: str) -> str:
@@ -484,6 +505,7 @@ def build_reply_prompt(
     jargon: str = "",
     expressions: str = "",
     people_context: str = "",
+    with_splits: bool = False,
 ) -> str:
     """拼出回复用的提示词：之前的对话，加上刚收到、还没回复的消息。
 
@@ -500,6 +522,7 @@ def build_reply_prompt(
         jargon: 合并调用时命中的黑话参考。
         expressions: 选中的习得表达参考。
         people_context: 当前发言人的历史资料；空字符串表示不附人物资料（3.3）。
+        with_splits: 是否让回复器标明分段边界及受保护的段（3.12）。
 
     Returns:
         提示词。
@@ -516,6 +539,8 @@ def build_reply_prompt(
     if length is not None:
         parts.append(_length_text(length))
     parts.append(_REPLY_INSTRUCTION.fill())
+    if with_splits:
+        parts.append(_REPLY_SPLITS.fill())
     if review_sentinel:
         parts.append(_REPLY_REVIEW.fill(sentinel=review_sentinel))
     return join_prompt(parts)
