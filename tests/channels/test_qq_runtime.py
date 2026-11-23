@@ -502,7 +502,7 @@ async def test_qq_emoji_order_scope_and_successful_use(tmp_path: Path) -> None:
                 parts = [message["message"][1] for message in messages]
                 expected = {
                     "type": "image",
-                    "data": {"file": "base64://" + b64encode(image).decode()},
+                    "data": {"file": "base64://" + b64encode(image).decode(), "sub_type": 1},
                 }
                 assert parts == [
                     expected,
