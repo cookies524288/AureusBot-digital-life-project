@@ -75,6 +75,8 @@ class Core:
     qq: QQChannel | None = None
     qq_link: AccountLink | None = None
     inbox_store: InboxStore | None = None
+    language: LanguageStore | None = None
+    memory: MemoryIndex | None = None
 
 
 def open_people(
@@ -395,4 +397,6 @@ def open_core(
             qq,
             qq_link,
             inbox_store,
+            language,
+            memory,
         )

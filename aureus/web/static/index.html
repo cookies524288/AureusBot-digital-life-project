@@ -545,6 +545,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button class="nav-item" data-page="monitor" aria-label="观察"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-pulse"/></svg><span class="nav-label" style="--i:3">观察</span></button>
 <button class="nav-item" data-page="timeline" aria-label="时间线"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-timeline"/></svg><span class="nav-label" style="--i:4">时间线</span></button>
 <button class="nav-item" data-page="inbox" aria-label="收件箱"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-chat"/></svg><span class="nav-label" style="--i:5">收件箱</span></button>
+<div class="nav-group"><span class="nav-label" style="--i:4">资源管理</span></div>
+<button class="nav-item" data-page="learning" aria-label="学习"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-persona"/></svg><span class="nav-label" style="--i:5">学习</span></button>
+<button class="nav-item" data-page="memory" aria-label="长期记忆"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-timeline"/></svg><span class="nav-label" style="--i:6">长期记忆</span></button>
 <div class="nav-group"><span class="nav-label" style="--i:4">配置</span></div>
 <button class="nav-item" data-page="persona" aria-label="人设"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-persona"/></svg><span class="nav-label" style="--i:5">人设</span></button>
 <button class="nav-item" data-page="models" aria-label="模型"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-model"/></svg><span class="nav-label" style="--i:6">模型</span></button>
@@ -622,6 +625,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="tl-list" class="tl-list"></div>
 <div class="row" style="justify-content:center;margin-top:16px"><button id="tl-more" class="btn hidden">加载更早的</button></div>
 </div></section>
+<section id="page-learning" class="page"><div class="page-head"><h2>学习</h2></div><div class="page-body stack"><form id="learning-search" class="row" style="flex-wrap:wrap"><label>关键词 <input name="q" maxlength="200"></label><label>类型 <select name="kind"><option value="expression">表达</option><option value="jargon">黑话</option></select></label><button class="btn small">搜索</button></form><div id="learning-result" class="stack" aria-live="polite"></div><button id="learning-more" class="btn small hidden">加载更多</button></div></section>
+<section id="page-memory" class="page"><div class="page-head"><h2>长期记忆</h2></div><div class="page-body stack"><form id="memory-search" class="row" style="flex-wrap:wrap"><label>关键词 <input name="q" maxlength="200"></label><label>类型 <select name="kind"><option value="history">迁入记忆</option><option value="live">本地经历</option></select></label><label>状态 <select name="status"><option value="">全部</option><option value="active">可用</option><option value="inactive">停用</option><option value="conflicted">冲突</option><option value="superseded">已替代</option><option value="retracted">已撤回</option><option value="deleted">已删除</option><option value="missing">缺失</option></select></label><button class="btn small">搜索</button></form><div id="memory-result" class="stack" aria-live="polite"></div><button id="memory-more" class="btn small hidden">加载更多</button></div></section>
 <section id="page-inbox" class="page"><div class="page-head"><h2>收件箱</h2><button id="inbox-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class="page-body">
 <p id="inbox-empty" class="empty hidden" role="status"></p>
@@ -1241,6 +1246,46 @@ $('ov-power').addEventListener('click', async (event) => {
 });
 for (const btn of document.querySelectorAll('[data-go]')) btn.addEventListener('click', () => showPage(btn.dataset.go));
 PAGES.overview = { load: loadOverview };
+for (const key of ['learning', 'memory']) {
+  const form = $(key + '-search');
+  const list = $(key + '-result');
+  const more = $(key + '-more');
+  let next = null, query = '', request = 0;
+  async function read(append) {
+    if (append && next === null) return;
+    const serial = ++request;
+    if (!append) {
+      query = new URLSearchParams(new FormData(form)).toString();
+      next = null;
+      list.textContent = '读取中…';
+      more.classList.add('hidden');
+    }
+    more.disabled = true;
+    const res = await api('/api/resources/' + key + '?' + query + '&offset=' + (append ? next : 0));
+    if (serial !== request) return;
+    more.disabled = false;
+    if (!res.ok) { if (!append) list.textContent = '读取失败'; fail(res); return; }
+    if (!append) list.replaceChildren();
+    const data = res.data;
+    if (!append && !data.items.length) list.textContent = data.enabled ? '没有符合条件的记录' : '此功能当前关闭';
+    for (const item of data.items) {
+      const preview = item.text.length > 100 ? item.text.slice(0, 100) + '…' : item.text;
+      const detail = el('details', {class:'card', style:'overflow-wrap:anywhere'});
+      detail.append(el('summary', {text:preview || '空文本'}));
+      detail.append(el('p', {text:item.text, style:'white-space:pre-wrap'}));
+      const fields = key === 'learning'
+        ? [['释义或场景', item.detail], ['示例', item.example], ['次数', item.count], ['发言者', item.speakers.join('、')], ['时间线证据', item.evidence_ids.join('、')], ['来源', item.source_refs.join('、')]]
+        : [['人物', item.actor_label], ['时间', item.recorded_at && fmtTime(item.recorded_at, true)], ['状态', item.status], ['来源', item.source && JSON.stringify(item.source)], ['时间线编号', item.record_id], ['证据', item.evidence?.map(e => e.kind + ' ' + e.reference).join('、')]];
+      for (const [label, value] of fields) if (value != null && value !== '') detail.append(el('p', {text:label + '：' + value}));
+      list.append(detail);
+    }
+    next = data.next_offset;
+    more.classList.toggle('hidden', next === null);
+  }
+  form.addEventListener('submit', event => { event.preventDefault(); read(false); });
+  more.addEventListener('click', () => read(true));
+  PAGES[key] = { load: () => read(false) };
+}
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------
 // 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
 const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };

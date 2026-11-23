@@ -84,6 +84,8 @@ def open_web(
             run_model_test=core.gateway.test_model,
             qq_link=core.qq_link,
             inbox_store=core.inbox_store,
+            resource_language=core.language,
+            resource_memory=core.memory,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

@@ -194,6 +194,35 @@ class MemoryIndex:
         with closing(open_connection(self._db_path)) as conn:
             return read_batch(conn, size)
 
+    def browse_history(
+        self, query: str, status: str, offset: int, limit: int
+    ) -> list[HistoricalMemory]:
+        """按入库顺序浏览历史原件，保留原记录与证据。"""
+        from .history import browse_history
+
+        with closing(open_connection(self._db_path)) as conn:
+            return browse_history(conn, query, status, offset, limit)
+
+    def browse_live(self, query: str, offset: int, limit: int) -> list[MemoryHit]:
+        """浏览已经索引的本地经历，返回时间线来源。"""
+        with closing(open_connection(self._db_path)) as conn:
+            rows = conn.execute(
+                """SELECT record_id, content, actor_label, recorded_at FROM memory_index
+                   WHERE (? = '' OR instr(lower(content), lower(?)) > 0
+                                   OR instr(lower(actor_label), lower(?)) > 0)
+                   ORDER BY record_id DESC LIMIT ? OFFSET ?""",
+                (query, query, query, limit, offset),
+            ).fetchall()
+        return [
+            MemoryHit(
+                row["record_id"],
+                datetime.fromisoformat(row["recorded_at"]),
+                row["actor_label"],
+                row["content"],
+            )
+            for row in rows
+        ]
+
     def save_consolidation(
         self,
         batch: ConsolidationBatch,

@@ -79,3 +79,12 @@ digital-life-core 值得借鉴的设计：用 `genome.json` 声明每种激素�
 - 单人远程访问可使用经鉴权的私有隧道，将客户端回环端口转发到后端回环地址。检查网页和 WebSocket 经同一入口访问。
 - 多设备访问可使用带访问控制的 HTTPS 反向代理。后端继续只绑定回环，代理验证 TLS 证书，转发原始 Host、HTTPS 协议头和 WebSocket 升级。限制受信任的转发头来源，为 HTTPS 会话 cookie 加 Secure，并用部署地址核对登录、Cookie、同源检查与 WebSocket。
 - `[web] allow_remote` 开放的是明文 HTTP。公网直连该端口不满足 TLS 要求。3.6 的回环验收不包含公网部署或真实 QQ 切换。
+
+## 3. 网页资源管理参考
+
+参考 MaiBot 公开桌面管理界面的搜索、分页、详情和证据呈现。其表达与黑话页面分别提供搜索、范围筛选、分页及详情操作，长期记忆的文字记录页提供查询、过滤和证据详情。Aureus 使用现有语言库及记忆索引，已登录用户可以只读查询本地经历和迁入原件。
+
+- [表达页面源码](https://github.com/Mai-with-u/MaiBot/blob/edf42446f123149c57fc79765dd5a8b004b8524c/dashboard/src/routes/resource/expression/index.tsx)
+- [黑话页面源码](https://github.com/Mai-with-u/MaiBot/blob/edf42446f123149c57fc79765dd5a8b004b8524c/dashboard/src/routes/resource/jargon/index.tsx)
+- [长期记忆查询源码](https://github.com/Mai-with-u/MaiBot/blob/edf42446f123149c57fc79765dd5a8b004b8524c/dashboard/src/routes/resource/knowledge-base/tabs/MemoryRecordsTab.tsx)
+- [MaiBot 记忆管理手册](https://docs.maibot.chat/manual/webui/memory-management)

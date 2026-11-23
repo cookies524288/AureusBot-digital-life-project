@@ -232,6 +232,22 @@ def read_history(conn: sqlite3.Connection, source: MemorySource) -> HistoricalMe
     return _decode(row) if row is not None else None
 
 
+def browse_history(
+    conn: sqlite3.Connection, query: str, status: str, offset: int, limit: int
+) -> list[HistoricalMemory]:
+    """返回一页原件，包括被归档的记录。"""
+    rows = conn.execute(
+        """SELECT * FROM memory_history
+           WHERE (? = '' OR status = ?)
+             AND (? = '' OR instr(lower(content), lower(?)) > 0
+                         OR instr(lower(actor_label), lower(?)) > 0
+                         OR instr(lower(source_key), lower(?)) > 0)
+           ORDER BY id DESC LIMIT ? OFFSET ?""",
+        (status, status, query, query, query, query, limit, offset),
+    ).fetchall()
+    return [_decode(row) for row in rows]
+
+
 def search_history(
     conn: sqlite3.Connection,
     keywords: Sequence[str],
