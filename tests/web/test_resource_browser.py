@@ -630,6 +630,78 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
     )
 
 
+@pytest.mark.parametrize("outcome", ["failure", "stale"])
+def test_learning_scope_reload_disables_unconfirmed_choices(browser: Browser, outcome: str) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      const scope = () => find('select[name="conversation_key"]');
+      const hint = () => find('#learning-scope-hint-jargon');
+      const select = key => {
+        scope().value = key;
+        scope().dispatchEvent(new Event('change', {bubbles:true}));
+      };
+      await waitFor(() => scope() && !scope().disabled && button('合成黑话000'), '首次会话就绪');
+      select('group-20');
+      await waitFor(() => button('合成黑话024') && !button('合成黑话000'), '首次会话筛选');
+      const nativeFetch = window.fetch;
+      const pending = [];
+      const queries = [];
+      window.fetch = (url, options) => {
+        const parsed = new URL(url, location.href);
+        if (parsed.pathname === '/api/resources/learning/scope') {
+          return new Promise(resolve => pending.push(resolve));
+        }
+        if (parsed.pathname === '/api/resources/learning' &&
+            parsed.searchParams.get('kind') === 'jargon') {
+          queries.push(parsed.searchParams.get('conversation_key'));
+        }
+        return nativeFetch(url, options);
+      };
+      try {
+        click('[data-learning-tab="expression"]');
+        await waitFor(() => pending.length === 1, '表达页请求已拦截');
+        click('[data-learning-tab="jargon"]');
+        await waitFor(() => pending.length === 2, '黑话再次确认会话');
+        check(scope().disabled, '第二次读取完成前旧会话选项不可操作');
+        check(scope().value === '' && scope().options.length === 1, '只保留全部资料');
+        await waitFor(() => button('合成黑话000') && !button('合成黑话024'), '仍可浏览全部');
+        check(queries.length > 0 && queries.every(key => !key), '不查询未经确认的旧会话');
+        if (OUTCOME === 'failure') {
+          pending[1](new Response('{}', {status:503}));
+          await waitFor(() => hint().textContent.includes('会话列表读取失败'), '失败有明确提示');
+          check(scope().disabled && scope().options.length === 1, '失败后旧选项不可用');
+          press('下一页');
+          await waitFor(() => page().startsWith('第 2 /'), '失败不妨碍全部资料翻页');
+        } else {
+          click('[data-learning-tab="expression"]');
+          await waitFor(() => pending.length === 3, '再次离开');
+          click('[data-learning-tab="jargon"]');
+          await waitFor(() => pending.length === 4, '新一轮确认');
+          pending[3](new Response(JSON.stringify({items:[
+            {key:'group-10', label:'最新群 · 群聊 10'}
+          ]})));
+          await waitFor(() => !scope().disabled && scope().options.length === 2, '新列表生效');
+          select('group-10');
+          await waitFor(() => button('合成黑话000'), '新选择的结果');
+          const currentPage = page();
+          pending[1](new Response(JSON.stringify({items:[
+            {key:'group-20', label:'过期群 · 群聊 20'}
+          ]})));
+          await new Promise(resolve => setTimeout(resolve, 150));
+          check(scope().value === 'group-10' && scope().options[1].textContent.includes('最新群'),
+            '迟到会话列表不能覆盖新选项');
+          check(page() === currentPage && !button('合成黑话024'), '迟到列表不能覆盖新结果');
+        }
+      } finally {
+        window.fetch = nativeFetch;
+        for (const resolve of pending) resolve(new Response('{"items":[]}'));
+      }
+    """.replace("OUTCOME", json.dumps(outcome)),
+    )
+
+
 def test_expression_quick_queue_filters_and_preserves_review_history(browser: Browser) -> None:
     browser.open("learning", 1280, 900)
     _run(

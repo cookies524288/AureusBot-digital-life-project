@@ -373,8 +373,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const disabled = el('label', {}, el('input', {name:'disabled', type:'checkbox'}), ' 显示停用和待映射');
     const removed = el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除');
     const reviewFilter = kind === 'expression' ? el('select', {name:'review', 'aria-label':'审核状态'}, ...reviewOptions('全部')) : null;
+    const scopeDescription = '会话筛选只浏览明确绑定的资料，不代表当前实际召回范围。';
     const scopeHint = el('p', {class:'muted', id:'learning-scope-hint-' + kind,
-      text:'会话筛选只浏览明确绑定的资料，不代表当前实际召回范围。'});
+      'aria-live':'polite', text:scopeDescription});
     const all = el('option', {value:'', text:'全部资料'});
     const scope = el('select', {name:'conversation_key', 'aria-label':'浏览会话',
       'aria-describedby':scopeHint.id, disabled:true}, all);
@@ -437,14 +438,21 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     let scopeGeneration = 0;
     async function loadScopes() {
       const generation = ++scopeGeneration;
+      scope.disabled = true;
+      scope.replaceChildren(all);
+      scopeHint.textContent = '正在确认会话列表；当前浏览全部资料。' + scopeDescription;
+      pager.apply();
       const response = await api(scopeEndpoint);
-      if (generation !== scopeGeneration || !response.ok) return;
-      const current = scope.value;
+      if (generation !== scopeGeneration) return;
+      if (!response.ok) {
+        scopeHint.textContent = '会话列表读取失败；当前仅可浏览全部资料。' + scopeDescription;
+        return;
+      }
       scope.replaceChildren(all, ...response.data.items.map(target =>
         el('option', {value:target.key, text:target.label})));
-      if ([...scope.options].some(option => option.value === current)) scope.value = current;
-      if (scope.value !== current) pager.apply();
       scope.disabled = !response.data.items.length;
+      scopeHint.textContent = (scope.disabled ? '暂无已知会话；当前仅可浏览全部资料。' : '')
+        + scopeDescription;
     }
     return {
       show() { loadScopes(); return pager.show(); },
