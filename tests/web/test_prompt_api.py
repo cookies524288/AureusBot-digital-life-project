@@ -64,7 +64,7 @@ def test_prompt_access_and_catalog(rig: ConfigRig, tmp_path: Path) -> None:
     assert set(listing["organs"]) == set(BUILTIN_ORGANS)
     assert set().union(*map(set, listing["organs"].values())) == {
         template["key"] for template in listing["templates"]
-    } - {"empty_system"}
+    }
     assert rig.client.get("/api/organs/missing/prompt-preview").status_code == 404
     assert rig.client.delete("/api/prompts/missing").status_code == 404
     assert rig.client.put("/api/prompts/plan_format", json={"source": "改格式"}).status_code == 422
@@ -205,7 +205,7 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         assert f'"{field}"' in plan
         assert f'"{field}"' not in previews["planner"]["plan"][1]["content"]
     planned = previews["replyer"]["reply_planned"]
-    assert "〔记忆召回〕" in planned[1]["content"]
+    assert "〔记忆召回：查询词、命中数、时间、说话人和记录〕" in planned[1]["content"]
     assert "〔回复长度〕" in planned[1]["content"]
     assert (
         ReplyLength.SHORT.describe() in previews["replyer"]["initiative_reply_first"][1]["content"]

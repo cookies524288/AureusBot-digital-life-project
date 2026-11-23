@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 
-from aureus.common.language_prompts import LANGUAGE_LEARNER_PROMPT
+from aureus.common.language_prompts import LANGUAGE_LEARNER_FORMAT, LANGUAGE_LEARNER_PROMPT
 from aureus.heartbeat.planning import first_json_object
 from aureus.memory import (
     MAX_DETAIL,
@@ -93,9 +93,7 @@ async def learn_language(
         if not fresh:
             return
         data = {sample.record_id: sample.content[:_MAX_SAMPLE_CHARS] for sample in fresh}
-        prompt = LANGUAGE_LEARNER_PROMPT.format(
-            max_text=MAX_TEXT, max_detail=MAX_DETAIL, samples=json.dumps(data, ensure_ascii=False)
-        )
+        prompt = build_language_learning_prompt(json.dumps(data, ensure_ascii=False))
         try:
             response = await call(
                 OrganRequest(
@@ -112,3 +110,13 @@ async def learn_language(
         await asyncio.to_thread(store.observe, fresh, _parse_proposals(response.suggestion))
     except sqlite3.Error:
         logger.exception("语言学习存储失败")
+
+
+def build_language_learning_prompt(samples: str) -> str:
+    """用已编号的学习样本或预览占位组装学习请求。"""
+    return LANGUAGE_LEARNER_PROMPT.fill(
+        max_text=str(MAX_TEXT),
+        max_detail=str(MAX_DETAIL),
+        output_format=LANGUAGE_LEARNER_FORMAT.fill(),
+        samples=samples,
+    )

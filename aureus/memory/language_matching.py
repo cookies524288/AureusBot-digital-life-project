@@ -15,6 +15,7 @@ from aureus.common.language_prompts import (
     LANGUAGE_JARGON_HEADER,
     LANGUAGE_JARGON_ITEM,
     LANGUAGE_REFERENCE_NOTE,
+    language_reference_block,
 )
 
 MAX_JARGON_MATCHES = 10
@@ -57,13 +58,20 @@ def message_text(text: str) -> str:
 
 def is_reference(text: str) -> bool:
     """学习时排除导出的黑话参考块。"""
-    return message_text(text).startswith(
-        (
-            "<jargon>",
-            "以下释义来自当前上下文中部分词汇的猜测含义",
-            LANGUAGE_JARGON_HEADER,
-            LANGUAGE_EXPRESSION_HEADER,
+    normalized = message_text(text)
+    first_lines = normalized.splitlines()[:2]
+    return (
+        normalized.startswith(("<jargon>", "以下释义来自当前上下文中部分词汇的猜测含义"))
+        or bool(
+            first_lines
+            and first_lines[0].startswith(
+                (
+                    LANGUAGE_JARGON_HEADER.default.template,
+                    LANGUAGE_EXPRESSION_HEADER.default.template,
+                )
+            )
         )
+        or LANGUAGE_REFERENCE_NOTE.default.template in first_lines
     )
 
 
@@ -152,15 +160,14 @@ def select_expressions(
 
 def format_language(entries: Sequence[LanguageEntry], *, jargon: bool, budget: int) -> str:
     """把候选放进内部参考块，超出字数预算的整条跳过。"""
-    header = LANGUAGE_JARGON_HEADER if jargon else LANGUAGE_EXPRESSION_HEADER
     item = LANGUAGE_JARGON_ITEM if jargon else LANGUAGE_EXPRESSION_ITEM
-    lines = [header, LANGUAGE_REFERENCE_NOTE]
-    remaining = budget - sum(len(line) for line in lines) - (len(lines) - 1)
+    lines: list[str] = []
+    remaining = budget - len(language_reference_block([], jargon=jargon))
     for entry in entries:
         text = " ".join(entry.text.split())
         detail = " ".join(entry.detail.split())
-        line = item.format(text=text, detail=detail)
+        line = item.fill(text=text, detail=detail)
         if len(line) + 1 <= remaining:
             lines.append(line)
             remaining -= len(line) + 1
-    return "\n".join(lines) if len(lines) > 2 else ""
+    return language_reference_block(lines, jargon=jargon) if lines else ""

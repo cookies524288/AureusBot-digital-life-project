@@ -45,6 +45,8 @@ def organ_tasks(runtime: RuntimeConfig) -> dict[str, str]:
         "exploration_summary": runtime.exploration.organ,
         "diary": runtime.diary.organ,
         "persona_review": runtime.persona_growth.organ,
+        "language_learning": runtime.language.organ,
+        "memory_consolidation": "summarizer",
     }
 
 
@@ -59,7 +61,13 @@ def organ_connections(names: Iterable[str], runtime: RuntimeConfig) -> list[dict
             "judge": (tasks["judge"],),
             "summarizer": tuple(
                 dict.fromkeys(
-                    tasks[key] for key in ("exploration_summary", "diary", "persona_review")
+                    tasks[key]
+                    for key in (
+                        "exploration_summary",
+                        "diary",
+                        "persona_review",
+                        "language_learning",
+                    )
                 )
             ),
         }

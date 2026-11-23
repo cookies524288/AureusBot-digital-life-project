@@ -471,6 +471,7 @@ def build_plan_prompt(
     with_recall: bool = False,
     jargon: str = "",
     with_expressions: bool = False,
+    heuristic_recall: str = "",
 ) -> str:
     """拼出规划器的提示词：同样的对话，最后要它只输出一个 JSON 格式的建议（D59）。
 
@@ -484,6 +485,7 @@ def build_plan_prompt(
         with_recall: 记忆和召回都开着时，说明按需提供关键词（D80）。
         jargon: 当前聊天命中的内部黑话参考。
         with_expressions: 是否请 Planner 在需要时描述表达意图。
+        heuristic_recall: 按本轮回忆线索取得的记忆参考。
 
     Returns:
         提示词。
@@ -496,7 +498,7 @@ def build_plan_prompt(
         parts.append(jargon)
     parts.append(join_prompt([_PLAN_TASK.fill(), _PLAN_INSTRUCTION.fill()], ""))
     if with_expressions:
-        parts.append(LANGUAGE_PLANNER_EXPRESSION_INTENT)
+        parts.append(LANGUAGE_PLANNER_EXPRESSION_INTENT.fill())
     if with_agenda:
         parts.append(_PLAN_AGENDA_INSTRUCTION.fill())
     if with_interests:
@@ -504,6 +506,8 @@ def build_plan_prompt(
     if with_recall:
         # D80 第 3 条：移植 MaiBot 私聊的按需召回规则，关键词随规划返回。
         parts.append(_PLAN_RECALL.fill())
+    if heuristic_recall:
+        parts.append(heuristic_recall)
     return join_prompt(parts)
 
 

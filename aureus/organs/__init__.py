@@ -1,5 +1,12 @@
 """Aureus 器官模块：器官接口、总线、假器官、真实器官（LLM）"""
 
+from aureus.common.prompt_text import (
+    PromptTemplate,
+    PromptTemplateError,
+    join_prompt,
+    prompt_template_keys,
+)
+
 from .api_keys import KeyResolver
 from .fake import FakePlanner, FakeReplyer
 from .interface import (
@@ -25,13 +32,7 @@ from .model_config import (
     validate_models_config,
 )
 from .organ_bus import OrganBus
-from .prompts import (
-    PromptStore,
-    PromptTemplate,
-    PromptTemplateError,
-    join_prompt,
-    prompt_template_keys,
-)
+from .prompts import PromptStore
 from .topology import organ_tasks
 
 __all__ = [

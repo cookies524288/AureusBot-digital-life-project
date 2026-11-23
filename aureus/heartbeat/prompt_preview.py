@@ -4,6 +4,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from aureus.actions.web import WebPage
+from aureus.common.language_prompts import (
+    LANGUAGE_EXPRESSION_ITEM,
+    LANGUAGE_JARGON_ITEM,
+    LANGUAGE_TEMPLATES,
+    language_reference_block,
+)
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE
 from aureus.heartbeat.context import (
     CONTEXT_TEMPLATES,
@@ -18,7 +24,19 @@ from aureus.heartbeat.context import (
     build_system_context,
 )
 from aureus.heartbeat.downtime import Downtime
+from aureus.heartbeat.language_runner import build_language_learning_prompt
+from aureus.heartbeat.memory_consolidation import (
+    EXTRACTION_FORMAT,
+    EXTRACTION_PROMPT,
+    build_extraction_prompt,
+)
+from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
 from aureus.heartbeat.persona_growth import REVIEW_TEMPLATES, build_prompt
+from aureus.heartbeat.recall import (
+    HEURISTIC_MEMORY_REFERENCE_MARKER,
+    REPLYER_MEMORY_REFERENCE_MARKER,
+    recall_reference,
+)
 from aureus.identity import Identity
 from aureus.organs import EMPTY_SYSTEM_MESSAGE, OrganRequest, PromptTemplate, prompt_template_keys
 
@@ -27,8 +45,10 @@ _INPUT = "〔当前消息〕"
 _LENGTH = "〔回复长度〕"
 _INTENT = "〔规划意图〕"
 _CONDITIONAL = {
-    "plan": "按功能和当轮材料附加日程、兴趣及记忆召回字段。",
-    "reply": "规划后才可能注入意图和召回；长度受回复策略约束。",
+    "plan": "按开关和本轮输入附加黑话、表达意图、日程、兴趣及召回。",
+    "reply": "有命中时附记忆、人际与习得表达。合并回复才附黑话，规划后可附意图和长度。",
+    "language_learning": "启用增量学习且收到未处理的新样本时调用。",
+    "memory_consolidation": "夜间空闲且整理达到批量门槛，启用提取、有可用器官和可提取发言时调用。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
     "judge": "仅在判断器官启用且档位允许时调用，有历史才附对话。",
@@ -59,7 +79,17 @@ class PromptScene:
 
 def registered_templates() -> tuple[PromptTemplate, ...]:
     """汇总内置消息构造代码登记的模板。"""
-    return (EMPTY_SYSTEM_MESSAGE, *CONTEXT_TEMPLATES, *REVIEW_TEMPLATES)
+    return (
+        EMPTY_SYSTEM_MESSAGE,
+        *CONTEXT_TEMPLATES,
+        *REVIEW_TEMPLATES,
+        *LANGUAGE_TEMPLATES,
+        EXTRACTION_PROMPT,
+        EXTRACTION_FORMAT,
+        PEOPLE_CONTEXT_TEMPLATE,
+        HEURISTIC_MEMORY_REFERENCE_MARKER,
+        REPLYER_MEMORY_REFERENCE_MARKER,
+    )
 
 
 def build_prompt_scenes(
@@ -99,13 +129,32 @@ def build_prompt_scenes(
         )
 
     if tasks & {"plan", "reply", "initiative_plan", "initiative_reply"}:
+        jargon = language_reference_block(
+            [LANGUAGE_JARGON_ITEM.fill(text="〔习得黑话〕", detail="〔黑话释义〕")], jargon=True
+        )
+        expression = language_reference_block(
+            [LANGUAGE_EXPRESSION_ITEM.fill(text="〔习得表达〕", detail="〔适用情景〕")],
+            jargon=False,
+        )
+        people = PEOPLE_CONTEXT_TEMPLATE.fill(people_records="〔人物资料〕")
+        automatic = recall_reference(
+            "〔启发式记忆召回：查询词、命中数、时间、说话人和记录〕", heuristic=True
+        )
         add("plan", "plan", "回应规划", build_plan_prompt([], _INPUT, user), system())
         add(
             "plan",
             "plan_context",
             "回应规划 · 含可选上下文",
             build_plan_prompt(
-                _HISTORY, _INPUT, user, with_agenda=True, with_interests=True, with_recall=True
+                _HISTORY,
+                _INPUT,
+                user,
+                with_agenda=True,
+                with_interests=True,
+                with_recall=True,
+                jargon=jargon,
+                with_expressions=True,
+                heuristic_recall=automatic,
             ),
             system(rich=True),
         )
@@ -121,7 +170,16 @@ def build_prompt_scenes(
             "reply",
             "reply_context",
             "合并回复 · 含上下文",
-            build_reply_prompt(_HISTORY, _INPUT, user, length=_LENGTH),
+            build_reply_prompt(
+                _HISTORY,
+                _INPUT,
+                user,
+                length=_LENGTH,
+                recall=automatic,
+                jargon=jargon,
+                expressions=expression,
+                people_context=people,
+            ),
             system(rich=True),
         )
         add(
@@ -129,7 +187,14 @@ def build_prompt_scenes(
             "reply_planned",
             "规划后回复 · 含记忆召回",
             build_reply_prompt(
-                _HISTORY, _INPUT, user, intent=_INTENT, length=_LENGTH, recall="〔记忆召回〕"
+                _HISTORY,
+                _INPUT,
+                user,
+                intent=_INTENT,
+                length=_LENGTH,
+                recall=recall_reference("〔记忆召回：查询词、命中数、时间、说话人和记录〕"),
+                expressions=expression,
+                people_context=people,
             ),
             system(full=False, rich=True),
         )
@@ -139,6 +204,37 @@ def build_prompt_scenes(
             "规划后回复 · 陌生联系人",
             build_reply_prompt(_HISTORY, _INPUT, user, intent=_INTENT),
             system(full=False, rich=True, contact=True),
+        )
+        add(
+            "plan",
+            "plan_references",
+            "回应规划 · 含习得语言及启发式记忆",
+            build_plan_prompt(
+                [],
+                _INPUT,
+                user,
+                with_recall=True,
+                jargon=jargon,
+                with_expressions=True,
+                heuristic_recall=automatic,
+            ),
+            system(),
+        )
+        add(
+            "reply",
+            "reply_references",
+            "规划后回复 · 含人际、记忆及习得表达",
+            build_reply_prompt(
+                [],
+                _INPUT,
+                user,
+                intent=_INTENT,
+                length=_LENGTH,
+                recall=recall_reference("〔记忆召回：查询词、命中数、时间、说话人和记录〕"),
+                expressions=expression,
+                people_context=people,
+            ),
+            system(full=False),
         )
         add(
             "initiative_plan",
@@ -199,6 +295,20 @@ def build_prompt_scenes(
             build_prompt("〔可引用经历〕", identity),
             system(),
         )
+    add(
+        "language_learning",
+        "language_learning",
+        "增量语言学习",
+        build_language_learning_prompt("〔新入站样本 JSON〕"),
+        "",
+    )
+    add(
+        "memory_consolidation",
+        "memory_consolidation",
+        "夜间记忆提取",
+        build_extraction_prompt("〔编号发言 JSON〕"),
+        "",
+    )
     return scenes or [
         PromptScene("custom", "custom", "通用请求", OrganRequest(organ, "〔调用方提示词〕"))
     ]
