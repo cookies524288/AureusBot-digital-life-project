@@ -56,6 +56,10 @@ models = ["example-chat"]
 models = ["example-chat"]
 # reasoning_effort = "high"    # 所有引用的模型都要在 reasoning_levels 中列出该等级
 
+# 快速模型为通过再审的回复建议切点。给它配置一个擅长短任务的模型。
+# [organs.fast_model]
+# models = ["example-chat"]
+
 # 总结器官用于小探索（D79），也用来写日记（D80）；按需启用。
 # [organs.summarizer]
 # models = ["example-chat"]

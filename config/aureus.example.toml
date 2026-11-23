@@ -39,7 +39,7 @@ config_version = 1
 # recent_message_limit = 20
 # 回复用哪个器官，名字要和 models.toml 里的 [organs.名字] 一致。
 # reply_organ = "replyer"
-# 各精力档位都由规划器决定回不回，再由回复器写成话。
+# 为旧配置保留。各精力档位都会先规划，修改这个值也照常规划。
 # planning_enabled = true
 # 自主翻阅和规划器调整特别关心的总开关。
 # inbox_attention_enabled = true
@@ -49,18 +49,20 @@ config_version = 1
 # inbox_debounce_enabled = false
 # inbox_debounce_seconds = 4.0
 # inbox_debounce_max_restarts = 4
-# 规划用哪个器官；models.toml 里必须有 [organs.这个名字]。
+# 各精力档位都由规划器决定回不回。器官名要和 models.toml 里的 [organs.名字] 一致。
 # plan_organ = "planner"
 # 节省档时带上最近多少条对话；低电量和透支保护时带多少条。都不会超过 recent_message_limit。
 # saving_message_limit = 10
 # low_message_limit = 5
-# 把一段回复拆成几条短消息发出（口语、短句、分条）；关掉后整段一条发出。
+# 分条开启后，已通过再审的回复交给 models.toml 中的 [organs.fast_model] 建议切点。
+# 快速模型只建议在哪里切。缺少可用建议时按文字分段。关掉分条后一条发完。
 # split_reply_enabled = true
-# 一段回复最多拆成几条。
+# 自动分段时最多拆成几条。回复器指定的强制切点仍会保留。
 # max_reply_messages = 4
-# 一条至少多少个字，更短的句子并进相邻的一句。
+# 自动分段时，切点两侧各至少保留多少个字。
 # min_message_chars = 4
-# 后续分段模拟打字。关掉后不等打字时长，仍按会话顺序发送。
+# 首段无需等待打字。开启后，同一回复的后续段按打字时长和随机延迟依次发出。
+# 关掉后跳过打字等待，仍按会话顺序发送。
 # typing_delay_enabled = true
 # 后续段按其中的汉字与其他字符分别累加打字秒数。
 # typing_han_seconds = 0.4
