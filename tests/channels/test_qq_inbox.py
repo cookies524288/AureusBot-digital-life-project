@@ -63,7 +63,7 @@ async def test_qq_persists_allowed_conversations_before_notifying(tmp_path: Path
     assert [item.last_message_id for item in reopened.list_conversations()] == [direct.id, first.id]
     assert reopened.add(first.perception) is None
     assert reopened.list_messages(first.conversation)[0].conversation_name == "合成群"
-    assert reopened.list_priority_unread("qq", str(ACCOUNT), ("2100",)) == [direct]
+    assert reopened.list_priority_unread(direct.conversation, ("2100",)) == [direct]
     reopened.mark_read([direct.id])
     assert InboxStore(path, clock).list_unread(direct.conversation) == []
     assert reopened.list_unread(first.conversation)[0].id == first.id

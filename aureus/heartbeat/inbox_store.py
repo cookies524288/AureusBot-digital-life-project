@@ -6,7 +6,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from sqlite3 import Row
+from sqlite3 import Connection, Row
 
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
@@ -17,7 +17,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox_conversations (
     id INTEGER PRIMARY KEY, platform TEXT NOT NULL, account_id TEXT NOT NULL,
     kind TEXT NOT NULL, recipient_id TEXT NOT NULL, temporary_group_id TEXT NOT NULL,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL, first_read_id INTEGER, last_read_id INTEGER,
     UNIQUE (platform, account_id, kind, recipient_id, temporary_group_id)
 );
 CREATE TABLE IF NOT EXISTS inbox_messages (
@@ -25,19 +25,21 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
     message_id TEXT NOT NULL, sender_id TEXT NOT NULL, sender_name TEXT NOT NULL,
     content TEXT NOT NULL, visibility TEXT NOT NULL, trust TEXT NOT NULL,
     mentioned INTEGER NOT NULL, quoted_message_id TEXT, source_timestamp INTEGER,
-    source_message_id TEXT, timestamp TEXT NOT NULL, is_read INTEGER NOT NULL DEFAULT 0,
+    source_message_id TEXT, timestamp TEXT NOT NULL,
     attachments TEXT NOT NULL DEFAULT '[]',
     UNIQUE (conversation_id, message_id)
 );
-CREATE INDEX IF NOT EXISTS inbox_messages_unread
-ON inbox_messages (conversation_id, is_read, id);
+CREATE INDEX IF NOT EXISTS inbox_messages_by_conversation
+ON inbox_messages (conversation_id, id);
 """
 
 _KEY = (
     "platform = ? AND account_id = ? AND kind = ? AND recipient_id = ? AND temporary_group_id = ?"
 )
-_MESSAGES = """
-SELECT m.*, c.platform, c.account_id, c.kind, c.recipient_id, c.temporary_group_id, c.name
+_UNREAD = "m.id > COALESCE(c.last_read_id, 0)"
+_MESSAGES = f"""
+SELECT m.*, c.platform, c.account_id, c.kind, c.recipient_id, c.temporary_group_id, c.name,
+       NOT ({_UNREAD}) AS is_read
 FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
 """
 
@@ -141,6 +143,44 @@ def _message(row: Row) -> InboxMessage:
     )
 
 
+def _migrate_read_range(database: Connection) -> None:
+    # 库里原来的零散已处理记录由时间线中的入箱序号去重。游标只跨过连续已读。
+    database.execute("""
+        WITH boundaries AS MATERIALIZED (
+            SELECT conversation_id, MIN(id) FILTER (WHERE is_read = 0) AS first_unread_id
+            FROM inbox_messages GROUP BY conversation_id
+        ), ranges AS MATERIALIZED (
+            SELECT m.conversation_id, MIN(m.id) AS first_id, MAX(m.id) AS last_id
+            FROM inbox_messages m JOIN boundaries b ON b.conversation_id = m.conversation_id
+            WHERE b.first_unread_id IS NULL OR m.id < b.first_unread_id GROUP BY m.conversation_id
+        )
+        UPDATE inbox_conversations AS c SET first_read_id = r.first_id, last_read_id = r.last_id
+        FROM ranges r WHERE c.id = r.conversation_id
+    """)
+    database.execute("DROP INDEX IF EXISTS inbox_messages_unread")
+    database.execute("ALTER TABLE inbox_messages DROP COLUMN is_read")
+
+
+def _advance_read_range(database: Connection, conversation_id: int, confirmed: set[int]) -> None:
+    candidates = database.execute(
+        f"""SELECT m.id FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
+        WHERE c.id = ? AND {_UNREAD} ORDER BY m.id LIMIT ?""",
+        (conversation_id, len(confirmed)),
+    )
+    adjacent: list[int] = []
+    for row in candidates:
+        message_id = row["id"]
+        if message_id not in confirmed:
+            break
+        adjacent.append(message_id)
+    if adjacent:
+        database.execute(
+            """UPDATE inbox_conversations SET first_read_id = COALESCE(first_read_id, ?),
+            last_read_id = ? WHERE id = ?""",
+            (adjacent[0], adjacent[-1], conversation_id),
+        )
+
+
 class InboxStore:
     """使用数据根目录的 SQLite 保存消息，每次操作独立提交。"""
 
@@ -151,12 +191,23 @@ class InboxStore:
             database.executescript(_SCHEMA)
             with database:
                 database.execute("BEGIN IMMEDIATE")
-                columns = database.execute("PRAGMA table_info(inbox_messages)")
-                if all(column["name"] != "attachments" for column in columns):
+                columns = {
+                    column["name"]
+                    for column in database.execute("PRAGMA table_info(inbox_messages)")
+                }
+                if "attachments" not in columns:
                     database.execute(
                         "ALTER TABLE inbox_messages ADD COLUMN attachments "
                         "TEXT NOT NULL DEFAULT '[]'"
                     )
+                if "is_read" in columns:
+                    database.execute(
+                        "ALTER TABLE inbox_conversations ADD COLUMN first_read_id INTEGER"
+                    )
+                    database.execute(
+                        "ALTER TABLE inbox_conversations ADD COLUMN last_read_id INTEGER"
+                    )
+                    _migrate_read_range(database)
 
     def add(
         self, perception: Perception, *, sender_name: str = "", conversation_name: str = ""
@@ -221,15 +272,27 @@ class InboxStore:
 
     def list_conversations(self) -> list[InboxConversation]:
         """按最后收到消息的顺序列出会话，最近的在前。"""
+        return self._list_conversations(only_unread=False)
+
+    def list_unread_conversations(self) -> list[InboxConversation]:
+        """列出仍有未读的会话，各会话按最早未读的入箱序号排列。"""
+        return self._list_conversations(only_unread=True)
+
+    def _list_conversations(self, *, only_unread: bool) -> list[InboxConversation]:
+        condition = "WHERE summary.first_unread_id IS NOT NULL" if only_unread else ""
+        order = "summary.first_unread_id" if only_unread else "m.id DESC"
         with closing(open_connection(self._path)) as database:
-            rows = database.execute("""
+            rows = database.execute(f"""
                 SELECT c.*, summary.unread_count, m.id AS last_message_id, m.timestamp
                 FROM inbox_conversations c
-                JOIN (SELECT conversation_id, MAX(id) AS last_id,
-                             SUM(1 - is_read) AS unread_count
-                      FROM inbox_messages GROUP BY conversation_id) summary
+                JOIN (SELECT m.conversation_id, MAX(m.id) AS last_id,
+                             COUNT(*) FILTER (WHERE {_UNREAD}) AS unread_count,
+                             MIN(m.id) FILTER (WHERE {_UNREAD}) AS first_unread_id
+                      FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
+                      GROUP BY m.conversation_id) summary
                 ON summary.conversation_id = c.id
-                JOIN inbox_messages m ON m.id = summary.last_id ORDER BY m.id DESC
+                JOIN inbox_messages m ON m.id = summary.last_id
+                {condition} ORDER BY {order}
             """).fetchall()
         return [
             InboxConversation(
@@ -257,31 +320,43 @@ class InboxStore:
         """从最早的未读开始读取一批。"""
         with closing(open_connection(self._path)) as database:
             rows = database.execute(
-                f"{_MESSAGES} WHERE {_KEY} AND m.is_read = 0 ORDER BY m.id LIMIT ?",
+                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} ORDER BY m.id LIMIT ?",
                 (*conversation.parameters(), limit),
             ).fetchall()
         return [_message(row) for row in rows]
 
     def list_priority_unread(
-        self, platform: str, account_id: str, sender_ids: Iterable[str], *, limit: int = 50
+        self,
+        conversation: ConversationKey,
+        sender_ids: Iterable[str],
+        *,
+        after_id: int | None = None,
+        limit: int = 50,
     ) -> list[InboxMessage]:
-        """读取指定平台账号下特别关心的未读消息。"""
+        """按入箱顺序分页读取指定会话内已验证发件人的优先未读。"""
         senders = tuple(sender_ids)
         if not senders:
             return []
         placeholders = ", ".join("?" for _ in senders)
         with closing(open_connection(self._path)) as database:
             rows = database.execute(
-                f"{_MESSAGES} WHERE platform = ? AND account_id = ? AND m.is_read = 0 "
-                f"AND sender_id IN ({placeholders}) ORDER BY m.id LIMIT ?",
-                (platform, account_id, *senders, limit),
+                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} AND m.id > ? "
+                f"AND m.trust != ? AND m.sender_id IN ({placeholders}) ORDER BY m.id LIMIT ?",
+                (*conversation.parameters(), after_id or 0, TrustLevel.UNVERIFIED, *senders, limit),
             ).fetchall()
         return [_message(row) for row in rows]
 
     def mark_read(self, ids: Iterable[int]) -> None:
-        """确认心跳已经处理的消息，重复确认无副作用。"""
+        """把已确认且相邻的消息计入连续已读范围，保留中间的未读。"""
+        confirmed = set(ids)
+        if not confirmed:
+            return
         with closing(open_connection(self._path)) as database, database:
-            database.executemany(
-                "UPDATE inbox_messages SET is_read = 1 WHERE id = ?",
-                ((message_id,) for message_id in ids),
-            )
+            database.execute("BEGIN IMMEDIATE")
+            conversations = database.execute(
+                """SELECT DISTINCT conversation_id FROM inbox_messages
+                WHERE id IN (SELECT value FROM json_each(?))""",
+                (json.dumps(sorted(confirmed)),),
+            ).fetchall()
+            for conversation in conversations:
+                _advance_read_range(database, conversation["conversation_id"], confirmed)
