@@ -546,7 +546,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </nav>
 <main id="pages">
 <section id="page-overview" class="page">
-<div class="page-head ov-head"><div><h2>总览</h2><div class="ov-meta"><b>AUREUS <span id="ov-version" class="mono"></span></b><time id="ov-date"></time></div></div><button id="ov-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
+<div class="page-head ov-head"><div><h2>总览</h2><div class="ov-meta"><b>AUREUS <span id="ov-version" class="mono"></span></b><time id="ov-date"></time></div></div><div class="row"><button id="ov-power" type="button" class="btn small hidden">关机</button><button id="ov-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div></div>
 <div class="page-body stack"><div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div><div id="ov-missing" class="empty hidden"></div>
 <div id="ov-content" class="ov-grid hidden">
 <article class="ov-slot"><div class="ov-face"><div class="ov-status-body">
@@ -1102,6 +1102,11 @@ $('ov-emitter').addEventListener('animationiteration', event => {
 });
 function showOverviewSignal(snapshot) {
   const thinking = snapshot?.thinking;
+  const paused = snapshot?.maintenance_paused;
+  const power = $('ov-power');
+  power.classList.toggle('hidden', typeof paused !== 'boolean');
+  power.dataset.action = paused ? 'start' : 'stop';
+  power.textContent = paused ? '开机' : '关机';
   const signal = thinking === true ? 'thinking' : thinking === false ? 'idle' : 'unknown';
   const indicator = $('ov-emitter');
   if (indicator.dataset.state !== signal) {
@@ -1110,8 +1115,8 @@ function showOverviewSignal(snapshot) {
   }
   const label = {idle:'空闲', thinking:'正在想', unknown:'状态未知'}[signal];
   const task = snapshot ? snapshot.current_task || '待机' : '—';
-  setLiveText($('ov-thinking'), label);
-  setLiveText($('ov-task'), task);
+  setLiveText($('ov-thinking'), paused ? '已关机' : label);
+  setLiveText($('ov-task'), paused ? '—' : task);
 }
 
 // 只在登录后的总览前台采样；每次读完再计时，以免慢响应叠加或重播整页动效。
@@ -1194,6 +1199,17 @@ async function loadOverviewActivity(request) {
   });
 }
 $('ov-refresh').addEventListener('click', loadOverview);
+$('ov-power').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const res = await api('/api/power/' + button.dataset.action, 'POST');
+    if (res.ok) await loadOverview();
+    else fail(res);
+  } finally {
+    button.disabled = false;
+  }
+});
 for (const btn of document.querySelectorAll('[data-go]')) btn.addEventListener('click', () => showPage(btn.dataset.go));
 PAGES.overview = { load: loadOverview };
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------

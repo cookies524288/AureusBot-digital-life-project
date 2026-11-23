@@ -121,6 +121,25 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         assert sum(row.unread_count for row in store.list_conversations()) == 1
         assert ordinary.route is not None
         assert not any(item.route == ordinary.route for item in sent)
+
+        heart.set_maintenance_paused(True)
+        buffered = receive("owner", "maintenance-buffered", private=True)
+        heart.beat()
+        assert heart.maintenance_paused and not heart.is_thinking
+        assert not any(item.route == buffered.route for item in sent)
+        assert sum(row.unread_count for row in store.list_conversations()) == 2
+
+        heart.set_maintenance_paused(False)
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.set_maintenance_paused(True)
+        heart.beat()
+        assert not any(item.route == buffered.route for item in sent)
+        heart.set_maintenance_paused(False)
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        assert sent[-1].route == buffered.route
         await heart.shut_down()
     finally:
         people.close()

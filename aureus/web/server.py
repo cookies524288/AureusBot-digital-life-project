@@ -208,6 +208,8 @@ def create_app(
     open_terminal: Callable[[], Awaitable[None]] | None = None,
     request_shutdown: Callable[[], None] | None = None,
     request_restart: Callable[[], None] | None = None,
+    maintenance_paused: Callable[[], bool] | None = None,
+    set_maintenance_paused: Callable[[bool], None] | None = None,
     run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
     | None = None,
     qq_link: AccountLink | None = None,
@@ -426,6 +428,19 @@ def create_app(
     if settings is not None:
         register_settings_routes(app, settings, require_ready)
 
+    if maintenance_paused is not None and set_maintenance_paused is not None:
+
+        @app.post("/api/power/{action}")
+        async def power(
+            action: str, request: Request, _token: Annotated[str, Depends(require_ready)]
+        ) -> dict[str, bool]:
+            if not _same_http_origin(request):
+                raise HTTPException(403, detail="请在当前网页上操作开关机。")
+            if action not in ("start", "stop"):
+                raise HTTPException(404, detail="未知的开关机操作。")
+            set_maintenance_paused(action == "stop")
+            return {"maintenance_paused": maintenance_paused()}
+
     if heartbeat is not None and clock is not None:
         register_timeline_routes(
             app,
@@ -435,6 +450,7 @@ def create_app(
             visibility=channel.user_visibility,
             require_ready=require_ready,
             restart_required=lambda: config_files.restart_required if config_files else False,
+            maintenance_paused=maintenance_paused,
         )
 
     if config_files is not None:

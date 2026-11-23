@@ -404,6 +404,8 @@ class Heartbeat:
         self._wake = asyncio.Event()
         self._phase = _Phase.NOT_STARTED
         self._stop_requested = False
+        self._maintenance_paused = False
+        self._maintenance_task: asyncio.Task[Any] | None = None
         self._downtime: Downtime | None = None
         self._cognitive_state: CognitiveState | None = None
         self._last_broadcast: str | None = None
@@ -439,7 +441,7 @@ class Heartbeat:
         """
         if perception.channel not in self._sinks:
             raise ValueError(f"通道 {perception.channel} 没有接到心跳上")
-        if self._phase in (_Phase.STOPPING, _Phase.STOPPED):
+        if self._maintenance_paused or self._phase in (_Phase.STOPPING, _Phase.STOPPED):
             logger.info("心跳正在关闭，没有收下来自 %s 的消息", perception.channel)
             return False
         self._pending.append((perception, None))
@@ -454,7 +456,11 @@ class Heartbeat:
     def on_inbox_message(self, message: InboxMessage) -> None:
         """来信已保存，重要来信立即叫醒心跳。"""
         inbox = self._platform_inbox
-        if inbox is not None and inbox.is_priority(message.perception):
+        if (
+            not self._maintenance_paused
+            and inbox is not None
+            and inbox.is_priority(message.perception)
+        ):
             self._wake.set()
 
     def apply_identity_edit(
@@ -623,6 +629,26 @@ class Heartbeat:
         self._stop_requested = True
         self._wake.set()
 
+    @property
+    def maintenance_paused(self) -> bool:
+        """网页总览是否已请求关机。"""
+        return self._maintenance_paused
+
+    def set_maintenance_paused(self, paused: bool) -> None:
+        """在同一进程内关停活动，保留网页控制和平台收件。"""
+        if paused == self._maintenance_paused:
+            return
+        self._maintenance_paused = paused
+        if paused and self._thought is not None:
+            thought = self._thought
+            self._thought = None
+            self._maintenance_task = thought.task
+            thought.task.cancel()
+            for heard in thought.replying_to:
+                priority = Priority.USER if heard.is_user else Priority.CONTACT
+                self._unanswered.add(heard, priority, _reply_address(heard.perception))
+        self._wake.set()
+
     def wake_up(self) -> Downtime:
         """醒来：算出停了多久，记进时间线。
 
@@ -738,6 +764,13 @@ class Heartbeat:
         """
         if self._phase is not _Phase.RUNNING:
             raise RuntimeError("心跳没有在运行，不能跳")
+        pending_cancel = self._maintenance_task
+        if pending_cancel is not None and pending_cancel.done():
+            if not pending_cancel.cancelled():
+                pending_cancel.exception()
+            self._maintenance_task = None
+        if self._maintenance_paused or self._maintenance_task is not None:
+            return
         self._initiative.begin_beat(self._clock.now())
         self._exploration.begin_beat(self._clock.now())
         self._watch_emergency_stop()
@@ -1732,7 +1765,8 @@ class Heartbeat:
     async def _wait_for_next_beat(self) -> None:
         """等到有事（新感知、想法有结果、要求停下）或者到了定时拍。"""
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self._wake.wait(), timeout=self.seconds_until_next_beat())
+            timeout = None if self._maintenance_paused else self.seconds_until_next_beat()
+            await asyncio.wait_for(self._wake.wait(), timeout=timeout)
         # 先清掉再跳：清掉之后才来的事会重新叫醒；之前来的事，接下来这一拍都会处理。
         self._wake.clear()
 

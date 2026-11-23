@@ -26,6 +26,10 @@ class FakeHeartbeat:
         self.cognitive_state: CognitiveState | None = None
         self.is_thinking = False
         self.limit = 2
+        self.maintenance_paused = False
+
+    def set_maintenance_paused(self, paused: bool) -> None:
+        self.maintenance_paused = paused
 
     def submit(self, perception: Perception) -> bool:
         return True
@@ -59,6 +63,8 @@ class Rig:
             timeline=self.timeline,
             heartbeat=self.heartbeat,
             clock=self.clock,
+            maintenance_paused=lambda: self.heartbeat.maintenance_paused,
+            set_maintenance_paused=self.heartbeat.set_maintenance_paused,
         )
         self.client = TestClient(app, client=("127.0.0.1", 50000))
 
@@ -101,6 +107,19 @@ def test_timeline_filters_time_and_paginates_in_ascending_order(rig: Rig) -> Non
     assert [record["id"] for record in second["records"]] == [2]
     assert second["next_before_id"] is None
     assert rig.client.get("/api/timeline?hours=26").json()["records"][0]["id"] == 1
+
+
+def test_power_requires_ready_and_same_origin_and_keeps_web_available(rig: Rig) -> None:
+    origin = {"Origin": "http://testserver"}
+    assert rig.client.post("/api/power/stop", headers=origin).status_code == 401
+    rig.log_in()
+    assert rig.client.post("/api/power/stop").status_code == 403
+    assert rig.client.post("/api/power/stop", headers=origin).json() == {"maintenance_paused": True}
+    assert rig.client.get("/api/overview").json()["maintenance_paused"] is True
+    assert rig.client.get("/api/timeline").status_code == 200
+    assert rig.client.post("/api/power/start", headers=origin).json() == {
+        "maintenance_paused": False
+    }
 
 
 def test_types_filter_and_private_metadata_are_returned_without_mutation(rig: Rig) -> None:
@@ -189,6 +208,7 @@ def test_overview_before_and_after_the_first_beat(rig: Rig) -> None:
         "energy_tier": "",
         "current_task": "",
         "restart_required": False,
+        "maintenance_paused": False,
     }
     rig.heartbeat.cognitive_state = CognitiveState(
         energy_level=0.2, energy_state="低电量", current_task="回复用户"

@@ -79,6 +79,8 @@ def open_web(
             open_terminal=open_terminal,
             request_shutdown=core.heartbeat.request_stop,
             request_restart=request_restart,
+            maintenance_paused=lambda: core.heartbeat.maintenance_paused,
+            set_maintenance_paused=core.heartbeat.set_maintenance_paused,
             run_model_test=core.gateway.test_model,
             qq_link=core.qq_link,
         )

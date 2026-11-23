@@ -49,6 +49,7 @@ def register_timeline_routes(
     visibility: VisibilityScope,
     require_ready: Callable[..., Awaitable[str]],
     restart_required: Callable[[], bool] | None = None,
+    maintenance_paused: Callable[[], bool] | None = None,
 ) -> None:
     """注册时间线和总览；核心时钟、用户可见范围和登录依赖由组装方传入。"""
 
@@ -117,4 +118,5 @@ def register_timeline_routes(
             "energy_tier": state.energy_state if state else "",
             "current_task": state.current_task if state else "",
             "restart_required": restart_required() if restart_required else False,
+            **({"maintenance_paused": maintenance_paused()} if maintenance_paused else {}),
         }
