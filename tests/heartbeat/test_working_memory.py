@@ -17,6 +17,7 @@ from aureus.organs import ModelPreference, OrganRequest, OrganResponse
 from aureus.safety import EmergencyStop, PermissionChecker
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 from aureus.web.timeline_api import register_timeline_routes
+from tests.prompt_assertions import dialogue_text
 
 NOW = datetime(2026, 11, 23, 12, tzinfo=UTC)
 
@@ -245,12 +246,15 @@ async def test_actual_planner_and_replyer_get_saved_summary(
             assert heart.working_memory_summaries() == {}
         requests = [req for req in organs.requests if req.organ_id in {"planner", "replyer"}]
         assert {req.organ_id for req in requests} == {"planner", "replyer"}
-        assert all(("摘要：已压缩的对话" in req.prompt) is not interrupt for req in requests)
+        assert all(
+            ("摘要：已压缩的对话" in dialogue_text(req)) is not interrupt for req in requests
+        )
         if not interrupt:
             for request in requests:
-                assert "第一段旧对话" not in request.prompt
-                assert "第二段旧对话" not in request.prompt
-                assert request.prompt.count("保留焦点的对话") == 1
+                text = dialogue_text(request)
+                assert "第一段旧对话" not in text
+                assert "第二段旧对话" not in text
+                assert text.count("保留焦点的对话") == 1
     finally:
         organs.release.set()
         await heart.shut_down()
@@ -287,10 +291,9 @@ async def test_pending_replies_are_split_at_working_memory_capacity(tmp_path: Pa
             requests = [request for request in organs.requests if request.organ_id == organ_id]
             assert [request.context["in_reply_to"] for request in requests] == expected
             for request, batch in zip(requests, expected, strict=True):
-                assert all(
-                    record.content in request.prompt for record in records if record.id in batch
-                )
-                assert sum(message in request.prompt for message in messages) <= 2
+                text = dialogue_text(request)
+                assert all(record.content in text for record in records if record.id in batch)
+                assert sum(message in text for message in messages) <= 2
     finally:
         await heart.shut_down()
         timeline.close()

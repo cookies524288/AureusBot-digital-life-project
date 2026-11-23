@@ -6,7 +6,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from aureus.common import Clock, MemoryConfig, SystemClock
 from aureus.common.sqlite import open_connection
@@ -40,9 +40,11 @@ from aureus.memory.history import (
     read_history,
     search_history,
 )
+from aureus.memory.inspection import LiveMemoryInspection, inspect_live_memory
+from aureus.memory.resources import browse_text_resources, set_resources_removed
 from aureus.memory.sparse import keyword_conditions, relevance_expression
 from aureus.memory.transfer import export_archive, import_archive
-from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord
+from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord, VisibilityScope
 
 # D80 第 4 条：单条记忆交给回复器时的正文上限。
 MAX_HIT_CHARS = 180
@@ -223,6 +225,29 @@ class MemoryIndex:
         omit_image_type: str = "",
     ) -> list[HistoricalMemory]:
         """按入库顺序浏览历史原件，保留原记录与证据。"""
+        rows, _total = self.browse_history_page(
+            query,
+            status,
+            offset,
+            limit,
+            recall=recall,
+            source_table=source_table,
+            omit_image_type=omit_image_type,
+        )
+        return rows
+
+    def browse_history_page(
+        self,
+        query: str,
+        status: str,
+        offset: int,
+        limit: int,
+        *,
+        recall: str = "",
+        source_table: str = "",
+        omit_image_type: str = "",
+    ) -> tuple[list[HistoricalMemory], int]:
+        """返回历史原件当前页和筛选后的总条数。"""
         with closing(open_connection(self._db_path)) as conn:
             return browse_history(
                 conn,
@@ -241,6 +266,42 @@ class MemoryIndex:
         with closing(open_connection(self._db_path)) as conn:
             return count_history_sources(conn)
 
+    def inspect_live(self, visibility: VisibilityScope) -> LiveMemoryInspection:
+        """核对指定可见范围内、原件仍在的本地文字索引。"""
+        return inspect_live_memory(self._db_path, visibility)
+
+    def browse_text_resources(
+        self,
+        query: str,
+        category: str,
+        status: str,
+        recall: str,
+        offset: int,
+        limit: int,
+        *,
+        removed: bool = False,
+    ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+        """浏览同一目录下的新旧文字原件，保留各自的维护定位键。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return browse_text_resources(
+                conn,
+                query,
+                category,
+                status,
+                recall,
+                offset,
+                limit,
+                self._clock.now(),
+                removed=removed,
+            )
+
+    def set_resources_removed(
+        self, targets: Sequence[tuple[MemoryKind, int]], removed: bool
+    ) -> bool:
+        """原子移除或恢复所选文字记忆，不修改正文覆盖或原召回状态。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return set_resources_removed(conn, targets, removed, self._clock.now())
+
     def publish_events(self, events: Iterable[MemoryEvent], snapshot: tuple[str, str]) -> int:
         """从相同迁入快照追加缺失的事件，保留原记忆。"""
         with closing(open_connection(self._db_path)) as conn:
@@ -257,6 +318,22 @@ class MemoryIndex:
         end: datetime | None = None,
     ) -> tuple[list[MemoryEvent], list[str]]:
         """读取按原发生时间排序的长期记忆事件和有依据的会话。"""
+        rows, conversations, _total = self.browse_flow_page(
+            offset, limit, event_type=event_type, conversation=conversation, start=start, end=end
+        )
+        return rows, conversations
+
+    def browse_flow_page(
+        self,
+        offset: int,
+        limit: int,
+        *,
+        event_type: MemoryEventType | None = None,
+        conversation: str = "",
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> tuple[list[MemoryEvent], list[str], int]:
+        """返回记忆流当前页、会话选项和筛选后的总条数。"""
         with closing(open_connection(self._db_path)) as conn:
             return browse_flow(
                 conn,
@@ -280,19 +357,30 @@ class MemoryIndex:
         self, query: str, offset: int, limit: int, *, recall: str = ""
     ) -> list[MemoryHit]:
         """浏览已经索引的本地经历，返回时间线来源。"""
+        rows, _total = self.browse_live_page(query, offset, limit, recall=recall)
+        return rows
+
+    def browse_live_page(
+        self, query: str, offset: int, limit: int, *, recall: str = ""
+    ) -> tuple[list[MemoryHit], int]:
+        """浏览已索引的本地经历，返回时间线来源和筛选总条数。"""
         with closing(open_connection(self._db_path)) as conn:
-            rows = conn.execute(
-                """SELECT record_id, content, actor_label, recorded_at, edit.edited_content,
-                          coalesce(edit.is_enabled, 1) AS is_recallable
-                   FROM memory_index
+            conn.execute("BEGIN")
+            filtered = """FROM memory_index
                    LEFT JOIN memory_edits AS edit
                      ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid
-                   WHERE (? = '' OR is_recallable = (? = 'enabled'))
+                   WHERE NOT coalesce(edit.is_removed, 0)
+                     AND (? = '' OR coalesce(edit.is_enabled, 1) = (? = 'enabled'))
                      AND (? = '' OR instr(lower(edit.edited_content), lower(?)) > 0
                                    OR instr(lower(content), lower(?)) > 0
-                                   OR instr(lower(actor_label), lower(?)) > 0)
-                   ORDER BY record_id DESC LIMIT ? OFFSET ?""",
-                (recall, recall, query, query, query, query, limit, offset),
+                                   OR instr(lower(actor_label), lower(?)) > 0)"""
+            params = (recall, recall, query, query, query, query)
+            total = conn.execute(f"SELECT count(*) {filtered}", params).fetchone()[0]
+            rows = conn.execute(
+                f"""SELECT record_id, content, actor_label, recorded_at, edit.edited_content,
+                           coalesce(edit.is_enabled, 1) AS is_recallable {filtered}
+                    ORDER BY record_id DESC LIMIT ? OFFSET ?""",
+                (*params, limit, offset),
             ).fetchall()
         return [
             MemoryHit(
@@ -305,7 +393,7 @@ class MemoryIndex:
                 original_text=row["content"] if row["edited_content"] is not None else None,
             )
             for row in rows
-        ]
+        ], total
 
     def update_resource(
         self,
@@ -358,7 +446,7 @@ class MemoryIndex:
             return []
         parameters: list[str | int | float] = list(terms)
         where = ["(" + " OR ".join(clauses) + ")"] if clauses else []
-        where.append("coalesce(edit.is_enabled, 1) = 1")
+        where.append("coalesce(edit.is_enabled, 1) = 1 AND NOT coalesce(edit.is_removed, 0)")
         person_keys = (person_key,) if isinstance(person_key, str) else person_key
         if person_keys is not None:
             where.append("person_key IN (" + ",".join("?" for _ in person_keys) + ")")

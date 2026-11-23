@@ -28,14 +28,13 @@ from aureus.safety import CallRejectedError
 
 from .auth import LoginLockedError, LoginRejectedError, WebAuth, is_loopback
 from .config_files import (
-    MODEL_RESTORE_FIELDS,
+    HIDDEN_CONFIG,
     PASSWORD_SECTIONS,
     READONLY_CONFIG,
     BiochemicalWriteError,
     ConfigService,
     ModelRename,
     check_biochemical_write,
-    model_defaults,
     models_require_password,
     runtime_field_names,
 )
@@ -111,6 +110,7 @@ def _runtime_changes(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(changes, dict):
         raise HTTPException(422, detail="提交的配置改动必须是对象。")
     check_biochemical_write(changes)
+    _check_hidden_runtime_fields(runtime_field_names(changes))
     for value in changes.values():
         fields = value.values() if isinstance(value, dict) else [value]
         if any(not isinstance(item, (bool, int, float, str)) for item in fields):
@@ -118,10 +118,16 @@ def _runtime_changes(body: dict[str, Any]) -> dict[str, Any]:
     return changes
 
 
+def _check_hidden_runtime_fields(names: list[str]) -> None:
+    if HIDDEN_CONFIG.intersection(names):
+        raise HTTPException(403, detail="这项旧设置不能在网页中修改。")
+
+
 def _confirm_runtime_edit(
     names: list[str], auth: WebAuth, body: dict[str, Any], request: Request
 ) -> None:
     check_biochemical_write(names)
+    _check_hidden_runtime_fields(names)
     if any(name in READONLY_CONFIG for name in names):
         raise HTTPException(
             403,
@@ -281,46 +287,6 @@ def register_config_routes(
                 "ok": True,
                 "restart_required": service.restart_required,
                 "warnings": submitted.warnings(),
-            }
-
-    @app.post("/api/models/restore-default")
-    async def restore_model_default(
-        request: Request, _token: Annotated[str, Depends(require_ready)]
-    ) -> dict[str, Any]:
-        with _translate_errors(service):
-            body = await _body(request)
-            section, name, field = (body.get(key) for key in ("section", "name", "field"))
-            if not (
-                isinstance(section, str)
-                and isinstance(name, str)
-                and isinstance(field, str)
-                and field in MODEL_RESTORE_FIELDS.get(section, ())
-            ):
-                raise HTTPException(422, detail="这项设置没有可恢复的默认值。")
-            async with service.write_lock:
-                current, restored, changed = await asyncio.to_thread(
-                    service.prepare_model_restore, section, name, field
-                )
-                if models_require_password(current, restored):
-                    _confirm(auth, body, request)
-                if changed:
-                    prepared = (
-                        await asyncio.to_thread(model_runtime.prepare, restored)
-                        if model_runtime is not None and current != restored
-                        else None
-                    )
-                    await asyncio.to_thread(service.write_model_restore, section, name, field)
-                    if model_runtime is not None and prepared is not None:
-                        model_runtime.apply(prepared)
-            entries = restored.model_dump(mode="json")[section]
-            entry = (
-                entries.get(name)
-                if section == "organs"
-                else next(item for item in entries if item["name"] == name)
-            )
-            return {
-                "value": entry[field] if entry is not None else model_defaults(section)[field],
-                "restart_required": service.restart_required,
             }
 
     @app.get("/api/keys")

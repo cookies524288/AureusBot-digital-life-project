@@ -25,6 +25,7 @@ from aureus.heartbeat import (
     EVENT_EMERGENCY_STOP,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
+    EVENT_REPLY_REFERENCE,
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
     Heartbeat,
@@ -35,7 +36,14 @@ from aureus.heartbeat import (
 )
 from aureus.heartbeat.main_loop import SHUTDOWN_INTERRUPTED, TASK_IDLE, TASK_REPLYING
 from aureus.identity import Identity
-from aureus.organs import CallAttempt, FakePlanner, OrganBus, OrganCallError, OrganRequest, OrganResponse
+from aureus.organs import (
+    CallAttempt,
+    FakePlanner,
+    OrganBus,
+    OrganCallError,
+    OrganRequest,
+    OrganResponse,
+)
 from aureus.safety import (
     EVENT_CALL_REJECTED,
     BudgetExceededError,
@@ -51,6 +59,7 @@ from aureus.timeline import (
     TimelineRecord,
     VisibilityScope,
 )
+from tests.prompt_assertions import dialogue_text
 
 pytestmark = pytest.mark.asyncio
 
@@ -223,6 +232,10 @@ async def test_a_message_is_recorded_and_answered(harness: Harness) -> None:
     assert (reply.actor_type, reply.content) == (ActorType.ME, "早呀。")
     assert reply.visibility is VisibilityScope.USER_ONLY
     assert reply.metadata["in_reply_to"] == [user.id]
+    [reference] = harness.records(EVENT_REPLY_REFERENCE)
+    assert reference.content == "建议回复：回应"
+    assert reference.visibility is user.visibility
+    assert reference.metadata == {"channel": CHANNEL, "in_reply_to": [user.id]}
     assert harness.sent == [
         OutgoingMessage(
             CHANNEL,
@@ -247,20 +260,20 @@ async def test_the_request_carries_persona_wakeup_history_and_new_message(
     assert "你是小绿。" in request.system_context
     assert "【表达风格】\n句子短。" in request.system_context
     assert "第一次醒来" in request.system_context
-    history, new = request.prompt.split("刚收到、还没回复的消息：")
+    history, new = dialogue_text(request).split("刚收到、还没回复的消息：", 1)
     assert "阿明：早" in history
     assert "你：嗯。" in history
     assert "今天面试被拒了" in new
     assert "今天面试被拒了" not in history
 
 
-async def test_reply_organ_comes_from_config(factory: Factory) -> None:
-    harness = factory.make(reply_organ="chatter")
+async def test_legacy_organ_config_does_not_change_the_organs_called(factory: Factory) -> None:
+    harness = factory.make(reply_organ="chatter", plan_organ="legacy")
     harness.heartbeat.wake_up()
 
     await harness.exchange("你好")
 
-    assert [request.organ_id for request in harness.organs.requests] == ["planner", "chatter"]
+    assert [request.organ_id for request in harness.organs.requests] == ["planner", "replyer"]
 
 
 async def test_history_is_limited_and_excludes_other_visibility(factory: Factory) -> None:
@@ -274,7 +287,7 @@ async def test_history_is_limited_and_excludes_other_visibility(factory: Factory
 
     await harness.exchange("最后一句")
 
-    prompt = harness.organs.requests[-1].prompt
+    prompt = dialogue_text(harness.organs.requests[-1])
     assert "群里的话" not in prompt
     # 最近 3 条里有这次的新消息，所以之前的对话只剩 2 条。
     assert "第2句" in prompt
@@ -305,7 +318,9 @@ async def test_messages_arriving_while_thinking_are_answered_together(harness: H
         "planner",
         "replyer",
     ]
-    history, second = harness.organs.requests[-1].prompt.split("刚收到、还没回复的消息：")
+    history, second = dialogue_text(harness.organs.requests[-1]).split(
+        "刚收到、还没回复的消息：", 1
+    )
     assert "想问你个事" in second
     assert "算了，明天说" in second
     # 它对“在吗”的回复，序号比后两句大，也要出现在之前的对话里。
@@ -369,6 +384,8 @@ async def test_failures_become_a_notice_not_a_reply(
     assert expected in notice.content
     assert [r.actor_type for r in harness.records(EVENT_MESSAGE)] == [ActorType.USER]
     assert not harness.heartbeat.is_thinking
+    [reference] = harness.records(EVENT_REPLY_REFERENCE)
+    assert reference.content == "建议回复：回应"
 
 
 async def test_a_broken_channel_does_not_stop_the_heartbeat(factory: Factory) -> None:
@@ -673,7 +690,10 @@ async def test_if_the_request_cannot_be_built_the_messages_stay_queued(
     harness.heartbeat.beat()  # 恢复之后，那条消息还在，照样回复
     await harness.heartbeat.wait_for_thought()
     harness.heartbeat.beat()
-    assert "还在吗" in harness.organs.requests[-1].prompt.split("刚收到、还没回复的消息：")[1]
+    assert (
+        "还在吗"
+        in dialogue_text(harness.organs.requests[-1]).split("刚收到、还没回复的消息：", 1)[1]
+    )
 
 
 async def test_calling_shut_down_wakes_a_waiting_run_loop(factory: Factory) -> None:
@@ -760,7 +780,10 @@ async def test_replies_resume_after_the_halt_is_lifted(harness: Harness) -> None
 
     assert [request.organ_id for request in harness.organs.requests] == ["planner", "replyer"]
     # 急停时的那句不补回复：请求里只有解除后才说的这一句。
-    assert "在吗" not in harness.organs.requests[-1].prompt.split("刚收到、还没回复的消息：")[1]
+    assert (
+        "在吗"
+        not in dialogue_text(harness.organs.requests[-1]).split("刚收到、还没回复的消息：", 1)[1]
+    )
     assert [m.content for m in harness.sent if m.kind is MessageKind.REPLY] == ["我回来了。"]
 
 

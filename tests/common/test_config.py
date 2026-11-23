@@ -273,9 +273,10 @@ def test_safety_error_does_not_echo_unsafe_value(tmp_path: Path) -> None:
 
 # ---------- [heartbeat] 心跳配置（D41） ----------
 
-# advance_biomodel 已废弃（D69），示例配置里不再写它。
 HEARTBEAT_FIELDS = tuple(
-    name for name in HeartbeatConfig.model_fields if name != "advance_biomodel"
+    name
+    for name in HeartbeatConfig.model_fields
+    if name not in {"advance_biomodel", "planning_enabled"}
 )
 
 
@@ -286,6 +287,23 @@ def test_heartbeat_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert heartbeat.advance_biomodel is None  # 已废弃，没写就是 None（D69 第 7 条）
     assert heartbeat.broadcast_cognitive_state is True
     assert heartbeat.reply_organ == "replyer"
+    assert heartbeat.plan_organ == "planner"
+    assert heartbeat.inbox_debounce_enabled is True
+
+
+def test_legacy_organ_overrides_are_ignored_and_explicit_debounce_opt_out_is_kept(
+    tmp_path: Path,
+) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        '[heartbeat]\nreply_organ = "chatter"\nplan_organ = "legacy"\n'
+        "inbox_debounce_enabled = false\n",
+    )
+    heartbeat = load_runtime_config(paths).heartbeat
+    assert heartbeat.reply_organ == "replyer"
+    assert heartbeat.plan_organ == "planner"
+    assert heartbeat.inbox_debounce_enabled is False
 
 
 def test_heartbeat_example_values_equal_the_defaults(tmp_path: Path) -> None:
@@ -323,7 +341,6 @@ def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
         ("tick_interval_seconds", "0"),
         ("shutdown_grace_seconds", "-1"),
         ("recent_message_limit", "0"),
-        ("reply_organ", '""'),
         ("advance_biomodel", "1"),  # 数字 1 不是 true
         ("broadcast_cognitive_state", '"false"'),
         ("roleplay_mode", "1"),  # 数字 1 不是 true

@@ -255,15 +255,18 @@ def browse_history(
     recall: str = "",
     source_table: str = "",
     omit_image_type: str = "",
-) -> list[HistoricalMemory]:
-    """返回一页记录和维护覆盖，包括被归档的记录。"""
-    rows = conn.execute(
-        """SELECT history.*, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled,
+) -> tuple[list[HistoricalMemory], int]:
+    """返回一页记录、维护覆盖和筛选总数，包括被归档的记录。"""
+    conn.execute("BEGIN")
+    filtered = """WITH annotated AS (
+           SELECT history.*, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled,
                   (status = 'active' AND (valid_from IS NULL OR valid_from <= ?)
                    AND (valid_to IS NULL OR valid_to > ?) AND coalesce(edit.is_enabled, 1))
                     AS is_recallable
            FROM memory_history AS history
            LEFT JOIN memory_edits AS edit ON edit.kind = 'history' AND edit.entry_id = history.id
+           WHERE NOT coalesce(edit.is_removed, 0)
+           ), filtered AS (SELECT * FROM annotated AS history
            WHERE (? = '' OR status = ?)
              AND (? = '' OR json_extract(source_key, '$[2]') = ?
                   OR (? = 'text' AND json_extract(source_key, '$[2]') IN
@@ -273,31 +276,32 @@ def browse_history(
                   SELECT 1 FROM json_each(history.evidence) evidence_item
                   WHERE json_extract(evidence_item.value, '$.kind') = 'media_type'
                     AND json_extract(evidence_item.value, '$.reference') = ?))
-             AND (? = '' OR instr(lower(coalesce(edit.edited_content, content)), lower(?)) > 0
+             AND (? = '' OR instr(lower(coalesce(edited_content, content)), lower(?)) > 0
                          OR instr(lower(content), lower(?)) > 0
                          OR instr(lower(actor_label), lower(?)) > 0
-                         OR instr(lower(source_key), lower(?)) > 0)
-           ORDER BY history.id DESC LIMIT ? OFFSET ?""",
-        (
-            now.timestamp(),
-            now.timestamp(),
-            status,
-            status,
-            source_table,
-            source_table,
-            source_table,
-            recall,
-            recall,
-            omit_image_type,
-            omit_image_type,
-            query,
-            query,
-            query,
-            query,
-            query,
-            limit,
-            offset,
-        ),
+                         OR instr(lower(source_key), lower(?)) > 0))"""
+    params = (
+        now.timestamp(),
+        now.timestamp(),
+        status,
+        status,
+        source_table,
+        source_table,
+        source_table,
+        recall,
+        recall,
+        omit_image_type,
+        omit_image_type,
+        query,
+        query,
+        query,
+        query,
+        query,
+    )
+    total = conn.execute(f"{filtered} SELECT count(*) FROM filtered", params).fetchone()[0]
+    rows = conn.execute(
+        f"{filtered} SELECT * FROM filtered ORDER BY id DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
     ).fetchall()
     return [
         replace(
@@ -309,7 +313,7 @@ def browse_history(
             original_text=row["content"] if row["edited_content"] is not None else None,
         )
         for row in rows
-    ]
+    ], total
 
 
 def count_history_sources(conn: sqlite3.Connection) -> dict[str, int]:
@@ -343,6 +347,7 @@ def search_history(
         "(valid_from IS NULL OR valid_from <= ?)",
         "(valid_to IS NULL OR valid_to > ?)",
         "coalesce(edit.is_enabled, 1) = 1",
+        "NOT coalesce(edit.is_removed, 0)",
     ]
     point = now.timestamp()
     parameters: list[str | int | float] = [point, point]

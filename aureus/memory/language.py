@@ -6,7 +6,9 @@ import json
 from collections.abc import Iterable, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import StrEnum
+from hashlib import sha256
 from itertools import groupby
 from pathlib import Path
 from sqlite3 import Connection, Row, connect
@@ -23,6 +25,7 @@ from aureus.memory.language_import import (
 )
 from aureus.memory.language_matching import (
     MIN_JARGON_EVIDENCE,
+    ExpressionReviewStatus,
     LanguageEntry,
     format_language,
     is_reference,
@@ -34,6 +37,7 @@ from aureus.memory.language_matching import (
 MAX_TEXT = 80
 MAX_DETAIL = 160
 MAX_EXAMPLE = 2000
+MAX_REVIEW_REASON = 500
 BATCH_SIZE = 16
 _EXCLUDED_MARKERS = ("SELF", "[表情包", "[图片")
 _SCHEMA = """
@@ -71,6 +75,31 @@ CREATE TABLE IF NOT EXISTS language_edits (
     example TEXT,
     is_enabled INTEGER
 );
+CREATE TABLE IF NOT EXISTS language_package_rows (
+    digest TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    example TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    source_chat_name TEXT NOT NULL,
+    original TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS language_removed (entry_key TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS language_package_scopes (
+    digest TEXT NOT NULL REFERENCES language_package_rows(digest),
+    conversation_key TEXT NOT NULL,
+    PRIMARY KEY(digest, conversation_key)
+);
+CREATE TABLE IF NOT EXISTS language_expression_reviews (
+    id INTEGER PRIMARY KEY,
+    entry_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS language_expression_reviews_entry
+    ON language_expression_reviews (entry_key, id);
 """
 
 
@@ -110,6 +139,21 @@ def _local_key(kind: str, entry_id: int) -> str:
 
 
 @dataclass(frozen=True)
+class LanguagePackageRow:
+    """待映射的包记录，原有会话标签与原始字段只用于保存和导出。"""
+
+    content: LanguageContent
+    count: int
+    source_chat_name: str
+    original: str
+
+    @property
+    def digest(self) -> str:
+        """以原始包条目及其会话标签去重，不依赖文件名或导出时间。"""
+        return sha256(json.dumps((self.source_chat_name, self.original)).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
 class LanguageSample:
     """来自正常入站消息的样本，时间、原文和可见范围通过时间线序号定位。"""
 
@@ -127,6 +171,15 @@ class LanguageProposal:
     text: str
     detail: str
     record_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class ExpressionReview:
+    """一条追加写入的人工审核记录。"""
+
+    status: ExpressionReviewStatus
+    reason: str
+    recorded_at: str
 
 
 def _is_learnable(sample: LanguageSample) -> bool:
@@ -289,6 +342,137 @@ class LanguageStore:
             ).fetchone()
             return _local_key("manual", row["id"])
 
+    def save_package(self, kind: LanguageKind, rows: Sequence[LanguagePackageRow]) -> int:
+        """一次追加整包待映射原件，不修改任何现有条目或覆盖。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            return connection.executemany(
+                """INSERT INTO language_package_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(digest) DO NOTHING""",
+                (
+                    (
+                        row.digest,
+                        kind,
+                        row.content.text,
+                        row.content.detail,
+                        row.content.example,
+                        row.count,
+                        row.source_chat_name,
+                        row.original,
+                    )
+                    for row in rows
+                ),
+            ).rowcount
+
+    def package_originals(self, kind: LanguageKind) -> dict[str, tuple[str, str]]:
+        """供导出查找待映射条目的原始作用域标签和资源包字段。"""
+        with closing(open_connection(self._path)) as connection:
+            rows = connection.execute(
+                "SELECT digest, source_chat_name, original FROM language_package_rows "
+                "WHERE kind = ?",
+                (kind,),
+            )
+            return {
+                f"package:{row['digest']}": (row["source_chat_name"], row["original"])
+                for row in rows
+            }
+
+    def package_scope(
+        self,
+        kind: LanguageKind,
+        entry_key: str,
+        conversation_keys: Sequence[str],
+        *,
+        confirm: bool,
+    ) -> tuple[str, ...] | None:
+        """返回原来的目标范围；明确确认时仅改包记录的会话授权。"""
+        prefix = "package:"
+        if not entry_key.startswith(prefix):
+            return None
+        digest = entry_key.removeprefix(prefix)
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE" if confirm else "BEGIN")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM language_package_rows WHERE kind = ? AND digest = ?",
+                    (kind, digest),
+                ).fetchone()
+                is None
+            ):
+                return None
+            previous = tuple(
+                row["conversation_key"]
+                for row in connection.execute(
+                    "SELECT conversation_key FROM language_package_scopes "
+                    "WHERE digest = ? ORDER BY conversation_key",
+                    (digest,),
+                )
+            )
+            if confirm:
+                connection.execute(
+                    "DELETE FROM language_package_scopes WHERE digest = ?", (digest,)
+                )
+                connection.executemany(
+                    "INSERT INTO language_package_scopes VALUES (?, ?)",
+                    ((digest, key) for key in sorted(set(conversation_keys))),
+                )
+        return previous
+
+    def set_removed(self, kind: LanguageKind, keys: Sequence[str], removed: bool) -> bool:
+        """标记整批条目移除或恢复，不触碰原件及原有召回设置。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not set(keys) <= {entry.entry_key for entry in self._read_entries(connection, kind)}:
+                return False
+            statement = (
+                "INSERT OR IGNORE INTO language_removed VALUES (?)"
+                if removed
+                else "DELETE FROM language_removed WHERE entry_key = ?"
+            )
+            connection.executemany(statement, ((key,) for key in keys))
+        return True
+
+    def review_expressions(
+        self,
+        keys: Sequence[str],
+        status: ExpressionReviewStatus,
+        reason: str,
+        recorded_at: datetime,
+    ) -> int:
+        """为整批表达追加人工审核；任何目标不存在时不写入。"""
+        reason = reason.strip()
+        if status == ExpressionReviewStatus.REJECTED and not reason:
+            raise ValueError("请填写拒绝理由。")
+        if len(reason) > MAX_REVIEW_REASON:
+            raise ValueError(f"审核理由最多 {MAX_REVIEW_REASON} 字。")
+        targets = set(keys)
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            entries = self._read_entries(connection, LanguageKind.EXPRESSION)
+            if not targets <= {entry.entry_key for entry in entries}:
+                return 0
+            timestamp = recorded_at.isoformat()
+            connection.executemany(
+                """INSERT INTO language_expression_reviews (entry_key, status, reason, recorded_at)
+                   VALUES (?, ?, ?, ?)""",
+                ((key, status, reason, timestamp) for key in targets),
+            )
+        return len(targets)
+
+    def expression_reviews(self, entry_key: str) -> list[ExpressionReview]:
+        """从新到旧读取单条表达的人工审核历史。"""
+        with closing(open_connection(self._path)) as connection:
+            rows = connection.execute(
+                """SELECT status, reason, recorded_at FROM language_expression_reviews
+                   WHERE entry_key = ? ORDER BY id DESC""",
+                (entry_key,),
+            )
+            return [
+                ExpressionReview(
+                    ExpressionReviewStatus(row["status"]), row["reason"], row["recorded_at"]
+                )
+                for row in rows
+            ]
+
     def update_entry(
         self,
         kind: LanguageKind,
@@ -300,10 +484,18 @@ class LanguageStore:
         content = content.validated() if content is not None else None
         with closing(open_connection(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            if not any(
-                entry.entry_key == entry_key for entry in self._read_entries(connection, kind)
-            ):
+            entry = next(
+                (
+                    entry
+                    for entry in self._read_entries(connection, kind)
+                    if entry.entry_key == entry_key
+                ),
+                None,
+            )
+            if entry is None:
                 return False
+            if entry.pending_scope and is_enabled:
+                raise ValueError("包记录尚未映射会话，不能参与召回。")
             connection.execute(
                 """INSERT INTO language_edits (entry_key, text, detail, example, is_enabled)
                    VALUES (?, ?, ?, ?, ?)
@@ -330,14 +522,38 @@ class LanguageStore:
             edits = {
                 row["entry_key"]: row for row in connection.execute("SELECT * FROM language_edits")
             }
+            removed = {
+                row["entry_key"] for row in connection.execute("SELECT * FROM language_removed")
+            }
+            if kind == LanguageKind.EXPRESSION:
+                reviews = {
+                    row["entry_key"]: ExpressionReviewStatus(row["status"])
+                    for row in connection.execute(
+                        """SELECT entry_key, status, max(id) FROM language_expression_reviews
+                           GROUP BY entry_key"""
+                    )
+                }
+                entries = [
+                    replace(
+                        entry,
+                        review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
+                    )
+                    for entry in entries
+                ]
         entries = [self._apply_edit(entry, edits.get(entry.entry_key)) for entry in entries]
+        entries = [
+            replace(entry, is_enabled=False, is_removed=True)
+            if entry.entry_key in removed
+            else entry
+            for entry in entries
+        ]
         return entries if include_disabled else [entry for entry in entries if entry.is_enabled]
 
     @staticmethod
     def _apply_edit(entry: LanguageEntry, row: Row | None) -> LanguageEntry:
         if row is None:
             return entry
-        entry = replace(entry, is_enabled=row["is_enabled"] != 0)
+        entry = replace(entry, is_enabled=not entry.pending_scope and row["is_enabled"] != 0)
         if row["text"] is None:
             return entry
         return replace(
@@ -379,6 +595,7 @@ class LanguageStore:
                 )
         source_table = JARGON_TABLE if kind == LanguageKind.JARGON else EXPRESSION_TABLE
         entries.extend(imported_entries(connection, source_table))
+        entries.extend(LanguageStore._package_entries(connection, kind))
         entries.extend(
             LanguageEntry(
                 row["text"],
@@ -395,18 +612,64 @@ class LanguageStore:
         )
         return entries
 
-    def jargon_reference(self, texts: Sequence[str], budget: int) -> str:
+    @staticmethod
+    def _package_entries(connection: Connection, kind: LanguageKind) -> list[LanguageEntry]:
+        rows = connection.execute(
+            """SELECT package.*, scope.conversation_key FROM language_package_rows AS package
+               LEFT JOIN language_package_scopes AS scope USING (digest)
+               WHERE kind = ? ORDER BY digest, conversation_key""",
+            (kind,),
+        )
+        entries: list[LanguageEntry] = []
+        for digest, group in groupby(rows, key=lambda row: row["digest"]):
+            sources = list(group)
+            row = sources[0]
+            keys = tuple(
+                source["conversation_key"] for source in sources if source["conversation_key"]
+            )
+            entries.append(
+                LanguageEntry(
+                    row["text"],
+                    row["detail"],
+                    row["example"],
+                    row["count"],
+                    (),
+                    frozenset(),
+                    entry_key=f"package:{digest}",
+                    is_enabled=bool(keys),
+                    pending_scope=not keys,
+                    scope_keys=keys,
+                    package_source=row["source_chat_name"],
+                )
+            )
+        return entries
+
+    def jargon_reference(
+        self, texts: Sequence[str], budget: int, *, conversation_key: str | None = None
+    ) -> str:
         """生成 Planner 的黑话参考，按统一库的高频词加权。"""
         with closing(open_connection(self._path)) as connection:
             frequencies = imported_frequencies(connection)
-        matches = match_jargons(texts, self.entries(LanguageKind.JARGON), frequencies)
+        entries = self._visible_entries(LanguageKind.JARGON, conversation_key)
+        matches = match_jargons(texts, entries, frequencies)
         return format_language(matches, jargon=True, budget=budget)
 
     def expression_reference(
-        self, topic: str, intent: str, avoid: tuple[str, ...], speaker: str, budget: int
+        self,
+        topic: str,
+        intent: str,
+        avoid: tuple[str, ...],
+        speaker: str,
+        budget: int,
+        *,
+        conversation_key: str | None = None,
     ) -> str:
         """生成 Replyer 的情景表达参考。"""
-        matches = select_expressions(
-            self.entries(LanguageKind.EXPRESSION), topic, intent, avoid, speaker
-        )
+        entries = self._visible_entries(LanguageKind.EXPRESSION, conversation_key)
+        matches = select_expressions(entries, topic, intent, avoid, speaker)
         return format_language(matches, jargon=False, budget=budget)
+
+    def _visible_entries(
+        self, kind: LanguageKind, conversation_key: str | None
+    ) -> list[LanguageEntry]:
+        return [entry for entry in self.entries(kind) if entry.visible_in(conversation_key)]

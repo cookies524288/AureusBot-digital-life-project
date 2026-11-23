@@ -15,7 +15,9 @@ def test_key_cards_render_metadata_as_text_and_have_no_reveal_action() -> None:
         assert.equal(nodes.some(node => node.tagName === 'IMG'), false);
         assert.equal(nodes.some(node => node.textContent === name), true);
         const buttons = nodes.filter(node => node.tagName === 'BUTTON');
-        assert.deepEqual(buttons.map(node => node.textContent), ['改名','删除']);
+        assert.deepEqual(buttons.map(node => node.attributes['aria-label']),
+          ['改名', '修改密钥值', '删除']);
+        assert.ok(buttons.every(node => node.innerHTML.includes('aria-hidden="true"')));
         assert.equal(PAGES.keys.load, loadKeysPage);
         """
     )
@@ -53,6 +55,7 @@ def test_other_type_can_enter_multiline_values() -> None:
         r"""
         const body = openKeyEditor(null);
         const kind = body.children[1].children.at(-1);
+        assert.equal(body.children[2].lastChild.attributes.type, 'password');
         kind.value = 'other';
         kind.listeners.change[0]();
         const value = body.children[2].children.at(-1);
@@ -60,6 +63,9 @@ def test_other_type_can_enter_multiline_values() -> None:
         value.value = 'fake-line-one\n fake-line-two ';
         assert.equal(value.value.endsWith(' '), true);
         assert.equal(value.value.includes(String.fromCharCode(10)), true);
+        kind.value = 'password';
+        kind.listeners.change[0]();
+        assert.equal(body.children[2].lastChild.attributes.type, 'password');
         """
     )
 

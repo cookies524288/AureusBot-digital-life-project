@@ -33,6 +33,7 @@ from aureus.organs import CallAttempt, FakeReplyer, OrganRequest, OrganResponse
 from aureus.timeline import TimelineQuery, TimelineRecord
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 from aureus.web.settings import SettingsService
+from tests.prompt_assertions import dialogue_text
 
 pytestmark = pytest.mark.asyncio
 
@@ -180,7 +181,7 @@ async def test_terminal_and_web_share_one_timeline_and_one_attention(
     # 同一个人：终端和网页上的用户是同一份档案。
     assert messages[0].metadata["person_id"] == messages[2].metadata["person_id"]
     # 同一个注意力：网页上这一轮的回复，看得到终端里刚说过的话。
-    assert "终端里说一句" in requests[-1].prompt
+    assert "终端里说一句" in dialogue_text(requests[-1])
     # 回复只发回说话的那个通道。
     for sent, name in ((rig.terminal, "terminal"), (rig.web, "web")):
         replies = [message for message in sent if message.kind is MessageKind.REPLY]

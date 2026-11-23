@@ -90,6 +90,8 @@ def open_web(
             resource_people=core.people,
             resource_memory_dir=core.paths.memory_dir,
             resource_emojis=core.emoji_store,
+            resource_database=core.paths.database_file,
+            recall_feedback_enabled=core.settings.runtime.memory.recall_feedback_enabled,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

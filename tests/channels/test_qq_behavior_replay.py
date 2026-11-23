@@ -16,7 +16,9 @@ from aureus.common import AureusPaths, ManualClock
 from aureus.core import runtime
 from aureus.core.model_runtime import ModelRuntime
 from aureus.feedback import COMMITMENT_KEPT, Outcome
-from aureus.heartbeat import Perception, build_prompt_scenes, registered_templates
+from aureus.heartbeat import build_prompt_scenes, registered_templates
+from aureus.heartbeat.events import EVENT_RECALL_REPLY_DELIVERED
+from aureus.heartbeat.inbox_store import InboxMessage
 from aureus.memory import HistoricalMemory, LanguageKind, LanguageStore, MemoryIndex, MemorySource
 from aureus.organs import (
     CallAttempt,
@@ -32,6 +34,7 @@ from aureus.people import HistoricalKind, HistoricalRecord
 from aureus.timeline import ActorType, TimelineQuery, TimelineRecord, VisibilityScope
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, IDENTITY, FakeOneBot, event
 from tests.organs.test_llm_adapter import FakeCompletion, fixed_counter, make_config, make_response
+from tests.prompt_assertions import dialogue_text
 from tests.test_language_runtime import LanguageOrgan
 
 pytestmark = pytest.mark.asyncio
@@ -74,7 +77,7 @@ class Replay:
     core: runtime.Core
     fake: FakeOneBot
     remote: ServerConnection
-    accepted: asyncio.Queue[str]
+    accepted: asyncio.Queue[InboxMessage]
     judge: ReplayOrgan
     planner: ReplayOrgan
     replyer: ReplayOrgan
@@ -83,7 +86,9 @@ class Replay:
     async def receive(self, *events: dict[str, Any]) -> None:
         for payload in events:
             await self.fake.send(self.remote, **payload)
-            assert await self.accepted.get() == f"{ACCOUNT}:{payload['message_id']}"
+            message = await self.accepted.get()
+            assert message.perception.source_message_id == f"{ACCOUNT}:{payload['message_id']}"
+            self.core.heartbeat._submit_inbox([message])
 
     async def step(self) -> None:
         self.core.heartbeat.beat()
@@ -93,13 +98,15 @@ class Replay:
     def records(self, kind: str = "message") -> list[TimelineRecord]:
         return list(self.core.timeline.query(TimelineQuery(event_type=kind, limit=100)))
 
-    async def assert_sent(self, target: int) -> None:
+    async def assert_sent(self, quoted_target: int | None = None) -> None:
         sent = await self.fake.messages.get()
         assert sent["message_type"] == "group"
         assert sent["group_id"] == str(GROUP)
-        assert sent["message"][0] == {"type": "reply", "data": {"id": str(target)}}
-        assert sent["message"][1]["type"] == "text"
-        assert sent["message"][1]["data"]["text"] == self.replyer.calls[-1][2]
+        quote = (
+            [] if quoted_target is None else [{"type": "reply", "data": {"id": str(quoted_target)}}]
+        )
+        text = {"type": "text", "data": {"text": self.replyer.calls[-1][2]}}
+        assert sent["message"] == [*quote, text]
 
 
 @asynccontextmanager
@@ -118,6 +125,7 @@ async def open_replay(
     qq_test_group: str | None = None,
     allowed_group_id: str | None = None,
     initiative: bool = False,
+    split_reply: bool = False,
 ) -> AsyncIterator[Replay]:
     paths = AureusPaths(home)
     paths.ensure_directories()
@@ -152,7 +160,8 @@ async def open_replay(
         paths.runtime_config_file.write_text(
             f"""[heartbeat]
 planning_enabled = true
-split_reply_enabled = false
+inbox_debounce_enabled = false
+split_reply_enabled = {str(split_reply).lower()}
 recent_message_limit = {history_limit}
 [body]
 sleep_enabled = false
@@ -185,17 +194,13 @@ endpoint = "ws://127.0.0.1:{port}/onebot"
                 paths, clock=clock, to_console=False, qq_test_group=qq_test_group
             ) as core:
                 assert core.qq is not None
-                accepted: asyncio.Queue[str] = asyncio.Queue()
-                submit = core.heartbeat.submit
+                accepted: asyncio.Queue[InboxMessage] = asyncio.Queue()
 
-                def observe(perception: Perception) -> bool:
-                    result = submit(perception)
-                    if result:
-                        assert perception.source_message_id
-                        accepted.put_nowait(perception.source_message_id)
-                    return result
+                def observe(message: InboxMessage) -> None:
+                    core.heartbeat.on_inbox_message(message)
+                    accepted.put_nowait(message)
 
-                patch.setattr(core.heartbeat, "submit", observe)
+                patch.setattr(core.qq, "_on_inbox_message", observe)
                 core.heartbeat.wake_up()
                 if cortisol is not None:
                     # 让两组具有相同的已结算输入；日程真实结算另由主动联系专项覆盖。
@@ -235,6 +240,84 @@ endpoint = "ws://127.0.0.1:{port}/onebot"
                 finally:
                     await core.heartbeat.shut_down()
     assert paths.identity_file.read_bytes() == IDENTITY
+
+
+@pytest.mark.parametrize("accepted", [1, 2, None])
+async def test_qq_recall_receipts_only_mark_successful_text_parts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, accepted: int | None
+) -> None:
+    clock = ManualClock(START)
+    async with open_replay(tmp_path, monkeypatch, clock, split_reply=True) as replay:
+        index, channel = replay.core.memory, replay.core.qq
+        assert index is not None and channel is not None
+        source = MemorySource("fixture", "memory", "paragraphs", (1,))
+        index.publish([HistoricalMemory(source, "合成木卫二照片")])
+        replay.planner.plan = {"reply": True, "intent": "继续聊天", "recall": ["木卫二"]}
+
+        async def reply(request: OrganRequest) -> OrganResponse:
+            assert "合成木卫二照片" in dialogue_text(request)
+            return OrganResponse("replyer", "第一段<n>后续段")
+
+        monkeypatch.setattr(replay.replyer, "process", reply)
+        replay.fake.reply_with[:] = ["ok" if part == accepted else "failed" for part in (1, 2)]
+        await replay.receive(event(711, 2100, "木卫二照片呢？", group=GROUP))
+        await replay.step()
+        await replay.fake.messages.get()
+        await asyncio.gather(*channel._sending)
+        clock.advance(timedelta(seconds=10))
+        replay.core.heartbeat.beat()
+        await replay.fake.messages.get()
+        await asyncio.gather(*channel._sending)
+
+        _, answer = replay.records()
+        assert answer.metadata["recall_feedback_refs"] == [f"source:{source.encode()}"]
+        receipts = replay.records(EVENT_RECALL_REPLY_DELIVERED)
+        assert [receipt.metadata for receipt in receipts] == (
+            [] if accepted is None else [{"reply_id": answer.id, "segment": accepted}]
+        )
+        assert all(receipt.visibility is answer.visibility for receipt in receipts)
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "mention", "explicit", "private"])
+async def test_qq_reply_parts_quote_only_when_needed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    clock = ManualClock(START)
+    async with open_replay(tmp_path, monkeypatch, clock, split_reply=True) as replay:
+        replay.planner.plan = {"reply": True, "intent": "继续聊天"}
+
+        async def reply(request: OrganRequest) -> OrganResponse:
+            assert request.context["task"] == "reply"
+            return OrganResponse("replyer", "第一段<n>后续段")
+
+        monkeypatch.setattr(replay.replyer, "process", reply)
+        is_private = mode == "private"
+        incoming = event(701, 2100, "合成来信", group=None if is_private else GROUP)
+        prefix = []
+        if mode == "mention":
+            prefix.append({"type": "at", "data": {"qq": str(ACCOUNT)}})
+        elif mode == "explicit":
+            prefix.append({"type": "reply", "data": {"id": 700}})
+        incoming["message"] = [*prefix, {"type": "text", "data": {"text": "合成来信"}}]
+        await replay.receive(incoming)
+        await replay.step()
+        first = await replay.fake.messages.get()
+        assert replay.fake.messages.empty()
+        clock.advance(timedelta(seconds=10))
+        replay.core.heartbeat.beat()
+        second = await replay.fake.messages.get()
+
+        quote = {"type": "reply", "data": {"id": "701"}}
+        for index, frame in enumerate((first, second)):
+            text = ("第一段", "后续段")[index]
+            assert frame["message_type"] == ("private" if is_private else "group")
+            recipient = "user_id" if is_private else "group_id"
+            assert frame[recipient] == str(2100 if is_private else GROUP)
+            parts = [quote] if is_private or (mode == "explicit" and not index) else []
+            assert frame["message"] == [*parts, {"type": "text", "data": {"text": text}}]
+        heard, answer = replay.records()
+        assert heard.metadata["quoted_message_id"] == ("700" if mode == "explicit" else None)
+        assert answer.metadata["in_reply_to"] == [heard.id]
 
 
 @pytest.mark.parametrize("cortisol", [False, True])
@@ -308,17 +391,15 @@ async def test_group_replay_silence_then_addressed_reply_with_quote(
         for request in (plan, reply):
             assert request.context["in_reply_to"] == [question.id]
             assert "Preserve this personality." in request.system_context
-            assert (
-                request.prompt.index("2100")
-                < request.prompt.index("2200")
-                < request.prompt.index("2300")
-            )
-            assert "消息 101" in request.prompt
-            assert "引用消息 101" in request.prompt
-            assert "点名你" in request.prompt
-        assert "你已经想好要表达的意思：确认东门" in reply.prompt
-        assert f"[person_info #{profile.id}]" in reply.prompt
-        assert "喜欢银杏" in reply.prompt
+            text = dialogue_text(request)
+            assert text.index("2100") < text.index("2200") < text.index("2300")
+            assert "消息 101" in text
+            assert "引用消息 101" in text
+            assert "点名你" in text
+        text = dialogue_text(reply)
+        assert "你已经想好要表达的意思：确认东门" in text
+        assert f"[person_info #{profile.id}]" in text
+        assert "喜欢银杏" in text
 
 
 @pytest.mark.parametrize("cortisol", [False, True])
@@ -353,7 +434,7 @@ async def test_group_replay_hormone_state_changes_silence_and_delivery(
                 assert "可以选择这次不回复这个人" not in replay.planner.calls[0][1].system_context
                 assert replay.records("reply_declined") == []
                 assert len(replay.replyer.calls) == 1
-                await replay.assert_sent(201)
+                await replay.assert_sent()
                 outcomes[enabled] = (replay.records(), [])
     assert len(outcomes[False][0]) == 2
     [incoming] = outcomes[True][0]
@@ -385,7 +466,7 @@ async def test_group_replay_same_input_changes_timing_with_fatigue(
             assert replay.planner.calls == replay.replyer.calls == []
             clock.advance(timedelta(seconds=1))
             await replay.step()
-        await replay.assert_sent(301)
+        await replay.assert_sent()
         question, answer = replay.records()
         expected = START + timedelta(seconds=delay)
         assert question.timestamp == START
@@ -435,16 +516,17 @@ async def test_group_replay_language_learned_in_private_survives_restart(
         }
         await replay.receive(event(409, 2300, "gg，来聊跑步。", group=GROUP))
         await replay.step()
-        await replay.assert_sent(409)
+        await replay.assert_sent()
         plan, reply = replay.planner.calls[-1][1], replay.replyer.calls[-1][1]
         assert plan.prompt.index("GG：抵达终点") < plan.prompt.index("GG：等候开局")
-        assert "当「庆祝跑步成绩」时，可用「月兔冲线」" in reply.prompt
-        assert "GG：抵达终点" not in reply.prompt
+        text = dialogue_text(reply)
+        assert "当「庆祝跑步成绩」时，可用「月兔冲线」" in text
+        assert "GG：抵达终点" not in text
         replay.planner.plan = {"reply": True, "intent": "问好"}
         await replay.receive(event(410, 2300, "陌生主题。", group=GROUP))
         await replay.step()
-        await replay.assert_sent(410)
-        assert "习得表达（" not in replay.replyer.calls[-1][1].prompt
+        await replay.assert_sent()
+        assert "习得表达（" not in dialogue_text(replay.replyer.calls[-1][1])
 
 
 @pytest.mark.parametrize(("keyword", "hits"), [("木卫二", 2), ("海王星", 0)])
@@ -464,18 +546,19 @@ async def test_group_replay_history_matches_or_exposes_empty_result(
         replay.planner.plan = {"reply": True, "intent": "谈之前的约定", "recall": [keyword]}
         await replay.receive(event(504, 2300, f"还记得{keyword}吗？", group=GROUP))
         await replay.step()
-        await replay.assert_sent(504)
+        await replay.assert_sent()
         early, late, _, question, answer = replay.records()
         plan, reply = replay.planner.calls[-1][1], replay.replyer.calls[-1][1]
         assert plan.context["in_reply_to"] == reply.context["in_reply_to"] == [question.id]
         assert late.content not in plan.prompt
-        assert f"查询：{keyword}\n命中：{hits} 条" in reply.prompt
+        text = dialogue_text(reply)
+        assert f"查询：{keyword}\n命中：{hits} 条" in text
         assert answer.metadata["recall_keywords"] == [keyword]
         assert answer.metadata["recall_record_ids"] == ([late.id, early.id] if hits else [])
         if hits:
-            assert reply.prompt.index(late.content) < reply.prompt.index(early.content)
+            assert text.index(late.content) < text.index(early.content)
         else:
-            assert "没有找到相关的记忆。" in reply.prompt
+            assert "没有找到相关的记忆。" in text
 
 
 @pytest.mark.parametrize("topic", ["木卫二", "海王星"])
@@ -497,7 +580,7 @@ async def test_imported_memory_and_edited_prompts_in_group_replay(
         question = f"还记得{topic}吗？"
         await replay.receive(event(601, 2300, question, group=GROUP))
         await replay.step()
-        await replay.assert_sent(601)
+        await replay.assert_sent()
         hits = topic == "木卫二"
         _, answer = replay.records()
         assert answer.metadata.get("recall_source_keys", []) == ([source.encode()] if hits else [])
@@ -509,7 +592,10 @@ async def test_imported_memory_and_edited_prompts_in_group_replay(
             scenes = build_prompt_scenes(organ.organ_id, {task}, replay.core.identity, START)
             scene = next(scene for scene in scenes if scene.key == scene_key)
             preview = assemble_messages(scene.request, prompts)
-            assert "待回应的群消息：\n〔当前消息〕" in preview[1]["content"]
+            assert any(
+                "待回应的群消息：\n" in row["content"] and "〔当前消息〕" in row["content"]
+                for row in preview
+            )
             # 用同一份运行时请求通过正常适配器，截获最终消息数组。
             completion = FakeCompletion(make_response(response))
             adapter = LLMOrgan(
@@ -522,10 +608,13 @@ async def test_imported_memory_and_edited_prompts_in_group_replay(
             )
             await adapter.process(request)
             [call] = completion.calls
-            system, user = call["messages"]
-            assert [system["role"], user["role"]] == [row["role"] for row in preview]
+            system, *conversation = call["messages"]
+            assert system["role"] == "system"
+            assert [row["role"] for row in conversation] == (
+                ["user"] if task == "plan" else ["user", "user", "user"]
+            )
             assert "Preserve this personality." in system["content"]
-            content = user["content"]
+            content = "\n".join(row["content"] for row in conversation)
             assert "待回应的群消息：\n" in content and question in content
             assert (memory.text in content) is hits
             assert ("来源 mai_messages/" in content) is hits

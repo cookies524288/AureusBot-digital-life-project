@@ -30,7 +30,7 @@ from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
     build_plan_prompt,
-    build_reply_prompt,
+    build_reply_request,
     build_system_context,
 )
 from aureus.heartbeat.diary_runner import DiaryOutcome
@@ -58,7 +58,12 @@ from aureus.heartbeat.planning import (
     clean_text,
     parse_plan,
 )
-from aureus.heartbeat.recall import MAX_RECALL_CHARS, format_recall, heuristic_keywords
+from aureus.heartbeat.recall import (
+    MAX_RECALL_CHARS,
+    format_recall,
+    format_recall_hits,
+    heuristic_keywords,
+)
 from aureus.heartbeat.reply_outbox import EmojiReplyPart
 from aureus.heartbeat.reply_segments import ReplyDraft, prepare_reply
 from aureus.heartbeat.reply_strategy import ReplyStrategy, judge_allowed
@@ -161,6 +166,7 @@ class _ReplyJob:
     media_sources: tuple[Perception, ...] = ()
     planner_run: "_PlannerRun | None" = None
     emoji_history: Sequence[TimelineRecord] | None = None
+    language_scope_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +187,7 @@ class _ThoughtOutcome:
     notice: str = ""
     # 规划器读懂的建议；没规划、或者看不懂时是 None。
     plan: Plan | None = None
+    reference_plan: Plan | None = None
     # 规划器决定不回复：没有 response，也不是失败，不发失败通知。
     declined: bool = False
     # 判断器官的结果；没调用判断（开关关着、档位低、没配器官）时是 None。
@@ -192,6 +199,7 @@ class _ThoughtOutcome:
     recall_keywords: tuple[str, ...] = ()
     recall_record_ids: tuple[int, ...] = ()
     recall_source_keys: tuple[str, ...] = ()
+    recall_feedback_refs: tuple[str, ...] = ()
     review_reason: str | None = None
     reply_segments: tuple[str, ...] = ()
     emoji: EmojiReplyPart | None = None
@@ -261,7 +269,7 @@ def _organ_request(
     purpose: CallPurpose = CallPurpose.USER_REPLY,
 ) -> OrganRequest:
     """规划和回复共用的请求格式；主动联系显式传 OPTIONAL（D76）。"""
-    if job.working_context and task in {"plan", "reply", "initiative_plan", "initiative_reply"}:
+    if job.working_context and task in {"plan", "initiative_plan", "initiative_reply"}:
         prompt = join_prompt([job.working_context, prompt])
     return OrganRequest(
         organ_id=organ_id,
@@ -351,11 +359,14 @@ class ConversationFlow:
     def _recent_history(self, target: Perception, limit: int) -> Sequence[TimelineRecord]:
         """停用工作记忆时沿用按精力档位查询对话的规则（D59、D61、D84）。"""
         if target.route is None:
+            if (
+                target.visibility is VisibilityScope.USER_ONLY
+                and target.trust is not TrustLevel.VERIFIED_USER
+            ):
+                return ()
             return recent_dialogue(
                 self._timeline,
-                visibility=(
-                    target.visibility if target.trust is TrustLevel.VERIFIED_USER else None
-                ),
+                visibility=target.visibility,
                 limit=limit,
             )
         key = ConversationKey.from_perception(target)
@@ -494,6 +505,11 @@ class ConversationFlow:
             working_context=working_context,
             people_history=people_history,
             inbox_attention=inbox_attention,
+            language_scope_key=(
+                ConversationKey.from_perception(target).language_scope_key()
+                if target.route
+                else None
+            ),
             emoji_history=(
                 [
                     record
@@ -583,7 +599,12 @@ class ConversationFlow:
             outcome = await self._reply_with_review(job, plan, automatic)
             if outcome.response is not None:
                 outcome = await self._finish_reply(job, outcome, outcome.response)
-        return replace(outcome, judge=attempt, effects=job.effects)
+        return replace(
+            outcome,
+            reference_plan=outcome.reference_plan or plan,
+            judge=attempt,
+            effects=job.effects,
+        )
 
     async def _reply_with_review(
         self,
@@ -602,9 +623,11 @@ class ConversationFlow:
         except CallRejectedError:
             return _ThoughtOutcome(declined=True)
         if revised is None or not revised.should_reply:
-            return _ThoughtOutcome(declined=True)
+            return _ThoughtOutcome(declined=True, reference_plan=revised)
         outcome = await self._reply(job, revised, automatic)
-        return outcome if outcome.review_reason is None else _ThoughtOutcome(declined=True)
+        if outcome.review_reason is not None:
+            outcome = _ThoughtOutcome(declined=True)
+        return replace(outcome, reference_plan=revised)
 
     async def _finish_reply(
         self, job: _ReplyJob, outcome: _ThoughtOutcome, response: OrganResponse
@@ -848,7 +871,10 @@ class ConversationFlow:
         ]
         try:
             return await asyncio.to_thread(
-                self._language.jargon_reference, texts, self._language_config.reference_chars
+                self._language.jargon_reference,
+                texts,
+                self._language_config.reference_chars,
+                conversation_key=job.language_scope_key,
             )
         except sqlite3.Error:
             logger.exception("读取黑话参考失败")
@@ -868,6 +894,7 @@ class ConversationFlow:
                 avoid,
                 speaker_key(job.messages[-1]),
                 self._language_config.reference_chars,
+                conversation_key=job.language_scope_key,
             )
         except sqlite3.Error:
             logger.exception("读取习得表达参考失败")
@@ -949,24 +976,25 @@ class ConversationFlow:
         sentinel = _REVIEW_SENTINEL_PREFIX + uuid4().hex
         recall_text = ""
         keywords: tuple[str, ...] = ()
-        hits: list[MemoryHit] = []
+        hits: Sequence[MemoryHit] = ()
         if plan.recall and self._can_recall():
             if (explicit := await self._retrieve(job, plan.recall)) is not None:
-                hits = explicit
                 keywords = plan.recall
-                recall_text = format_recall(keywords, hits, self._timezone)
+                recall_text, hits = format_recall_hits(keywords, explicit, self._timezone)
         elif automatic is not None:
-            keywords, hits = automatic
-            recall_text = format_recall(keywords, hits, self._timezone, heuristic=True)
-        request = _organ_request(
-            job,
-            organ_id=self._config.reply_organ,
-            task="reply",
-            prompt=build_reply_prompt(
+            keywords, candidates = automatic
+            recall_text, hits = format_recall_hits(
+                keywords, candidates, self._timezone, heuristic=True
+            )
+        request = replace(
+            build_reply_request(
+                self._config.reply_organ,
                 job.history,
                 job.messages,
                 job.user_name,
                 self._timezone,
+                system_context=job.replyer_context,
+                working_context=job.working_context,
                 intent=plan.intent,
                 plan_reason=plan.reason,
                 review_sentinel=sentinel,
@@ -984,7 +1012,9 @@ class ConversationFlow:
                     else ""
                 ),
             ),
-            system_context=job.replyer_context,
+            context={"task": "reply", "in_reply_to": [record.id for record in job.messages]},
+            purpose=CallPurpose.USER_REPLY,
+            model_preference=job.strategy.model_preference,
         )
         try:
             response = await self._call(request)
@@ -1015,4 +1045,15 @@ class ConversationFlow:
             recall_keywords=keywords,
             recall_record_ids=tuple(hit.record_id for hit in hits if hit.record_id is not None),
             recall_source_keys=tuple(hit.source.encode() for hit in hits if hit.source is not None),
+            recall_feedback_refs=(
+                tuple(
+                    f"source:{hit.source.encode()}"
+                    if hit.source is not None
+                    else f"timeline:{hit.record_id}"
+                    for hit in hits
+                    if hit.source is not None or hit.record_id is not None
+                )
+                if self._memory_config.recall_feedback_enabled
+                else ()
+            ),
         )

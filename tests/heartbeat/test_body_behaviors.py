@@ -30,6 +30,7 @@ from aureus.identity import Identity
 from aureus.organs import CallAttempt, OrganRequest, OrganResponse
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord, VisibilityScope
+from tests.prompt_assertions import dialogue_text
 
 pytestmark = pytest.mark.asyncio
 
@@ -181,8 +182,9 @@ async def test_high_fatigue_holds_the_reply_then_answers_all_messages_together(
 
     assert [request.organ_id for request in rig.organs.requests] == ["planner", "replyer"]
     for request in rig.organs.requests:
-        assert "在吗" in request.prompt
-        assert "我想问个事" in request.prompt
+        text = dialogue_text(request)
+        assert "在吗" in text
+        assert "我想问个事" in text
     assert len(rig.records(EVENT_MESSAGE)) == 3  # 两条用户消息加一条回复
 
 

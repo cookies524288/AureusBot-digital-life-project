@@ -60,23 +60,24 @@ def register_memory_transfer_routes(
             start = end - timedelta(hours=hours)
         if start is not None and end is not None and start > end:
             raise HTTPException(422, "开始时间须早于或等于结束时间。")
-        rows, conversations = (
+        rows, conversations, total = (
             await asyncio.to_thread(
-                memory.browse_flow,
+                memory.browse_flow_page,
                 offset,
-                limit + 1,
+                limit,
                 event_type=event_type,
                 conversation=conversation,
                 start=start,
                 end=end,
             )
             if memory
-            else ([], [])
+            else ([], [], 0)
         )
         return {
             "enabled": memory is not None,
-            "items": [asdict(entry) for entry in rows[:limit]],
-            "next_offset": offset + limit if len(rows) > limit else None,
+            "items": [asdict(entry) for entry in rows],
+            "total": total,
+            "next_offset": offset + limit if offset + limit < total else None,
             "conversations": conversations,
             "start": start,
             "end": end,

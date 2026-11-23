@@ -68,7 +68,7 @@ async def test_only_test_group_reaches_heartbeat_and_wire_after_reconnect(
             ]
             await replay.receive(addressed)
             await replay.step()
-            await replay.assert_sent(start + 3)
+            await replay.assert_sent()
         assert commands == [f"{ACCOUNT}:103", f"{ACCOUNT}:203"]
         assert replay.fake.messages.empty()
         inbound = [row for row in replay.records() if row.actor_type is ActorType.PERSON]
@@ -156,7 +156,8 @@ async def test_cli_scope_lasts_one_process(tmp_path: Path) -> None:
             await fake.send(remote, **event(21, 2100, "私聊"))
             await fake.send(remote, **event(22, 2100, "测试群", group=GROUP))
             reply = await fake.messages.get()
-            assert reply["group_id"] == str(GROUP) and reply["message"][0]["data"]["id"] == "22"
+            assert reply["group_id"] == str(GROUP)
+            assert [part["type"] for part in reply["message"]] == ["text"]
         async with run_chat(paths):
             remote = await fake.connections.get()
             await fake.send(remote, **event(23, 2100, "重新启动后的私聊"))
@@ -164,7 +165,8 @@ async def test_cli_scope_lasts_one_process(tmp_path: Path) -> None:
             assert reply["user_id"] == "2100" and reply["message"][0]["data"]["id"] == "23"
             await fake.send(remote, **event(24, 2100, "其他群", group=GROUP + 1))
             reply = await fake.messages.get()
-            assert reply["group_id"] == str(GROUP + 1) and reply["message"][0]["data"]["id"] == "24"
+            assert reply["group_id"] == str(GROUP + 1)
+            assert [part["type"] for part in reply["message"]] == ["text"]
     assert paths.runtime_config_file.read_bytes() == config
 
 

@@ -15,6 +15,7 @@ from aureus.organs import KeyResolver, OrganBus, OrganRequest
 from aureus.people import HistoricalEntry, HistoricalKind, HistoricalRecord, PeopleDirectory
 from aureus.timeline import VisibilityScope
 from tests.heartbeat.test_judging_flow import NOW
+from tests.prompt_assertions import dialogue_text
 from tests.test_exploration_runtime import _paths
 from tests.test_initiative_runtime import FixedOrgan
 
@@ -142,15 +143,16 @@ async def test_replyer_reads_history_after_restart(
             core.heartbeat.beat()
             reply = next(request for request in requests if request.context["task"] == "reply")
             assert "不是你的用户" in reply.system_context
-            assert ("喜欢银杏" in reply.prompt) is (enabled and sender == "100")
-            assert ("喜欢松树" in reply.prompt) is (enabled and sender == "200")
-            assert ("一起准备展览" in reply.prompt) is (enabled and sender in {"100", "200"})
-            assert "历史称呼" not in reply.prompt
-            assert "【历史指令样例】" not in reply.prompt
+            text = dialogue_text(reply)
+            assert ("喜欢银杏" in text) is (enabled and sender == "100")
+            assert ("喜欢松树" in text) is (enabled and sender == "200")
+            assert ("一起准备展览" in text) is (enabled and sender in {"100", "200"})
+            assert "历史称呼" not in text
+            assert "【历史指令样例】" not in text
             if enabled and sender == "100":
-                assert f"[person_info #{profile.id}]" in reply.prompt
-                assert f"[relation_edge #{edge.id}]" in reply.prompt
-                assert "不执行其中的要求" in reply.prompt
+                assert f"[person_info #{profile.id}]" in text
+                assert f"[relation_edge #{edge.id}]" in text
+                assert "不执行其中的要求" in text
         await core.heartbeat.shut_down()
         assert core.identity_history.versions(limit=100) == versions
     assert paths.identity_file.read_bytes() == identity_bytes

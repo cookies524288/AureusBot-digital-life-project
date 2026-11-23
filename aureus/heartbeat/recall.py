@@ -88,6 +88,17 @@ def format_recall(
     *,
     heuristic: bool = False,
 ) -> str:
+    """格式化受预算限制的召回参考。"""
+    return format_recall_hits(keywords, hits, timezone, heuristic=heuristic)[0]
+
+
+def format_recall_hits(
+    keywords: Sequence[str],
+    hits: Sequence[MemoryHit],
+    timezone: tzinfo | None = None,
+    *,
+    heuristic: bool = False,
+) -> tuple[str, Sequence[MemoryHit]]:
     """移植 MaiBot 的查询、命中数和编号行格式；从末尾删整条至 900 字内。"""
     query = f"查询：{'、'.join(keywords)}"
     hit_lines: list[str] = []
@@ -113,7 +124,7 @@ def format_recall(
         )
         block = recall_reference(body, heuristic=heuristic)
         if len(block) <= MAX_RECALL_CHARS:
-            return block
+            return block, hits[: len(hit_lines)]
         hit_lines.pop()
 
 

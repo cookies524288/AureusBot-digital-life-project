@@ -18,6 +18,22 @@ function element(tag = 'div') {
   return {
     nodeType: 1, tagName: tag.toUpperCase(), dataset: {}, style: {}, value: '', textContent: '',
     children: [], listeners: {}, attributes: {},
+    get lastChild() { return this.children.at(-1) ?? null; },
+    get elements() {
+      if (this.tagName !== 'FORM') return undefined;
+      const controls = {};
+      function collect(parent) {
+        for (const child of parent.children) {
+          const name = child.attributes.name;
+          if (name && ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(child.tagName)) {
+            controls[name] = child;
+          }
+          collect(child);
+        }
+      }
+      collect(this);
+      return controls;
+    },
     classList: {
       add: name => classes.add(name), remove: name => classes.delete(name),
       contains: name => classes.has(name),
@@ -38,6 +54,11 @@ function element(tag = 'div') {
       for (const child of this.children.slice()) child.remove?.();
       this.children = [];
       this.append(...children);
+    },
+    replaceWith(node) {
+      if (!this.parentElement) return;
+      this.parentElement.insertBefore(node, this);
+      this.remove();
     },
     setAttribute(key, value) {
       this.attributes[key] = value;

@@ -12,6 +12,7 @@ from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception, TrustLevel
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore, MemoryIndex
+from aureus.memory.emoji import EmojiStore
 from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.timeline import TimelineDatabase, VisibilityScope
@@ -64,6 +65,8 @@ async def test_image_resource_returns_ranked_sources_only_to_signed_in_user(tmp_
         first = client.get(endpoint, params={"limit": 1}).json()
         assert first["items"][0]["attachment"] == "three"
         second = client.get(endpoint, params={"before": first["next_before"]}).json()
+        assert first["total"] == second["total"] == 3
+        assert second["next_before"] is None
         [match] = client.get(endpoint, params={"similar_to": second["items"][1]["id"]}).json()[
             "items"
         ]
@@ -95,6 +98,9 @@ def test_learning_resources_filter_and_page_real_observations(tmp_path: Path) ->
         params = {"q": "庆祝跑步", "limit": 1}
         first = client.get(endpoint, params=params).json()
         second = client.get(endpoint, params={**params, "offset": first["next_offset"]}).json()
+        beyond = client.get(endpoint, params={**params, "offset": 2}).json()
+        assert first["total"] == second["total"] == beyond["total"] == 2
+        assert beyond["items"] == [] and beyond["next_offset"] is None
         assert first["enabled"] is True and first["next_offset"] == 1
         assert second["next_offset"] is None
         entries = first["items"] + second["items"]
@@ -135,17 +141,90 @@ def test_resource_filters_pages_and_reads_evidence(tmp_path: Path) -> None:
         endpoint = "/api/resources/memory"
         assert client.get(endpoint).status_code == 401
         client.cookies.set("session", "test")
-        params = {"status": "active", "q": "样本", "limit": 1}
+        params = {"status": "active", "q": "样本", "limit": 1, "recall": "enabled"}
         first = client.get(endpoint, params=params).json()
         assert len(first["items"]) == 1
         assert first["items"][0]["evidence"][0]["kind"] == "message"
         assert first["next_offset"] == 1
         second = client.get(endpoint, params={**params, "offset": 1}).json()
+        assert first["total"] == second["total"] == 2
         assert second["items"][0]["text"] != first["items"][0]["text"]
         assert second["next_offset"] is None
-        assert client.get(endpoint, params={"q": "不存在"}).json()["items"] == []
+        empty = client.get(endpoint, params={"q": "不存在"}).json()
+        assert empty["items"] == [] and empty["total"] == 0
         assert client.get("/api/resources/learning").json()["enabled"] is False
         assert timeline.count_records() == 0
+    finally:
+        memory.close()
+        timeline.close()
+
+
+def test_picture_catalog_filters_and_counts_the_unpaged_snapshot(tmp_path: Path) -> None:
+    path = tmp_path / "pictures.db"
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    timeline = TimelineDatabase(path, clock)
+    timeline.open()
+    memory = MemoryIndex(path, timeline, clock)
+    memory.open()
+    emojis = EmojiStore(path, tmp_path / "media", clock)
+    archived = "a" * 64
+    try:
+        memory.publish(
+            HistoricalMemory(
+                MemorySource("fixture", "memory", "image_assets", (number,)),
+                f"归档图片 {number}",
+                evidence=(MemoryEvidence("attachment_archived", f"attachments/{archived}"),),
+                recorded_at=clock.now(),
+            )
+            for number in range(2)
+        )
+        inbox = InboxStore(path, clock)
+
+        async def embed(request: OrganRequest) -> OrganResponse:
+            return OrganResponse(request.organ_id, "", embeddings=((1.0, 0.0),))
+
+        images = InboxImageIndex(path, embed, lambda: True)
+        for number in range(3):
+            attachment = MediaReference("image", f"sample-{number}")
+            perception = Perception(
+                "qq",
+                "fixture",
+                "图片",
+                VisibilityScope.USER_ONLY,
+                TrustLevel.VERIFIED_USER,
+                route=MessageRoute("account", "private", "fixture", str(number)),
+                attachments=(attachment,),
+            )
+            inbox.add(perception, conversation_name=f"合成会话{number}")
+            images._save(number + 1, f"sample-{number}", "fixture-space", (1.0, 0.0))
+
+        async def require_ready() -> str:
+            return "test"
+
+        app = FastAPI()
+        register_resource_routes(
+            app, require_ready, None, memory, images, emojis=emojis, database=path
+        )
+        with TestClient(app) as client:
+            endpoint = "/api/resources/pictures"
+            first = client.get(endpoint, params={"availability": "reference", "limit": 1}).json()
+            second = client.get(
+                endpoint,
+                params={"availability": "reference", "limit": 1, "offset": 1},
+            ).json()
+            archived_page = client.get(
+                endpoint, params={"availability": "archived", "limit": 1}
+            ).json()
+            filtered = client.get(endpoint, params={"q": "sample-1"}).json()
+            beyond = client.get(
+                endpoint,
+                params={"availability": "reference", "limit": 1, "offset": 3},
+            ).json()
+        assert first["total"] == second["total"] == 3
+        assert first["next_offset"] == 1 and second["next_offset"] == 2
+        assert archived_page["total"] == 2 and archived_page["items"][0]["digest"] == archived
+        assert filtered["total"] == 1 and filtered["items"][0]["kind"] == "inbox"
+        assert beyond["items"] == [] and beyond["total"] == 3 and beyond["next_offset"] is None
     finally:
         memory.close()
         timeline.close()

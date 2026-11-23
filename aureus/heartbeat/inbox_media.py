@@ -1,4 +1,7 @@
-"""心跳选中会话后，在后台补充图片说明和语音转写。"""
+"""心跳选中会话后，在后台补充图片说明和语音转写。
+
+普通图片说明用 MaiBot 1.3.15 的简体中文模板（GPL-3.0），来源见 THIRD_PARTY.md。
+"""
 
 import asyncio
 import logging
@@ -13,6 +16,14 @@ from aureus.timeline import TimelineRecord
 from .perception import MediaReference, Perception
 
 logger = logging.getLogger(__name__)
+
+_IMAGE_DESCRIPTION = (
+    "请用中文详细描述这张图片的内容。如果有文字，请把文字描述概括出来，请留意其主题、直观感受，"
+    "输出为一段平文本，最多100字，请注意不要分点，就输出一段文本"
+)
+_EMOJI_DESCRIPTION = (
+    "请客观描述这张图片，读出可辨认的文字。请用一句简短中文注明画面和它表达的情绪。"
+)
 
 AttachmentReader = Callable[[Perception, MediaReference], Awaitable[tuple[bytes, str] | None]]
 ImageIndexer = Callable[[Perception, MediaReference, bytes], Awaitable[None]]
@@ -73,9 +84,9 @@ class InboxMedia:
                     logger.warning("QQ 表情收集未完成")
             if organ in self.available:
                 label = "表情识别" if attachment.is_emoji else "图片识别" if image else "语音转写"
-                prompt = "请客观描述这张图片，读出可辨认的文字。" if image else ""
-                if attachment.is_emoji:
-                    prompt += "请用一句简短中文注明画面和它表达的情绪。"
+                prompt = ""
+                if image:
+                    prompt = _EMOJI_DESCRIPTION if attachment.is_emoji else _IMAGE_DESCRIPTION
                 try:
                     result = await self._call(
                         OrganRequest(

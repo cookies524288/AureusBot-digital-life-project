@@ -13,6 +13,8 @@
 | `aureus/memory/consolidation.py` 的 `read_candidates` | 安装版 A_Memorix 2.0.0 的 `core/utils/memory_lifecycle_policy.py::retention_at` | AGPL-3.0 | 沿用指数半衰期公式，保留源证据，以 Aureus 时钟和可配置半衰期计算派生候选权重 |
 | `aureus/tools/migrate/maibot_memory.py` 的 `_message_person` | 安装版 MaiBot 1.3.15 的 `src/person_info/person_info.py::get_person_id` | GPL-3.0 | 保持平台字段规范化和哈希规则，附逻辑实例名，匹配同源 A_Memorix 人物键 |
 | `aureus/web/static/ark-pixel.woff2` | TakWolf/ark-pixel-font，2026-11-10 版，12 像素比例简体中文 WOFF2，https://github.com/TakWolf/ark-pixel-font | SIL OFL 1.1 | 原样随网页分发，许可证见同目录 `ark-pixel-OFL.txt` |
+| `aureus/heartbeat/context.py` 的 `plan_task`、`reply_instruction`、`build_reply_request` | MaiBot 1.3.15 的 [maisaka_chat.prompt](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/prompts/zh-CN/maisaka_chat.prompt)、[maisaka_replyer.prompt](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/prompts/zh-CN/maisaka_replyer.prompt) 和 [maisaka_generator_base.py](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/src/chat/replyer/maisaka_generator_base.py) | GPL-3.0 | 改编规划要求、口语化及正文输出说明，采用现代回复器的角色历史及参考布局；保留本项目任务字段、上下文权限、工具隔离、分段与再审协议和覆盖键。 |
+| `aureus/heartbeat/inbox_media.py` 的 `_IMAGE_DESCRIPTION` | MaiBot 1.3.15 的 [image_description.prompt](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/prompts/zh-CN/image_description.prompt) | GPL-3.0 | 使用普通图片的简体中文模板正文，不移植媒体读取、表情标签或语音流程。 |
 
 ## 许可证核对记录
 

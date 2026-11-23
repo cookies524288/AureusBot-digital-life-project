@@ -69,6 +69,7 @@ async def _read_stream(stream: Any) -> tuple[str | None, TokenUsage]:
                 usage = actual
     return "".join(pieces).strip() or None, usage
 
+
 # 协议 → litellm 的模型前缀。openai/responses/ 触发 OpenAI Responses 协议；
 # 四种写法都用 litellm 的 get_llm_provider 离线核对过。
 LITELLM_PREFIX_BY_PROTOCOL: dict[ProviderProtocol, str] = {
@@ -631,6 +632,10 @@ def assemble_messages(
             "role": "system",
             "content": system or render_prompt(EMPTY_SYSTEM_MESSAGE.fill(), overrides),
         },
+        *(
+            {"role": role, "content": render_prompt(content, overrides)}
+            for role, content in request.preceding_messages
+        ),
         {"role": "user", "content": render_prompt(request.prompt, overrides)},
     ]
 

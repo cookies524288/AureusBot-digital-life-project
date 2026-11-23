@@ -141,10 +141,12 @@ section.page{padding:18px 16px 24px}
 .field>label,.field-label{font-size:13px;color:var(--text-2)}
 .field .hint{font-size:12px;color:var(--text-2)}
 .field-label .hint{margin-inline-start:.5em;color:color-mix(in srgb,var(--text-2) 90%,var(--surface))}
-input[type=text],input[type=password],input[type=number],input[type=search],select,textarea{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);transition:border-color var(--dur-fast)}
+input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]),select,textarea{box-sizing:border-box;min-width:0;max-width:100%;width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit;transition:border-color var(--dur-fast)}
+input:is([type=checkbox],[type=radio],[type=range]){accent-color:var(--accent)}
+input::file-selector-button{font:inherit;color:inherit;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px 8px;margin-right:8px;cursor:pointer}
 input:hover,select:hover,textarea:hover{border-color:var(--text-2)}
 input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-input:read-only,textarea:read-only{background:var(--surface-2);color:var(--text-2)}
+input[readonly],textarea[readonly]{background:var(--surface-2);color:var(--text-2)}
 textarea{resize:vertical;min-height:96px;line-height:1.6}
 .form-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
 
@@ -289,6 +291,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 @media(max-width:680px){.tl-meta{flex-basis:100%}}
 .tl-content{margin-top:2px;white-space:pre-wrap;word-break:break-word}
 .tl-content.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.tl-details{font-size:12px}.tl-details :is(dl,ul){margin:4px 0}.tl-details dt{font-weight:600}.tl-details dd{margin:0 0 6px 12px;overflow-wrap:anywhere;white-space:pre-wrap}
 .tl-divider{display:flex;align-items:center;gap:10px;margin:10px 0 10px -22px;color:var(--accent-strong);font-size:12px;font-weight:600}
 .tl-divider::before,.tl-divider::after{content:'';flex:1;height:0;border-top:2px dashed var(--accent)}
 
@@ -443,6 +446,29 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-message{padding:12px 0;border-bottom:1px solid var(--border)}
 .inbox-message .row{justify-content:space-between;gap:6px 12px}.inbox-message p{white-space:pre-wrap;margin:7px 0 0}
 .inbox-more{margin-top:14px}
+.resource-page .stack{gap:10px}
+.resource-page>.page-body,.resource-panel{flex:1;min-width:0}
+.resource-filters input[type=search]{flex:1 1 180px;min-width:0}
+.resource-filters select{width:auto;max-width:100%}
+.resource-filters label{font-size:13px}
+.resource-list{display:grid;gap:6px;--resource-row:42px;flex:1;align-content:start;contain:size;min-height:var(--resource-row)}
+.resource-record{display:flex;align-items:center;min-width:0;gap:8px;height:var(--resource-row)}
+.resource-record .btn{height:100%;flex:1;justify-content:flex-start;min-width:0}
+.resource-record .btn span,.resource-tile span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.resource-grid{--resource-tile:126px;min-height:var(--resource-tile);grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--resource-tile)),1fr));align-items:start}
+.resource-grid[data-size=small]{--resource-tile:88px}
+.resource-grid[data-size=large]{--resource-tile:176px}
+.resource-grid>.resource-empty{grid-column:1/-1}
+.resource-tile{display:grid;grid-template-rows:minmax(0,1fr) auto;height:var(--resource-tile);min-width:0;gap:3px;padding:5px}
+.resource-tile img{width:100%;height:100%;min-height:0;object-fit:contain}
+.resource-tile-selection{position:relative;min-width:0}
+.resource-tile-selection>.resource-tile{width:100%}
+.resource-tile-selection>input[type=checkbox]{position:absolute;top:7px;right:7px;z-index:1}
+.resource-tile .resource-placeholder{display:grid;place-items:center;background:var(--surface-2);border-radius:var(--radius-sm);white-space:normal;text-align:center}
+.resource-pagination{justify-content:center;gap:8px;min-height:32px}
+.resource-detail{overflow-wrap:anywhere;gap:12px}
+.resource-detail p{white-space:pre-wrap}
+.resource-detail img{display:block;width:100%;max-height:58dvh;object-fit:contain}
 @media(max-width:680px){.inbox-layout{grid-template-columns:minmax(0,1fr)}.inbox-conversations{max-height:30dvh}}
 @media(max-width:1100px){.model-library{grid-template-columns:1fr}.model-vendors{position:static}.provider-list{flex-direction:row;flex-wrap:wrap}.provider-row{flex:1 1 100px}.model-price,.model-owners{display:none}}
 @media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
@@ -546,7 +572,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 
 <div id="login-error" class="banner danger hidden" role="alert"></div>
 <div class="field"><label for="password">密码</label>
-<input id="password" type="password" autocomplete="current-password"></div>
+<input id="password" type="password" autocomplete="off"></div>
 <button id="login-btn" class="btn primary">登录</button>
 </div>
 </section>
@@ -557,9 +583,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <p id="change-hint" class="muted"></p>
 <div id="change-error" class="banner danger hidden" role="alert"></div>
 <div class="field"><label for="old-password">旧密码</label>
-<input id="old-password" type="password" autocomplete="current-password"></div>
+<input id="old-password" type="password" autocomplete="off"></div>
 <div class="field"><label for="new-password">新密码</label>
-<input id="new-password" type="password" autocomplete="new-password">
+<input id="new-password" type="password" autocomplete="off">
 <span class="hint">至少 8 位。改完后所有设备都会退出，需要用新密码重新登录。</span></div>
 <button id="change-btn" class="btn primary">修改密码</button>
 </div>
@@ -621,6 +647,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="ov-task"><span>当前任务</span><strong id="ov-task"></strong></div></div></article>
 <article class="ov-slot ov-energy"><div class="ov-face"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-zap"/></svg>精力</h3><div class="ov-energy-line"><strong id="ov-energy" class="ov-readout"></strong><span id="ov-tier" class="ov-tier"></span></div><div class="ov-gauge" aria-hidden="true"><div class="ov-cells"><i id="ov-meter"></i></div></div></div></article>
 <article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg>状态摘要</h3></div><div id="ov-state" class="ov-state"></div></div></article>
+<article class="ov-slot"><div class="ov-face"><h3 class="ov-label">回复参考</h3><p id="ov-reference" class="tl-content">暂无回复参考</p><p id="ov-reference-source" class="muted"></p></div></article>
 <article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-timeline"/></svg>最近动态</h3><span class="ov-period">近 24 小时</span></div><ul id="ov-activity" class="ov-activity"></ul></div></article>
 <div class="ov-links"><button type="button" class="ov-slot ov-link" data-go="chat"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg><span>私聊</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
 <button type="button" class="ov-slot ov-link" data-go="monitor"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg><span>内部状态</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
@@ -635,7 +662,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="chat-log" class="chat-log" aria-live="polite"></div>
 <div class="composer">
 <textarea id="chat-text" rows="1" placeholder="说点什么（Enter 发送，Shift+Enter 换行）"></textarea>
-<button id="chat-send" class="btn primary"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-send"/></svg>发送</button>
+<button id="chat-send" class="btn primary" disabled><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-send"/></svg>发送</button>
 </div>
 </div></section>
 <section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
@@ -652,29 +679,22 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 <div id="tl-missing" class="empty hidden"></div>
 <div id="tl-list" class="tl-list"></div>
-<div class="row" style="justify-content:center;margin-top:16px"><button id="tl-more" class="btn hidden">加载更早的</button></div>
+<div class="row" style="justify-content:center;margin-top:16px"><button id="tl-more" class="btn hidden" disabled>加载更早的</button></div>
 </div></section>
-<section id="page-learning" class="page">
-  <div class="page-head"><h2>学习</h2><button id="learning-add" class="btn primary small">添加学习内容</button></div>
+<section id="page-learning" class="page wide resource-page">
+  <div class="page-head"><h2>学习</h2></div>
   <div class="page-body stack">
     <div class="row" role="group" aria-label="学习类型">
       <button class="btn small primary" data-learning-tab="jargon" aria-pressed="true">黑话</button>
       <button class="btn small" data-learning-tab="expression" aria-pressed="false">表达方式</button>
       <button class="btn small" data-learning-tab="emoji" aria-pressed="false">表情包</button>
     </div>
-    <form id="learning-search" class="row" style="flex-wrap:wrap">
-      <input type="search" name="q" aria-label="搜索学习内容" placeholder="搜索词、释义或例句" maxlength="200">
-      <label><input name="disabled" type="checkbox"> 显示停用</label>
-      <label class="hidden">表情状态 <select name="emoji_status">
-        <option value="">全部</option><option value="registered">已登记</option>
-        <option value="unregistered">未登记</option><option value="banned">已禁用</option>
-      </select></label><button class="btn small">查询</button>
-    </form>
-    <div id="learning-result" class="stack" aria-live="polite"></div>
-    <button id="learning-more" class="btn small hidden">加载更多</button>
+    <div id="learning-panel-jargon" class="stack resource-panel"></div>
+    <div id="learning-panel-expression" class="stack resource-panel hidden"></div>
+    <div id="learning-panel-emoji" class="stack resource-panel hidden"></div>
   </div>
 </section>
-<section id="page-memory" class="page">
+<section id="page-memory" class="page wide resource-page">
   <div class="page-head"><h2>长期记忆</h2></div>
   <div class="page-body stack">
     <div class="row" role="group" aria-label="长期记忆功能" style="flex-wrap:wrap">
@@ -683,38 +703,35 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
       <button class="btn small" data-memory-tab="flow" aria-pressed="false">记忆流</button>
       <button class="btn small" data-memory-tab="transfer" aria-pressed="false">导入导出</button>
     </div>
-    <div id="memory-panel-query" class="stack">
-      <div class="row" style="flex-wrap:wrap">
-        <div class="row" role="group" aria-label="查询内容">
-          <button class="btn small primary" data-memory-query="text" aria-pressed="true">文字记录</button>
-          <button class="btn small" data-memory-query="profiles" aria-pressed="false">人物画像</button>
-        </div>
-        <form id="memory-search" class="row" style="flex-wrap:wrap;flex:1">
-          <input type="search" name="q" aria-label="搜索记忆" placeholder="搜索内容、名称或来源 ID" maxlength="200" style="flex:1;min-width:0">
+    <div id="memory-panel-query" class="stack resource-panel">
+      <div class="row" role="group" aria-label="查询内容">
+        <button class="btn small primary" data-memory-query="text" aria-pressed="true">文字记录</button>
+        <button class="btn small" data-memory-query="profiles" aria-pressed="false">人物画像</button>
+      </div>
+      <div id="memory-query-text" class="stack resource-panel">
+        <form id="memory-search" class="row resource-filters">
+          <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索正文或来源 ID" maxlength="200">
           <select name="type" aria-label="记忆类型">
-            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="mai_messages">迁入消息</option><option value="live">本地经历</option>
+            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="messages">消息</option><option value="experiences">其他经历</option>
           </select>
           <label id="memory-show-disabled"><input name="disabled" type="checkbox"> 显示停用</label>
+          <label><input name="removed" type="checkbox"> 查看已移除</label>
           <button class="btn small primary">查询</button><button id="memory-refresh" type="button" class="btn small">刷新</button>
         </form>
+        <div id="memory-selection" class="row">
+          <label><input id="memory-select-all" type="checkbox" disabled> 全选本页</label>
+          <button id="memory-correct" class="btn small" disabled>修正所选</button>
+          <button id="memory-toggle-removed" type="button" class="btn small" disabled>移除所选</button>
+          <button id="memory-inspection" type="button" class="btn small">只读检修</button>
+          <span id="memory-counts" class="muted" aria-live="polite" style="margin-left:auto"></span>
+        </div>
       </div>
-      <div id="memory-selection" class="row" style="flex-wrap:wrap">
-        <label><input id="memory-select-all" type="checkbox" disabled> 全选</label>
-        <button id="memory-correct" class="btn small" disabled>修正所选</button>
-        <span id="memory-counts" class="muted" aria-live="polite" style="margin-left:auto"></span>
-      </div>
-      <div id="memory-result" class="stack" aria-live="polite"></div>
-      <button id="memory-more" class="btn small hidden">加载更多</button>
+      <div id="memory-query-profiles" class="stack resource-panel hidden"></div>
     </div>
-    <div id="memory-panel-images" class="stack hidden">
-      <div class="row" role="group" aria-label="图片来源"><button class="btn small primary" data-image-source="archive" aria-pressed="true">迁入图片</button><button class="btn small" data-image-source="live" aria-pressed="false">收件箱图片</button></div>
-      <div id="image-source-archive" class="stack">
-        <form id="archived-images-search" class="row"><input type="search" name="q" aria-label="搜索迁入图片" placeholder="搜索迁入图片" maxlength="200"><button class="btn small">查询</button></form>
-        <div id="archived-images-result" class="stack" aria-live="polite"></div><button id="archived-images-more" class="btn small hidden">加载更多</button>
-      </div>
-      <div id="image-source-live" class="stack hidden"><button id="images-reset" class="btn small hidden">返回图片列表</button><div id="images-result" class="stack" aria-live="polite"></div><button id="images-more" class="btn small hidden">加载更多</button></div>
+    <div id="memory-panel-images" class="stack resource-panel hidden">
+      <div id="memory-pictures" class="stack resource-panel"></div>
     </div>
-    <div id="memory-panel-flow" class="stack hidden"></div>
+    <div id="memory-panel-flow" class="stack resource-panel hidden"></div>
     <div id="memory-panel-transfer" class="stack hidden"></div>
   </div>
 </section>
@@ -727,7 +744,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <h3 id="inbox-thread-name">选择会话</h3>
 <p id="inbox-message-status" class="empty hidden" role="status"></p>
 <div id="inbox-messages"></div>
-<button id="inbox-more" class="btn inbox-more hidden">加载更早的消息</button>
+<button id="inbox-more" class="btn inbox-more hidden" disabled>加载更早的消息</button>
 </div>
 </div></div></section>
 <section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2></div></div>
@@ -755,7 +772,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 <div class="field" style="margin-top:14px"><label for="ps-immutable">不变人格</label><textarea id="ps-immutable" rows="8"></textarea></div>
 <div class="row" style="margin-top:14px;justify-content:flex-end">
-<input id="ps-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px">
+<input id="ps-password" type="password" placeholder="当前密码" autocomplete="off" style="max-width:220px">
 <button id="ps-save-baseline" class="btn primary" disabled>保存设定</button>
 </div>
 </div>
@@ -766,7 +783,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="md-missing" class="empty hidden"></div>
 <div id="md-content" class="model-library hidden">
 <aside class="model-vendors" aria-label="API供应商"><h3>API供应商</h3><div id="md-providers" class="provider-list"></div><button id="md-add-provider" class="btn"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加供应商</button></aside>
-<div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或供应商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option></select><button id="md-test-provider" class="btn" disabled>网络测速</button><button id="md-edit-provider" class="btn" disabled>编辑供应商</button><button id="md-add-model" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加模型</button></div>
+<div class="model-main"><div class="model-toolbar"><input id="md-search" type="search" placeholder="搜索模型或供应商" aria-label="搜索模型"><select id="md-kind" aria-label="模型类型筛选"><option value="">全部类型</option></select><button id="md-test-provider" class="btn" disabled>网络测速</button><button id="md-edit-provider" class="btn" disabled>编辑供应商</button><button id="md-add-model" class="btn primary" disabled><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加模型</button></div>
 <div id="md-results" style="display:grid;gap:inherit;min-width:0"><div id="md-catalog"></div>
 <div class="model-table-wrap"><table class="model-table" aria-label="模型列表"><thead><tr><th>模型</th><th>API供应商</th><th>类型</th><th class="model-vision">视觉</th><th class="model-price">价格（输入/输出）</th><th class="model-owners">负责的工作</th><th>操作</th></tr></thead><tbody id="md-models"></tbody></table></div>
 <div id="md-cards" class="model-cards"></div><div id="md-empty" class="empty hidden">没有匹配的模型。先添加供应商，再添加模型。</div></div>
@@ -800,7 +817,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <li><div class="og-step"><b>结束本轮</b><p>器官在后台工作，心跳在后续拍收回结果。回复、学习、整理等任务按各自条件调用器官。</p></div></li>
 </ol></section>
 </div></div></div></section>
-<section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
+<section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary" disabled><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
 <div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
@@ -810,7 +827,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
 <div id="cf-missing" class="empty hidden"></div>
 <div id="cf-content" class="stack hidden">
-<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px;margin-left:8px"></div>
+<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="off" style="max-width:220px;margin-left:8px"></div>
 <div id="cf-section" class="card"></div>
 </div>
 <section id="qq-link" class="stack hidden" aria-labelledby="qq-link-title">
@@ -875,7 +892,9 @@ const $ = id => document.getElementById(id);
 const state = { loggedIn: false, qqLink: false, page: '', loaded: {} };
 let editorGeneration = 0;
 
+for (const control of document.querySelectorAll('input, textarea, select, form')) control.setAttribute('autocomplete', 'off');
 function el(tag, props, ...kids) {
+  if (['input', 'textarea', 'select', 'form'].includes(tag)) props = {...props, autocomplete:'off'};
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props || {})) {
     if (key === 'class') node.className = value;
@@ -892,13 +911,18 @@ function el(tag, props, ...kids) {
 
 // 所有接口都走这里。返回 {ok, status, data, retryAfter}；网络断了 status 是 0。
 async function api(path, method, body) {
+  const session = state.loaded;
   const opt = { method: method || 'GET', headers: {}, credentials: 'same-origin' };
-  if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
+    opt.headers['Content-Type'] = 'application/octet-stream'; opt.body = body;
+  } else if (path.startsWith('/api/resources/learning/package/') && method === 'POST' && body instanceof Blob) {
+    opt.headers['Content-Type'] = 'application/json'; opt.body = body;
+  } else if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   let r;
   try { r = await fetch(path, opt); } catch (e) { return { ok: false, status: 0, data: null }; }
   let data = null;
   try { data = await r.json(); } catch (e) { /* 没有正文也可以 */ }
-  if (r.status === 401 && state.loggedIn) {
+  if (r.status === 401 && state.loggedIn && session === state.loaded) {
     // 改密码时旧密码不对也会返回 401，先确认会话是否真的失效。
     if (path === '/api/status') showAuth('login', '登录已失效，请重新登录。');
     else await api('/api/status');
@@ -984,12 +1008,13 @@ function fmtTime(iso, full) {
 }
 
 // ---------- 页面切换 ----------
-const PAGES = {};   // 页面名 -> {load}，各页在下面登记
+const PAGES = {};   // 页面名 -> {load, leave}，各页在下面登记
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const PAGE_ENTRANCE_SPEED = 1.3;
 // 普通文字按所在元素入场。表格行、消息和按钮等复合控件作为整体，避免内部文字重复播放。
 const REVEAL_GROUP = 'tr, .msg, .tl-item, .model-compact, .provider-row, .key-card, .composer, .banner, .empty';
 let pageEntrance = null;
+let pageNavigation = null;
 
 function stopPageEntrance() {
   pageEntrance?.stop();
@@ -1081,24 +1106,34 @@ function startPageEntrance(page) {
   return entrance;
 }
 
-async function showPage(name) {
-  if (name === 'images') {
-    history.replaceState(null, '', '#memory');
-    await showPage('memory');
-    return showMemoryTab('images');
-  }
-  if (!PAGES[name]) name = 'overview';   // 总览是主页（D85）
+async function showPage(name, onShown) {
+  const images = name === 'images';
+  if (images) name = 'memory';
+  if (!Object.hasOwn(PAGES, name)) name = 'overview';   // 总览是主页（D85）
   const page = $('page-' + name);
-  if (state.page === name && page.classList.contains('active')) return;
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  if (state.page === name && page.classList.contains('active')) {
+    if (images) await showMemoryTab('images');
+    else if (onShown) {
+      const navigation = pageNavigation;
+      await navigation?.loading;
+      if (pageNavigation === navigation) onShown();
+    }
+    return;
+  }
   pendingLiveUpdates.clear();
+  PAGES[state.page]?.leave?.();
   state.page = name;
+  const navigation = pageNavigation = {};
   for (const sec of document.querySelectorAll('section.page')) sec.classList.toggle('active', sec === page);
   for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.classList.toggle('active', btn.dataset.page === name);
   const entrance = startPageEntrance(page);
-  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
-  await PAGES[name].load?.();
+  navigation.loading = images ? showMemoryTab('images') : PAGES[name].load?.();
+  await navigation.loading;
+  if (pageNavigation !== navigation) return;
   // 补上本次导航异步读到的内容，后续状态更新无需入场。
   if (entrance && pageEntrance === entrance) entrance.scan();
+  onShown?.();
 }
 for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.addEventListener('click', () => showPage(btn.dataset.page));
 window.addEventListener('hashchange', () => { if (state.loggedIn) showPage(location.hash.slice(1)); });
@@ -1122,14 +1157,17 @@ $('theme-btn').addEventListener('click', () => {
 // ---------- 登录、改密码、退出 ----------
 // 默认密码时只能进改密码页（D63 第 6 条）。
 function showAuth(view, message) {
+  PAGES[state.page]?.leave?.();
   state.loggedIn = false;
   clearQQLink();
   pendingLiveUpdates.clear();
   catalogs.clear();
   state.loaded = {};
+  pageNavigation = null;
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
-  for (const id of ['provider-key-dialog', 'editor-dialog', 'confirm-dialog']) if ($(id).open) $(id).close();
+  for (const id of ['provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview']) if ($(id).open) $(id).close();
+  $('ky-add').disabled = true;
   if (typeof closeSocket === 'function') closeSocket();
   $('app').classList.add('hidden');
   $('login').classList.toggle('hidden', view !== 'login');
@@ -1280,6 +1318,14 @@ function showOverviewSignal(snapshot) {
   setLiveText($('ov-task'), paused ? '—' : task);
 }
 
+function showOverviewReference(snapshot) {
+  const reference = snapshot.reply_reference;
+  setLiveText($('ov-reference'), reference?.content || '暂无回复参考');
+  setLiveText($('ov-reference-source'), reference
+    ? [fmtTime(reference.time, true), CHANNEL_NAMES[reference.channel], VISIBILITY_NAMES[reference.visibility]].filter(Boolean).join(' · ')
+    : '');
+}
+
 // 只在登录后的总览前台采样；每次读完再计时，以免慢响应叠加或重播整页动效。
 const OVERVIEW_SIGNAL_INTERVAL_MS = 2000;
 let overviewSignalTimer;
@@ -1290,6 +1336,7 @@ function renderOverview(d) {
   setLiveText($('ov-version'), d.version ? 'V' + d.version : '');
   setLiveText($('ov-date'), new Date().toLocaleDateString('zh-CN', {year:'numeric', month:'long', day:'numeric', weekday:'long'}));
   showOverviewSignal(d);
+  showOverviewReference(d);
   const limited = d.energy_level != null;
   const percent = limited ? Math.round(d.energy_level * 100) : 0;
   setLiveText($('ov-energy'), limited ? percent + '%' : '不限');
@@ -1300,6 +1347,7 @@ function renderOverview(d) {
   updateLiveRegion(box, () => {
     const expanded = box.querySelector('details')?.open;
     const lines = (d.state_text || '').split('\n').map(line => line.trim()).filter(Boolean);
+    lines.unshift(d.working_memory_capacity == null ? '工作记忆：已关闭' : '工作记忆容量：' + d.working_memory_capacity + ' 条经历');
     const row = line => el('div', {class:'state-line', text:line});
     box.replaceChildren(...lines.slice(0, 3).map(row));
     if (!lines.length) box.append(el('span', {class:'ov-empty', text:'暂无状态记录'}));
@@ -1342,6 +1390,7 @@ function loadOverview() {
       await loadOverviewActivity(request);
     } else {
       showOverviewSignal(res.data);
+      showOverviewReference(res.data);
     }
   }
   return sample(true);
@@ -1350,7 +1399,7 @@ async function loadOverviewActivity(request) {
   const activity = $('ov-activity');
   if (!activity.childElementCount) activity.append(el('li', {class:'ov-empty', text:'读取中…'}));
   const recent = await api('/api/timeline?hours=24&limit=3');
-  if (request !== overviewRequest) return;
+  if (request !== overviewRequest || !state.loggedIn || state.page !== 'overview') return;
   const records = recent.ok ? recent.data.records.slice().reverse() : [];
   updateLiveRegion(activity, () => {
     activity.replaceChildren(...records.map(record => el('li', {},
@@ -1373,42 +1422,7 @@ $('ov-power').addEventListener('click', async (event) => {
 });
 for (const btn of document.querySelectorAll('[data-go]')) btn.addEventListener('click', () => showPage(btn.dataset.go));
 PAGES.overview = { load: loadOverview };
-let imagePageCursor = null, imagePageRequest = 0;
-async function loadImages({similarTo, append = false} = {}) {
-  const request = ++imagePageRequest;
-  const list = $('images-result');
-  const more = $('images-more');
-  const query = new URLSearchParams();
-  if (similarTo) query.set('similar_to', similarTo);
-  if (append) query.set('before', imagePageCursor);
-  if (!append) list.textContent = '读取中…';
-  more.disabled = true;
-  const res = await api('/api/resources/images?' + query);
-  if (request !== imagePageRequest) return;
-  more.disabled = false;
-  if (!res.ok) { if (!append) list.textContent = '读取失败'; fail(res); return; }
-  if (!append) list.replaceChildren();
-  $('images-reset').classList.toggle('hidden', !similarTo);
-  if (!append && !res.data.items.length) list.textContent = similarTo ? '没有找到相似图片' : '暂无已索引的图片';
-  for (const item of res.data.items) {
-    const card = el('article', {class:'card stack', style:'overflow-wrap:anywhere'},
-      el('strong', {text:item.conversation}),
-      el('time', {datetime:item.timestamp, text:fmtTime(item.timestamp, true)}),
-      el('span', {text:'附件 ' + item.attachment}));
-    if (item.score != null) card.append(el('span', {text:'相似度 ' + Number(item.score).toFixed(3)}));
-    else {
-      const button = el('button', {class:'btn small', text:'查找相似图片'});
-      button.addEventListener('click', () => loadImages({similarTo:item.id}));
-      card.append(button);
-    }
-    list.append(card);
-  }
-  imagePageCursor = res.data.next_before;
-  more.classList.toggle('hidden', imagePageCursor === null);
-}
-$('images-reset').addEventListener('click', () => loadImages());
-$('images-more').addEventListener('click', () => loadImages({append:true}));
-const showMemoryTab = installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAGES, loadImages});
+const showMemoryTab = installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAGES});
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------
 // 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
 const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
@@ -1486,8 +1500,10 @@ function mergeChatHistory(items) {
 
 function loadChatHistory() {
   const loaded = state.loaded;
+  if (!loaded.chat) $('chat-send').disabled = true;
   loaded.chat ??= api('/api/history').then(res => {
     if (state.loaded !== loaded) return;
+    $('chat-send').disabled = false;
     if (!res.ok) { delete loaded.chat; fail(res); return; }
     mergeChatHistory(res.data);
   });
@@ -1523,6 +1539,7 @@ function closeSocket() {
   socket = null;
   if (old) old.close();
   pendingChat = [];
+  $('chat-send').disabled = true;
   renderedHistoryIds.clear();
   lastDay = '';
   $('chat-log').replaceChildren();
@@ -1567,20 +1584,47 @@ $('chat-text').addEventListener('input', ev => {
 const TL_FILTERS = [
   ['全部', ''],
   ['对话', 'message'],
+  ['回复参考', 'reply_reference'],
   ['日记与人设', 'diary_written,diary_failed,persona_changed,persona_unchanged,persona_review_failed'],
   ['行动与日程', 'agenda_added,agenda_due,agenda_closed,initiative_considered,initiative_result,exploration_started,exploration_result,interest_changed'],
   ['系统与安全', 'woke_up,shut_down,emergency_stop,emergency_resume,self_check,organ_call_abandoned,organ_call_rejected,organ_call_failed,cognitive_state'],
 ];
 const EVENT_NAMES = {
   message: '对话', woke_up: '醒来', shut_down: '关机', cognitive_state: '状态变化', organ_call_abandoned: '调用放弃',
-  emergency_stop: '急停', emergency_resume: '恢复', self_check: '自检', reply_declined: '没有回复',
+  emergency_stop: '急停', emergency_resume: '恢复', self_check: '自检', reply_declined: '没有回复', reply_reference: '回复参考',
   identity_changed: '设定被改', judgment: '判断', hormone_triggered: '激素', agenda_added: '新增承诺',
   agenda_due: '承诺到期', agenda_closed: '承诺了结', initiative_considered: '考虑主动联系', initiative_result: '主动联系结果',
   interest_changed: '兴趣变化', exploration_started: '开始探索', exploration_result: '探索结果',
   diary_written: '写了日记', diary_failed: '日记没写成', persona_changed: '人设变了', persona_unchanged: '人设没变',
   persona_review_failed: '人设回顾失败', organ_call_rejected: '调用被拒', organ_call_failed: '调用失败',
+  recall_feedback: '召回评价', recall_reply_delivered: '召回回复投递',
 };
 const tl = { filter: '', records: [], next: null, context: null };
+const VISIBILITY_NAMES = {private:'仅自己可见', user_only:'仅用户可见', group:'群聊', public:'公开'};
+const CHANNEL_NAMES = {web:'网页', terminal:'终端', qq:'QQ'};
+const DETAIL_NAMES = {
+  channel:'来源通道', account_id:'接收账号', recipient_id:'会话号码', message_type:'会话类型',
+  temporary_group_id:'临时会话所属群', in_reply_to:'对应来信序号', organ_id:'器官',
+  plan:'规划建议', reply:'是否建议回复', intent:'回应意图', length:'篇幅', reason:'依据',
+  strategy:'回复配置', hormones:'激素影响', reply_segments:'实际发送的文字分段', recall:'召回关键词',
+  recall_keywords:'召回关键词', recall_record_ids:'召回记录序号', recall_source_keys:'召回来源',
+  model_preference:'模型偏好', message_limit:'对话上限', length_limit:'篇幅上限',
+  plan_first:'先规划', to_user:'发给维护者', judgment:'判断结果', probability:'概率',
+  action:'动作', result:'结果', status:'状态', changed:'改动', elapsed_ms:'耗时（毫秒）',
+  id:'序号', source:'来源', text:'文本', content:'内容', summary:'摘要',
+  reply_id:'回复序号', segment:'已投递文字段', evidence_key:'依据编号', rating:'评价',
+};
+
+function timelineDetails(value, key = '') {
+  if (Array.isArray(value)) return el('ul', {}, value.map(item => el('li', {}, timelineDetails(item, key))));
+  if (value !== null && typeof value === 'object') {
+    return el('dl', {}, Object.entries(value).map(([name, item]) => el('div', {},
+      el('dt', {text:DETAIL_NAMES[name] || name.replaceAll('_', ' ')}), el('dd', {}, timelineDetails(item, name)))));
+  }
+  const choices = key === 'channel' ? CHANNEL_NAMES : key === 'message_type' ? {group:'群聊', private:'私聊', temporary:'临时私聊'} : {};
+  const text = value === true ? '是' : value === false ? '否' : value == null || value === '' ? '—' : Object.hasOwn(choices, value) ? choices[value] : String(value);
+  return el('span', {text});
+}
 
 function renderTimelineChips() {
   const box = $('tl-chips');
@@ -1595,21 +1639,65 @@ function renderTimelineChips() {
   }
 }
 
+function recallFeedback(replyId) {
+  const path = `/api/timeline/${replyId}/recall-feedback`;
+  const body = el('div', {class:'stack', 'aria-live':'polite'});
+  const details = el('details', {class:'tl-details'}, el('summary', {text:'评价召回依据'}), body);
+  let loaded = false;
+  details.addEventListener('toggle', async () => {
+    if (loaded || !details.open) return;
+    loaded = true;
+    body.textContent = '读取中…';
+    const response = await api(path);
+    if (!details.isConnected) return;
+    if (!response.ok) {
+      loaded = false;
+      body.textContent = '暂时无法读取评价，关闭后可重新打开。';
+      return;
+    }
+    body.replaceChildren(...response.data.map(item => {
+      const status = el('span', {class:'muted'});
+      let busy = false;
+      function update() {
+        status.textContent = item.rating === 'useful' ? '已标有用' : item.rating === 'not_useful' ? '已标无用' : '未评价';
+        for (const button of controls) button.disabled = busy || button.rating === item.rating;
+      }
+      const controls = [['有用', 'useful'], ['无用', 'not_useful'], ['撤销评价', null]].map(([label, rating]) => {
+        const button = el('button', {type:'button', class:'btn small', text:label, onclick:async () => {
+          busy = true;
+          update();
+          const result = await api(path, 'PATCH', {evidence_key:item.key, rating});
+          if (result.ok) item.rating = result.data.rating;
+          else fail(result);
+          busy = false;
+          update();
+        }});
+        button.rating = rating;
+        return button;
+      });
+      update();
+      return el('div', {class:'stack'}, el('strong', {text:item.label}), el('div', {class:'row'}, status, ...controls));
+    }));
+  });
+  return details;
+}
+
 function timelineItem(rec, inContext) {
   const actor = { user: '你', me: '它', person: '对方', system: '系统' }[rec.actor] || rec.actor;
   const top = el('div', { class: 'tl-top' },
     el('strong', { class: 'tl-event', text: EVENT_NAMES[rec.event_type] || rec.event_type }),
-    rec.visibility === 'user_only' ? el('span', { class: 'tag', text: '仅用户可见' }) : null,
+    VISIBILITY_NAMES[rec.visibility] ? el('span', { class: 'tag', text: VISIBILITY_NAMES[rec.visibility] }) : null,
     el('div', { class: 'tl-meta' },
       el('time', { datetime: rec.time, text: fmtTime(rec.time, true) }),
       el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
-      rec.channel ? el('span', { text: rec.channel }) : null,
+      rec.channel ? el('span', { text: CHANNEL_NAMES[rec.channel] || rec.channel }) : null,
       el('span', { class: 'mono', text: '#' + rec.id })));
   const content = el('div', { class: 'tl-content clamp', text: rec.content || '（没有正文）' });
   content.addEventListener('click', () => content.classList.toggle('clamp'));
   const keys = Object.keys(rec.metadata || {});
-  const meta = keys.length ? el('details', { class: 'muted', style: 'font-size:12px' }, el('summary', { text: '详细信息（' + keys.length + ' 项）' }), el('pre', { class: 'mono', style: 'white-space:pre-wrap;margin:4px 0 0', text: JSON.stringify(rec.metadata, null, 2) })) : null;
-  return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, meta);
+  const meta = keys.length ? el('details', { class: 'muted tl-details' }, el('summary', { text: '详细信息（' + keys.length + ' 项）' }), timelineDetails(rec.metadata)) : null;
+  return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, meta,
+    rec.recall_feedback_available ? recallFeedback(rec.id) : null);
 }
 
 // 分隔线画在「当前上下文」最后一条之后：序号不小于 boundary_id 的在上面，更早的在下面（D84 第 4 条）。
@@ -1635,23 +1723,43 @@ function tlDivider() {
 }
 
 let timelineRequest = 0;
+let timelineQuery = '';
 async function loadTimeline(more, switching = false) {
-  const request = ++timelineRequest;
+  const button = $('tl-more');
   const query = new URLSearchParams({ hours: $('tl-hours').value, limit: '100' });
   if (tl.filter) query.set('types', tl.filter);
-  if (more && tl.next) query.set('before_id', String(tl.next));
+  const base = String(query);
+  if (more && (button.disabled || !tl.next || base !== timelineQuery)) return;
+  if (more) query.set('before_id', String(tl.next));
+  button.disabled = true;
+  const list = $('tl-list');
+  const replacesFilter = !more && base !== timelineQuery;
+  if (replacesFilter) {
+    timelineQuery = '';
+    tl.next = null;
+    pendingLiveUpdates.delete(list);
+    list.textContent = '读取中…';
+    button.classList.add('hidden');
+  }
+  const request = ++timelineRequest, session = state.loaded;
   const res = await api('/api/timeline?' + query);
-  if (request !== timelineRequest) return;
+  if (request !== timelineRequest || session !== state.loaded) return;
   const missing = $('tl-missing');
   if (notBuilt(res)) {
     missing.textContent = NOT_BUILT_TEXT;
     missing.classList.remove('hidden');
     $('tl-list').textContent = '';
-    $('tl-more').classList.add('hidden');
+    timelineQuery = '';
+    button.classList.add('hidden');
     return;
   }
   missing.classList.add('hidden');
-  if (!res.ok) { fail(res); return; }
+  if (!res.ok) {
+    button.disabled = !tl.next || base !== timelineQuery;
+    if (replacesFilter) list.textContent = errorText(res);
+    else fail(res);
+    return;
+  }
   const summary = $('tl-summary');
   const entries = Object.entries(res.data.summary || {});
   summary.replaceChildren(...entries.map(([source, text]) => {
@@ -1669,8 +1777,9 @@ async function loadTimeline(more, switching = false) {
   tl.records = more ? res.data.records.concat(tl.records) : res.data.records;
   tl.next = res.data.next_before_id;
   tl.context = res.data.context;
-  $('tl-more').classList.toggle('hidden', !tl.next);
-  const list = $('tl-list');
+  timelineQuery = base;
+  button.disabled = !tl.next;
+  button.classList.toggle('hidden', !tl.next);
   if (switching) {
     pendingLiveUpdates.delete(list);
     renderTimeline();
@@ -1719,9 +1828,9 @@ function renderInboxConversations(conversations) {
 }
 
 async function loadInbox() {
-  const request = ++inbox.conversationRequest;
+  const request = ++inbox.conversationRequest, session = state.loaded;
   const res = await api('/api/inbox/conversations');
-  if (request !== inbox.conversationRequest) return;
+  if (request !== inbox.conversationRequest || session !== state.loaded) return;
   if (!res.ok) { fail(res); return; }
   const {enabled, conversations} = res.data;
   const empty = $('inbox-empty');
@@ -1739,9 +1848,9 @@ async function loadInbox() {
 }
 
 async function loadInboxMessages(more = false) {
-  if (!inbox.selected || (more && !inbox.next)) return;
-  const request = ++inbox.messageRequest;
   const list = $('inbox-messages'), status = $('inbox-message-status'), button = $('inbox-more');
+  if (!inbox.selected || (more && (!inbox.next || button.disabled))) return;
+  const request = ++inbox.messageRequest, session = state.loaded;
   const query = new URLSearchParams(Object.entries(inbox.selected.key).filter(([, value]) => value !== null));
   if (more) query.set('before_id', String(inbox.next));
   else {
@@ -1753,10 +1862,16 @@ async function loadInboxMessages(more = false) {
   }
   button.disabled = true;
   const res = await api('/api/inbox/messages?' + query);
-  if (request !== inbox.messageRequest) return;
+  if (request !== inbox.messageRequest || session !== state.loaded) return;
   button.disabled = false;
   status.classList.add('hidden');
-  if (!res.ok) { fail(res); return; }
+  if (!res.ok) {
+    if (!more) {
+      status.textContent = errorText(res);
+      status.classList.remove('hidden');
+    } else fail(res);
+    return;
+  }
   const {messages, next_before_id} = res.data;
   list.append(...messages.map(message => el('article', {class:'inbox-message'},
     el('div', {class:'row'}, el('strong', {text:message.sender_name || message.sender_id}),
@@ -1850,8 +1965,11 @@ function personaLayerCard(key, title, content, history) {
     ...rows);
 }
 
+let personaLoadRevision = 0;
 async function loadPersona() {
+  const revision = ++personaLoadRevision, session = state.loaded;
   const res = await api('/api/settings');
+  if (revision !== personaLoadRevision || session !== state.loaded) return;
   if (!res.ok) { fail(res); return; }
   const v = res.data;
   const free = $('ps-free');
@@ -1969,11 +2087,14 @@ function markDirty(rename) {
   });
   return mdl.queue;
 }
+let modelLoadRevision = 0;
 async function loadModelsConfig() {
   const editing = () => $('editor-dialog').open || $('confirm-dialog').open;
+  const request = ++modelLoadRevision, session = state.loaded;
   if (mdl.pending || mdl.dirty || (mdl.cfg && editing())) return true;
   const revision = mdl.revision;
   const res = await api('/api/models');
+  if (request !== modelLoadRevision || session !== state.loaded) return;
   if (mdl.cfg && (mdl.revision !== revision || editing())) return true;
   if (notBuilt(res)) return 'missing';
   if (!res.ok) { fail(res); return false; }
@@ -2010,39 +2131,6 @@ function validFields(fields) { return Object.values(fields).every(field => field
 function restoreButton(label, field, run) {
   return el('button', { type: 'button', class: 'btn small', 'data-restore': field,
     'aria-label': label + '：恢复默认', text: '恢复默认', onclick: event => run(event.currentTarget) });
-}
-
-function addModelRestore(host, label, section, entry, field, reopen, passwordInput) {
-  host.append(restoreButton(label, field, async button => {
-    const dialog = $('editor-dialog'), editor = $('editor-body'), close = $('editor-close');
-    const generation = editorGeneration;
-    const password = passwordInput?.value;
-    if (passwordInput) passwordInput.value = '';
-    editor.inert = true; close.disabled = true;
-    const keepOpen = event => event.preventDefault();
-    dialog.addEventListener('cancel', keepOpen);
-    try {
-      await mdl.queue;
-      if (!dialog.open || generation !== editorGeneration) return;
-      const name = section === 'organs' ? entry : entry.name;
-      const res = await api('/api/models/restore-default', 'POST', { section, name, field, password });
-      if (!res.ok) { failApi(res); return; }
-      for (const config of [mdl.cfg, mdl.baseline]) {
-        const entries = config[section];
-        const item = section === 'organs' ? entries[name] : entries.find(row => row.name === name);
-        if (item) item[field] = clone(res.data.value);
-      }
-      if (res.data.restart_required) showRestart();
-      toast('已恢复默认。', 'ok');
-      if (section === 'providers' && field === 'base_url') refreshCatalog(entry);
-      renderModels(); renderOrgans();
-      if (dialog.open && generation === editorGeneration) reopen();
-    } finally {
-      editor.inert = false; close.disabled = false;
-      dialog.removeEventListener('cancel', keepOpen);
-      if (dialog.open) (button.isConnected ? button : editor.querySelector('[data-restore="' + field + '"]'))?.focus();
-    }
-  }));
 }
 
 // 同一份已保存配置共用目录；两个选择框同步显示刷新结果。
@@ -2242,10 +2330,32 @@ function showProbeDetails(data) {
     body.append(el('section', {class:'card'}, el('h3', {text:name}),
       el('p', {text:check.error || '通过 · ' + check.latency_ms + ' ms'}),
       el('strong', {text:check.sent ? '发送内容' : '预定输入（未确认发出）'}),
-      el('pre', {text:JSON.stringify(check.input, null, 2)}),
-      el('strong', {text:'收到的回复'}), el('pre', {text:check.reply || '未收到回复'})));
+      el('ul', {}, probeInputLines(check.input).map(text => el('li', {text}))),
+      el('strong', {text:'收到的回复'}), el('p', {class:'tl-content', text:probeReplyText(check)})));
   }
   openEditor('测速详情 · ' + data.model + ' · ' + data.provider, body);
+}
+function probeInputLines(input) {
+  const lines = [];
+  for (const message of input.messages || []) {
+    if (typeof message.content === 'string') lines.push(message.content);
+    else for (const part of message.content) {
+      if (part.type === 'text') lines.push(part.text);
+      if (part.type === 'image_url') lines.push('测试图片');
+    }
+  }
+  for (const item of input.input || []) lines.push(typeof item === 'string' ? item : '测试图片');
+  for (const tool of input.tools || []) lines.push('可调用工具：' + tool.function.name);
+  if (input.file) lines.push('测试音频：' + input.file);
+  if (input.reasoning_effort) lines.push('思考等级：' + input.reasoning_effort);
+  return lines.length ? lines : ['没有输入内容'];
+}
+function probeReplyText(check) {
+  if (!check.reply) return '未收到回复';
+  if (check.capability !== 'embedding' && check.capability !== 'image_embedding') return check.reply;
+  let vector;
+  try { vector = JSON.parse(check.reply); } catch { return check.reply; }
+  return Array.isArray(vector) ? '收到 ' + vector.length + ' 维向量。' : check.reply;
 }
 $('md-test-provider').addEventListener('click', async () => {
   const provider = mdl.provider;
@@ -2256,7 +2366,9 @@ $('md-test-provider').addEventListener('click', async () => {
   });
 });
 async function loadModelsPage() {
+  const navigation = pageNavigation;
   const result = await loadModelsConfig();
+  if (result === undefined || navigation !== pageNavigation) return;
   $('md-missing').classList.toggle('hidden', result !== 'missing');
   if (result === 'missing') $('md-missing').textContent = NOT_BUILT_TEXT;
   $('md-content').classList.toggle('hidden', result !== true);
@@ -2332,14 +2444,6 @@ function openProviderEditor(provider) {
       });
     }})));
   if (original) {
-    const restorePassword = editorField('恢复默认地址的确认密码', '', {type:'password'});
-    const restoreAddress = el('details', {class:'stack'}, el('summary', {text:'恢复默认地址'}), restorePassword.node);
-    addModelRestore(restoreAddress, '请求地址', 'providers', original, 'base_url',
-      () => openProviderEditor(original), restorePassword.input);
-    fields.base_url.node.append(restoreAddress);
-    for (const [field, control, label] of [
-      ['timeout_seconds', fields.timeout, '超时（秒）'], ['max_retry', fields.retry, '失败重试次数'],
-    ]) addModelRestore(control.node, label, 'providers', original, field, () => openProviderEditor(original));
     body.append(el('button', { class: 'btn danger', text: '删除API供应商', onclick: () => removeProvider(original) }));
   }
 }
@@ -2416,13 +2520,6 @@ function openModelEditor(model, identifier = '') {
   }
   const reasoning = el('div', { class: 'field' }, el('label', { text: '支持的思考等级' }), choices);
   body.append(reasoning);
-  if (original) {
-    for (const field of ['kind', 'price_in', 'price_out', 'price_cache_in', 'temperature', 'max_tokens']) {
-      addModelRestore(fields[field].node, fields[field].input.getAttribute('aria-label'), 'models', original, field, () => openModelEditor(original));
-    }
-    addModelRestore(fields.kind.node, '视觉', 'models', original, 'vision', () => openModelEditor(original));
-    addModelRestore(reasoning, '支持的思考等级', 'models', original, 'reasoning_levels', () => openModelEditor(original));
-  }
 }
 async function removeModel(model) {
   if (!await confirmAction('确定要删除模型「' + model.name + '」吗？')) return;
@@ -2441,10 +2538,16 @@ function keyAction(entry, action, label, icon) {
   return button;
 }
 async function loadKeysPage() {
-  const revision = ++keyLoadRevision;
+  const revision = ++keyLoadRevision, session = state.loaded;
+  $('ky-add').disabled = true;
   const res = await api('/api/keys');
-  if (revision !== keyLoadRevision) return;
-  if (!res.ok) { failApi(res); return; }
+  if (revision !== keyLoadRevision || session !== state.loaded) return;
+  if (!res.ok) {
+    $('ky-empty').classList.add('hidden');
+    $('ky-list').replaceChildren();
+    showBanner('ky-status', notBuilt(res) ? NOT_BUILT_TEXT : errorText(res));
+    return;
+  }
   const entries = res.data.entries || [], unreadable = res.data.vault === 'unreadable';
   mdl.entries = entries;
   $('ky-add').disabled = unreadable;
@@ -2463,7 +2566,7 @@ function keyValueField(label, kind, value = '') {
     field.input = el('textarea', {rows:5, 'data-secret':'', 'aria-label':label, autocomplete:'off', spellcheck:'false', required:true});
     field.input.value = value;
     field.node.lastChild.replaceWith(field.input);
-  } else field.input.setAttribute('autocomplete', 'new-password');
+  }
   field.input.setAttribute('maxlength', '4096');
   return field;
 }
@@ -2489,7 +2592,6 @@ function openKeyEditor(entry, action = 'create', onProviderKey) {
   }
   if (action === 'update') fields.value = keyValueField('新密钥值', entry.kind);
   fields.password = editorField('当前密码', '', {type:'password', required:true});
-  fields.password.input.setAttribute('autocomplete', 'current-password');
   const [title, saveLabel, success] = {
     create:['添加密钥', '保存密钥', '密钥已保存。'],
     rename:['修改密钥名称', '保存名称', '名称已更新。'],
@@ -2616,16 +2718,14 @@ function openOrganEditor(name) {
     el('button', { class: 'btn small', text: '清空模型', onclick: () => { organ.models = []; changed(); } }));
   const effortField = el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort);
   body.append(list, search, picker, chainActions, effortField, temperature.node, maxTokens.node);
-  for (const [field, host, label] of [
-    ['models', chainActions, '模型顺序'], ['reasoning_effort', effortField, '思考等级'],
-    ['temperature', temperature.node, '温度'], ['max_tokens', maxTokens.node, '单次回复 token 上限'],
-  ]) addModelRestore(host, label, 'organs', name, field, () => openOrganEditor(name));
   body.append(el('button', { class: 'btn', type: 'button', text: '预览完整提示词', onclick: () => openPromptPreview(name) }));
   openEditor(name.toUpperCase(), body, true); refreshList();
   notifyModelWarnings([name]);
 }
 async function loadOrgansPage() {
+  const navigation = pageNavigation;
   const result = await loadModelsConfig();
+  if (result === undefined || navigation !== pageNavigation) return;
   $('og-missing').classList.toggle('hidden', result !== 'missing');
   if (result === 'missing') $('og-missing').textContent = NOT_BUILT_TEXT;
   $('og-content').classList.toggle('hidden', result !== true);
@@ -2683,9 +2783,12 @@ function renderPromptEditor(entry, focus = false) {
     source, el('div', { class: 'prompt-actions' }, entry.editable ? save : null, reset));
   if (focus) source.focus();
 }
+let promptLoadRevision = 0;
 async function loadPromptPage() {
+  const revision = ++promptLoadRevision, session = state.loaded;
   showBanner('prompt-banner', '');
   const response = await api('/api/prompts');
+  if (revision !== promptLoadRevision || session !== state.loaded) return false;
   if (!response.ok) { showBanner('prompt-banner', errorText(response)); return false; }
   Object.assign(promptCatalog, response.data);
   const filter = $('prompt-organ');
@@ -2697,7 +2800,7 @@ async function loadPromptPage() {
   if (entry) {
     promptCatalog.selected = entry.key;
     renderPromptEditor(entry);
-  }
+  } else $('prompt-editor').replaceChildren();
   renderPromptDirectory();
   return true;
 }
@@ -2804,7 +2907,6 @@ const CFG_FIELDS = {
   'safety.max_consecutive_failures': ['连续失败上限', '连续失败达到多少次后暂停调用。'],
   'safety.failure_pause_seconds': ['失败暂停时长（秒）', '触发失败保护后，等多少秒才允许再试。'],
   'heartbeat.tick_interval_seconds': ['心跳间隔（秒）', '程序每隔多少秒检查一次待处理的事。'],
-  'heartbeat.advance_biomodel': ['旧神经递质模型', '心跳时是否推进旧版身体模拟。'],
   'cortisol.enabled': ['启用调节', '根据本地时相和已结算的承诺失败推迟可选主动联系。'],
   'cortisol.rise_seconds': ['上升时间（秒）', '从失败结算到该次增量达到峰值的时间。'],
   'cortisol.half_life_seconds': ['峰后半衰期（秒）', '达到峰值后增量降到一半所需的时间。'],
@@ -2818,14 +2920,11 @@ const CFG_FIELDS = {
   'heartbeat.working_memory_capacity': ['工作记忆容量', '累计达到此条数时整理最早的经历。保存后重启生效。'],
   'heartbeat.working_memory_retain': ['保留近期经历条数', '每次整理后保留在工作记忆中的原始经历条数。保存后重启生效。'],
   'heartbeat.inbox_read_limit': ['自主翻阅条数上限', '每次自主翻阅从所有选中会话合计读取的消息条数。优先唤醒的来信单独处理。保存后重启生效。'],
-  'heartbeat.inbox_debounce_enabled': ['会话消息防抖', '合并短时间内同一会话的新消息。开启后规划使用流式请求。保存后重启生效。'],
+  'heartbeat.inbox_debounce_enabled': ['会话消息防抖', '默认开启：合并短时间内同一会话的新消息，规划使用流式请求。关闭后保存，重启生效。'],
   'heartbeat.inbox_debounce_seconds': ['防抖窗口秒数', '同一会话的每条新消息都会重新开始计时。保存后重启生效。'],
   'heartbeat.inbox_debounce_max_restarts': ['规划重开次数上限', '同一轮规划最多可被新消息打断并重开的次数。保存后重启生效。'],
   'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
   'heartbeat.low_message_limit': ['低电量对话条数', '低电量时可以参考最近多少条对话。'],
-  'heartbeat.reply_organ': ['回复器官', '选择负责生成回复的器官。'],
-  'heartbeat.planning_enabled': ['旧版回复前规划设置', '仅用于读取旧配置。各精力档位均先规划。'],
-  'heartbeat.plan_organ': ['规划器官', '选择负责制定计划的器官。'],
   'heartbeat.split_reply_enabled': ['分条回复', '允许把一次回复拆成多条消息发出。'],
   'heartbeat.max_reply_messages': ['回复条数上限', '一次回复最多拆成多少条。'],
   'heartbeat.min_message_chars': ['分条字数下限', '拆分时每条至少保留多少个字。'],
@@ -2835,7 +2934,6 @@ const CFG_FIELDS = {
   'heartbeat.typing_jitter_min_seconds': ['随机延迟下限（秒）', '每个后续分段额外等待的最少秒数。保存后重启生效。'],
   'heartbeat.typing_jitter_max_seconds': ['随机延迟上限（秒）', '每个后续分段额外等待的最多秒数。保存后重启生效。'],
   'heartbeat.identity_changes_in_prompt': ['设定变更提示', '回复时提醒模型你修改过哪些人设层。'],
-  'heartbeat.roleplay_mode': ['扮演模式', '是否按照角色扮演模式回复。'],
   'body.energy_enabled': ['精力调节', '是否根据剩余额度调节活动。'],
   'body.user_reserve_fraction': ['用户预留比例', '留出多大比例的额度供用户对话使用。'],
   'body.state_in_prompt_enabled': ['身体状态提示', '回复前是否把当下的身体状态告诉模型。'],
@@ -2939,6 +3037,7 @@ const CFG_FIELDS = {
   'memory.enabled': ['记忆索引', '是否为记忆建立可搜索的索引。'],
   'memory.recall_enabled': ['回复记忆检索', '回复前是否查找相关旧记忆。'],
   'memory.max_results': ['记忆检索上限', '一次最多找回多少条相关记忆。'],
+  'memory.recall_feedback_enabled': ['人工召回评价', '允许评价已投递回复使用的召回依据，不改变召回结果。'],
   'memory.index_batch': ['索引批量条数', '每次最多把多少条记录加入索引。'],
   'diary.enabled': ['日记', '是否根据当天的经历写日记。'],
   'diary.organ': ['日记器官', '选择负责写日记的器官。'],
@@ -2964,7 +3063,7 @@ const CFG_FIELDS = {
   'web.login_lockout_seconds': ['登录锁定时长（秒）', '触发锁定后等待多少秒才能重新登录。'],
 };
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
-const cf = { data: null, schema: null, readonly: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false };
+const cf = { data: null, schema: null, readonly: new Set(), noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false };
 const cfKey = (sec, field) => sec ? sec + '.' + field : field;
 const cfResolve = node => (node && node.$ref ? cf.schema.$defs[node.$ref.split('/').pop()] : node) || {};
 const cfOriginal = (sec, field) => (sec ? (cf.data[sec] || {})[field] : cf.data[field]);
@@ -3090,7 +3189,7 @@ function cfRow(sec, field) {
       el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field }),
       readonly ? el('span', { class: 'tag', text: '只读' }) : null),
     el('div', { class: 'cfg-control' }, value,
-      !readonly && Object.hasOwn(prop, 'default')
+      !readonly && !cf.noDefault.has(key) && Object.hasOwn(prop, 'default')
         ? restoreButton(name, key, button => restoreConfigField(sec, field, button)) : null));
 }
 function renderConfigSection(sec) {
@@ -3123,9 +3222,13 @@ function renderConfigSection(sec) {
 }
 
 // 有没保存的改动时，切回这一页不重新读，免得改动丢掉。
+let configLoadRevision = 0;
 async function loadConfigPage(force) {
-  if (!force && cf.data && (cf.busy || Object.keys(cf.changes).length || cf.invalid.size)) return;
+  const hasDraft = () => cf.data && (cf.busy || Object.keys(cf.changes).length || cf.invalid.size);
+  if (!force && hasDraft()) return;
+  const revision = ++configLoadRevision, session = state.loaded;
   const res = await api('/api/config');
+  if (revision !== configLoadRevision || session !== state.loaded || (!force && hasDraft())) return;
   const missing = $('cf-missing');
   if (notBuilt(res)) { missing.textContent = NOT_BUILT_TEXT; missing.classList.remove('hidden'); $('cf-content').classList.add('hidden'); return; }
   if (!res.ok) { failApi(res); return; }
@@ -3134,6 +3237,7 @@ async function loadConfigPage(force) {
   cf.data = res.data.config;
   cf.schema = res.data.schema;
   cf.readonly = new Set(res.data.readonly);
+  cf.noDefault = new Set(res.data.no_default);
   cf.pwSections = new Set(res.data.password_sections);
   cf.changes = {};
   cf.invalid = new Set();
@@ -3159,13 +3263,11 @@ async function loadConfigPage(force) {
   refreshConfigDirty();
 }
 PAGES.config = { load: () => loadConfigPage(false) };
-$('og-search-settings').addEventListener('click', async () => {
-  await showPage('config');
-  if (state.page !== 'config') return;
+$('og-search-settings').addEventListener('click', () => showPage('config', () => {
   const tab = document.querySelector('#cf-tabs [data-sec="exploration"]');
   tab?.click();
   tab?.focus();
-});
+}));
 
 $('cf-save').addEventListener('click', async () => {
   if (cf.invalid.size) { toast('有的数字填得不对（' + [...cf.invalid].join('、') + '），改好再保存。', 'error'); return; }
@@ -3196,7 +3298,12 @@ $('cf-save').addEventListener('click', async () => {
   }
 });
 
-$('cf-reset').addEventListener('click', async () => { if (await confirmAction('放弃所有没保存的改动？')) loadConfigPage(true); });
+$('cf-reset').addEventListener('click', async () => {
+  if (cf.busy || !await confirmAction('放弃所有没保存的改动？')) return;
+  cf.busy = true; refreshConfigDirty();
+  try { await loadConfigPage(true); }
+  finally { cf.busy = false; refreshConfigDirty(); }
+});
 // ---------- 观察：只读，用 /api/overview 和 /api/timeline（D85）；曲线和花费没有网页接口，不假造 ----------
 const MONITOR_REFRESH_MS = 10000;
 function monitorList(id, res, emptyText) {

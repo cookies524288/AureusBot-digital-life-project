@@ -24,14 +24,19 @@ def test_registered_organ_inherits_core_ports_and_declares_its_successor(
     }
 
 
-def test_flow_follows_the_running_role_names_and_supports_a_shared_organ() -> None:
+def test_flow_shows_builtin_planner_and_replyer_despite_legacy_names() -> None:
     runtime = RuntimeConfig.model_validate(
         {"heartbeat": {"plan_organ": "legacy", "reply_organ": "legacy"}}
     )
     edges = organ_connections(["legacy"], runtime)
     relays = {(e["source"], e["target"]) for e in edges if e["kind"] == "relay"}
-    assert relays == {("judge", "legacy"), ("legacy", "legacy"), ("legacy", "fast_model")}
+    assert relays == {
+        ("judge", "planner"),
+        ("judge", "replyer"),
+        ("planner", "replyer"),
+        ("replyer", "fast_model"),
+    }
     assert any(
-        e["source"] is None and e["target"] == "legacy" and "生成回复" in (e["label"] or "")
+        e["source"] is None and e["target"] == "replyer" and "生成回复" in (e["label"] or "")
         for e in edges
     )

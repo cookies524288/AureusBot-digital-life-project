@@ -17,6 +17,9 @@ EVENT_EMERGENCY_RESUME = "emergency_resume"
 EVENT_SELF_CHECK = "self_check"
 # 规划器看了刚收到的消息，决定不回复（D59）：只有自己可见，metadata 里有规划器的原话和这次的做法。
 EVENT_REPLY_DECLINED = "reply_declined"
+EVENT_REPLY_REFERENCE = "reply_reference"
+EVENT_RECALL_REPLY_DELIVERED = "recall_reply_delivered"
+EVENT_RECALL_FEEDBACK = "recall_feedback"
 # 用户在 identity.toml 里改了设定（D62）：醒来后记一条，metadata 里有改了哪几层、
 # 和已经记到哪个版本（下次醒来从它之后找新的修改）。
 EVENT_IDENTITY_CHANGED = "identity_changed"

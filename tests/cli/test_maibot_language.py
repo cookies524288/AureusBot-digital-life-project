@@ -17,6 +17,7 @@ from aureus.organs import KeyResolver, OrganBus, OrganRequest
 from aureus.timeline import TimelineDatabase, VisibilityScope
 from tests.cli.test_maibot_migration import create_source, run_command
 from tests.heartbeat.test_judging_flow import NOW
+from tests.prompt_assertions import dialogue_text
 from tests.test_exploration_runtime import _paths
 from tests.test_language_runtime import LanguageOrgan
 
@@ -239,8 +240,9 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
         assert "GG：证据未知" in plan.prompt
         assert "GG：原库无引用" in plan.prompt
         assert "已认定非黑话" not in plan.prompt
-        assert "当「庆祝跑步成绩」时，可用「白桦冲线」" in reply.prompt
-        assert "当「庆祝跑步成绩」时，可用「缺例表达」" in reply.prompt
-        assert "禁用表达" not in reply.prompt
+        text = dialogue_text(reply)
+        assert "当「庆祝跑步成绩」时，可用「白桦冲线」" in text
+        assert "当「庆祝跑步成绩」时，可用「缺例表达」" in text
+        assert "禁用表达" not in text
         await heart.shut_down()
     assert paths.identity_file.read_bytes() == identity_bytes

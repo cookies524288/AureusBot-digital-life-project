@@ -55,8 +55,13 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
 ) -> None:
     data = rig.client.get("/api/config").json()
     assert data["exists"] is False
-    assert data["config"] == RuntimeConfig().model_dump(mode="json")
-    assert data["schema"] == RuntimeConfig.model_json_schema()
+    defaults = RuntimeConfig().model_dump(mode="json")
+    schema = RuntimeConfig.model_json_schema()
+    for field in ("advance_biomodel", "planning_enabled", "roleplay_mode"):
+        del defaults["heartbeat"][field]
+        del schema["$defs"]["HeartbeatConfig"]["properties"][field]
+    assert data["config"] == defaults
+    assert data["schema"] == schema
     assert "$defs" in data["schema"]
     assert data["readonly"] == [
         "config_version",

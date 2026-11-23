@@ -331,6 +331,8 @@ class QQChannel:
                     return
             params = encode_message(message, route, image=image)
             await self._transport.call(socket, "send_msg", params)
+            if message.confirm_delivery is not None:
+                message.confirm_delivery()
             if digest is not None and self._record_emoji_use is not None:
                 await asyncio.to_thread(self._record_emoji_use, digest)
         except (OSError, TimeoutError, WebSocketException, OneBotError, SQLiteError) as error:

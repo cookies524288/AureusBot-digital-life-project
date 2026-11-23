@@ -35,6 +35,13 @@ _SOURCE = """
     JOIN inbox_conversations c ON c.id = m.conversation_id
 """
 _PUBLIC_FIELDS = "v.id, v.attachment, m.id AS message_id, m.timestamp, c.name AS conversation"
+PICTURE_REFERENCES = (
+    """
+    SELECT 'inbox', v.id, unixepoch(m.timestamp, 'subsec'), c.name, NULL, NULL,
+           v.attachment, m.id, c.name, m.timestamp, NULL
+"""
+    + _SOURCE
+)
 
 
 class InboxImageIndex:
@@ -110,7 +117,14 @@ class InboxImageIndex:
 
     def browse(self, before: int | None, limit: int) -> list[dict[str, Any]]:
         """按收录顺序显示来源会话、消息时间和附件引用。"""
+        rows, _total = self.browse_page(before, limit)
+        return rows
+
+    def browse_page(self, before: int | None, limit: int) -> tuple[list[dict[str, Any]], int]:
+        """返回收件箱图片当前页和不受翻页游标影响的总条数。"""
         with closing(open_connection(self._path)) as connection:
+            connection.execute("BEGIN")
+            total = connection.execute("SELECT count(*) " + _SOURCE).fetchone()[0]
             rows = connection.execute(
                 "SELECT "
                 + _PUBLIC_FIELDS
@@ -118,7 +132,7 @@ class InboxImageIndex:
                 + " WHERE (? IS NULL OR v.id < ?) ORDER BY v.id DESC LIMIT ?",
                 (before, before, limit),
             )
-            return [dict(row) for row in rows]
+            return [dict(row) for row in rows], total
 
     def similar(self, source_id: int, limit: int) -> list[dict[str, Any]] | None:
         """按余弦相似度保存前几位，只比较来自同一模型空间的向量。"""

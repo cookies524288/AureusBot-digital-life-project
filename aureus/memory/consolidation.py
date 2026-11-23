@@ -233,8 +233,10 @@ def read_candidates(
         LEFT JOIN memory_edits live_edit ON live_edit.kind = 'live'
             AND e.reference = 'timeline:' || live_edit.entry_id
         WHERE (e.reference LIKE 'timeline:%' AND coalesce(live_edit.is_enabled, 1)
+               AND NOT coalesce(live_edit.is_removed, 0)
                AND live_edit.edited_content IS NULL)
            OR (h.status = 'active' AND coalesce(history_edit.is_enabled, 1)
+               AND NOT coalesce(history_edit.is_removed, 0)
                AND history_edit.edited_content IS NULL
                AND (h.valid_from IS NULL OR h.valid_from <= ?)
                AND (h.valid_to IS NULL OR h.valid_to > ?))

@@ -65,8 +65,10 @@ async def test_qq_collects_marked_emoji_and_preserves_moderation(tmp_path: Path)
         return IMAGE + attachment.file_id.encode(), "image/png"
 
     rejected = True
+    prompts = []
 
     async def recognize(request: OrganRequest) -> OrganResponse:
+        prompts.append(request.prompt)
         if rejected:
             raise CallRejectedError(request.organ_id, "测试拒绝")
         return OrganResponse(request.organ_id, "打招呼的笑脸")
@@ -83,6 +85,7 @@ async def test_qq_collects_marked_emoji_and_preserves_moderation(tmp_path: Path)
         visibility=source.visibility,
     )
     await flow.enrich([record], [message.perception], ModelPreference.PREFERRED)
+    assert any(prompt.endswith("请用一句简短中文注明画面和它表达的情绪。") for prompt in prompts)
     [entry] = store.browse("", 0, 10)
     assert entry.collection_count == 1 and not entry.is_registered
 
@@ -154,6 +157,11 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
 
     async def recognize(request: OrganRequest) -> OrganResponse:
         sent_to_organs.append((request.organ_id, request.media_bytes, request.media_type))
+        if request.organ_id == "vlm":
+            assert request.prompt.startswith("请用中文详细描述这张图片的内容。")
+            assert request.prompt.endswith("最多100字，请注意不要分点，就输出一段文本")
+        else:
+            assert request.prompt == ""
         text = {"vlm": "图片里的字", "voice": "语音里的话"}[request.organ_id]
         return OrganResponse(request.organ_id, text)
 

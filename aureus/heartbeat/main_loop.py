@@ -77,7 +77,9 @@ from aureus.heartbeat.events import (
     EVENT_JUDGMENT,
     EVENT_MESSAGE,
     EVENT_ORGAN_CALL_ABANDONED,
+    EVENT_RECALL_REPLY_DELIVERED,
     EVENT_REPLY_DECLINED,
+    EVENT_REPLY_REFERENCE,
     EVENT_SELF_CHECK,
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
@@ -594,7 +596,6 @@ class Heartbeat:
                 else f"精力 {state.energy_level:.0%}（{state.energy_state}档）"
             )
             lines.append(f"{energy}，信心 {state.confidence_note}")
-            lines.append(f"回复做法：{self._current_strategy().describe()}")
         lines.extend(self._describe_signals())
         levels = self._hormone_levels()
         if levels is not None:
@@ -627,6 +628,10 @@ class Heartbeat:
     def working_memory_summaries(self) -> dict[str, str]:
         """读取本次运行已恢复的分区摘要，供管理网页展示。"""
         return self._working_memory.summaries() if self._working_memory is not None else {}
+
+    def working_memory_capacity(self) -> int | None:
+        """工作记忆启用时返回生效的配置容量。"""
+        return self._config.working_memory_capacity if self._config.working_memory_enabled else None
 
     def working_memory_focus(self) -> tuple[int, int | None] | None:
         """管理网页所见的工作记忆容量和最早焦点；停用时沿用对话窗口。"""
@@ -1003,6 +1008,7 @@ class Heartbeat:
             self._collect_initiative(thought, outcome)
             return
         target = thought.replying_to[-1].perception
+        self._record_reply_reference(thought, outcome.reference_plan, target)
         person_id = _person_id_of(thought.replying_to[-1].record)
         if (
             self._platform_inbox is not None
@@ -1061,6 +1067,8 @@ class Heartbeat:
             metadata["recall_record_ids"] = list(outcome.recall_record_ids)
         if outcome.recall_source_keys:
             metadata["recall_source_keys"] = list(outcome.recall_source_keys)
+        if outcome.recall_feedback_refs:
+            metadata["recall_feedback_refs"] = list(outcome.recall_feedback_refs)
         if outcome.effects is not None:
             metadata["hormones"] = outcome.effects.to_metadata()
             if self._hormones is not None:
@@ -1097,7 +1105,12 @@ class Heartbeat:
         )
 
     def _send_reply_part(
-        self, target: Perception, part: str | EmojiReplyPart, record: TimelineRecord
+        self,
+        target: Perception,
+        part: str | EmojiReplyPart,
+        record: TimelineRecord,
+        first_part: bool,
+        segment: int | None,
     ) -> bool:
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if not permission.allowed:
@@ -1105,11 +1118,47 @@ class Heartbeat:
             return False
         if self._maintenance_paused:
             return False
+        quote_source = first_part and target.quoted_message_id is not None
         if isinstance(part, EmojiReplyPart):
             if target.channel != "qq" or target.route is None or self._stop_requested:
                 return False
-            return self._deliver(target, "", MessageKind.REPLY, record, emoji_digest=part.digest)
-        return self._deliver(target, part, MessageKind.REPLY, record)
+            return self._deliver(
+                target,
+                "",
+                MessageKind.REPLY,
+                record,
+                emoji_digest=part.digest,
+                quote_source=quote_source,
+            )
+        confirm_delivery = None
+        if segment is not None and record.metadata.get("recall_feedback_refs"):
+            confirm_delivery = self._recall_delivery_receipt(record, segment)
+        return self._deliver(
+            target,
+            part,
+            MessageKind.REPLY,
+            record,
+            quote_source=quote_source,
+            confirm_delivery=confirm_delivery,
+        )
+
+    def _recall_delivery_receipt(self, reply: TimelineRecord, segment: int) -> Callable[[], None]:
+        confirmed = False
+
+        def confirm() -> None:
+            nonlocal confirmed
+            if confirmed:
+                return
+            self._timeline.append(
+                EVENT_RECALL_REPLY_DELIVERED,
+                "一段带召回参考的回复已投递。",
+                ActorType.SYSTEM,
+                visibility=reply.visibility,
+                metadata={"reply_id": reply.id, "segment": segment},
+            )
+            confirmed = True
+
+        return confirm
 
     def _after_reply_delivery(
         self,
@@ -1146,7 +1195,7 @@ class Heartbeat:
     ) -> bool:
         """投递已记录的各段。返回本次调用中是否已交给通道。"""
         if self._stop_requested and self._config.typing_delay_enabled:
-            delivered = self._send_reply_part(target, parts[0], record)
+            delivered = self._send_reply_part(target, parts[0], record, True, 1)
             finish = after_delivery if delivered else after_failure
             if finish is not None:
                 finish()
@@ -1245,6 +1294,37 @@ class Heartbeat:
             stress_level=stress,
             person_id=person_id,
             viewer_is_user=viewer_is_user,
+        )
+
+    def _record_reply_reference(
+        self, thought: _Thought, plan: Plan | None, target: Perception
+    ) -> None:
+        metadata: dict[str, Any] = {
+            "channel": target.channel,
+            "in_reply_to": [heard.record.id for heard in thought.replying_to],
+        }
+        content = "这轮没有可用的规划建议。"
+        if plan is not None:
+            content = "建议回复" if plan.should_reply else "建议不回复"
+            if plan.should_reply and plan.intent:
+                content += f"：{plan.intent}"
+            if plan.reason:
+                content += f"\n依据：{plan.reason}"
+            if plan.length is not None and plan.should_reply:
+                content += f"\n建议篇幅：{plan.length.value}"
+        if target.route is not None:
+            metadata.update(
+                account_id=target.route.account_id,
+                recipient_id=target.route.recipient_id,
+                message_type=target.route.kind,
+                temporary_group_id=target.route.temporary_group_id,
+            )
+        self._timeline.append(
+            event_type=EVENT_REPLY_REFERENCE,
+            content=content,
+            actor_type=ActorType.ME,
+            visibility=target.visibility,
+            metadata=metadata,
         )
 
     def _record_declined(
@@ -2153,6 +2233,8 @@ class Heartbeat:
         record: TimelineRecord | None = None,
         *,
         emoji_digest: str | None = None,
+        quote_source: bool = False,
+        confirm_delivery: Callable[[], None] | None = None,
     ) -> bool:
         """把消息交给通道。通道出错只记日志：任何通道出问题都不影响核心（03 号文档）。"""
         sender = self._identity.facts.name if kind is MessageKind.REPLY else NOTICE_SENDER
@@ -2166,6 +2248,8 @@ class Heartbeat:
             timestamp=record.timestamp if record is not None else self._clock.now(),
             route=target.route,
             emoji_digest=emoji_digest,
+            quote_source=quote_source,
+            confirm_delivery=confirm_delivery,
         )
         sink = self._sinks.get(message.channel)
         if sink is None:
@@ -2176,6 +2260,8 @@ class Heartbeat:
         except Exception:
             logger.exception("通道 %s 没能发出消息", message.channel)
             return False
+        if confirm_delivery is not None and target.channel not in ("qq", "web"):
+            confirm_delivery()
         return True
 
 

@@ -110,7 +110,10 @@ async def test_deployment_scope_cli_then_windows_launcher(tmp_path: Path) -> Non
         for offset, group in [(5, None), (6, GROUP)]:
             await fake.send(remote, **event(base + offset, 2100, "允许的消息", group=group))
             reply = await fake.messages.get()
-            assert reply["message"][0]["data"]["id"] == str(base + offset)
+            if group is None:
+                assert reply["message"][0]["data"]["id"] == str(base + offset)
+            else:
+                assert [part["type"] for part in reply["message"]] == ["text"]
             assert reply.get("group_id") == (str(group) if group else None)
             assert reply.get("user_id") == (None if group else "2100")
         return remote

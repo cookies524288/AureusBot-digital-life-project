@@ -9,8 +9,9 @@ from fastapi import Depends, FastAPI, HTTPException
 from aureus import __version__
 from aureus.common import Clock
 from aureus.core import CognitiveState
-from aureus.heartbeat import recent_dialogue
+from aureus.heartbeat import EVENT_REPLY_REFERENCE, recent_dialogue
 from aureus.timeline import TimelineDatabase, TimelineQuery, VisibilityScope
+from aureus.web.recall_feedback_api import feedback_available
 
 DEFAULT_HOURS = 24
 MAX_HOURS = 720
@@ -31,6 +32,10 @@ class HeartbeatView(Protocol):
 
     def working_memory_summaries(self) -> dict[str, str]:
         """已持久化的注意力滚动摘要。"""
+        ...
+
+    def working_memory_capacity(self) -> int | None:
+        """当前配置启用的工作记忆容量。"""
         ...
 
     def working_memory_focus(self) -> tuple[int, int | None] | None:
@@ -58,6 +63,7 @@ def register_timeline_routes(
     require_ready: Callable[..., Awaitable[str]],
     restart_required: Callable[[], bool] | None = None,
     maintenance_paused: Callable[[], bool] | None = None,
+    recall_feedback_enabled: bool = False,
 ) -> None:
     """注册时间线和总览；核心时钟、用户可见范围和登录依赖由组装方传入。"""
 
@@ -110,7 +116,16 @@ def register_timeline_routes(
                     "content": record.content,
                     "visibility": record.visibility.value,
                     "channel": str(record.metadata.get("channel", "")),
-                    "metadata": record.metadata,
+                    "metadata": {
+                        key: value
+                        for key, value in record.metadata.items()
+                        if key != "recall_feedback_refs"
+                    },
+                    **(
+                        {"recall_feedback_available": True}
+                        if recall_feedback_enabled and feedback_available(timeline, record)
+                        else {}
+                    ),
                 }
                 for record in records
             ],
@@ -125,6 +140,10 @@ def register_timeline_routes(
     @app.get("/api/overview")
     async def overview(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
         state = heartbeat.cognitive_state
+        references = timeline.query(
+            TimelineQuery(event_type=EVENT_REPLY_REFERENCE, latest=True, limit=1)
+        )
+        reference = references[0] if references else None
         return {
             "version": __version__,
             "state_text": heartbeat.describe_state(),
@@ -132,6 +151,17 @@ def register_timeline_routes(
             "energy_level": state.energy_level if state else None,
             "energy_tier": state.energy_state if state else "",
             "current_task": state.current_task if state else "",
+            "working_memory_capacity": heartbeat.working_memory_capacity(),
+            "reply_reference": (
+                {
+                    "content": reference.content,
+                    "time": reference.timestamp.isoformat(),
+                    "visibility": reference.visibility.value,
+                    "channel": reference.metadata.get("channel", ""),
+                }
+                if reference is not None
+                else None
+            ),
             "restart_required": restart_required() if restart_required else False,
             **({"maintenance_paused": maintenance_paused()} if maintenance_paused else {}),
         }

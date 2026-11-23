@@ -6,8 +6,8 @@
 
 | 职责 | 配置和候选 | 运行入口 |
 | --- | --- | --- |
-| `replyer` | `organs.replyer`，对话模型；默认由 `[heartbeat] reply_organ` 指向 | `ConversationFlow._reply` 生成对话回复，主动回复沿用相同绑定。 |
-| `planner` | `organs.planner`，对话模型；默认由 `[heartbeat] plan_organ` 指向 | `ConversationFlow._plan` 按档位规划，主动发言也可调用。 |
+| `replyer` | 固定使用 `organs.replyer`，维护者可配置其对话模型 | `ConversationFlow._reply` 生成对话回复，主动回复沿用相同绑定。 |
+| `planner` | 固定使用 `organs.planner`，维护者可配置其对话模型 | `ConversationFlow._plan` 按档位规划，主动发言也可调用。 |
 | `memory` | `organs.memory`，对话模型；清空时沿用旧 `summarizer` | `MemoryConsolidator.run` 在提取开关启用、有材料且符合夜间整理条件时，从原文提取事实和偏好，保存前校验证据。 |
 | `utils` | `organs.utils`，对话模型；既有任务绑定优先 | 小探索摘要、日记、人设成长和语言学习仍按各自守则启动。当前任务的专职器官未配置对话模型时，心跳把实际调用交给 `utils`。 |
 | `fast_model` | `organs.fast_model`，对话模型；`[judge] organ` 有对话模型时优先 | `ConversationFlow._judge_emotion` 满足判断配置和触发条件时调用，专职判断器官空置时使用此模型顺序。 |

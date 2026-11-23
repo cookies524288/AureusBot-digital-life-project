@@ -52,8 +52,11 @@ from .auth import (
 from .config_api import register_config_routes
 from .config_files import ConfigService
 from .inbox_api import register_inbox_routes
+from .language_package_api import register_language_package_routes
+from .memory_inspection_api import register_memory_inspection_routes
 from .memory_transfer_api import register_memory_transfer_routes
 from .prompt_api import register_prompt_routes
+from .recall_feedback_api import register_recall_feedback_routes
 from .resource_api import register_resource_routes
 from .session import SessionStore
 from .settings import SettingsService
@@ -168,6 +171,8 @@ async def _push(
                         **({"time": message.timestamp.isoformat()} if message.timestamp else {}),
                     }
                 )
+                if message.confirm_delivery is not None:
+                    message.confirm_delivery()
     except Exception:
         # 连接已经断了或发不出去：这个网页的推送结束，不影响别的网页和心跳。
         logger.debug("网页连接的推送结束", exc_info=True)
@@ -226,6 +231,8 @@ def create_app(
     resource_people: PeopleDirectory | None = None,
     resource_memory_dir: Path | None = None,
     resource_emojis: EmojiStore | None = None,
+    resource_database: Path | None = None,
+    recall_feedback_enabled: bool = False,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -241,6 +248,14 @@ def create_app(
         return token
 
     async def require_ready(token: Annotated[str, Depends(require_session)]) -> str:
+        if auth.password_is_default:
+            raise HTTPException(403, detail="请先修改默认密码。")
+        return token
+
+    async def require_inspection_access(request: Request) -> str:
+        token = request.cookies.get(SESSION_COOKIE, "")
+        if not sessions.is_active(token):
+            raise HTTPException(401, detail="请先登录。")
         if auth.password_is_default:
             raise HTTPException(403, detail="请先修改默认密码。")
         return token
@@ -442,7 +457,13 @@ def create_app(
         register_settings_routes(app, settings, require_ready)
 
     register_inbox_routes(app, inbox_store, require_ready)
+    register_language_package_routes(
+        app, require_ready, _same_http_origin, resource_language, clock
+    )
     register_memory_transfer_routes(app, require_ready, _same_http_origin, resource_memory, clock)
+    register_memory_inspection_routes(
+        app, require_inspection_access, resource_memory, channel.user_visibility
+    )
     register_resource_routes(
         app,
         require_ready,
@@ -452,6 +473,10 @@ def create_app(
         resource_people,
         resource_memory_dir,
         resource_emojis,
+        same_origin=_same_http_origin,
+        database=resource_database,
+        clock=clock,
+        inbox=inbox_store,
     )
 
     if maintenance_paused is not None and set_maintenance_paused is not None:
@@ -477,6 +502,10 @@ def create_app(
             require_ready=require_ready,
             restart_required=lambda: config_files.restart_required if config_files else False,
             maintenance_paused=maintenance_paused,
+            recall_feedback_enabled=recall_feedback_enabled,
+        )
+        register_recall_feedback_routes(
+            app, timeline, require_ready, _same_http_origin, enabled=recall_feedback_enabled
         )
 
     if config_files is not None:

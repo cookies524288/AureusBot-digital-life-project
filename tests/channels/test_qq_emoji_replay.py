@@ -87,7 +87,7 @@ async def test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success(
         parts = (image, text) if before_text else (text, image)
         for frame, part in zip((first, second), parts, strict=True):
             assert frame["group_id"] == str(GROUP)
-            assert frame["message"] == [{"type": "reply", "data": {"id": "31"}}, part]
+            assert frame["message"] == [part]
         assert store.browse("", 0, 10)[0].use_count == int(accepted)
         assert replay.fake.messages.empty()
 
@@ -109,7 +109,7 @@ async def test_qq_emoji_reply_without_candidates_sends_text_without_selecting(
 
         await receive_mention(replay, monkeypatch, 32, "合成群消息")
         await replay.step()
-        await asyncio.wait_for(replay.assert_sent(32), timeout=2)
+        await asyncio.wait_for(replay.assert_sent(), timeout=2)
         await asyncio.gather(*channel._sending)
 
         assert all(request.context.get("task") != "emoji" for _, request, _ in replay.replyer.calls)

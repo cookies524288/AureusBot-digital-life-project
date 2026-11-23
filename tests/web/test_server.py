@@ -10,6 +10,8 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from threading import get_ident
 from typing import Any
@@ -18,10 +20,13 @@ import httpx
 import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from aureus.channels import WebChannel
 from aureus.common import ManualClock, WebConfig
 from aureus.heartbeat import EVENT_MESSAGE, Perception
+from aureus.memory.emoji import MAX_EMOJI_BYTES, EmojiStore, ImportedEmoji
+from aureus.memory.history import MemorySource
 from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 from aureus.web.server import SESSION_COOKIE
@@ -44,6 +49,7 @@ class Rig:
         *,
         open_terminal: Callable[[], Awaitable[None]] | None = None,
         request_shutdown: Callable[[], None] | None = None,
+        resource_emojis: EmojiStore | None = None,
     ) -> None:
         self.clock = ManualClock(START)
         self.config = config or WebConfig(login_max_failures=3)
@@ -61,6 +67,7 @@ class Rig:
             timeline=self.timeline,
             open_terminal=open_terminal,
             request_shutdown=request_shutdown,
+            resource_emojis=resource_emojis,
         )
 
     def client(self, host: str = "127.0.0.1") -> TestClient:
@@ -84,6 +91,138 @@ def login(client: TestClient, password: str = "admin") -> Any:
 
 def set_password(rig: Rig) -> None:
     rig.passwords.set_password(GOOD)
+
+
+def test_emoji_catalog_filters_actual_format_before_paging_and_keeps_global_counts(
+    tmp_path: Path,
+) -> None:
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, ManualClock(START))
+    store.open()
+
+    def collect(image_format: str, color: str, description: str) -> str:
+        with BytesIO() as stream:
+            Image.new("RGB", (8, 8), color).save(stream, format=image_format)
+            entry = store.collect(stream.getvalue(), description=description, register=True)
+        assert entry.digest is not None
+        return entry.digest
+
+    first = collect("PNG", "blue", "示例.jpg")
+    second = collect("PNG", "red", "示例第二张")
+    jpeg = collect("JPEG", "green", "示例.png")
+    damaged = collect("PNG", "purple", "示例损坏")
+    removed = collect("PNG", "yellow", "示例移除")
+    (tmp_path / "attachments" / damaged).write_bytes(b"\x89PNG\r\n\x1a\n")
+    store.set_status(jpeg, is_registered=True, is_banned=True)
+    store.set_status(damaged, is_registered=False, is_banned=False)
+    assert store.set_removed([f"asset:{removed}"], removed=True)
+    rig = Rig(tmp_path, resource_emojis=store)
+    try:
+        with rig.client() as client:
+            set_password(rig)
+            assert login(client, GOOD).status_code == 200
+            endpoint = "/api/resources/media"
+            params = {"q": "示例", "status": "registered", "format": "png", "limit": 1}
+            page_one = client.get(endpoint, params=params).json()
+            page_two = client.get(endpoint, params={**params, "offset": 1}).json()
+            assert [page["items"][0]["digest"] for page in (page_one, page_two)] == sorted(
+                [first, second]
+            )
+            assert page_one["items"][0]["media_type"] == "image/png"
+            assert (page_one["total"], page_one["next_offset"]) == (2, 1)
+            assert (page_two["total"], page_two["next_offset"]) == (2, None)
+            most_used = max(first, second)
+            store.record_use(most_used)
+            sorted_page = client.get(endpoint, params={**params, "sort": "most_used"}).json()
+            assert sorted_page["items"][0]["digest"] == most_used
+            excluded = client.get(endpoint, params={"format": "png", "q": "损坏"}).json()
+            assert excluded["items"] == [] and excluded["total"] == 0
+            removed_page = client.get(endpoint, params={"format": "png", "removed": True}).json()
+            assert [item["digest"] for item in removed_page["items"]] == [removed]
+            counts = {"total": 5, "registered": 2, "unregistered": 1, "banned": 1, "removed": 1}
+            for page in (page_one, page_two, sorted_page, excluded, removed_page):
+                assert page["counts"] == counts
+            assert client.get(endpoint, params={"sort": "bad"}).status_code == 422
+            assert client.get(endpoint, params={"format": "svg"}).status_code == 422
+    finally:
+        rig.close()
+
+
+def test_emoji_catalog_upload_and_maintenance_preserve_originals(tmp_path: Path) -> None:
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, ManualClock(START))
+    store.open()
+    with BytesIO() as stream:
+        Image.new("RGB", (8, 8), "blue").save(stream, format="PNG")
+        image = stream.getvalue()
+    digest = sha256(image).hexdigest()
+    source = MemorySource("fixture", "main", "images", (7,))
+    assert store.import_records(
+        [
+            ImportedEmoji(source, digest, "旧说明", False, True, 2, 3, 0, None, "{}"),
+        ]
+    ) == (1, 1)
+    rig = Rig(tmp_path, resource_emojis=store)
+    endpoint = "/api/resources/emoji"
+    edit = f"{endpoint}/{digest}"
+    media = "/api/resources/media"
+    origin = {"Origin": "http://testserver"}
+    headers = {**origin, "Content-Type": "application/octet-stream"}
+    try:
+        with rig.client() as client:
+            assert client.post(endpoint, content=image, headers=headers).status_code == 401
+            assert client.patch(edit, json={"is_banned": False}, headers=origin).status_code == 401
+            assert login(client).json()["must_change_password"]
+            denied = client.post(endpoint, content=image, headers=headers)
+            assert denied.status_code == 403 and "默认密码" in denied.json()["detail"]
+            set_password(rig)
+            assert login(client, GOOD).status_code == 200
+            foreign = {**headers, "Origin": "http://example.test"}
+            assert client.post(endpoint, content=image, headers=foreign).status_code == 403
+            assert client.patch(edit, json={"is_banned": False}).status_code == 403
+            assert client.post(endpoint, content=image, headers=origin).status_code == 415
+            assert client.post(endpoint, content=image[:16], headers=headers).status_code == 422
+            assert client.post(endpoint, content=b"<svg/>", headers=headers).status_code == 422
+            oversized = b"0" * (MAX_EMOJI_BYTES + 1)
+            assert client.post(endpoint, content=oversized, headers=headers).status_code == 413
+            assert (
+                client.patch(edit, json={"is_registered": True}, headers=origin).status_code == 422
+            )
+            assert store.read_catalog_media(digest) is None
+
+            upload = client.post(endpoint, content=image, headers=headers)
+            assert upload.status_code == 200
+            assert upload.json() == {"digest": digest, "created": False}
+            [item] = client.get(media, params={"status": "banned"}).json()["items"]
+            assert (item["text"], item["collection_count"], item["use_count"]) == ("旧说明", 2, 3)
+            assert item["source"] == source.encode()
+
+            payload = {
+                "description": " 握手 ",
+                "tags": [" 友好 ", "", "友好"],
+                "is_registered": True,
+            }
+            assert client.patch(edit, json=payload, headers=origin).status_code == 200
+            assert store.read_sendable(digest) is None
+            assert client.patch(edit, json={"is_banned": False}, headers=origin).status_code == 200
+            assert store.read_sendable(digest) == image
+            assert client.patch(edit, json={"is_banned": True}, headers=origin).status_code == 200
+            assert store.read_sendable(digest) is None
+            assert client.post(endpoint, content=image, headers=headers).json() == upload.json()
+            [item] = client.get(media, params={"q": "友好", "status": "banned"}).json()["items"]
+            assert item["text"] == "握手" and item["tags"] == ["友好"] and item["is_registered"]
+            assert (item["source"], item["collection_count"], item["use_count"]) == (
+                source.encode(),
+                2,
+                3,
+            )
+            assert client.get(f"{media}/{digest}?kind=emoji").content == image
+            assert client.patch(edit, json={"is_banned": False}, headers=origin).status_code == 200
+            assert store.read_sendable(digest) == image
+            assert (
+                client.patch(edit, json={"is_registered": False}, headers=origin).status_code == 200
+            )
+            assert store.read_sendable(digest) is None
+    finally:
+        rig.close()
 
 
 # ---------- 没登录什么都看不到 ----------

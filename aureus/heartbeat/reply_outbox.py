@@ -14,7 +14,7 @@ from aureus.timeline import TimelineRecord
 
 type _Address = ConversationKey | tuple[str, str]
 type _Part = str | EmojiReplyPart
-type _Send = Callable[[Perception, _Part, TimelineRecord], bool]
+type _Send = Callable[[Perception, _Part, TimelineRecord, bool, int | None], bool]
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,8 @@ class _Reply:
     on_delivered: Callable[[], None] | None
     on_failed: Callable[[], None] | None
     delivered: bool = False
+    first_part: bool = True
+    text_parts: int = 0
 
     def fail(self) -> None:
         if not self.delivered and self.on_failed is not None:
@@ -139,7 +141,12 @@ class ReplyOutbox:
         while queue.replies and queue.seconds_until_due(self._clock.now()) == 0:
             reply = queue.replies[0]
             content, _ = reply.parts.popleft()
-            delivered = self._send(reply.target, content, reply.record)
+            segment = None
+            if isinstance(content, str):
+                reply.text_parts += 1
+                segment = reply.text_parts
+            delivered = self._send(reply.target, content, reply.record, reply.first_part, segment)
+            reply.first_part = False
             queue.last_sent_at = self._clock.now()
             if not reply.parts:
                 queue.replies.popleft()

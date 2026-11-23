@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -12,8 +13,9 @@ from aureus import __version__
 from aureus.channels import WebChannel
 from aureus.common import ManualClock, WebConfig
 from aureus.core import CognitiveState
-from aureus.heartbeat import Perception, recent_dialogue
-from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
+from aureus.heartbeat import EVENT_REPLY_REFERENCE, Perception, recent_dialogue
+from aureus.heartbeat.events import EVENT_RECALL_FEEDBACK, EVENT_RECALL_REPLY_DELIVERED
+from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 
 NOW = datetime(2026, 11, 21, 12, tzinfo=UTC)
@@ -29,6 +31,7 @@ class FakeHeartbeat:
         self.maintenance_paused = False
         self.summaries: dict[str, str] = {}
         self.focus: tuple[int, int | None] | None = None
+        self.capacity: int | None = None
 
     def set_maintenance_paused(self, paused: bool) -> None:
         self.maintenance_paused = paused
@@ -48,9 +51,14 @@ class FakeHeartbeat:
     def working_memory_focus(self) -> tuple[int, int | None] | None:
         return self.focus
 
+    def working_memory_capacity(self) -> int | None:
+        return self.capacity
+
 
 class Rig:
-    def __init__(self, tmp_path: Path, *, password_set: bool = True) -> None:
+    def __init__(
+        self, tmp_path: Path, *, password_set: bool = True, recall_feedback_enabled: bool = True
+    ) -> None:
         self.clock = ManualClock(NOW)
         self.heartbeat = FakeHeartbeat()
         self.channel = WebChannel(self.heartbeat)
@@ -73,6 +81,7 @@ class Rig:
             clock=self.clock,
             maintenance_paused=lambda: self.heartbeat.maintenance_paused,
             set_maintenance_paused=self.heartbeat.set_maintenance_paused,
+            recall_feedback_enabled=recall_feedback_enabled,
         )
         self.client = TestClient(app, client=("127.0.0.1", 50000))
 
@@ -98,6 +107,120 @@ def test_timeline_routes_require_login_and_a_changed_password(tmp_path: Path, pa
         assert rig.client.get(path).status_code == 401
         rig.log_in("admin")
         assert rig.client.get(path).status_code == 403
+    finally:
+        rig.close()
+
+
+def test_recall_feedback_is_bound_to_a_delivered_reply_and_is_reversible(rig: Rig) -> None:
+    visibility = VisibilityScope.GROUP
+    evidence = rig.timeline.append("message", "合成依据", ActorType.USER, visibility=visibility)
+    reference = f"timeline:{evidence.id}"
+    reply = rig.timeline.append(
+        "message",
+        "合成回复",
+        ActorType.ME,
+        visibility=visibility,
+        metadata={"recall_feedback_refs": [reference, "source:sample"]},
+    )
+    old = rig.timeline.append(
+        "message",
+        "旧回复",
+        ActorType.ME,
+        visibility=visibility,
+        metadata={"recall_record_ids": [evidence.id]},
+    )
+    private = rig.timeline.append(
+        "message",
+        "私有记录",
+        ActorType.ME,
+        metadata={"recall_feedback_refs": [reference]},
+    )
+    path = f"/api/timeline/{reply.id}/recall-feedback"
+    origin = {"origin": "http://testserver"}
+    key = sha256(reference.encode()).hexdigest()
+    payload = {"evidence_key": key, "rating": "useful"}
+    assert rig.client.get(path).status_code == 401
+    assert rig.client.patch(path, json=payload, headers=origin).status_code == 401
+    rig.log_in()
+    assert rig.client.get(path).status_code == 404
+    assert rig.client.patch(path, json=payload, headers=origin).status_code == 404
+    for target in (reply, old, private):
+        rig.timeline.append(
+            EVENT_RECALL_REPLY_DELIVERED,
+            "合成回执",
+            ActorType.SYSTEM,
+            visibility=target.visibility,
+            metadata={"reply_id": target.id, "segment": 1},
+        )
+    for target in (old, private):
+        rejected = f"/api/timeline/{target.id}/recall-feedback"
+        assert rig.client.get(rejected).status_code == 404
+        assert rig.client.patch(rejected, json=payload, headers=origin).status_code == 404
+    assert rig.client.patch(path, json=payload).status_code == 403
+    unrelated = sha256(b"timeline:9999").hexdigest()
+    assert (
+        rig.client.patch(
+            path,
+            json={**payload, "evidence_key": unrelated},
+            headers=origin,
+        ).status_code
+        == 404
+    )
+    assert rig.client.get(path).json() == [
+        {"key": key, "label": f"时间线记录 #{evidence.id}", "rating": None},
+        {
+            "key": sha256(b"source:sample").hexdigest(),
+            "label": f"记忆依据 · 编号 {sha256(b'sample').hexdigest()[:12]}",
+            "rating": None,
+        },
+    ]
+    for rating in (None, "useful", "useful", "not_useful", None, None):
+        result = rig.client.patch(path, json={**payload, "rating": rating}, headers=origin)
+        assert result.json() == {"rating": rating}
+        assert rig.client.get(path).json()[0]["rating"] == rating
+    history = rig.timeline.query(TimelineQuery(event_type=EVENT_RECALL_FEEDBACK))
+    assert [record.metadata["rating"] for record in history] == ["useful", "not_useful", None]
+    assert all(
+        record.visibility is visibility and record.actor_type is ActorType.USER
+        for record in history
+    )
+    assert rig.timeline.get(reply.id) == reply and rig.timeline.get(evidence.id) == evidence
+    records = rig.client.get("/api/timeline").json()["records"]
+    assert [item["id"] for item in records if item.get("recall_feedback_available")] == [reply.id]
+    assert all("recall_feedback_refs" not in item["metadata"] for item in records)
+
+
+def test_recall_feedback_switch_hides_controls_and_rejects_mutation(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, recall_feedback_enabled=False)
+    try:
+        visibility = VisibilityScope.USER_ONLY
+        reply = rig.timeline.append(
+            "message",
+            "已有评价的回复",
+            ActorType.ME,
+            visibility=visibility,
+            metadata={"recall_feedback_refs": ["timeline:42"]},
+        )
+        rig.timeline.append(
+            EVENT_RECALL_REPLY_DELIVERED,
+            "合成回执",
+            ActorType.SYSTEM,
+            visibility=visibility,
+            metadata={"reply_id": reply.id, "segment": 1},
+        )
+        rig.log_in()
+        path = f"/api/timeline/{reply.id}/recall-feedback"
+        assert rig.client.get(path).status_code == 404
+        assert (
+            rig.client.patch(
+                path,
+                headers={"origin": "http://testserver"},
+                json={"evidence_key": sha256(b"timeline:42").hexdigest(), "rating": "not_useful"},
+            ).status_code
+            == 404
+        )
+        [record] = rig.client.get("/api/timeline?types=message").json()["records"]
+        assert "recall_feedback_available" not in record
     finally:
         rig.close()
 
@@ -225,6 +348,8 @@ def test_overview_before_and_after_the_first_beat(rig: Rig) -> None:
         "energy_level": None,
         "energy_tier": "",
         "current_task": "",
+        "working_memory_capacity": None,
+        "reply_reference": None,
         "restart_required": False,
         "maintenance_paused": False,
     }
@@ -237,3 +362,28 @@ def test_overview_before_and_after_the_first_beat(rig: Rig) -> None:
     assert data["energy_tier"] == "低电量"
     assert data["current_task"] == "回复用户"
     assert data["thinking"] is True
+
+
+def test_overview_reports_configured_capacity_and_latest_reference(rig: Rig) -> None:
+    rig.heartbeat.limit = 10
+    rig.heartbeat.capacity = 84
+    rig.timeline.append(EVENT_REPLY_REFERENCE, "上一轮建议", ActorType.ME)
+    newest = rig.timeline.append(
+        EVENT_REPLY_REFERENCE,
+        "建议不回复\n依据：只是在道别",
+        ActorType.ME,
+        visibility=VisibilityScope.GROUP,
+        metadata={"channel": "qq", "recipient_id": "fake-group"},
+    )
+    rig.timeline.append("message", "不相关的消息", ActorType.USER)
+    assert rig.client.get("/api/overview").status_code == 401
+    rig.log_in()
+    data = rig.client.get("/api/overview").json()
+    assert data["working_memory_capacity"] == 84
+    assert data["reply_reference"] == {
+        "content": newest.content,
+        "time": newest.timestamp.isoformat(),
+        "visibility": "group",
+        "channel": "qq",
+    }
+    assert not recent_dialogue(rig.timeline, visibility=VisibilityScope.GROUP, limit=10)

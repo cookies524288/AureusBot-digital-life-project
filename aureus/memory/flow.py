@@ -85,7 +85,7 @@ def browse_flow(
     conversation: str,
     start: datetime | None,
     end: datetime | None,
-) -> tuple[list[MemoryEvent], list[str]]:
+) -> tuple[list[MemoryEvent], list[str], int]:
     """在分页前筛选真实事件，返回事件和有明确归属的会话。"""
     conn.execute("BEGIN")
     people = conn.execute(
@@ -102,23 +102,24 @@ def browse_flow(
                 WHERE imported.source = people.source AND imported.event_type = people.event_type
             )
         """
-    rows = conn.execute(
-        f"""SELECT * FROM ({select_events}) AS flow
+    filtered = f"""FROM ({select_events}) AS flow
             WHERE (:event_type IS NULL OR event_type = :event_type)
               AND (:conversation = '' OR EXISTS (
                   SELECT 1 FROM json_each(flow.conversations) WHERE value = :conversation
               ))
               AND (:start IS NULL OR happened >= :start)
-              AND (:end IS NULL OR happened <= :end)
+              AND (:end IS NULL OR happened <= :end)"""
+    params = {
+        "event_type": event_type,
+        "conversation": conversation,
+        "start": start.timestamp() if start else None,
+        "end": end.timestamp() if end else None,
+    }
+    total = conn.execute(f"SELECT count(*) {filtered}", params).fetchone()[0]
+    rows = conn.execute(
+        f"""SELECT * {filtered}
             ORDER BY happened DESC, event_type, source, summary LIMIT :limit OFFSET :offset""",
-        {
-            "event_type": event_type,
-            "conversation": conversation,
-            "offset": offset,
-            "limit": limit,
-            "start": start.timestamp() if start else None,
-            "end": end.timestamp() if end else None,
-        },
+        {**params, "offset": offset, "limit": limit},
     )
     items = [
         MemoryEvent(
@@ -134,4 +135,4 @@ def browse_flow(
         """SELECT DISTINCT value FROM memory_imported_events, json_each(conversations)
            ORDER BY value"""
     )
-    return items, [row[0] for row in conversations]
+    return items, [row[0] for row in conversations], total

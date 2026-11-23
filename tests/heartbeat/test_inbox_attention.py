@@ -315,7 +315,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
                     "persona": {"immutable": "温和。"},
                 }
             ),
-            config=HeartbeatConfig(split_reply_enabled=False),
+            config=HeartbeatConfig(split_reply_enabled=False, inbox_debounce_enabled=False),
             permissions=PermissionChecker(stop),
             emergency_stop=stop,
             people=people,

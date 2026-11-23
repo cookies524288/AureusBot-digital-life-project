@@ -1,0 +1,1039 @@
+"""用独立 Chrome 实例和编造的 API 数据验收资源页的浏览交互。"""
+
+import base64
+import json
+import os
+import shutil
+import subprocess
+from collections.abc import Iterator
+from functools import partial
+from hashlib import sha256
+from http.client import HTTPConnection
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Thread
+from time import monotonic, sleep
+from typing import cast
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+from PIL import Image
+from websockets.sync.client import ClientConnection, connect
+
+STATIC = Path(__file__).resolve().parents[2] / "aureus" / "web" / "static"
+STAMP = "2026-11-23T00:00:00Z"
+TOTAL = 320
+MEMORY_BATCH_TOTAL = 15
+REVIEW_ENDPOINT = "/api/resources/learning/reviews"
+
+
+def _items(path: str, kind: str) -> list[dict[str, object]]:
+    labels = {"jargon": "黑话", "expression": "表达", "emoji": "表情", "image_assets": "图片"}
+    return [_item(path, kind, labels.get(kind, "记忆"), number) for number in range(TOTAL)]
+
+
+def _item(path: str, kind: str, label: str, number: int) -> dict[str, object]:
+    text = f"合成{label}{number:03}"
+    source = {"table": "paragraphs", "source_key": str(number), "instance": "browser-fixture"}
+    if path.endswith("/learning"):
+        return {
+            "entry_key": f"{kind}-{number}",
+            "text": text,
+            "detail": "合成释义",
+            "example": "例句",
+            "count": 2,
+            "speakers": [],
+            "source_refs": [],
+            "evidence_ids": [],
+            "is_enabled": True,
+        }
+    if path.endswith("/media"):
+        digest = sha256(f"browser-emoji-{number}".encode()).hexdigest()
+        return {
+            "text": text,
+            "description": text,
+            "tags": [],
+            "source": source,
+            "media_kind": kind,
+            "digest": digest,
+            "is_banned": False,
+            "has_file": True,
+            "is_registered": True,
+            "media_type": "image/gif" if number % 16 == 2 else "image/png",
+            "use_count": number,
+            "collection_count": 2,
+        }
+    if path.endswith("/profiles"):
+        return {"record": {"name": f"合成人物{number:03}", **source}, "person_id": number}
+    if path.endswith("/flow"):
+        return {
+            "summary": f"合成事件{number:03}",
+            "event_type": "profile_created",
+            "recorded_at": STAMP,
+            "conversations": ["合成会话"],
+        }
+    if path.endswith("/pictures"):
+        archived = kind == "archived" or (not kind and number % 2 == 0)
+        return {
+            "kind": "archive" if archived else "inbox",
+            "id": TOTAL - number,
+            "text": f"合成{'图片' if archived else '收件箱'}{number:03}",
+            "conversation": "合成会话",
+            "timestamp": STAMP,
+            "source": source if archived else None,
+            "digest": f"{number:064x}" if archived else None,
+            "attachment": f"sample-{number}.png",
+        }
+    if path.endswith("/images"):
+        return {
+            "id": TOTAL - number,
+            "conversation": f"合成收件箱{number:03}",
+            "timestamp": STAMP,
+            "attachment": f"sample-{number}.png",
+        }
+    return {
+        "entry_id": str(number),
+        "source": source,
+        "text": text,
+        "original_text": "合成原件",
+        "is_enabled": True,
+        "is_recallable": True,
+        "recorded_at": STAMP,
+        "evidence": [],
+    }
+
+
+class ResourceServer(ThreadingHTTPServer):
+    emoji_uploads: dict[str, dict[str, object]]
+    removed_memories: set[tuple[str, int]]
+    expression_reviews: dict[str, list[dict[str, str]]]
+    recall_rating: str | None
+
+
+class ResourceFixture(SimpleHTTPRequestHandler):
+    @property
+    def emoji_uploads(self) -> dict[str, dict[str, object]]:
+        return cast(ResourceServer, self.server).emoji_uploads
+
+    @property
+    def removed_memories(self) -> set[tuple[str, int]]:
+        return cast(ResourceServer, self.server).removed_memories
+
+    @property
+    def expression_reviews(self) -> dict[str, list[dict[str, str]]]:
+        return cast(ResourceServer, self.server).expression_reviews
+
+    def do_GET(self) -> None:
+        url = urlsplit(self.path)
+        if url.path.startswith("/assets/"):
+            self.path = url.path.removeprefix("/assets")
+            super().do_GET()
+        elif url.path == "/":
+            super().do_GET()
+        elif url.path == "/api/status":
+            self._send_json({"must_change_password": False})
+        elif url.path == "/api/timeline":
+            records = [
+                {"id": 41, "content": "没有依据的旧回复"},
+                {"id": 42, "content": "可评价的合成回复", "recall_feedback_available": True},
+            ]
+            self._send_json(
+                {
+                    "records": [
+                        {
+                            "time": STAMP,
+                            "actor": "me",
+                            "event_type": "message",
+                            "visibility": "user_only",
+                            "metadata": {},
+                            **record,
+                        }
+                        for record in records
+                    ],
+                    "context": {"boundary_id": None},
+                }
+            )
+        elif url.path == "/api/timeline/42/recall-feedback":
+            rating = cast(ResourceServer, self.server).recall_rating
+            data = [{"key": "a" * 64, "label": "时间线记录 #40", "rating": rating}]
+            self._send("application/json; charset=utf-8", json.dumps(data).encode())
+        elif url.path == "/ws":
+            self.send_error(404)
+        elif url.path.startswith("/api/resources/media/"):
+            asset = b'<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"/>'
+            self._send("image/svg+xml", asset)
+        elif url.path == REVIEW_ENDPOINT:
+            entry_key = parse_qs(url.query)["entry_key"][0]
+            self._send_json({"items": self.expression_reviews.get(entry_key, [])})
+        elif url.path == "/api/resources/memory/inspection":
+            self._send_json(
+                {
+                    "coverage": "原件缺失未检查；零异常不代表全库完整。",
+                    "checked": 3,
+                    "checks": [
+                        {"label": "维护停用", "count": 1, "detail": "不需要重建索引。"},
+                        {"label": "已移除", "count": 0, "detail": "仍保留原件。"},
+                        {"label": "可见标签不一致", "count": 1, "detail": "本次不重建索引。"},
+                    ],
+                }
+            )
+        elif url.path.startswith("/api/resources/"):
+            self._send_page(url.path, parse_qs(url.query))
+        else:
+            self.send_error(404)
+
+    def do_POST(self) -> None:
+        if self.path != "/api/resources/emoji":
+            self.send_error(404)
+            return
+        data = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        digest = sha256(data).hexdigest()
+        uploads = self.emoji_uploads
+        created = digest not in uploads
+        uploads.setdefault(
+            digest,
+            {
+                "text": "",
+                "description": "",
+                "tags": [],
+                "source": None,
+                "media_kind": "emoji",
+                "digest": digest,
+                "is_banned": False,
+                "has_file": True,
+                "is_registered": False,
+                "use_count": 0,
+                "collection_count": 0,
+            },
+        )
+        self._send_json({"digest": digest, "created": created})
+
+    def do_PATCH(self) -> None:
+        if self.path == "/api/timeline/42/recall-feedback":
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            if body["evidence_key"] != "a" * 64:
+                self.send_error(404)
+                return
+            cast(ResourceServer, self.server).recall_rating = body["rating"]
+            self._send_json({"rating": body["rating"]})
+            return
+        if self.path == REVIEW_ENDPOINT:
+            payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            for key in payload["entry_keys"]:
+                self.expression_reviews.setdefault(key, []).insert(
+                    0,
+                    {
+                        "status": payload["status"],
+                        "reason": payload["reason"],
+                        "recorded_at": STAMP,
+                    },
+                )
+            self._send_json({"changed": len(payload["entry_keys"])})
+            return
+        if self.path == "/api/resources/memory/batch":
+            batch = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            targets = {(item["kind"], item["entry_id"]) for item in batch["targets"]}
+            if batch["removed"]:
+                self.removed_memories.update(targets)
+            else:
+                self.removed_memories.difference_update(targets)
+            self._send_json({"changed": len(targets)})
+            return
+        prefix = "/api/resources/emoji/"
+        if not self.path.startswith(prefix):
+            self.send_error(404)
+            return
+        digest = self.path.removeprefix(prefix)
+        item = self.emoji_uploads.get(digest)
+        if item is None:
+            self.send_error(404)
+            return
+        item.update(json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0")))))
+        if "description" in item:
+            item["text"] = item["description"]
+        self._send_json({"ok": True})
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+    def _send(self, content_type: str, data: bytes) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_json(self, data: dict[str, object]) -> None:
+        self._send("application/json; charset=utf-8", json.dumps(data).encode())
+
+    def _send_page(self, path: str, params: dict[str, list[str]]) -> None:
+        kind = params.get("kind", params.get("availability", [""]))[0]
+        query = params.get("q", [""])[0]
+        offset = int(params.get("offset", ["0"])[0])
+        limit = int(params.get("limit", ["50"])[0])
+        results = [item for item in _items(path, kind) if query in str(item)]
+        counts = {"paragraphs": len(results)}
+        if path.endswith("/learning") and kind == "expression":
+            for item in results:
+                history = self.expression_reviews.get(str(item["entry_key"]), [])
+                item["review_status"] = history[0]["status"] if history else "pending"
+            if review := params.get("review"):
+                results = [item for item in results if item["review_status"] == review[0]]
+        if path.endswith("/memory") and query == "合成批量":
+            results = self._batch_memories(params)
+        if path.endswith("/media") and kind == "emoji":
+            uploads = [item for item in self.emoji_uploads.values() if query in str(item)]
+            results = uploads + results
+            all_uploads = list(self.emoji_uploads.values())
+            counts = {
+                "total": TOTAL + len(all_uploads),
+                "registered": TOTAL
+                + sum(
+                    bool(item["is_registered"] and not item["is_banned"]) for item in all_uploads
+                ),
+                "unregistered": sum(
+                    bool(not item["is_registered"] and not item["is_banned"])
+                    for item in all_uploads
+                ),
+                "banned": sum(bool(item["is_banned"]) for item in all_uploads),
+                "removed": 0,
+            }
+            status = params.get("status", [""])[0]
+            if status == "banned":
+                results = [item for item in results if item["is_banned"]]
+            elif status == "registered":
+                results = [
+                    item for item in results if item["is_registered"] and not item["is_banned"]
+                ]
+            elif status == "unregistered":
+                results = [
+                    item for item in results if not item["is_registered"] and not item["is_banned"]
+                ]
+            if image_format := params.get("format"):
+                results = [
+                    item for item in results if item.get("media_type") == f"image/{image_format[0]}"
+                ]
+            if params.get("sort") == ["most_used"]:
+                results.sort(key=lambda item: int(str(item["use_count"])), reverse=True)
+        if "before" in params:
+            offset = TOTAL - int(params["before"][0]) + 1
+        next_offset = offset + limit if offset + limit < len(results) else None
+        next_before = None if next_offset is None else results[next_offset - 1].get("id")
+        self._send_json(
+            {
+                "enabled": True,
+                "items": results[offset : offset + limit],
+                "total": len(results),
+                "next_offset": None if path.endswith("/images") else next_offset,
+                "next_before": next_before,
+                "counts": counts,
+                "conversations": ["合成会话"],
+                "start": STAMP,
+                "end": STAMP,
+            }
+        )
+
+    def _batch_memories(self, params: dict[str, list[str]]) -> list[dict[str, object]]:
+        removed = params.get("removed") == ["true"]
+        enabled_only = params.get("recall") == ["enabled"]
+        results = []
+        for number in range(MEMORY_BATCH_TOTAL):
+            kind = "history" if number % 2 else "live"
+            entry_id = number // 2 + 1
+            enabled = number != MEMORY_BATCH_TOTAL - 1
+            if ((kind, entry_id) in self.removed_memories) != removed or (
+                enabled_only and not enabled
+            ):
+                continue
+            results.append(
+                {
+                    **_item("/memory", kind, "批量", number),
+                    "kind": kind,
+                    "entry_id": entry_id,
+                    "is_removed": removed,
+                    "is_enabled": enabled,
+                    "is_recallable": enabled and not removed,
+                }
+            )
+        return results
+
+
+class Browser:
+    def __init__(self, socket: ClientConnection, origin: str) -> None:
+        self.socket = socket
+        self.origin = origin
+        self.serial = 0
+
+    def command(self, method: str, **params: object) -> dict:
+        self.serial += 1
+        self.socket.send(json.dumps({"id": self.serial, "method": method, "params": params}))
+        while True:
+            result = json.loads(self.socket.recv(timeout=15))
+            if result.get("id") == self.serial:
+                assert "error" not in result, result
+                return result["result"]
+
+    def evaluate(self, expression: str) -> object:
+        result = self.command(
+            "Runtime.evaluate", expression=expression, awaitPromise=True, returnByValue=True
+        )
+        assert "exceptionDetails" not in result, result.get("exceptionDetails")
+        return result["result"].get("value")
+
+    def open(self, page: str, width: int, height: int) -> None:
+        self.command("Page.enable")
+        self.resize(width, height)
+        self.command(
+            "Emulation.setEmulatedMedia",
+            features=[
+                {"name": "prefers-reduced-motion", "value": "reduce"},
+            ],
+        )
+        self.command("Page.navigate", url=f"{self.origin}/?run={self.serial}#{page}")
+
+    def resize(self, width: int, height: int) -> None:
+        self.command(
+            "Emulation.setDeviceMetricsOverride",
+            width=width,
+            height=height,
+            deviceScaleFactor=1,
+            mobile=False,
+        )
+
+
+def _chrome() -> str:
+    for executable in ("google-chrome", "chromium", "chrome", "msedge"):
+        if path := shutil.which(executable):
+            return path
+    for env, filename in (
+        ("ProgramFiles", "Google/Chrome/Application/chrome.exe"),
+        ("ProgramFiles(x86)", "Microsoft/Edge/Application/msedge.exe"),
+    ):
+        if parent := os.environ.get(env):
+            path = Path(parent) / filename
+            if path.is_file():
+                return str(path)
+    pytest.skip("资源页布局验收需要 Chrome、Chromium 或 Edge")
+
+
+def _debug_socket(profile: Path) -> str:
+    port_file = profile / "DevToolsActivePort"
+    deadline = monotonic() + 10
+    while not port_file.exists():
+        assert monotonic() < deadline, "独立浏览器未启动调试端口"
+        sleep(0.05)
+    port = int(port_file.read_text(encoding="utf-8").splitlines()[0])
+    connection = HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        connection.request("GET", "/json/list")
+        return next(
+            tab["webSocketDebuggerUrl"]
+            for tab in json.load(connection.getresponse())
+            if tab["type"] == "page"
+        )
+    finally:
+        connection.close()
+
+
+@pytest.fixture(scope="module")
+def browser() -> Iterator[Browser]:
+    with TemporaryDirectory(prefix="aureus-resource-chrome-") as directory:
+        yield from _open_browser(Path(directory))
+
+
+def _open_browser(profile: Path) -> Iterator[Browser]:
+    chrome = _chrome()
+    server = ResourceServer(("127.0.0.1", 0), partial(ResourceFixture, directory=STATIC))
+    server.emoji_uploads = {}
+    server.removed_memories = set()
+    server.expression_reviews = {}
+    server.recall_rating = None
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    process = subprocess.Popen(
+        [
+            chrome,
+            "--headless",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--no-first-run",
+            "--no-proxy-server",
+            "--remote-debugging-port=0",
+            "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+            f"--user-data-dir={profile}",
+            "about:blank",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        with connect(_debug_socket(profile), proxy=None) as socket:
+            yield Browser(socket, f"http://127.0.0.1:{server.server_port}")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+HARNESS = """
+async (run) => {
+  const root = () => document.querySelector('.page.active');
+  const visible = node => Boolean(node?.getClientRects().length);
+  const nodes = selector => [...(root()?.querySelectorAll(selector) ?? [])].filter(visible);
+  const find = selector => nodes(selector)[0];
+  const button = label => nodes('button').find(node => node.textContent.trim() === label);
+  const text = value => root()?.innerText.includes(value);
+  const check = (condition, message) => { if (!condition) throw Error(message); };
+  const waitFor = async (predicate, message) => {
+    const until = performance.now() + 3500;
+    while (performance.now() < until) {
+      if (predicate()) return;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw Error(message + '\\n' + (root()?.innerText ?? document.body?.innerText.slice(0, 1000)));
+  };
+  const click = selector => find(selector).click();
+  const press = label => button(label).click();
+  const page = () => find('.resource-pagination span')?.textContent.trim();
+  return run({root, find, visible, button, text, check, waitFor, click, press, page});
+}
+"""
+
+
+def _run(browser: Browser, script: str) -> None:
+    browser.evaluate(
+        f"({HARNESS})(async ({{root, find, visible, button, text, check, "
+        f"waitFor, click, press, page}}) => {{{script}}})"
+    )
+
+
+@pytest.mark.parametrize(("width", "height"), [(1280, 900), (390, 740)])
+def test_learning_pagination_and_category_switch(browser: Browser, width: int, height: int) -> None:
+    browser.open("learning", width, height)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成黑话000') && button('下一页'), '黑话首页与分页按钮');
+      const expected = Math.ceil(320 / find('#learning-jargon-result').childElementCount);
+      check(page() === `第 1 / ${expected} 页`, '总页数按当前视口容量计算');
+      check(button('上一页').disabled && !button('下一页').disabled, '黑话首页的按钮状态');
+      const footer = button('下一页').getBoundingClientRect();
+      check(footer.bottom <= innerHeight && footer.right <= innerWidth, '窄屏时页脚在可视区');
+      press('下一页');
+      await waitFor(() => page() === `第 2 / ${expected} 页` && text('合成黑话') &&
+        !text('合成黑话000'), '翻页替换而不是追加');
+      press('上一页');
+      await waitFor(() => text('合成黑话000'), '上一页恢复首页');
+      click('[data-learning-tab="expression"]');
+      await waitFor(() => text('合成表达000') && !text('合成黑话000'), '切换到表达结果');
+      check(button('上一页').disabled, '表达不沿用黑话的页数');
+      const search = find('input[type="search"]');
+      search.value = '合成表达001';
+      search.form.requestSubmit();
+      await waitFor(() => text('合成表达001') && !text('合成表达000'), '表达筛选只显示命中项');
+      check(page() === '第 1 / 1 页', '筛选后重新计算总页数');
+      check(button('上一页').disabled && button('下一页').disabled, '末页禁止继续翻页');
+      search.value = '无匹配内容';
+      search.form.requestSubmit();
+      await waitFor(() => page() === '第 0 / 0 页', '空列表没有可翻的页');
+      check(button('上一页').disabled && button('下一页').disabled, '空列表禁用翻页');
+      click('[data-learning-tab="jargon"]');
+      await waitFor(() => text('合成黑话000'), '黑话不沿用表达查询');
+      check(!find('input[type="search"]').value, '黑话搜索栏独立');
+    """,
+    )
+
+
+def test_expression_quick_queue_filters_and_preserves_review_history(browser: Browser) -> None:
+    browser.open("learning", 1280, 900)
+    _run(
+        browser,
+        """
+      await waitFor(() => text('合成黑话000'), '黑话页已加载');
+      check(!button('快速审核'), '黑话没有审核入口');
+      click('[data-learning-tab="expression"]');
+      await waitFor(() => button('快速审核') && !button('快速审核').disabled, '表达队列就绪');
+      press('快速审核');
+      const filter = find('select[name="review"]');
+      const dialog = document.querySelector('#editor-dialog');
+      function submit(status, reason) {
+        const form = dialog.querySelector('form');
+        const select = form.querySelector('select');
+        select.value = status;
+        select.dispatchEvent(new Event('change'));
+        form.querySelector('textarea').value = reason;
+        form.requestSubmit();
+      }
+      function filterBy(status) {
+        filter.value = status;
+        filter.dispatchEvent(new Event('change', {bubbles:true}));
+      }
+      check(filter.value === 'pending', '快速审核进入待审队列');
+      await waitFor(() => button('合成表达000 · 待审'), '待审记录可操作');
+      press('合成表达000 · 待审');
+      submit('rejected', '');
+      check(dialog.open && dialog.querySelector('textarea').required, '拒绝理由必填');
+      submit('rejected', '合成拒绝理由');
+      await waitFor(() => !dialog.open && button('合成表达001 · 待审') &&
+        !button('合成表达000 · 待审'), '拒绝后退出待审队列');
+      click('input[aria-label="选择 合成表达001"]');
+      click('input[aria-label="选择 合成表达002"]');
+      press('审核所选');
+      check(dialog.innerText.includes('审核 2 条所选表达'), '批量审核只操作选中记录');
+      submit('approved', '合成通过理由');
+      await waitFor(() => !dialog.open && button('合成表达003 · 待审') &&
+        !button('合成表达001 · 待审'), '批量通过后刷新队列');
+      filterBy('approved');
+      await waitFor(() => button('合成表达001 · 通过') && button('合成表达002 · 通过'), '通过筛选');
+      check(find('#learning-expression-result').childElementCount === 2, '只批准了两条');
+      filterBy('rejected');
+      await waitFor(() => button('合成表达000 · 拒绝'), '拒绝项仍保留');
+      press('合成表达000 · 拒绝');
+      dialog.querySelector('summary').click();
+      await waitFor(() => dialog.innerText.includes('合成拒绝理由'), '详情显示审核历史与理由');
+      document.querySelector('#editor-close').click();
+    """,
+    )
+
+
+def test_learning_scope_shows_preview_and_cancel_never_confirms(browser: Browser) -> None:
+    browser.open("learning", 1280, 900)
+    _run(
+        browser,
+        """
+      const nativeFetch = window.fetch;
+      await waitFor(() => find('#learning-panel-jargon input[name="disabled"]'), '黑话页已就绪');
+      const calls = [];
+      const response = value => Promise.resolve(new Response(JSON.stringify(value)));
+      window.fetch = (url, options) => {
+        const path = String(url);
+        if (path.includes('/api/resources/learning?')) {
+          return response({enabled:true, total:1, items:[{
+            entry_key:'package:one', text:'合成词', detail:'合成释义', example:'', count:2,
+            speakers:[], source_refs:[], evidence_ids:[], pending_scope:true,
+            scope_keys:[], package_source:'原群', is_enabled:false,
+          }]});
+        }
+        if (path.endsWith('/api/resources/learning/scope')) {
+          if (options.method !== 'POST') return response({items:[{key:'known', label:'合成甲群'}]});
+          const payload = JSON.parse(options.body);
+          calls.push(payload);
+          return response({before:[], after:['合成甲群'], confirmed:payload.confirm});
+        }
+        return nativeFetch(url, options);
+      };
+      const disabled = find('#learning-panel-jargon input[name="disabled"]');
+      disabled.click();
+      await waitFor(() => button('合成词 · 待映射'), '待映射条目可见');
+      press('合成词 · 待映射');
+      const dialog = document.querySelector('#editor-dialog');
+      const dialogButton = label => [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent.trim() === label);
+      check(dialogButton('设置生效会话'), '待映射详情提供范围维护：' + dialog.innerText);
+      dialogButton('设置生效会话').click();
+      await waitFor(() => dialogButton('预览范围'), '会话选项载入');
+      dialog.querySelector('input[value="known"]').click();
+      dialogButton('预览范围').click();
+      await waitFor(() => dialogButton('确认范围') &&
+        dialog.innerText.includes('确认后授权：合成甲群'), '确认前展示影响范围');
+      dialogButton('取消').click();
+      check(!dialog.open && calls.length === 1 && calls[0].confirm === false &&
+        calls[0].conversation_keys.join() === 'known', '取消只提交过预览');
+    """,
+    )
+
+
+def test_learning_package_entry_previews_without_writing(browser: Browser) -> None:
+    browser.open("learning", 1280, 900)
+    _run(
+        browser,
+        """
+      await waitFor(() => button('导入') && !button('导入').disabled, '黑话包入口就绪');
+      check(!button('导出').disabled, '黑话包导出可用');
+      const nativeFetch = window.fetch;
+      const calls = [];
+      window.fetch = (url, options) => {
+        if (!String(url).startsWith('/api/resources/learning/package/')) {
+          return nativeFetch(url, options);
+        }
+        calls.push([url, options.method, options.body instanceof File]);
+        return Promise.resolve(new Response(JSON.stringify({
+          digest: 'a'.repeat(64), can_save: 2, can_recall: 0,
+        })));
+      };
+      press('导入');
+      const dialog = document.querySelector('#editor-dialog');
+      const file = dialog.querySelector('input[type="file"]');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['{}'], 'jargon.json', {type:'application/json'}));
+      file.files = transfer.files;
+      file.dispatchEvent(new Event('change', {bubbles:true}));
+      dialog.querySelector('form').requestSubmit();
+      await waitFor(() => dialog.innerText.includes('可导入保存 2 条，可参与召回 0 条'), '仅预览');
+      document.querySelector('#editor-close').click();
+      check(!dialog.open && calls.length === 1 &&
+        calls[0][0].endsWith('/jargon') && calls[0][1] === 'POST' && calls[0][2],
+        '取消不发确认请求');
+      window.fetch = nativeFetch;
+      click('[data-learning-tab="expression"]');
+      await waitFor(() => button('导入') && !button('导入').disabled, '表达包入口就绪');
+      press('导入');
+      check(dialog.innerText.includes('导入表达方式'), '表达和黑话使用独立入口');
+      document.querySelector('#editor-close').click();
+    """,
+    )
+
+
+def test_emoji_density_switches_visible_thumbnail_size(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      const tile = () => button('已登记 · 合成表情000');
+      const picture = () => tile()?.querySelector('img');
+      await waitFor(() => visible(picture()) && picture().naturalWidth && button('小'),
+        '显示表情缩略图和大小按钮');
+      const middle = picture().getBoundingClientRect().width;
+      const mediumPage = page();
+      check(button('中').getAttribute('aria-pressed') === 'true', '默认选中中号');
+      press('小');
+      await waitFor(() => visible(picture()) && picture().getBoundingClientRect().width < middle,
+        '小号切换确实缩小图片');
+      check(page() !== mediumPage, '缩略图容量改变后重新计算总页数');
+      press('大');
+      await waitFor(() => visible(picture()) && picture().getBoundingClientRect().width > middle,
+        '大号切换确实放大图片');
+      check(!button('添加黑话') && !button('添加表达方式'), '表情页没有添加文字按钮');
+      tile().click();
+      const dialog = document.querySelector('#editor-dialog');
+      await waitFor(() => dialog.open && dialog.querySelector('img')?.naturalWidth,
+        '表情详情显示实际原图');
+      check(dialog.innerText.includes('已登记') && dialog.innerText.includes('使用次数'),
+        '表情详情');
+      document.querySelector('#editor-close').click();
+      check(button('下一页').getBoundingClientRect().bottom <= innerHeight, '表情页脚不被挤出');
+    """,
+    )
+
+
+def test_emoji_filters_sort_and_keep_global_counts_on_narrow_screen(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      const panel = document.querySelector('#learning-panel-emoji');
+      const select = (name, value) => {
+        const input = panel.querySelector(`select[name="${name}"]`);
+        input.value = value;
+        input.dispatchEvent(new Event('change', {bubbles:true}));
+      };
+      const counts = () => panel.querySelector('#emoji-library-counts').textContent;
+      await waitFor(() => button('已登记 · 合成表情000') && counts().includes('全库 320 条'),
+        '默认顺序与全库统计');
+      const initialCounts = counts();
+      const initialPage = page();
+      select('format', 'gif');
+      await waitFor(() => button('已登记 · 合成表情002') && !button('已登记 · 合成表情000'),
+        '仅显示 GIF');
+      check(page() !== initialPage && counts() === initialCounts,
+        '格式只改变结果页，不改变全库统计');
+      select('sort', 'most_used');
+      await waitFor(() => button('已登记 · 合成表情306') && !button('已登记 · 合成表情002'),
+        '使用次数排序从首屏显示较常用的 GIF');
+      button('已登记 · 合成表情306').click();
+      check(document.querySelector('#editor-dialog').innerText.includes('GIF'), '详情显示实际格式');
+      document.querySelector('#editor-close').click();
+      check(counts() === initialCounts, '切换排序后继续显示全库统计');
+      check(button('下一页').getBoundingClientRect().bottom <= innerHeight, '窄屏分页仍可见');
+    """,
+    )
+
+
+def test_emoji_upload_edit_search_and_status_maintenance(browser: Browser) -> None:
+    browser.open("learning", 1280, 900)
+    with BytesIO() as stream:
+        Image.new("RGB", (12, 12), "purple").save(stream, format="PNG")
+        image_data = base64.b64encode(stream.getvalue()).decode("ascii")
+    _run(
+        browser,
+        f"""
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      await waitFor(() => button('上传表情') && !button('上传表情').disabled, '表情列表加载');
+      press('上传表情');
+      const dialog = document.querySelector('#editor-dialog');
+      const dialogButton = label => [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent.trim() === label);
+      const input = dialog.querySelector('input[type="file"]');
+      const file = new File([Uint8Array.from(atob('{image_data}'), byte => byte.charCodeAt(0))],
+        'fixture.png', {{type:'image/png'}});
+      const transfer = new DataTransfer(); transfer.items.add(file); input.files = transfer.files;
+      input.dispatchEvent(new Event('change', {{bubbles:true}}));
+      const nativeFetch = window.fetch; let failOnce = true;
+      window.fetch = async (url, options) => {{
+        if (failOnce && String(url).startsWith('/api/resources/emoji') &&
+          options.method === 'POST') {{
+          failOnce = false;
+          return new Response(JSON.stringify({{detail:'合成失败'}}),
+            {{status:422, headers:{{'Content-Type':'application/json'}}}});
+        }}
+        return nativeFetch(url, options);
+      }};
+      dialog.querySelector('form').requestSubmit();
+      await waitFor(() => document.querySelector('#toasts')?.innerText.includes('合成失败'),
+        '上传错误可见');
+      check(input.files.length === 1 && !dialog.querySelector('form button').disabled,
+        '失败保留图片并允许重试');
+      dialog.querySelector('form').requestSubmit();
+      await waitFor(() => !dialog.open && button('未登记 · 未填写描述'), '上传重试成功');
+      window.fetch = nativeFetch;
+
+      button('未登记 · 未填写描述').click();
+      await waitFor(() => dialog.open && dialogButton('编辑'), '打开新增表情详情');
+      dialogButton('编辑').click();
+      const editDialog = document.querySelector('#editor-dialog');
+      editDialog.querySelector('textarea').value = '月兔握手';
+      editDialog.querySelectorAll('textarea')[1].value = '握手\\n庆祝';
+      editDialog.querySelector('form').requestSubmit();
+      await waitFor(() => !editDialog.open && button('未登记 · 月兔握手'), '编辑描述与标签');
+
+      const search = find('input[type="search"]');
+      search.value = '庆祝'; search.form.requestSubmit();
+      await waitFor(() => button('未登记 · 月兔握手'), '新标签可用于搜索');
+      button('未登记 · 月兔握手').click();
+      await waitFor(() => dialog.open && dialogButton('登记'), '查看未登记表情');
+      dialogButton('登记').click();
+      await waitFor(() => !dialog.open && button('已登记 · 月兔握手'), '登记状态立即刷新');
+      button('已登记 · 月兔握手').click();
+      await waitFor(() => dialog.open && dialogButton('禁用'), '打开已登记表情详情');
+      dialogButton('禁用').click();
+      await waitFor(() => !dialog.open && button('已禁用 · 月兔握手'), '禁用后列表仍可见');
+      const status = find('select[name="status"]'); status.value = 'banned';
+      status.dispatchEvent(new Event('change', {{bubbles:true}}));
+      await waitFor(() => button('已禁用 · 月兔握手'), '禁用筛选');
+      button('已禁用 · 月兔握手').click();
+      await waitFor(() => dialog.open && dialogButton('恢复'), '查看禁用表情');
+      dialogButton('恢复').click();
+      await waitFor(() => !dialog.open && !button('已禁用 · 月兔握手'), '恢复立即退出禁用筛选');
+      status.value = 'registered'; status.dispatchEvent(new Event('change', {{bubbles:true}}));
+      await waitFor(() => button('已登记 · 月兔握手'), '恢复保留原登记状态');
+    """,
+    )
+
+
+def test_memory_pagination_details_and_button_states(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000') && button('下一页'), '文字记忆有查询结果');
+      const expected = Math.ceil(320 / find('#memory-result').childElementCount);
+      check(button('上一页').disabled && !button('下一页').disabled, '记忆首页的按钮状态');
+      press('合成记忆000');
+      const dialog = document.querySelector('#editor-dialog');
+      check(dialog.open && dialog.innerText.includes('合成原件'), '文字记录细节显示原件');
+      document.querySelector('#editor-close').click();
+      check(find('#memory-correct').disabled, '未勾选不可修正');
+      click('#memory-select-all');
+      check(!find('#memory-correct').disabled, '选中文字记忆可以修正');
+      press('下一页');
+      await waitFor(() => page() === `第 2 / ${expected} 页` && text('合成记忆') &&
+        !text('合成记忆000'), '文字记忆翻页替换列表');
+      check(find('#memory-correct').disabled, '换页不带入上一页选中项');
+      click('[data-memory-query="profiles"]');
+      await waitFor(() => text('合成人物000') && !text('合成记忆000'), '人物画像独立显示');
+      check(button('上一页').disabled && !visible(find('#memory-correct')), '画像无文字维护按钮');
+      click('[data-memory-tab="images"]');
+      await waitFor(() => text('合成图片000') && !text('合成人物000'), '图片记忆切换迁入素材');
+      check(button('下一页').getBoundingClientRect().bottom <= innerHeight, '图片页窄屏可分页');
+    """,
+    )
+
+
+def test_memory_inspection_shows_counts_and_limits(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000'), '文字记忆有查询结果');
+      press('只读检修');
+      const dialog = document.querySelector('#editor-dialog');
+      await waitFor(() => dialog.open && dialog.innerText.includes('维护停用：1 条'), '检修分项');
+      check(dialog.innerText.includes('已检查 3 条') && dialog.innerText.includes('已移除：0 条') &&
+        dialog.innerText.includes('可见标签不一致：1 条'), '显示已检查与各项计数');
+      check(dialog.innerText.includes('原件缺失未检查') &&
+        dialog.innerText.includes('零异常不代表全库完整'), '显示报告边界');
+      check(!dialog.innerText.includes('合成记忆000'), '报告不显示原件正文');
+      document.querySelector('#editor-close').click();
+      check(!dialog.open && text('合成记忆000'), '关闭报告保留原来的结果');
+    """,
+    )
+
+
+def test_memory_batch_remove_and_restore(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      const list = () => find('#memory-result');
+      const boxes = () => [...list().querySelectorAll('input[type="checkbox"]')];
+      const toggle = () => find('#memory-toggle-removed');
+      const dialog = document.querySelector('#editor-dialog');
+      const dialogButton = label => [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent.trim() === label);
+      const writes = [];
+      const fetchOriginal = window.fetch;
+      window.fetch = (url, options) => {
+        if (url === '/api/resources/memory/batch' && options?.method === 'PATCH') {
+          writes.push(JSON.parse(options.body));
+        }
+        return fetchOriginal(url, options);
+      };
+      await waitFor(() => text('合成记忆000'), '文字记忆初始查询');
+      find('#memory-search [name="q"]').value = '合成批量';
+      click('#memory-search [name="disabled"]');
+      await waitFor(() => text('合成批量000') && !button('下一页').disabled, '筛出多页的批量用例');
+      const pages = Number(page().match(/\/ (\d+)/)[1]);
+      check(pages > 1, '批量场景有多页');
+      boxes()[0].click();
+      check(!toggle().disabled, '本页勾选后可批量移除');
+      for (let target = 2; target <= pages; target++) {
+        press('下一页');
+        await waitFor(() => page() === `第 ${target} / ${pages} 页`, '到达下一页');
+        check(toggle().disabled && boxes().every(box => !box.checked), '翻页清空上一页的选择');
+      }
+      const selected = boxes().map(box => box.parentElement.innerText.trim());
+      const targets = selected.map(title => {
+        const number = Number(title.slice(-3));
+        return {kind: number % 2 ? 'history' : 'live', entry_id: Math.floor(number / 2) + 1};
+      });
+      click('#memory-select-all');
+      toggle().click();
+      check(dialog.open && dialog.innerText.includes(`本页选中的 ${selected.length} 条文字记忆`),
+        '二次确认展示本页影响范围和实际条数');
+      dialogButton('取消').click();
+      check(!dialog.open && writes.length === 0 && boxes().every(box => box.checked), '取消不写入');
+      toggle().click();
+      dialogButton('确认移除').click();
+      await waitFor(() => page() === `第 ${pages - 1} / ${pages - 1} 页` && !dialog.open,
+        '整个末页被移除，退回新末页、重新计算页数');
+      check(JSON.stringify(writes) === JSON.stringify([{removed:true, targets}]),
+        '仅提交本页选中类型及编号');
+      check(!selected.some(title => text(title)), '移除记录不在普通文字列表');
+      click('#memory-search [name="removed"]');
+      await waitFor(() => text('已移除 · 合成批量014') && page() === '第 1 / 1 页', '查看已移除');
+      check(boxes().length === selected.length && find('#memory-correct').disabled,
+        '只显示移除的记录');
+      click('#memory-select-all');
+      toggle().click();
+      check(dialog.innerText.includes('不会启用原已停用'), '恢复确认说明原停用状态不变');
+      dialogButton('确认恢复').click();
+      await waitFor(() => page() === '第 0 / 0 页' && !dialog.open, '回收列表清空');
+      check(JSON.stringify(writes[1]) === JSON.stringify({removed:false, targets}),
+        '恢复同一批原件');
+      click('#memory-search [name="removed"]');
+      await waitFor(() => page() === `第 1 / ${pages} 页`, '恢复后总页数还原');
+      for (let target = 2; target <= pages; target++) {
+        press('下一页');
+        await waitFor(() => page() === `第 ${target} / ${pages} 页`, '返回恢复过的末页');
+      }
+      press('未参与召回 · 合成批量014');
+      check(dialog.open && dialog.innerText.includes('恢复召回'), '恢复移除不启用原停用记录');
+    """,
+    )
+
+
+def test_timeline_recall_feedback_controls(browser: Browser) -> None:
+    browser.open("timeline", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('没有依据的旧回复') && text('可评价的合成回复'), '显示两条回复');
+      const summaries = [...root().querySelectorAll('summary')]
+        .filter(node => node.textContent === '评价召回依据');
+      check(summaries.length === 1, '旧回复不出现评价按钮');
+      summaries[0].click();
+      await waitFor(() => text('时间线记录 #40') && text('未评价'), '加载该回复的依据');
+      check(button('撤销评价').disabled, '未评价时不可撤销');
+      press('有用');
+      await waitFor(() => text('已标有用') && button('有用').disabled, '可标为有用');
+      press('无用');
+      await waitFor(() => text('已标无用') && button('无用').disabled, '可改标无用');
+      press('撤销评价');
+      await waitFor(() => text('未评价') && button('撤销评价').disabled, '可撤销至未评价');
+    """,
+    )
+
+
+def test_learning_reflows_when_the_available_height_changes(browser: Browser) -> None:
+    browser.open("learning", 1280, 900)
+    _run(
+        browser,
+        """
+      await waitFor(() => text('合成黑话000') && !button('下一页').disabled, '高屏首页稳定');
+      window.tallCount = find('#learning-jargon-result').childElementCount;
+      press('下一页');
+      await waitFor(() => text('合成黑话') && !text('合成黑话000'), '高屏第二页稳定');
+    """,
+    )
+    browser.resize(390, 630)
+    _run(
+        browser,
+        """
+      const list = () => find('#learning-jargon-result');
+      await waitFor(() => text('合成黑话000') && list().childElementCount < window.tallCount,
+        '缩短视口后重分首页，减少每页记录');
+      const expected = Math.ceil(320 / list().childElementCount);
+      check(page() === `第 1 / ${expected} 页`, '视口变窄后更新总页数');
+      check(button('上一页').disabled && !button('下一页').disabled, '重分页后按钮状态');
+      check(list().lastElementChild.getBoundingClientRect().bottom <=
+        button('下一页').getBoundingClientRect().top, '分页按钮不遮挡末条记录');
+    """,
+    )
+
+
+def test_memory_image_bookmark_filter_and_flow(browser: Browser) -> None:
+    browser.open("images", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => text('合成图片000'), '旧图片书签打开长期记忆里的图片页');
+      check(location.hash === '#memory', '旧书签映射到长期记忆');
+      const availability = find('select[name="availability"]');
+      availability.value = 'reference';
+      availability.dispatchEvent(new Event('change', {bubbles:true}));
+      await waitFor(() => text('合成收件箱000') && !button('下一页').disabled, '收件箱图片首页');
+      press('下一页');
+      await waitFor(() => text('合成收件箱') && !text('合成收件箱000'), '在仅引用的图片筛选内翻页');
+      press('上一页');
+      await waitFor(() => text('合成收件箱000'), '回到收件箱图片首页');
+      click('[data-memory-tab="flow"]');
+      await waitFor(() => text('合成事件000') && !button('下一页').disabled, '记忆流首页');
+      const times = [...root().querySelectorAll('input[type="datetime-local"]')];
+      const themeField = getComputedStyle(find('select'));
+      check(times.length === 2 && times.every(node => {
+        const style = getComputedStyle(node);
+        return style.borderRadius === themeField.borderRadius &&
+          style.backgroundColor === themeField.backgroundColor &&
+          style.fontFamily === themeField.fontFamily;
+      }), '开始和结束时间沿用表单主题');
+      check([...document.querySelectorAll('input, textarea, select, form')].every(node =>
+        node.getAttribute('autocomplete') === 'off'), '静态和动态表单均关闭浏览器自动填充');
+      press('下一页');
+      await waitFor(() => text('合成事件') && !text('合成事件000'), '记忆流分页');
+      press('最近24小时');
+      await waitFor(() => text('合成事件000') && button('上一页').disabled, '时间筛选回到首页');
+      click('[data-memory-tab="transfer"]');
+      await waitFor(() => button('追加导入'), '导入导出页可见');
+      check(button('追加导入').disabled, '未选择文件不可导入');
+      check(!button('下一页'), '导入导出不是分页列表');
+    """,
+    )

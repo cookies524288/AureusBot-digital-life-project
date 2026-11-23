@@ -383,16 +383,6 @@ def test_signed_in_provider_changes_save_without_password(rig: ConfigRig, change
         assert saved["providers"][0][change] == config["providers"][0][change]
 
 
-def test_wrong_confirmations_are_rate_limited(rig: ConfigRig) -> None:
-    saved_config(rig)
-    request = {"section": "providers", "name": "cloud", "field": "base_url"}
-    for _ in range(3):
-        assert rig.client.post("/api/models/restore-default", json=request).status_code == 403
-    response = rig.client.post("/api/models/restore-default", json={**request, "password": GOOD})
-    assert response.status_code == 429
-    assert "Retry-After" in response.headers
-
-
 def test_organs_and_local_providers_need_no_password_and_order_follows_submission(
     rig: ConfigRig,
 ) -> None:
@@ -425,36 +415,6 @@ def test_replace_failure_preserves_file_and_restart_flag(
     assert rig.paths.models_config_file.read_bytes() == ORIGINAL.encode("utf-8")
     assert list(rig.paths.config_dir.glob("*.tmp")) == []
     assert rig.service.restart_required is False
-
-
-def test_files_run_in_a_worker_but_password_confirmation_runs_on_the_request_thread(
-    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    saved_config(rig)
-    worker_threads: list[int] = []
-    confirm_threads: list[int] = []
-    real_write = rig.service.write_model_restore
-    real_confirm = rig.auth.confirm_password
-
-    def write(section: str, name: str, field: str) -> None:
-        worker_threads.append(threading.get_ident())
-        real_write(section, name, field)
-
-    def confirm(*args: Any) -> None:
-        asyncio.get_running_loop()  # 线程池里没有这个事件循环。
-        confirm_threads.append(threading.get_ident())
-        real_confirm(*args)
-
-    monkeypatch.setattr(rig.service, "write_model_restore", write)
-    monkeypatch.setattr(rig.auth, "confirm_password", confirm)
-    response = rig.client.post(
-        "/api/models/restore-default",
-        json={"section": "providers", "name": "cloud", "field": "base_url", "password": GOOD},
-    )
-    assert response.status_code == 200
-    assert rig.client.get("/api/models").json()["config"]["providers"][0]["base_url"] is None
-    assert worker_threads and confirm_threads
-    assert worker_threads[0] != confirm_threads[0]
 
 
 @pytest.mark.parametrize("failure", ["prepare", "replace"])

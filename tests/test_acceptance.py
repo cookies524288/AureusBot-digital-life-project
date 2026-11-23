@@ -28,6 +28,7 @@ from aureus.heartbeat import (
 )
 from aureus.organs import CallAttempt, FakeReplyer, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineQuery
+from tests.prompt_assertions import dialogue_text
 
 START = datetime(2026, 11, 17, 8, 0, tzinfo=UTC)
 # 选一个离现在很远的年份：时间线上出现真实时间的话，一眼就能看出来。
@@ -129,7 +130,7 @@ async def test_1_restart_remembers_the_chat_and_the_downtime(
     assert downtime.duration == timedelta(hours=3, minutes=20)
     second_run_request = requests[-1]
     assert "停了 3 小时 20 分钟" in second_run_request.system_context
-    assert "今天面试被拒了" in second_run_request.prompt
+    assert "今天面试被拒了" in dialogue_text(second_run_request)
 
 
 # ---------- 验收 3：每次调用的 token 查得到；预算调低后超限就拒绝 ----------
@@ -233,7 +234,7 @@ async def test_7_exported_data_continues_to_run_in_a_new_place(
         await converse(core, "搬家后还记得吗")
         await core.heartbeat.shut_down()
     assert downtime.duration == timedelta(hours=1)
-    assert "搬家前说的话" in requests[-1].prompt
+    assert "搬家前说的话" in dialogue_text(requests[-1])
 
     moved = AureusPaths(tmp_path / "third_disk" / "moved_home")
     moved.home.parent.mkdir()

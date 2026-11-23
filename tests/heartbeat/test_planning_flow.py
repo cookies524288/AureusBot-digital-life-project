@@ -63,7 +63,10 @@ class ScriptedOrgans:
         planner: list[str | BaseException],
         replyer: list[str | BaseException | Callable[[OrganRequest], str]],
     ) -> None:
-        self.outcomes = {"planner": planner, "replyer": replyer}
+        self.outcomes: dict[str, list[str | BaseException | Callable[[OrganRequest], str]]] = {
+            "planner": list(planner),
+            "replyer": replyer,
+        }
         self.requests: list[OrganRequest] = []
 
     async def call(self, request: OrganRequest) -> OrganResponse:
@@ -198,7 +201,7 @@ async def test_normal_tier_plans_then_replies_with_the_planned_intent(
     assert all(r.purpose is CallPurpose.USER_REPLY for r in rig.organs.requests)
     assert planner.model_preference is ModelPreference.PREFERRED
     assert "JSON 对象" in planner.prompt
-    assert "你已经想好要表达的意思：安慰一下，问问细节" in replyer.prompt
+    assert "你已经想好要表达的意思：安慰一下，问问细节" in assemble_messages(replyer)[-2]["content"]
     assert "长度：一两句话。" in replyer.prompt
     # 规划器看四层人设；回复器不看行为风格：什么时候开口、怎么回应已经由规划器定了。
     assert "【行为风格】" in planner.system_context
@@ -216,7 +219,7 @@ def review_reply(form: str) -> Callable[[OrganRequest], str]:
         match = re.search(r"<(reply_review_[0-9a-f]{32})>", request.prompt)
         assert match is not None
         sentinel = match.group(1)
-        assert "规划器的回复理由：" in request.prompt
+        assert "规划器的回复理由：" in assemble_messages(request)[-2]["content"]
         assert f"\\</{sentinel}>" in request.prompt
         return form.format(sentinel=sentinel, reason=REVIEW_REASON)
 
@@ -239,8 +242,12 @@ async def test_review_reason_returns_only_to_planner_then_sends_rewrite(
     first_plan, first_reply, second_plan, second_reply = rig.organs.requests
     assert first_plan.context["in_reply_to"] == second_plan.context["in_reply_to"]
     assert REVIEW_REASON in second_plan.prompt
-    assert REVIEW_REASON not in first_plan.prompt + first_reply.prompt + second_reply.prompt
-    assert "自然地问后来呢" in second_reply.prompt
+    assert all(
+        REVIEW_REASON not in message["content"]
+        for request in (first_plan, first_reply, second_reply)
+        for message in assemble_messages(request)
+    )
+    assert "自然地问后来呢" in assemble_messages(second_reply)[-2]["content"]
     [record] = rig.my_messages()
     assert record.content == "后来呢"
     assert record.metadata["plan"]["intent"] == "自然地问后来呢"
@@ -328,7 +335,7 @@ async def test_group_prompt_keeps_speaker_persona_and_silence(
         replyer_messages = assemble_messages(rig.organs.requests[1])
         assert "句子短。" in replyer_messages[0]["content"]
         assert "少打断。" not in replyer_messages[0]["content"]
-        assert "不要加名字或时间前缀" in replyer_messages[1]["content"]
+        assert "不要加名字或时间前缀" in replyer_messages[-1]["content"]
     else:
         assert rig.organ_ids() == ["planner"]
 
@@ -416,9 +423,7 @@ async def test_low_tier_uses_the_cheapest_model_and_the_shortest_reply(
     assert rig.my_messages()[0].metadata["strategy"]["message_limit"] == 5
 
 
-async def test_legacy_switch_cannot_bypass_planning(
-    made: list[Rig], tmp_path: Path
-) -> None:
+async def test_legacy_switch_cannot_bypass_planning(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, planning_enabled=False)
     await rig.exchange("在吗")
 

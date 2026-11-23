@@ -286,8 +286,22 @@ class PeopleDirectory:
 
     def browse_profiles(self, query: str, offset: int, limit: int) -> list[HistoricalEntry]:
         """使用独立连接分页浏览迁入人物画像。"""
+        rows, _total = self.browse_profiles_page(query, offset, limit)
+        return rows
+
+    def browse_profiles_page(
+        self, query: str, offset: int, limit: int
+    ) -> tuple[list[HistoricalEntry], int]:
+        """使用独立连接分页浏览迁入人物画像，并返回筛选总数。"""
         with closing(open_connection(self._db_path)) as conn:
             return history.browse_profiles(conn, query, offset, limit)
+
+    def browse_profile_resources(
+        self, query: str, offset: int, limit: int
+    ) -> tuple[list[dict[str, object]], int]:
+        """在同一个目录中浏览人物和画像，不合并同名档案。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return history.browse_profile_resources(conn, query, offset, limit)
 
     def accounts_of(self, person_id: int) -> list[tuple[str, str]]:
         """这个人的全部（平台，账号 ID），按平台和账号排序。"""

@@ -19,7 +19,7 @@ from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
     build_plan_prompt,
-    build_reply_prompt,
+    build_reply_request,
     build_system_context,
 )
 from aureus.heartbeat.persona_growth import MaterialLine, build_prompt
@@ -142,7 +142,7 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         "initiative_first": _request(
             "planner", build_initiative_plan_prompt([], user, ["主动原因样本"], UTC), full
         ),
-        "reply": _request("replyer", build_reply_prompt([], incoming, user, UTC), full),
+        "reply": build_reply_request("replyer", [], incoming, user, UTC, system_context=full),
         "initiative_reply_first": _request(
             "replyer",
             build_initiative_reply_prompt([], user, UTC, "意图样本", with_splits=True),
@@ -196,7 +196,16 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         expected = []
         for message in previews[request.organ_id][key]:
             content = message["content"]
-            for marker, value in replacements.items():
+            values = (
+                replacements
+                if key != "reply"
+                else {
+                    **replacements,
+                    "〔发言者〕": "当前说话人",
+                    "〔当前消息〕": "当前材料",
+                }
+            )
+            for marker, value in values.items():
                 content = content.replace(marker, value)
             assert "〔" not in content
             expected.append({"role": message["role"], "content": content})
@@ -207,8 +216,8 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         assert f'"{field}"' in plan
         assert f'"{field}"' not in previews["planner"]["plan"][1]["content"]
     planned = previews["replyer"]["reply_planned"]
-    assert "〔记忆召回：查询词、命中数、时间、说话人和记录〕" in planned[1]["content"]
-    assert "〔回复长度〕" in planned[1]["content"]
+    assert "〔记忆召回：查询词、命中数、时间、说话人和记录〕" in planned[-2]["content"]
+    assert "〔回复长度〕" in planned[-1]["content"]
     assert (
         ReplyLength.SHORT.describe() in previews["replyer"]["initiative_reply_first"][1]["content"]
     )
@@ -229,7 +238,14 @@ async def test_save_invalid_reset_restart_and_upgrade_share_the_live_default(
         item.default.template for item in registered_templates() if item.key == instruction
     )
     client = rig.client
-    request = OrganRequest("replyer", build_reply_prompt([], "模型输入样本", IDENTITY.user.name))
+    request = build_reply_request(
+        "replyer",
+        [],
+        [_record(1, "成员", "模型输入样本")],
+        IDENTITY.user.name,
+        UTC,
+        system_context="",
+    )
     fake = FakeCompletion(*(make_response("收到。") for _ in range(3)))
     organ = LLMOrgan(
         "replyer",
@@ -246,7 +262,7 @@ async def test_save_invalid_reset_restart_and_upgrade_share_the_live_default(
     saved = client.put(f"/api/prompts/{instruction}", json={"source": "简短一点，保留 $$。"})
     assert saved.json()["customized"]
     await organ.process(request)
-    assert fake.calls[-1]["messages"][1]["content"].endswith("简短一点，保留 $。")
+    assert fake.calls[-1]["messages"][-1]["content"].endswith("简短一点，保留 $。")
     assert "简短一点，保留 $。" in client.get("/api/organs/replyer/prompt-preview").text
 
     before = path.read_bytes()
@@ -259,18 +275,18 @@ async def test_save_invalid_reset_restart_and_upgrade_share_the_live_default(
     )
     assert path.read_bytes() == before
     await organ.process(request)
-    assert fake.calls[-1]["messages"][1]["content"].endswith("简短一点，保留 $。")
+    assert fake.calls[-1]["messages"][-1]["content"].endswith("简短一点，保留 $。")
     restarted = PromptStore(path, registered_templates())
-    assert assemble_messages(request, restarted)[1]["content"].endswith("简短一点，保留 $。")
+    assert assemble_messages(request, restarted)[-1]["content"].endswith("简短一点，保留 $。")
 
     deleted = client.delete(f"/api/prompts/{instruction}").json()
     assert deleted["source"] == default and not deleted["customized"]
     assert tomllib.loads(path.read_text(encoding="utf-8")) == {"reply_length": "短一点 $length。"}
     await organ.process(request)
-    assert fake.calls[-1]["messages"][1]["content"].endswith(default)
+    assert fake.calls[-1]["messages"][-1]["content"].endswith(default)
     assert default in client.get("/api/organs/replyer/prompt-preview").text
     restarted = PromptStore(path, registered_templates())
-    assert assemble_messages(request, restarted)[1]["content"].endswith(default)
+    assert assemble_messages(request, restarted)[-1]["content"].endswith(default)
 
     updated = PromptTemplate(instruction, "发言要求", "升级后维护的默认文字。")
     installed = tuple(

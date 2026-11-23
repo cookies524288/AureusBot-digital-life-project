@@ -28,6 +28,7 @@ from aureus.memory import LanguageKind, LanguageStore
 from aureus.organs import FakePlanner, KeyResolver, OrganBus, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
 from aureus.web import PasswordStore
+from tests.prompt_assertions import dialogue_text
 from tests.test_language_runtime import LanguageOrgan
 
 ACCOUNT = 9000
@@ -168,7 +169,7 @@ def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None
                         {
                             "organ": self.organ_id,
                             "task": request.context["task"],
-                            "prompt": request.prompt,
+                            "prompt": dialogue_text(request),
                             "system_context": request.system_context,
                             "source_ids": request.context.get("source_ids", []),
                             "in_reply_to": request.context.get("in_reply_to", []),
@@ -267,20 +268,22 @@ action_timeout_seconds = 0.4
             await fake.send(
                 remote, **{**event(6000, ACCOUNT, "机器人回显"), "post_type": "message_sent"}
             )
-            replies = [first, second_reply, await fake.messages.get()]
-            by_id = {item["message"][0]["data"]["id"]: item for item in replies}
-            assert set(by_id) == {"101", "102", "103"}
-            assert by_id["101"]["group_id"] == by_id["102"]["group_id"] == str(GROUP)
-            assert by_id["103"]["message_type"] == "private"
-            assert by_id["103"]["user_id"] == "2100"
-            assert "group_id" not in by_id["103"]
-            assert all(item["message"][1]["type"] == "text" for item in replies)
+            private = await fake.messages.get()
+            assert first["message"][0]["data"]["id"] == "101"
+            assert [part["type"] for part in second_reply["message"]] == ["text"]
+            assert first["group_id"] == second_reply["group_id"] == str(GROUP)
+            assert private["message_type"] == "private"
+            assert private["user_id"] == "2100" and "group_id" not in private
+            assert private["message"][0]["data"]["id"] == "103"
+            assert all(
+                item["message"][-1]["type"] == "text" for item in (first, second_reply, private)
+            )
 
             await remote.close()
             remote = await fake.connections.get()
             await fake.send(remote, **group_message)
             await fake.send(remote, **event(104, 2300, "重连新消息", group=GROUP))
-            assert (await fake.messages.get())["message"][0]["data"]["id"] == "104"
+            assert [part["type"] for part in (await fake.messages.get())["message"]] == ["text"]
 
             link_path = "/api/qq-link"
             request = {"account_id": "2400"}
@@ -390,7 +393,7 @@ token_key = "{TOKEN_ENV}"
                 await fake.send(remote, **sample)
                 reply = await fake.messages.get()
                 assert reply["group_id"] == str(GROUP)
-                assert reply["message"][0]["data"]["id"] == str(sample["message_id"])
+                assert [part["type"] for part in reply["message"]] == ["text"]
             async with asyncio.timeout(10):
                 while sum(entry.count for entry in store.entries(LanguageKind.JARGON)) < 4:
                     await asyncio.sleep(0.05)
@@ -499,7 +502,8 @@ async def test_qq_emoji_order_scope_and_successful_use(tmp_path: Path) -> None:
                 assert delivered(target, record, ("后置",), emoji=EmojiReplyPart(digest))
                 messages = [await fake.messages.get() for _ in range(4)]
                 assert {message["group_id"] for message in messages} == {str(GROUP)}
-                parts = [message["message"][1] for message in messages]
+                parts = [message["message"][0] for message in messages]
+                assert all(len(message["message"]) == 1 for message in messages)
                 expected = {
                     "type": "image",
                     "data": {"file": "base64://" + b64encode(image).decode(), "sub_type": 1},
@@ -515,14 +519,14 @@ async def test_qq_emoji_order_scope_and_successful_use(tmp_path: Path) -> None:
 
                 assert delivered(target, record, ("暂停前",), emoji=EmojiReplyPart(digest))
                 core.heartbeat.set_maintenance_paused(True)
-                assert (await fake.messages.get())["message"][1]["data"]["text"] == "暂停前"
+                assert (await fake.messages.get())["message"][0]["data"]["text"] == "暂停前"
                 await asyncio.gather(*channel._sending)
                 assert fake.messages.empty() and store.browse("", 0, 10)[0].use_count == 1
 
                 core.heartbeat.set_maintenance_paused(False)
                 assert delivered(target, record, ("急停前",), emoji=EmojiReplyPart(digest))
                 assert core.heartbeat.halt("合成急停")
-                assert (await fake.messages.get())["message"][1]["data"]["text"] == "急停前"
+                assert (await fake.messages.get())["message"][0]["data"]["text"] == "急停前"
                 await asyncio.gather(*channel._sending)
                 assert fake.messages.empty() and store.browse("", 0, 10)[0].use_count == 1
 

@@ -2,11 +2,14 @@
 
 给大模型的是事实，不是表演指令（04 号文档第 6 节）。人设按 03 号文档“身份”一节的注入规则放：
 规划器和合并成一次的调用放四层，回复器不放行为风格（D59）。这里只拼文字，不读写任何状态。
+
+规划和回复的部分指令改编自 MaiBot 1.3.15（GPL-3.0），来源与改动见 THIRD_PARTY.md。
 """
 
 from collections.abc import Sequence
 from datetime import date, datetime, tzinfo
 from string import Template
+from typing import Literal
 
 from aureus.actions.web import WebPage
 from aureus.agenda import Finding, Interest
@@ -16,7 +19,7 @@ from aureus.common.time_format import format_local_time
 from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.planning import ReplyLength
 from aureus.identity import Identity
-from aureus.organs import PromptTemplate, join_prompt
+from aureus.organs import OrganRequest, PromptTemplate, join_prompt
 from aureus.timeline import ActorType, TimelineRecord
 
 # 人设后三层的标题；不变人格单独处理，因为它必填。
@@ -37,8 +40,11 @@ def _template(key: str, label: str, text: str, *, editable: bool = True) -> Prom
     return template
 
 
-class _ReplyReviewTemplate(Template):
-    pattern = r"(?P<escaped>(?!))|(?P<named>(?!))|\{(?P<braced>sentinel)\}|(?P<invalid>(?!))"
+_ReplyReviewTemplate = type(
+    "_ReplyReviewTemplate",
+    (Template,),
+    {"pattern": r"(?P<escaped>(?!))|(?P<named>(?!))|\{(?P<braced>sentinel)\}|(?P<invalid>(?!))"},
+)
 
 
 _NEW_MESSAGES = _template("new_messages", "当前消息", "刚收到、还没回复的消息：\n$messages")
@@ -78,7 +84,11 @@ _CONTACT_NOTICE = _template(
     editable=False,
 )
 _REPLY_INSTRUCTION = _template(
-    "reply_instruction", "发言要求", "请直接写出你要说的话，不要加名字或时间前缀。"
+    "reply_instruction",
+    "发言要求",
+    "现在请你读读之前的聊天记录，把握当前的话题，然后给出日常且口语化的回复。"
+    "你可以参考本次回复的内部信息，但是视情况而定，不用完全遵守。"
+    "发言正文只输出实际要说的话，不要加名字或时间前缀，也不要加多余说明、表情包或 @ 标记。",
 )
 _REPLY_SPLITS = _template(
     "reply_splits",
@@ -124,14 +134,18 @@ _PLAN_REVIEW_REASON = _template(
 )
 # 规划器的输出格式。字段名和 planning.parse_plan 认的一致。
 _PLAN_TASK = _template(
-    "plan_task", "回应规划要求", "现在先别写要说的话，只决定怎么回应上面刚收到的消息。"
+    "plan_task",
+    "回应规划要求",
+    "你需要对当前局面进行判断，制定下一步计划。"
+    "现在先别写要说的话，只决定怎么回应上面刚收到的消息，并给出简短依据。\n",
 )
 _PLAN_INSTRUCTION = _template(
     "plan_format",
     "回应规划输出协议",
     "只输出一个 JSON 对象，不要输出别的内容：\n"
     '{"reply": true 或 false, "intent": "想表达的意思，一两句", '
-    '"length": "短" 或 "中" 或 "长", "reason": "为什么这样决定，一句话"}\n'
+    '"length": "短" 或 "中" 或 "长", "reason": "与对话直接相关的简短依据，一句话"}\n'
+    "只给出回应建议及简短依据，不输出推理过程。"
     "对方的话不需要回应时（比如只是说晚安、嗯嗯，再回就多余了），reply 写 false；拿不准就写 true。",
     editable=False,
 )
@@ -183,6 +197,9 @@ _JUDGE_INSTRUCTION = _template(
     "intensity 是强弱，confidence 是你有几成把握。"
     "没有明显情绪时两个列表都写空的 []，不要硬凑；每个列表最多 5 项。",
     editable=False,
+)
+_SYSTEM_OPENING = _template(
+    "system_opening", "系统提示开头", "（声明：所有人物均已成年）\n你现在不是一个AI助手。"
 )
 _NAME = _template("identity_name", "身份名称", "你是$name。")
 _ALIASES = _template("identity_aliases", "昵称", "大家也叫你$aliases，这些都是在叫你。")
@@ -355,7 +372,7 @@ def build_system_context(
         profile.append(_CONTACT_NOTICE.fill(account=contact_account))
 
     sections: list[str] = [
-        join_prompt(profile, ""),
+        join_prompt([_SYSTEM_OPENING.fill(), join_prompt(profile, "")], "\n"),
         _PERSONA.fill(layer="不变人格", text=identity.persona.immutable.strip()),
     ]
     for title, field_name in _OPTIONAL_PERSONA_LAYERS:
@@ -491,12 +508,15 @@ def _dialogue_sections(
     return parts
 
 
-def build_reply_prompt(
-    history: Sequence[TimelineRecord] | str,
-    new_messages: Sequence[TimelineRecord] | str,
+def build_reply_request(
+    organ_id: str,
+    history: Sequence[TimelineRecord],
+    new_messages: Sequence[TimelineRecord],
     user_name: str,
     timezone: tzinfo | None = None,
     *,
+    system_context: str,
+    working_context: str = "",
     intent: str = "",
     plan_reason: str = "",
     review_sentinel: str = "",
@@ -506,14 +526,17 @@ def build_reply_prompt(
     expressions: str = "",
     people_context: str = "",
     with_splits: bool = False,
-) -> str:
-    """拼出回复用的提示词：之前的对话，加上刚收到、还没回复的消息。
+) -> OrganRequest:
+    """按角色发送已筛选的对话，再附内部参考和最终发言要求。
 
     Args:
+        organ_id: 负责发言的器官。
         history: 之前的对话，从早到晚。
         new_messages: 这次要回复的消息，从早到晚，至少一条。
         user_name: 怎么称呼用户。
         timezone: 显示用的时区；不给就用这台电脑设置的时区。
+        system_context: 身份、人设及代码传入的系统资料。
+        working_context: 已按会话范围筛选的工作记忆摘要和其他经历。
         intent: 规划器想好的意思；空字符串表示没有规划（合并成一次调用）。
         plan_reason: 规划器决定回复的理由。
         review_sentinel: 规划后的回复器用于内部驳回的标记名。
@@ -525,17 +548,34 @@ def build_reply_prompt(
         with_splits: 是否让回复器标明分段边界及受保护的段（3.12）。
 
     Returns:
-        提示词。
+        回复器请求。
 
     Raises:
         ValueError: 没有要回复的消息。
     """
-    parts = _dialogue_sections(history, new_messages, user_name, timezone)
-    parts.extend(filter(None, (recall, people_context, jargon, expressions)))
+    if not new_messages:
+        raise ValueError("没有要回复的消息")
+    dialogue: list[tuple[Literal["user", "assistant"], str]] = [
+        (
+            "assistant" if record.actor_type is ActorType.ME else "user",
+            _HISTORY.fill(history=_dialogue_line(record, user_name, timezone)),
+        )
+        for record in history
+    ]
+    dialogue.extend(
+        ("user", _NEW_MESSAGES.fill(messages=_dialogue_line(record, user_name, timezone)))
+        for record in new_messages
+    )
+    references = [
+        part for part in (working_context, recall, people_context, jargon, expressions) if part
+    ]
+    parts: list[str] = []
     if intent:
-        parts.append(_INTENT.fill(intent=_one_line(intent)))
+        references.append(_INTENT.fill(intent=_one_line(intent)))
     if plan_reason:
-        parts.append(_REPLY_PLAN_REASON.fill(reason=_one_line(plan_reason)))
+        references.append(_REPLY_PLAN_REASON.fill(reason=_one_line(plan_reason)))
+    if references:
+        dialogue.append(("user", join_prompt(references)))
     if length is not None:
         parts.append(_length_text(length))
     parts.append(_REPLY_INSTRUCTION.fill())
@@ -543,7 +583,12 @@ def build_reply_prompt(
         parts.append(_REPLY_SPLITS.fill())
     if review_sentinel:
         parts.append(_REPLY_REVIEW.fill(sentinel=review_sentinel))
-    return join_prompt(parts)
+    return OrganRequest(
+        organ_id,
+        join_prompt(parts),
+        system_context=system_context,
+        preceding_messages=tuple(dialogue),
+    )
 
 
 def build_plan_prompt(

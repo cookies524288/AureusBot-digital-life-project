@@ -11,7 +11,7 @@
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Self
+from typing import Any, ClassVar, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -67,18 +67,16 @@ class HeartbeatConfig(BaseModel):
     shutdown_grace_seconds: float = Field(default=60.0, ge=0)
     # 回复时带上最近多少条对话（包括刚收到的新消息）。
     recent_message_limit: int = Field(default=20, ge=1)
-    # 回复用哪个器官；名字要和 models.toml 的 [organs.名字] 一致。
-    reply_organ: str = Field(default="replyer", min_length=1)
+    reply_organ: ClassVar[str] = "replyer"
     # 兼容原配置。各档位的回复流程都先请求规划器。
     planning_enabled: bool = True
     # D94：只关闭自主翻阅及规划器的特别关心调整，保留重要来信唤醒。
     inbox_attention_enabled: bool = True
     inbox_read_limit: int = Field(default=35, ge=1, le=200)
-    inbox_debounce_enabled: bool = False
+    inbox_debounce_enabled: bool = True
     inbox_debounce_seconds: float = Field(default=4.0, gt=0, le=60, allow_inf_nan=False)
     inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
-    # 规划用哪个器官，models.toml 里必须有它。
-    plan_organ: str = Field(default="planner", min_length=1)
+    plan_organ: ClassVar[str] = "planner"
     qq_emoji_collection_enabled: bool = True
     qq_emoji_selection_enabled: bool = True
     qq_emoji_semantic_enabled: bool = False
@@ -108,6 +106,16 @@ class HeartbeatConfig(BaseModel):
     working_memory_enabled: bool = True
     working_memory_capacity: int = Field(default=80, ge=2, le=300)
     working_memory_retain: int = Field(default=25, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_organ_names(cls, value: object) -> object:
+        """旧配置可照常读取，但规划和回复固定走内置器官的模型绑定。"""
+        if isinstance(value, Mapping):
+            return {
+                key: item for key, item in value.items() if key not in ("plan_organ", "reply_organ")
+            }
+        return value
 
     @model_validator(mode="after")
     def validate_typing_jitter(self) -> Self:
@@ -589,6 +597,7 @@ class MemoryConfig(BaseModel):
     enabled: bool = True
     recall_enabled: bool = True
     heuristic_recall_enabled: bool = False
+    recall_feedback_enabled: bool = True
     max_results: int = Field(default=5, ge=1, le=20)
     index_batch: int = Field(default=200, ge=1, le=5000)
     consolidation_enabled: bool = False

@@ -8,6 +8,7 @@
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+from enum import StrEnum
 
 from aureus.common.language_prompts import (
     LANGUAGE_EXPRESSION_HEADER,
@@ -25,6 +26,14 @@ _PLANNER_MESSAGE_PREFIX = re.compile(r"^<message\b[^>]*>\s*", re.IGNORECASE)
 _TERMS = re.compile(r"[a-z0-9]+|[\u3400-\u9fff]+")
 
 
+class ExpressionReviewStatus(StrEnum):
+    """表达方式的人工审核结论，与启用状态分别保存。"""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 @dataclass(frozen=True)
 class LanguageEntry:
     """一项候选及其可定位的本地消息证据。"""
@@ -39,6 +48,17 @@ class LanguageEntry:
     entry_key: str = ""
     is_enabled: bool = True
     original: tuple[str, str, str] | None = None
+    pending_scope: bool = False
+    is_removed: bool = False
+    review_status: ExpressionReviewStatus | None = None
+    scope_keys: tuple[str, ...] = ()
+    package_source: str | None = None
+
+    def visible_in(self, conversation_key: str | None) -> bool:
+        """非包记录保持原可见性；包记录仅在明确绑定的会话中可用。"""
+        return self.package_source is None or (
+            conversation_key is not None and conversation_key in self.scope_keys
+        )
 
 
 @dataclass(frozen=True)
@@ -148,6 +168,8 @@ def select_expressions(
     excluded = tuple(filter(None, map(normalize, avoid)))
     ranked: list[tuple[int, int, LanguageEntry]] = []
     for entry in entries:
+        if entry.review_status == ExpressionReviewStatus.REJECTED:
+            continue
         style = normalize(entry.text)
         if any(term in style for term in excluded):
             continue

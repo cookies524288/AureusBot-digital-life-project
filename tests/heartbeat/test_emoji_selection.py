@@ -17,6 +17,43 @@ PNG = b"\x89PNG\r\n\x1a\n"
 
 
 @pytest.mark.asyncio
+async def test_removed_emoji_is_not_selected_and_recovery_keeps_moderation(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, clock)
+    store.open()
+    active = store.collect(PNG + b"active", description="庆祝", register=True)
+    banned = store.collect(PNG + b"banned", description="停用", register=True)
+    assert active.digest and banned.digest
+    store.set_status(banned.digest, is_registered=True, is_banned=True)
+    calls = []
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        calls.append(request)
+        assert "庆祝" in request.prompt and "停用" not in request.prompt
+        return OrganResponse(request.organ_id, '{"selected": 1}')
+
+    selector = EmojiSelector(store, call, clock, HeartbeatConfig(), UTC)
+
+    async def select() -> EmojiReplyPart | None:
+        return await selector.select(
+            EmojiIntent(), (), "测试者", ModelPreference.PREFERRED, has_embedding=False
+        )
+
+    assert await select() is not None
+    keys = [active.entry_key, banned.entry_key]
+    assert store.set_removed(keys, True)
+    assert await select() is None and len(calls) == 1
+    assert store.read_sendable(active.digest) is None
+    assert store.read_catalog_media(active.digest) == PNG + b"active"
+    removed, total = store.browse_page("", 0, 20, removed=True)
+    assert total == 2 and all(entry.is_removed for entry in removed)
+    assert store.set_removed(keys, False)
+    assert await select() is not None and len(calls) == 2
+    assert store.read_sendable(banned.digest) is None
+    assert store.read_catalog_media(banned.digest) == PNG + b"banned"
+
+
+@pytest.mark.asyncio
 async def test_semantic_selection_refreshes_incrementally_and_falls_back(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     store = EmojiStore(tmp_path / "test.db", tmp_path, clock)

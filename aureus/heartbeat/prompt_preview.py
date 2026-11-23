@@ -20,7 +20,7 @@ from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
     build_plan_prompt,
-    build_reply_prompt,
+    build_reply_request,
     build_system_context,
 )
 from aureus.heartbeat.downtime import Downtime
@@ -40,6 +40,7 @@ from aureus.heartbeat.recall import (
 from aureus.heartbeat.reply_segments import SEGMENT_PROMPT, prepare_reply
 from aureus.identity import Identity
 from aureus.organs import EMPTY_SYSTEM_MESSAGE, OrganRequest, PromptTemplate, prompt_template_keys
+from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 
 _HISTORY = "〔聊天历史〕"
 _INPUT = "〔当前消息〕"
@@ -75,7 +76,11 @@ class PromptScene:
 
     def template_keys(self) -> set[str]:
         """本场景用到的模板，包括空系统提示。"""
-        keys = prompt_template_keys(self.request.prompt, self.request.system_context)
+        keys = prompt_template_keys(
+            self.request.prompt,
+            self.request.system_context,
+            *(content for _, content in self.request.preceding_messages),
+        )
         if not self.request.system_context:
             keys.add(EMPTY_SYSTEM_MESSAGE.key)
         return keys
@@ -104,13 +109,31 @@ def build_prompt_scenes(
     user = identity.user.name
     scenes: list[PromptScene] = []
 
-    def add(task: str, variant: str, label: str, prompt: str, system: str) -> None:
+    def add(
+        task: str, variant: str, label: str, prompt: str | OrganRequest, system: str = ""
+    ) -> None:
         if task in tasks:
             scenes.append(
                 PromptScene(
-                    variant, task, label, OrganRequest(organ, prompt, system_context=system)
+                    variant,
+                    task,
+                    label,
+                    prompt
+                    if isinstance(prompt, OrganRequest)
+                    else OrganRequest(organ, prompt, system_context=system),
                 )
             )
+
+    def sample(ident: int, actor: ActorType, text: str) -> TimelineRecord:
+        return TimelineRecord(
+            id=ident,
+            timestamp=now,
+            actor_type=actor,
+            actor_id="〔发言者〕" if actor is not ActorType.ME else "",
+            event_type="message",
+            content=text,
+            visibility=VisibilityScope.GROUP,
+        )
 
     def system(
         *, full: bool = True, rich: bool = False, contact: bool = False, initiative: bool = False
@@ -177,31 +200,47 @@ def build_prompt_scenes(
             build_plan_prompt(_HISTORY, _INPUT, user, with_agenda=True, with_recall=True),
             system(rich=True, contact=True),
         )
-        add("reply", "reply", "合并回复 · 无规划", build_reply_prompt([], _INPUT, user), system())
+        incoming = [sample(3, ActorType.PERSON, _INPUT)]
+        reply_history = [
+            sample(1, ActorType.PERSON, _HISTORY),
+            sample(2, ActorType.ME, "〔先前的回复〕"),
+        ]
+        add(
+            "reply",
+            "reply",
+            "回复 · 基础布局",
+            build_reply_request(organ, [], incoming, user, UTC, system_context=system()),
+        )
         add(
             "reply",
             "reply_context",
-            "合并回复 · 含上下文",
-            build_reply_prompt(
-                _HISTORY,
-                _INPUT,
+            "回复 · 含上下文",
+            build_reply_request(
+                organ,
+                reply_history,
+                incoming,
                 user,
+                UTC,
+                system_context=system(rich=True),
+                working_context="〔工作记忆〕",
                 length=_LENGTH,
                 recall=automatic,
                 jargon=jargon,
                 expressions=expression,
                 people_context=people,
             ),
-            system(rich=True),
         )
         add(
             "reply",
             "reply_planned",
             "规划后回复 · 含记忆召回",
-            build_reply_prompt(
-                _HISTORY,
-                _INPUT,
+            build_reply_request(
+                organ,
+                reply_history,
+                incoming,
                 user,
+                UTC,
+                system_context=system(full=False, rich=True),
                 intent=_INTENT,
                 plan_reason=_PLAN_REASON,
                 review_sentinel=_REVIEW_SENTINEL,
@@ -211,22 +250,23 @@ def build_prompt_scenes(
                 expressions=expression,
                 people_context=people,
             ),
-            system(full=False, rich=True),
         )
         add(
             "reply",
             "reply_contact",
             "规划后回复 · 陌生联系人",
-            build_reply_prompt(
-                _HISTORY,
-                _INPUT,
+            build_reply_request(
+                organ,
+                reply_history,
+                incoming,
                 user,
+                UTC,
+                system_context=system(full=False, rich=True, contact=True),
                 intent=_INTENT,
                 plan_reason=_PLAN_REASON,
                 review_sentinel=_REVIEW_SENTINEL,
                 with_splits=True,
             ),
-            system(full=False, rich=True, contact=True),
         )
         add(
             "plan",
@@ -247,10 +287,13 @@ def build_prompt_scenes(
             "reply",
             "reply_references",
             "规划后回复 · 含人际、记忆及习得表达",
-            build_reply_prompt(
-                [],
-                _INPUT,
+            build_reply_request(
+                organ,
+                reply_history,
+                incoming,
                 user,
+                UTC,
+                system_context=system(full=False),
                 intent=_INTENT,
                 plan_reason=_PLAN_REASON,
                 review_sentinel=_REVIEW_SENTINEL,
@@ -260,7 +303,6 @@ def build_prompt_scenes(
                 expressions=expression,
                 people_context=people,
             ),
-            system(full=False),
         )
         add(
             "initiative_plan",

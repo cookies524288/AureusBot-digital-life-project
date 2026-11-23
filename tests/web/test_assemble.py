@@ -301,7 +301,7 @@ async def test_first_provider_save_keeps_fake_replies(paths: AureusPaths, reply_
         config["providers"] = [{"name": "local", "protocol": "openai"}]
         assert client.put("/api/models", json={"config": config}).status_code == 200
         response = await core.gateway.call(
-            OrganRequest(organ_id=reply_organ, prompt="测试", purpose=CallPurpose.USER_REPLY)
+            OrganRequest(organ_id="replyer", prompt="测试", purpose=CallPurpose.USER_REPLY)
         )
         assert response.metadata["type"] == "fake"
         assert response.attempts == []

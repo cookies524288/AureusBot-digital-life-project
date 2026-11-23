@@ -1,7 +1,7 @@
 """网页通道：登录状态（路线图 1.10，D63 第 7 条）。
 
 登录后给浏览器一个不透明的随机 token；数据库里只存它的 SHA-256，所以库被人看到也拿不到能用的 token。
-每台设备各自一条记录、各自计时：有效期从最后一次活动算起，每次使用都续期。
+每台设备各自一条记录、各自计时：有效期从最后一次活动算起；只读检修不续期。
 表 web_sessions 只属于网页通道，放在 aureus.db 里；它是登录状态，不是审计记录，可以删改。
 """
 
@@ -86,18 +86,30 @@ class SessionStore:
             )
         return token
 
-    def touch(self, token: str) -> bool:
-        """这个 token 现在还有效吗？有效就续期，过期了就删掉。"""
+    def _session_row(self, token: str) -> sqlite3.Row | None:
         if not token or len(token) > MAX_TOKEN_LENGTH:
-            return False
-        conn = self._require_open()
-        now = self._now()
-        row = conn.execute(
+            return None
+        connection = self._require_open()
+        return connection.execute(
             "SELECT id, last_active_at FROM web_sessions WHERE token_hash = ?",
             (_hash_token(token),),
         ).fetchone()
+
+    def is_active(self, token: str) -> bool:
+        """只核对登录有效期，不续期、不清理过期状态。"""
+        row = self._session_row(token)
+        return (
+            row is not None
+            and self._now() - datetime.fromisoformat(row["last_active_at"]) < self._lifetime
+        )
+
+    def touch(self, token: str) -> bool:
+        """这个 token 现在还有效吗？有效就续期，过期了就删掉。"""
+        row = self._session_row(token)
         if row is None:
             return False
+        conn = self._require_open()
+        now = self._now()
         with conn:
             if now - datetime.fromisoformat(row["last_active_at"]) >= self._lifetime:
                 conn.execute("DELETE FROM web_sessions WHERE id = ?", (row["id"],))

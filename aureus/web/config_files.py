@@ -51,21 +51,17 @@ READONLY_CONFIG = (
     *(f"cortisol.{field}" for field in CortisolConfig.model_fields),
 )
 PASSWORD_SECTIONS = ("safety", "web")
+HIDDEN_CONFIG = frozenset(
+    {
+        "heartbeat.advance_biomodel",
+        "heartbeat.planning_enabled",
+        "heartbeat.roleplay_mode",
+        "heartbeat.plan_organ",
+        "heartbeat.reply_organ",
+    }
+)
+NO_DEFAULT_CONFIG = frozenset({"exploration.search_endpoint"})
 MODEL_ENTRY_TYPES = {"providers": ProviderConfig, "models": ModelConfig, "organs": OrganConfig}
-MODEL_RESTORE_FIELDS = {
-    "providers": ("base_url", "timeout_seconds", "max_retry"),
-    "models": (
-        "kind",
-        "vision",
-        "price_in",
-        "price_out",
-        "price_cache_in",
-        "temperature",
-        "max_tokens",
-        "reasoning_levels",
-    ),
-    "organs": ("models", "reasoning_effort", "temperature", "max_tokens"),
-}
 ModelRename = tuple[str, str, str]
 
 
@@ -172,28 +168,6 @@ def _edit_models(
         document["config_version"] = 1
 
 
-def _drop_model_override(document: Mapping[str, Any], section: str, name: str, field: str) -> bool:
-    if section == "organs":
-        table = document.get(section, {}).get(name)
-        if table is None and name in BUILTIN_ORGANS:
-            return False
-    else:
-        table = next((entry for entry in document.get(section, []) if entry["name"] == name), None)
-    if table is None:
-        raise ConfigError("找不到要恢复的配置条目。")
-    if table.get("kind") == "vision":
-        if field == "kind":
-            table["vision"] = True
-        elif field == "vision":
-            table["kind"] = "llm"
-            table.pop(field, None)
-            return True
-    if field not in table:
-        return False
-    del table[field]
-    return True
-
-
 def models_require_password(current: ModelsConfig, submitted: ModelsConfig) -> bool:
     """已有服务商改地址或密钥引用、新增带密钥的服务商时，要重新确认密码。"""
     previous = {provider.name: provider for provider in current.providers}
@@ -287,28 +261,6 @@ class ConfigService:
             lambda raw: validate_models_config(raw, "提交的模型配置"),
         )
 
-    def prepare_model_restore(
-        self, section: str, name: str, field: str
-    ) -> tuple[ModelsConfig, ModelsConfig, bool]:
-        """读取原配置和删除指定覆盖后的有效配置，供权限检查和热重载。"""
-        _, raw = _read_toml(self.paths.models_config_file, "models.toml")
-        current = validate_models_config(raw, "models.toml")
-        changed = _drop_model_override(raw, section, name, field)
-        restored = validate_models_config(raw, "恢复默认后的模型配置") if changed else current
-        return current, restored, changed
-
-    def write_model_restore(self, section: str, name: str, field: str) -> None:
-        """仅删除指定键，重新校验并原子写回模型配置文件。"""
-
-        def edit(document: TOMLDocument) -> None:
-            _drop_model_override(document, section, name, field)
-
-        apply_toml_edit(
-            self.paths.models_config_file,
-            edit,
-            lambda raw: validate_models_config(raw, "恢复默认后的模型配置"),
-        )
-
     def view_keys(self) -> dict[str, Any]:
         """只列密钥库状态和名字；打不开时不当成空库。"""
         if not self.paths.vault_file.exists():
@@ -386,11 +338,19 @@ class ConfigService:
     def view_runtime(self) -> dict[str, Any]:
         """提供当前文件配置、自动生成的 schema、只读项和需密码的节。"""
         exists, config = self.read_runtime()
+        values = config.model_dump(mode="json")
+        schema = RuntimeConfig.model_json_schema()
+        for key in HIDDEN_CONFIG:
+            section, _, field = key.partition(".")
+            definition = schema["properties"][section]["$ref"].rsplit("/", 1)[-1]
+            schema["$defs"][definition]["properties"].pop(field, None)
+            values[section].pop(field, None)
         return {
             "exists": exists,
-            "config": config.model_dump(mode="json"),
-            "schema": RuntimeConfig.model_json_schema(),
+            "config": values,
+            "schema": schema,
             "readonly": list(READONLY_CONFIG),
+            "no_default": sorted(NO_DEFAULT_CONFIG),
             "password_sections": list(PASSWORD_SECTIONS),
         }
 
@@ -444,6 +404,8 @@ class ConfigService:
     def restore_runtime(self, key: str) -> tuple[Any, bool]:
         """仅删除一个运行配置覆盖，返回有效值和覆盖是否存在。"""
         check_biochemical_write([key])
+        if key in NO_DEFAULT_CONFIG or key in HIDDEN_CONFIG:
+            raise ConfigError("这项设置没有可恢复的默认值。")
         section, separator, field = key.rpartition(".")
         defaults = RuntimeConfig().model_dump(mode="json")
         fields = defaults.get(section) if separator else defaults

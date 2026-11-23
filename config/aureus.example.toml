@@ -37,20 +37,15 @@ config_version = 1
 # shutdown_grace_seconds = 60
 # 回复时带上最近多少条对话。
 # recent_message_limit = 20
-# 回复用哪个器官，名字要和 models.toml 里的 [organs.名字] 一致。
-# reply_organ = "replyer"
-# 为旧配置保留。各精力档位都会先规划，修改这个值也照常规划。
-# planning_enabled = true
+# 各精力档位固定先调用 [organs.planner]，需要回复时使用 [organs.replyer]；在 models.toml 中配置它们的模型。
 # 自主翻阅和规划器调整特别关心的总开关。
 # inbox_attention_enabled = true
 # 每次自主翻阅在所有选中会话合计读取的条数，范围 1–200。
 # inbox_read_limit = 35
 # 开启后合并同会话来信，规划器用流式请求。思考期间新来信可重开本轮规划。
-# inbox_debounce_enabled = false
+# inbox_debounce_enabled = true
 # inbox_debounce_seconds = 4.0
 # inbox_debounce_max_restarts = 4
-# 各精力档位都由规划器决定回不回。器官名要和 models.toml 里的 [organs.名字] 一致。
-# plan_organ = "planner"
 # QQ 表情收集与回复选择。配置 [organs.emoji] 可使用专门的文字模型。
 # qq_emoji_collection_enabled = true
 # qq_emoji_selection_enabled = true
@@ -370,6 +365,7 @@ config_version = 1
 # 只关召回仍继续建索引。
 # recall_enabled = true
 # heuristic_recall_enabled = false  # 在规划前按本轮回忆提示词检索
+# recall_feedback_enabled = true    # 人工评价已投递回复的召回依据；不参与排序
 # 一次最多给回复器几条，1～20。
 # max_results = 5
 # 每拍最多处理几条新的时间线记录，1～5000。

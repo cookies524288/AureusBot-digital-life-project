@@ -78,6 +78,10 @@ class ConversationKey:
             self.temporary_group_id or "",
         )
 
+    def language_scope_key(self) -> str:
+        """以完整路由区分平台、账号、群聊和私聊，不以名称或群号猜测。"""
+        return json.dumps(self.parameters(), separators=(",", ":"))
+
 
 @dataclass(frozen=True)
 class InboxConversation:

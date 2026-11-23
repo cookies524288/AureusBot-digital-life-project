@@ -8,8 +8,7 @@ import pytest
 
 from aureus.common import HeartbeatConfig, RuntimeConfig, load_runtime_config, shutdown_logging
 from aureus.core.runtime import open_core
-from aureus.organs import ModelsConfig, load_models_config
-from aureus.organs.model_config import ProviderConfig
+from aureus.organs import load_models_config
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import GOOD
 from tests.web.test_web_acceptance_flow import IDENTITY
@@ -129,6 +128,7 @@ def test_inbox_read_limit_saves_and_restores_for_restart(rig: ConfigRig) -> None
         "memory.enabled",
         "memory.recall_enabled",
         "memory.heuristic_recall_enabled",
+        "memory.recall_feedback_enabled",
         "memory.max_results",
         "memory.index_batch",
         "memory.consolidation_enabled",
@@ -147,6 +147,7 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
             "enabled": False,
             "recall_enabled": False,
             "heuristic_recall_enabled": True,
+            "recall_feedback_enabled": False,
             "max_results": 12,
             "index_batch": 321,
             "consolidation_enabled": True,
@@ -179,9 +180,7 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
         assert page_config[group] == loaded[group] == values
 
 
-def test_model_restore_reloads_and_sparse_saves_follow_changed_defaults(
-    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_model_edit_preserves_sparse_values_and_has_no_restore(rig: ConfigRig) -> None:
     path = rig.paths.models_config_file
     path.write_text(
         '[[providers]]\nname = "local"\nprotocol = "openai"\ntimeout_seconds = 21\n'
@@ -206,76 +205,30 @@ def test_model_restore_reloads_and_sparse_saves_follow_changed_defaults(
     assert "strategy" not in raw["organs"]["replyer"]
     assert "# 旧配置" in path.read_text(encoding="utf-8")
 
-    cases = [
-        (
-            "providers",
-            "local",
-            "timeout_seconds",
-            ProviderConfig.model_fields["timeout_seconds"].default,
-        ),
-        ("models", "renamed", "temperature", None),
-        ("organs", "replyer", "max_tokens", None),
-    ]
-    applied = []
-    rig.models.on_reload = applied.append
-    for section, name, field, default in cases:
+    before = path.read_bytes()
+    for section, name, field in (
+        ("providers", "local", "timeout_seconds"),
+        ("models", "renamed", "temperature"),
+        ("organs", "replyer", "models"),
+    ):
         params = {"section": section, "name": name, "field": field}
-        assert rig.client.post(MODEL_RESTORE, json=params).json()["value"] == default
-        assert rig.client.post(MODEL_RESTORE, json=params).json()["value"] == default
-    assert len(applied) == len(cases)
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    assert raw["providers"][0] == {"name": "local", "protocol": "openai", "max_retry": 7}
-    assert raw["models"][0]["tool_calls"] is True
-    assert "temperature" not in raw["models"][0]
-    assert raw["organs"]["replyer"] == {"models": ["renamed"]}
-
-    fields = ProviderConfig.model_fields
-    monkeypatch.setattr(fields["timeout_seconds"], "default", 44.0)
-    monkeypatch.setattr(fields["max_retry"], "default", 3)
-    try:
-        ProviderConfig.model_rebuild(force=True)
-        ModelsConfig.model_rebuild(force=True)
-        loaded = load_models_config(rig.paths)
-        assert loaded.providers[0].timeout_seconds == 44.0
-        assert loaded.providers[0].max_retry == 7
-        assert loaded.routes_for("replyer")[0].max_tokens is None
-    finally:
-        monkeypatch.undo()
-        ProviderConfig.model_rebuild(force=True)
-        ModelsConfig.model_rebuild(force=True)
+        assert rig.client.post(MODEL_RESTORE, json=params).status_code == 404
+    assert path.read_bytes() == before
+    loaded = load_models_config(rig.paths)
+    assert loaded.providers[0].timeout_seconds == 21.0
+    assert loaded.providers[0].max_retry == 7
+    assert loaded.routes_for("replyer")[0].max_tokens == 200
 
 
 def test_restore_permissions_unknown_keys_and_invalid_result_keep_files(rig: ConfigRig) -> None:
     runtime = rig.paths.runtime_config_file
     runtime.write_text("[web]\nport = 30000\nsession_days = 12\n", encoding="utf-8")
-    models = rig.paths.models_config_file
-    models.write_text(
-        '[[providers]]\nname = "local"\nprotocol = "openai"\nbase_url = "http://localhost"\n'
-        '[[models]]\nname = "m"\nidentifier = "m"\nprovider = "local"\n'
-        'reasoning_levels = ["high"]\n[organs.replyer]\n'
-        'models = ["m"]\nreasoning_effort = "high"\n',
-        encoding="utf-8",
-    )
-    before = runtime.read_bytes(), models.read_bytes()
+    before = runtime.read_bytes()
     assert rig.client.post(RUNTIME_RESTORE, json={"field": "web.port"}).status_code == 403
     assert rig.client.post(RUNTIME_RESTORE, json={"field": ".config_version"}).status_code == 422
     assert rig.client.post(RUNTIME_RESTORE, json={"field": "web.session_days"}).status_code == 403
     assert rig.client.post(RUNTIME_RESTORE, json={"field": "identity.name"}).status_code == 422
-    address = {"section": "providers", "name": "local", "field": "base_url"}
-    assert rig.client.post(MODEL_RESTORE, json=address).status_code == 403
-    assert (
-        rig.client.post(MODEL_RESTORE, json={**address, "field": "api_key_ref"}).status_code == 422
-    )
-    assert (
-        rig.client.post(
-            MODEL_RESTORE, json={"section": "models", "name": "m", "field": "reasoning_levels"}
-        ).status_code
-        == 422
-    )
-    assert (runtime.read_bytes(), models.read_bytes()) == before
-    assert (
-        rig.client.post(MODEL_RESTORE, json={**address, "password": GOOD}).json()["value"] is None
-    )
+    assert runtime.read_bytes() == before
     assert (
         rig.client.post(
             RUNTIME_RESTORE, json={"field": "web.session_days", "password": GOOD}
@@ -288,10 +241,46 @@ def test_restore_permissions_unknown_keys_and_invalid_result_keep_files(rig: Con
 def test_restore_requires_login_and_non_default_password(tmp_path: Path) -> None:
     rig = ConfigRig(tmp_path, password_set=False)
     try:
-        for path in (RUNTIME_RESTORE, MODEL_RESTORE):
-            assert rig.client.post(path, json={}).status_code == 401
+        assert rig.client.post(RUNTIME_RESTORE, json={}).status_code == 401
         rig.log_in("admin")
-        for path in (RUNTIME_RESTORE, MODEL_RESTORE):
-            assert rig.client.post(path, json={}).status_code == 403
+        assert rig.client.post(RUNTIME_RESTORE, json={}).status_code == 403
     finally:
         rig.close()
+
+
+def test_web_keeps_legacy_settings_off_the_page_and_preserves_file(rig: ConfigRig) -> None:
+    path = rig.paths.runtime_config_file
+    legacy = {
+        "advance_biomodel": True,
+        "planning_enabled": False,
+        "roleplay_mode": True,
+        "plan_organ": "custom-plan",
+        "reply_organ": "custom-reply",
+    }
+    legacy_toml = (
+        "[heartbeat]\nadvance_biomodel = true\nplanning_enabled = false\nroleplay_mode = true\n"
+        'plan_organ = "custom-plan"\nreply_organ = "custom-reply"\n'
+        '[exploration]\nsearch_endpoint = "https://search.example.test"\n'
+    )
+    path.write_bytes(legacy_toml.encode("utf-8"))
+    view = rig.client.get("/api/config").json()
+    assert not set(legacy).intersection(view["config"]["heartbeat"])
+    assert not set(legacy).intersection(view["schema"]["$defs"]["HeartbeatConfig"]["properties"])
+    assert "exploration.search_endpoint" in view["no_default"]
+    assert "safety.monthly_token_limit" not in view["no_default"]
+    for field, value in legacy.items():
+        changes = {"heartbeat": {field: value}}
+        assert rig.client.put("/api/config", json={"changes": changes}).status_code == 403
+        response = rig.client.post(RUNTIME_RESTORE, json={"field": f"heartbeat.{field}"})
+        assert response.status_code == 403
+    response = rig.client.post(RUNTIME_RESTORE, json={"field": "exploration.search_endpoint"})
+    assert response.status_code == 422
+    assert path.read_bytes() == legacy_toml.encode("utf-8")
+
+    changes = {"heartbeat": {"inbox_debounce_enabled": False}}
+    assert rig.client.put("/api/config", json={"changes": changes}).status_code == 200
+    assert load_runtime_config(rig.paths).heartbeat.inbox_debounce_enabled is False
+    response = rig.client.post(RUNTIME_RESTORE, json={"field": "heartbeat.inbox_debounce_enabled"})
+    assert response.status_code == 200 and response.json()["value"] is True
+    assert load_runtime_config(rig.paths).heartbeat.inbox_debounce_enabled is True
+    assert tomllib.loads(path.read_text(encoding="utf-8")) == tomllib.loads(legacy_toml)

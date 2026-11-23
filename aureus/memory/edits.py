@@ -22,9 +22,15 @@ def open_edits(connection: Connection) -> None:
                 entry_id INTEGER NOT NULL,
                 edited_content TEXT,
                 is_enabled INTEGER NOT NULL DEFAULT 1,
+                is_removed INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(kind, entry_id)
             )
         """)
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(memory_edits)")}
+        if "is_removed" not in columns:
+            connection.execute(
+                "ALTER TABLE memory_edits ADD COLUMN is_removed INTEGER NOT NULL DEFAULT 0"
+            )
         if (
             connection.execute(
                 "SELECT 1 FROM sqlite_schema WHERE name = 'memory_edits_fts'"

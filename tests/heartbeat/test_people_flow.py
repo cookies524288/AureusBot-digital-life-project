@@ -25,6 +25,7 @@ from aureus.organs import OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, PermissionChecker
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from tests.prompt_assertions import dialogue_text
 
 pytestmark = pytest.mark.asyncio
 
@@ -46,7 +47,10 @@ class GatedOrgans:
         self.requests.append(request)
         if self.gate is not None:
             await self.gate.wait()
-        return OrganResponse(organ_id=request.organ_id, suggestion="嗯。")
+        suggestion = (
+            '{"reply": true, "intent": "简单应答"}' if request.organ_id == "planner" else "嗯。"
+        )
+        return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
 
 
 class Rig:
@@ -146,6 +150,7 @@ async def test_another_person_gets_a_reply_and_the_user_is_not_addressed(
     assert f"{CHANNEL}:{STRANGER}" in request.system_context
     assert "称呼对方“阿明”" not in request.system_context
     assert "套话" in request.system_context
+    assert USER_SECRET not in dialogue_text(request) + request.system_context
 
 
 async def test_the_user_still_gets_the_user_context(made: list[Rig], tmp_path: Path) -> None:
@@ -199,8 +204,8 @@ async def test_one_persons_messages_are_answered_together(made: list[Rig], tmp_p
     rig.say(STRANGER, "有件事", TrustLevel.VERIFIED_CONTACT)
     await rig.settle()
 
-    assert len(rig.organs.requests) == 2
-    stranger_prompt = rig.organs.requests[1].prompt
+    assert [request.organ_id for request in rig.organs.requests] == ["planner", "replyer"] * 2
+    stranger_prompt = dialogue_text(rig.organs.requests[-1])
     assert "在吗" in stranger_prompt and "有件事" in stranger_prompt
 
 

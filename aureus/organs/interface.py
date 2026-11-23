@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 
 class CallPurpose(StrEnum):
@@ -52,6 +52,7 @@ class OrganRequest:
     media_bytes: bytes | None = field(default=None, repr=False)
     media_type: str | None = None
     stream: bool = False
+    preceding_messages: tuple[tuple[Literal["user", "assistant"], str], ...] = ()
 
 
 @dataclass(frozen=True)

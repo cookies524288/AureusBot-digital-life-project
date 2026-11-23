@@ -10,13 +10,21 @@ import pytest
 
 from aureus.attention import WorkingMemory
 from aureus.common import HeartbeatConfig, ManualClock
-from aureus.heartbeat import EVENT_MESSAGE, Heartbeat, OutgoingMessage, Perception, TrustLevel
+from aureus.heartbeat import (
+    EVENT_MESSAGE,
+    EVENT_REPLY_REFERENCE,
+    Heartbeat,
+    OutgoingMessage,
+    Perception,
+    TrustLevel,
+)
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.perception import MessageRoute
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.safety import EmergencyStop, PermissionChecker
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from tests.prompt_assertions import dialogue_text
 
 _REVIEW_REASON = "这个说法像通知，改成一句口语"
 _FINAL_REPLY = "行呀，周六见"
@@ -68,7 +76,7 @@ class _StreamingOrgans:
         sentinel = marker.group(1)
         text = (
             f"<{sentinel}>{_REVIEW_REASON}\\</{sentinel}>"
-            if "用系统通知口吻确认" in request.prompt
+            if "用系统通知口吻确认" in dialogue_text(request)
             else _FINAL_REPLY
         )
         return OrganResponse(request.organ_id, text)
@@ -188,16 +196,24 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
         assert len(retried.context["in_reply_to"]) == 2
         assert review.context["in_reply_to"] == retried.context["in_reply_to"]
         for request in (retried, review, *organs.replies):
-            assert "滚动小结：约过周末碰面" in request.prompt
-            assert "发言者 阿明（账号 owner）" in request.prompt
-            assert "发言者 小雨（账号 visitor）" in request.prompt
-            assert "我说的是周六下午" in request.prompt
-            assert "已经用完一次打断" not in request.prompt
-            assert "再审中的后来消息" not in request.prompt
+            text = dialogue_text(request)
+            assert "滚动小结：约过周末碰面" in text
+            assert "发言者 阿明（账号 owner）" in text
+            assert "发言者 小雨（账号 visitor）" in text
+            assert "我说的是周六下午" in text
+            assert "已经用完一次打断" not in text
+            assert "再审中的后来消息" not in text
             for private in ("别群的私事", "维护者的私事", "尚未压缩的私事"):
-                assert private not in request.prompt + request.system_context
-            assert (_REVIEW_REASON in request.prompt) is (request is review)
+                assert private not in text + request.system_context
+            assert (_REVIEW_REASON in text) is (request is review)
         assert _REVIEW_REASON not in first.prompt
+
+        [reference] = timeline.query(TimelineQuery(event_type=EVENT_REPLY_REFERENCE))
+        assert reference.visibility is VisibilityScope.GROUP
+        assert reference.metadata["recipient_id"] == "home-group"
+        assert reference.metadata["in_reply_to"] == review.context["in_reply_to"]
+        assert reference.content == ("建议回复：简短答应周六见" if speak else "建议不回复")
+        assert _REVIEW_REASON not in reference.content
 
         recorded = [
             row.content

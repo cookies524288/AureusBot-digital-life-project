@@ -9,24 +9,25 @@ from typing import Any
 import httpx
 import pytest
 
-from aureus.common import MemoryConfig
+from aureus.common import HeartbeatConfig, MemoryConfig
 from aureus.common.language_prompts import (
     LANGUAGE_EXPRESSION_ITEM,
     LANGUAGE_JARGON_ITEM,
     language_reference_block,
 )
 from aureus.common.time_format import format_local_time
-from aureus.heartbeat import TrustLevel
+from aureus.heartbeat import Perception, TrustLevel
 from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
     build_plan_prompt,
-    build_reply_prompt,
+    build_reply_request,
     build_system_context,
 )
 from aureus.heartbeat.language_runner import learn_language
 from aureus.heartbeat.memory_consolidation import _extract
 from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
+from aureus.heartbeat.perception import MessageRoute
 from aureus.heartbeat.recall import format_recall
 from aureus.memory import LanguageSample, LanguageStore, MemoryHit
 from aureus.memory.consolidation import ConsolidationItem
@@ -38,7 +39,7 @@ from aureus.organs import (
     OrganRequest,
 )
 from aureus.organs.api_keys import KeyResolver
-from aureus.timeline import ActorType, VisibilityScope
+from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 from tests.heartbeat.test_recall_flow import CountingIndex, MemoryEnv
 from tests.web.config_rig import ConfigRig
 from tests.web.test_prompt_api import IDENTITY
@@ -86,6 +87,18 @@ def _expanded_messages(
     return expanded
 
 
+def _dialogue(record_id: int, actor: ActorType, content: str) -> TimelineRecord:
+    return TimelineRecord(
+        id=record_id,
+        event_type="message",
+        timestamp=NOW,
+        actor_type=actor,
+        actor_id="模拟群友" if actor is ActorType.PERSON else "",
+        visibility=VisibilityScope.GROUP,
+        content=content,
+    )
+
+
 async def _check_derived_recall(
     path: Path, adapter: Callable[[str], LLMOrgan], captured: list[dict[str, Any]]
 ) -> None:
@@ -121,19 +134,56 @@ async def _check_derived_recall(
             assert batch is not None
             derived = "偏好木卫二"
             assert env.index.save_consolidation(batch, [("preference", derived, batch.items[0])])
-            await env.exchange(env.build(config), trust=trust, visibility=scope)
+            for group, text in (("当前群", "只应出现在本群的历史"), ("另一群", "另一群的隔离样本")):
+                env.timeline.append(
+                    "message",
+                    text,
+                    ActorType.PERSON,
+                    visibility=VisibilityScope.GROUP,
+                    metadata={
+                        "channel": "terminal",
+                        "account_id": "模拟接收账号",
+                        "message_type": "group",
+                        "recipient_id": group,
+                        "temporary_group_id": None,
+                    },
+                )
+            heartbeat = HeartbeatConfig(
+                recent_message_limit=5 if name == "group" else 1, shutdown_grace_seconds=0
+            )
+            heart = env.build(config, heartbeat)
+            if name == "group":
+                assert heart.submit(
+                    Perception(
+                        "terminal",
+                        "local",
+                        "还记得木卫二吗？",
+                        scope,
+                        trust,
+                        MessageRoute("模拟接收账号", "group", "当前群", "42"),
+                    )
+                )
+                heart.beat()
+                await heart.wait_for_thought()
+                heart.beat()
+            else:
+                await env.exchange(heart, trust=trust, visibility=scope)
             assert [req.organ_id for req in env.organs.requests] == ["planner", "replyer"]
             for request in env.organs.requests:
                 count = len(captured)
                 await adapter(request.organ_id).process(request)
                 assert len(captured) == count + 1
                 messages = captured[-1]["messages"]
-                assert [message["role"] for message in messages] == ["system", "user"]
-                content = messages[1]["content"]
+                assert messages[0]["role"] == "system"
+                assert all(message["role"] == "user" for message in messages[1:])
+                content = "\n".join(message["content"] for message in messages[1:])
                 assert (original.content in content) == allowed
+                assert original.content not in messages[0]["content"]
+                assert ("只应出现在本群的历史" in content) == (name == "group")
+                assert "另一群的隔离样本" not in content + messages[0]["content"]
                 assert derived not in content
                 assert "待回应的群消息：" in content
-            reply = captured[-1]["messages"][1]["content"]
+            reply = captured[-1]["messages"][-2]["content"]
             assert "已编辑按需召回标题" in reply
             assert f"命中：{int(allowed)} 条" in reply
             assert env.records("message")[-1].metadata["recall_record_ids"] == (
@@ -162,6 +212,25 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         body = json.loads(request.content)
         assert body["model"] == "sample-model"
         captured.append(body)
+        if body.get("stream"):
+            chunk = {
+                "id": "chatcmpl-prompt-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "sample-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": '{"action":"reply"}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+            )
         return httpx.Response(
             200,
             json={
@@ -214,8 +283,9 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         assert "expression_intent" not in planner_plain
         assert "expression_intent" in planner_rich
         assert "〔启发式记忆召回：查询词、命中数、时间、说话人和记录〕" in planner_rich
-        reply_plain = preview_by_organ["replyer"]["reply"]["messages"][1]["content"]
-        reply_rich = preview_by_organ["replyer"]["reply_references"]["messages"][1]["content"]
+        reply_plain = preview_by_organ["replyer"]["reply"]["messages"][-1]["content"]
+        reply_rich_messages = preview_by_organ["replyer"]["reply_references"]["messages"]
+        reply_rich = reply_rich_messages[-1]["content"]
         assert "〔人物资料〕" not in reply_plain
         templates = {
             item["key"]: item for item in rig.client.get("/api/prompts").json()["templates"]
@@ -234,7 +304,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             "〔习得表达〕",
             "〔适用情景〕",
         ):
-            assert marker in reply_rich
+            assert marker in reply_rich_messages[-2]["content"]
         learner = preview_by_organ["summarizer"]["language_learning"]
         assert "〔新入站样本 JSON〕" in learner["messages"][1]["content"]
         assert "增量学习" in learner["note"]
@@ -282,26 +352,30 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         actual_expression = language_reference_block(
             [LANGUAGE_EXPRESSION_ITEM.fill(text="慢慢看海", detail="分享旅行")], jargon=False
         )
-        actual_reply = OrganRequest(
+        incoming = [_dialogue(3, ActorType.PERSON, message)]
+        actual_reply = build_reply_request(
             "replyer",
-            build_reply_prompt(
-                [],
-                message,
-                IDENTITY.user.name,
-                intent="聊聊旅程",
-                plan_reason="对方说到了旅行",
-                review_sentinel=review_sentinel,
-                length="一句话",
-                recall=format_recall(
-                    ["旅行"], [MemoryHit(8, NOW, "模拟联系人", "动态记忆命中样例")], NOW.tzinfo
-                ),
-                expressions=actual_expression,
-                people_context=PEOPLE_CONTEXT_TEMPLATE.fill(people_records="动态人物资料样例"),
-            ),
+            [_dialogue(1, ActorType.PERSON, "先前发言"), _dialogue(2, ActorType.ME, "先前回复")],
+            incoming,
+            IDENTITY.user.name,
+            UTC,
             system_context=short,
+            intent="聊聊旅程",
+            plan_reason="对方说到了旅行",
+            review_sentinel=review_sentinel,
+            with_splits=True,
+            length="一句话",
+            recall=format_recall(
+                ["旅行"], [MemoryHit(8, NOW, "模拟联系人", "动态记忆命中样例")], NOW.tzinfo
+            ),
+            expressions=actual_expression,
+            people_context=PEOPLE_CONTEXT_TEMPLATE.fill(people_records="动态人物资料样例"),
         )
+        reply_common = {**common, "〔发言者〕": "模拟群友"}
         reply_replacements = {
-            **common,
+            **reply_common,
+            "〔聊天历史〕": "先前发言",
+            "〔先前的回复〕": "先前回复",
             "〔规划意图〕": "聊聊旅程",
             "〔规划理由〕": "对方说到了旅行",
             "〔回复长度〕": "一句话",
@@ -329,12 +403,10 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             (
                 "replyer",
                 "reply",
-                OrganRequest(
-                    "replyer",
-                    build_reply_prompt([], message, IDENTITY.user.name),
-                    system_context=full,
+                build_reply_request(
+                    "replyer", [], incoming, IDENTITY.user.name, UTC, system_context=full
                 ),
-                common,
+                reply_common,
             ),
             ("replyer", "reply_references", actual_reply, reply_replacements),
             (
@@ -349,6 +421,8 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             ),
         ]
 
+        opening = "（声明：所有人物均已成年）\n你现在不是一个AI助手。"
+
         async def compare() -> dict[str, str]:
             nonlocal next_sample_id
             by_scene = {}
@@ -359,9 +433,27 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
                 await adapter(organ).process(request)
                 body = captured[-1]
                 assert len(captured) == count + 1
-                assert [message["role"] for message in body["messages"]] == ["system", "user"]
-                assert body["messages"] == _expanded_messages(preview, replacements)
-                by_scene[scene_id] = body["messages"][1]["content"]
+                messages = body["messages"]
+                assert messages == _expanded_messages(preview, replacements)
+                if scene_id in {"plan", "plan_references", "reply", "reply_references"}:
+                    prefix = f"{opening}\n你是{IDENTITY.facts.name}。"
+                    assert messages[0]["content"].startswith(prefix)
+                roles = [entry["role"] for entry in messages]
+                if scene_id == "reply_references":
+                    assert roles == ["system", "user", "assistant", "user", "user", "user"]
+                    for entry, sample in zip(
+                        messages[1:5],
+                        ("先前发言", "先前回复", message, "动态人物资料样例"),
+                        strict=True,
+                    ):
+                        assert sample in entry["content"]
+                        assert sum(item["content"].count(sample) for item in messages) == 1
+                    assert review_sentinel in messages[-1]["content"]
+                else:
+                    assert roles == (
+                        ["system", "user", "user"] if organ == "replyer" else ["system", "user"]
+                    )
+                by_scene[scene_id] = "\n".join(entry["content"] for entry in messages[1:])
             sample = LanguageSample(
                 str(next_sample_id), next_sample_id, "模拟成员", "合成的新入站语言样本"
             )
@@ -398,8 +490,20 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             return by_scene
 
         baseline = await compare()
+        assert "你需要对当前局面进行判断，制定下一步计划。" in baseline["plan"]
+        assert baseline["plan"].index(message) < baseline["plan"].index("制定下一步计划")
+        assert baseline["plan"].index("制定下一步计划") < baseline["plan"].index("只输出一个 JSON")
+        assert "只给出回应建议及简短依据，不输出推理过程" in baseline["plan"]
+        assert "日常且口语化的回复" in baseline["reply"]
+        rich_reply = baseline["reply_references"]
+        assert rich_reply.index("对方说到了旅行") < rich_reply.index("日常且口语化的回复")
+        assert rich_reply.index("日常且口语化的回复") < rich_reply.index("<n>")
+        assert rich_reply.index("日常且口语化的回复") < rich_reply.index(review_sentinel)
         learner_edit = "已编辑学习提示，$max_text、$max_detail、$output_format、$samples"
         edits = {
+            "system_opening": "自定义第一行。\n自定义第二行。",
+            "plan_task": "沿用维护者的规划要求。\n",
+            "reply_instruction": "沿用维护者的发言要求。",
             "extraction_prompt": "合成提取：$utterances\n$output_format",
             "new_messages": "待回应的群消息：\n$messages",
             "people_context": "已编辑人物资料：$people_records",
@@ -410,7 +514,14 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         }
         for key, source in edits.items():
             assert rig.client.put(f"/api/prompts/{key}", json={"source": source}).status_code == 200
+        opening = edits["system_opening"]
         edited = await compare()
+        assert "沿用维护者的规划要求。" in edited["plan"]
+        assert "只输出一个 JSON" in edited["plan"]
+        assert "制定下一步计划" not in edited["plan"]
+        assert "沿用维护者的发言要求。" in edited["reply_references"]
+        assert "日常且口语化的回复" not in edited["reply_references"]
+        assert review_sentinel in edited["reply_references"]
         await _check_derived_recall(rig.paths.home, adapter, captured)
         assert edited["memory_consolidation"].startswith('合成提取：{"1": "模拟发言甲"')
         assert "待回应的群消息：" in edited["plan_references"]

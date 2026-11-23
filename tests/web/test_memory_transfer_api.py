@@ -12,6 +12,7 @@ from aureus.memory import HistoricalMemory, MemoryEntry, MemoryEvidence, MemoryI
 from aureus.people import HistoricalKind, HistoricalRecord, PeopleDirectory
 from aureus.timeline import ActorType, TimelineDatabase
 from aureus.web.memory_transfer_api import register_memory_transfer_routes
+from aureus.web.resource_api import register_resource_routes
 
 FLOW = "/api/resources/memory/flow"
 TRANSFER = "/api/resources/memory/transfer"
@@ -37,6 +38,7 @@ def _client(memory: MemoryIndex, clock: ManualClock | None = None) -> TestClient
 
     app = FastAPI()
     register_memory_transfer_routes(app, require_ready, same_origin, memory, clock)
+    register_resource_routes(app, require_ready, None, memory, same_origin=same_origin)
     return TestClient(app)
 
 
@@ -104,18 +106,72 @@ def test_memory_flow_uses_real_events_and_filters_before_paging(tmp_path: Path) 
             assert client.get(FLOW, params=reversed_range).status_code == 422
             recent = client.get(FLOW, params={"hours": 24}).json()
             assert [entry["event_type"] for entry in recent["items"]] == ["person_merged"]
-            assert client.get(FLOW, params={"conversation": "another"}).json()["items"] == []
+            assert recent["total"] == 1
+            empty = client.get(FLOW, params={"conversation": "another"}).json()
+            assert empty["items"] == [] and empty["total"] == 0
             latest = client.get(FLOW, params={"event_type": "profile_updated", "limit": 1}).json()
         assert first["items"][0]["event_type"] == "person_merged"
         assert second["items"][0]["source"]["key"] == [1]
         assert second["items"][0]["event_type"] == "profile_created"
         assert third["items"][0]["recorded_at"] is None
+        assert first["total"] == second["total"] == third["total"] == 3
         assert third["next_offset"] is None
         assert latest["items"] == third["items"]
+        assert latest["total"] == 1
     finally:
         people.close()
         memory.close()
         timeline.close()
+
+
+def test_removed_text_is_omitted_from_the_ordinary_package(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    source_timeline, source = _open_memory(tmp_path / "source.db", clock)
+    target_timeline, target = _open_memory(tmp_path / "target.db", clock)
+    hidden = MemorySource("origin", "memory", "paragraphs", (1,))
+    visible = MemorySource("origin", "memory", "paragraphs", (2,))
+    hidden_record = HistoricalMemory(
+        hidden, "隐藏望远镜", evidence=(MemoryEvidence("message", "7"),)
+    )
+    visible_record = HistoricalMemory(visible, "公开望远镜")
+    try:
+        source.publish([hidden_record, visible_record])
+        with _client(source) as client:
+            client.cookies.set("session", "test")
+            endpoint = "/api/resources/memory"
+            origin = {"origin": "http://testserver"}
+            [item] = client.get(endpoint, params={"kind": "all", "q": "隐藏望远镜"}).json()["items"]
+            body = {"targets": [{"kind": "history", "entry_id": item["entry_id"]}], "removed": True}
+            assert client.patch(endpoint + "/batch", json=body, headers=origin).json() == {
+                "changed": 1
+            }
+            package = client.get(TRANSFER).content
+            header, row, trailer = map(json.loads, package.splitlines())
+            assert header["version"] == 1 and trailer == {"records": 1}
+            assert row["text"] == visible_record.text
+            assert source.get_history(hidden) == hidden_record
+            assert client.patch(
+                endpoint + "/batch", json={**body, "removed": False}, headers=origin
+            ).is_success
+            assert json.loads(client.get(TRANSFER).content.splitlines()[-1]) == {"records": 2}
+        with _client(target) as client:
+            client.cookies.set("session", "test")
+            assert client.post(TRANSFER, content=package, headers=HEADERS).json() == {
+                "added": 1,
+                "skipped": 0,
+            }
+            assert client.post(TRANSFER, content=package, headers=HEADERS).json() == {
+                "added": 0,
+                "skipped": 1,
+            }
+        assert target.get_history(hidden) is None
+        assert target.get_history(visible) == visible_record
+        assert [hit.source for hit in target.search(["望远镜"], set(), 10)] == [visible]
+    finally:
+        source.close()
+        source_timeline.close()
+        target.close()
+        target_timeline.close()
 
 
 def test_memory_file_roundtrip_and_conflicts_are_atomic(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ from aureus.people import HistoricalKind, PeopleDirectory, PeopleError
 from aureus.timeline import VisibilityScope
 from tests.cli.test_maibot_migration import SOURCE_ARGS, create_source, run_command
 from tests.heartbeat.test_judging_flow import NOW
+from tests.prompt_assertions import dialogue_text
 from tests.test_exploration_runtime import _paths
 from tests.test_initiative_runtime import FixedOrgan
 
@@ -167,8 +168,9 @@ async def test_publish_memory_profiles_and_recall_after_restart(
             await core.heartbeat.wait_for_thought()
             core.heartbeat.beat()
             reply = next(request for request in requests if request.context["task"] == "reply")
-            assert all(item in reply.prompt for item in expected)
-            assert all(item not in reply.prompt for item in absent)
+            text = dialogue_text(reply)
+            assert all(item in text for item in expected)
+            assert all(item not in text for item in absent)
         await core.heartbeat.shut_down()
         assert core.identity_history.versions(limit=100) == versions
     assert paths.identity_file.read_bytes() == original_identity

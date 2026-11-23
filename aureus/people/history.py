@@ -2,7 +2,7 @@
 
 import sqlite3
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -187,19 +187,69 @@ def for_person(conn: sqlite3.Connection, person_id: int) -> list[HistoricalEntry
 
 def browse_profiles(
     conn: sqlite3.Connection, query: str, offset: int, limit: int
-) -> list[HistoricalEntry]:
-    """分页查找人物画像和维护覆盖，包含待解析的来源。"""
-    rows = conn.execute(
-        """SELECT history.* FROM people_history history
+) -> tuple[list[HistoricalEntry], int]:
+    """分页查找人物画像和维护覆盖及其筛选总数，包含待解析的来源。"""
+    conn.execute("BEGIN")
+    filtered = """FROM people_history history
            LEFT JOIN people person ON person.id = history.person_id
            WHERE history.kind IN ('person_profile_snapshots', 'person_profile_overrides',
                                   'person_profile_alias_overrides')
              AND (? = '' OR instr(lower(history.record), lower(?)) > 0
-                         OR instr(lower(person.name), lower(?)) > 0)
-           ORDER BY history.id DESC LIMIT ? OFFSET ?""",
-        (query, query, query, limit, offset),
+                         OR instr(lower(person.name), lower(?)) > 0)"""
+    params = (query, query, query)
+    total = conn.execute(f"SELECT count(*) {filtered}", params).fetchone()[0]
+    rows = conn.execute(
+        f"SELECT history.* {filtered} ORDER BY history.id DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
     )
-    return [_entry(row) for row in rows]
+    return [_entry(row) for row in rows], total
+
+
+def browse_profile_resources(
+    conn: sqlite3.Connection, query: str, offset: int, limit: int
+) -> tuple[list[dict[str, object]], int]:
+    """浏览人物档案索引及画像原件，区分未关联画像和没有画像正文的人物。"""
+    conn.execute("BEGIN")
+    catalog = """
+        WITH entries AS (
+            SELECT 'person' AS entry_type, person.id, person.name,
+                   person.id AS person_id, NULL AS other_person_id, NULL AS pending_reason,
+                   person.first_seen, NULL AS record,
+                   unixepoch(person.first_seen, 'subsec') AS happened
+            FROM people person
+            UNION ALL
+            SELECT 'profile', history.id, person.name, history.person_id, history.other_person_id,
+                   history.pending_reason, NULL, history.record,
+                   CASE WHEN json_type(history.record, '$.occurred_at') IN ('real', 'integer')
+                        THEN json_extract(history.record, '$.occurred_at') END
+            FROM people_history history LEFT JOIN people person ON person.id = history.person_id
+            WHERE history.kind IN ('person_profile_snapshots', 'person_profile_overrides',
+                                   'person_profile_alias_overrides')
+        ), matching AS (
+            SELECT * FROM entries
+            WHERE :query = '' OR instr(lower(name), lower(:query)) > 0
+                OR instr(lower(record), lower(:query)) > 0 OR CAST(person_id AS TEXT) = :query
+        )
+    """
+    params = {"query": query, "limit": limit, "offset": offset}
+    total = conn.execute(catalog + "SELECT count(*) FROM matching", params).fetchone()[0]
+    rows = conn.execute(
+        catalog + "SELECT * FROM matching ORDER BY happened DESC NULLS LAST, entry_type, id DESC"
+        " LIMIT :limit OFFSET :offset",
+        params,
+    )
+    items = [
+        {
+            "entry_type": "person",
+            "person_id": row["person_id"],
+            "name": row["name"],
+            "first_seen": row["first_seen"],
+        }
+        if row["entry_type"] == "person"
+        else {"entry_type": "profile", "name": row["name"], **asdict(_entry(row))}
+        for row in rows
+    ]
+    return items, total
 
 
 def _snapshot_is_current(record: HistoricalRecord, now: float) -> bool:
