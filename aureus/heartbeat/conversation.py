@@ -38,6 +38,7 @@ from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
+from aureus.heartbeat.inbox_attention import InboxSelection
 from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
@@ -154,8 +155,8 @@ class _ReplyJob:
     working_context: str = ""
     people_history: tuple[HistoricalEntry, ...] = ()
     inbox_attention: bool = False
-    require_inbox_plan: bool = False
     media_sources: tuple[Perception, ...] = ()
+    planner_run: "_PlannerRun | None" = None
 
 
 @dataclass(frozen=True)
@@ -182,8 +183,6 @@ class _ThoughtOutcome:
     judge: _JudgeAttempt | None = None
     # 这次回复用的激素影响；收结果的那一拍用它记回击次数和不回次数。
     effects: HormoneEffects | None = None
-    # 规划器想不回，但这场冲突里已经不回过一次，代码要求这次必须回（D69 第 3 条）。
-    forced_reply: bool = False
     # 主动联系独立解析，不能拿普通回复的兜底来替它决定开口（D76）。
     initiative_plan: InitiativePlan | None = None
     recall_keywords: tuple[str, ...] = ()
@@ -214,6 +213,7 @@ class _Thought:
         | asyncio.Task[PersonaReviewOutcome]
         | asyncio.Task[None]
         | asyncio.Task[ConsolidationOutcome]
+        | asyncio.Task[InboxSelection]
         | asyncio.Task[SummaryOutcome]
     )
     replying_to: Sequence[_Heard]
@@ -221,6 +221,15 @@ class _Thought:
     # 非空表示主动想法；仍与回复共用唯一任务槽（D34、D76）。
     initiative: _InitiativeJob | None = None
     exploration: TimelineRecord | None = None
+    planner_run: "_PlannerRun | None" = None
+
+
+@dataclass
+class _PlannerRun:
+    """心跳可取消的首轮规划阶段。"""
+
+    is_planning: bool = False
+    restart_requested: bool = False
 
 
 def _reply_job(batch: Sequence[_Heard], conversation_job: Callable[..., _ReplyJob]) -> _ReplyJob:
@@ -345,11 +354,6 @@ class ConversationFlow:
         inbox_attention: bool = False,
     ) -> _ReplyJob:
         """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
-        require_inbox_plan = any(
-            record.metadata.get("inbox_browsed") is True for record in messages
-        )
-        if require_inbox_plan:
-            strategy = replace(strategy, plan_first=True)
         batch_ids = {record.id for record in messages}
         contact = target.trust is not TrustLevel.VERIFIED_USER
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
@@ -463,7 +467,6 @@ class ConversationFlow:
             working_context=self._working_context(target, history_ids),
             people_history=people_history,
             inbox_attention=inbox_attention,
-            require_inbox_plan=require_inbox_plan,
         )
         return self._apply_hormones(job, ())
 
@@ -536,6 +539,8 @@ class ConversationFlow:
             return _ThoughtOutcome(
                 notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
             )
+        if job.planner_run is not None and job.planner_run.restart_requested:
+            return _ThoughtOutcome(declined=True)
         if plan is None or not plan.should_reply:
             outcome = _ThoughtOutcome(plan=plan, declined=True)
         else:
@@ -681,12 +686,18 @@ class ConversationFlow:
             review_reason=review_reason,
         )
         if job.inbox_attention:
-            prompt += (
-                "\n\n如想在空闲时翻阅平台收件箱，可在 JSON 中加 read_inbox: true。"
+            inbox_note = (
+                "如想在空闲时翻阅平台收件箱，可在 JSON 中加 read_inbox: true。"
                 "如果经过这次交谈，你想将当前已认识的联系人设为特别关心，"
                 "可加 special_contact: true；"
                 "想取消可写 false。特别关心的人来信会叫醒你。此选择由你作出。"
             )
+            if any("inbox_message_id" in record.metadata for record in job.messages):
+                inbox_note += (
+                    "想留在本会话持续聊天，在 JSON 中加 stay_in_conversation: true；"
+                    "想退出请写 false。"
+                )
+            prompt = join_prompt([prompt, inbox_note])
         request = _organ_request(
             job,
             organ_id=organ_id,
@@ -694,6 +705,10 @@ class ConversationFlow:
             prompt=prompt,
             system_context=job.full_context,
         )
+        request = replace(request, stream=self._config.inbox_debounce_enabled)
+        run = job.planner_run if not review_reason else None
+        if run is not None:
+            run.is_planning = True
         try:
             response = await self._call(request)
         except CallRejectedError:
@@ -704,6 +719,9 @@ class ConversationFlow:
         except Exception:
             logger.exception("调用规划器 %s 时出错", organ_id)
             return None
+        finally:
+            if run is not None:
+                run.is_planning = False
         plan = parse_plan(response.suggestion)
         if plan is None:
             logger.warning("规划器的建议看不懂")

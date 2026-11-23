@@ -69,13 +69,15 @@ class HeartbeatConfig(BaseModel):
     recent_message_limit: int = Field(default=20, ge=1)
     # 回复用哪个器官；名字要和 models.toml 的 [organs.名字] 一致。
     reply_organ: str = Field(default="replyer", min_length=1)
-    # 规划器（路线图 1.6，D59）：正常档先由它决定回不回、说什么、多长，再交给回复器。
-    # 关掉后每次都合并成一次调用（D5：每个机制都能单独关）。
+    # 兼容原配置。各档位的回复流程都先请求规划器。
     planning_enabled: bool = True
     # D94：只关闭自主翻阅及规划器的特别关心调整，保留重要来信唤醒。
     inbox_attention_enabled: bool = True
     inbox_read_limit: int = Field(default=35, ge=1, le=200)
-    # 规划用哪个器官；planning_enabled 打开时，models.toml 里必须有它。
+    inbox_debounce_enabled: bool = False
+    inbox_debounce_seconds: float = Field(default=4.0, gt=0, le=60, allow_inf_nan=False)
+    inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
+    # 规划用哪个器官，models.toml 里必须有它。
     plan_organ: str = Field(default="planner", min_length=1)
     # 节省档、低电量（含透支保护）时带上最近多少条对话；都不会超过 recent_message_limit。
     saving_message_limit: int = Field(default=10, ge=1)

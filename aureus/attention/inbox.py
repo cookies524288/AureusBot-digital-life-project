@@ -62,27 +62,29 @@ class Inbox[T]:
         """到得最早的一件（不管优先级），没有时是 None。疲劳偏高时算「已经等了多久」用它。"""
         return self._entries[0].item if self._entries else None
 
-    def _next_batch(self) -> list[_Entry[T]]:
+    def _next_batch(self, conversation: Hashable | None = None) -> list[_Entry[T]]:
         """下一个要处理的对话里的全部消息：先选出优先级最高、最早到的那一件，再加上同一对话的。"""
+        if conversation is not None:
+            return [entry for entry in self._entries if entry.conversation == conversation]
         first = self._first()
         if first is None:
             return []
         return [entry for entry in self._entries if entry.conversation == first.conversation]
 
-    def peek_batch(self) -> list[T]:
+    def peek_batch(self, conversation: Hashable | None = None) -> list[T]:
         """看一眼下一批要处理的消息（同一个对话里的全部，按到达先后），不取出。
 
         先看再取：组装回复材料时出了错，消息还留在队里（D41）。
         """
-        return [entry.item for entry in self._next_batch()]
+        return [entry.item for entry in self._next_batch(conversation)]
 
-    def take_next(self) -> list[T]:
+    def take_next(self, conversation: Hashable | None = None) -> list[T]:
         """取出下一个要处理的对话里的全部消息，按到达先后。
 
         先选出优先级最高、最早到的那一件，再把同一个对话里的其他消息一起取出，
         这样同一个人的几句话合成一次回复；别的对话的消息留在队里。
         """
-        taken = self._next_batch()
+        taken = self._next_batch(conversation)
         if not taken:
             return []
         conversation = taken[0].conversation

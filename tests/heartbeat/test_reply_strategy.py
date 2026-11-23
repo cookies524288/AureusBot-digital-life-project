@@ -20,17 +20,16 @@ def test_normal_tier_plans_first_with_the_preferred_model(tier: EnergyTier | Non
     assert strategy.length_limit is None
 
 
-def test_planning_can_be_switched_off() -> None:
+def test_legacy_planning_switch_keeps_planning() -> None:
     strategy = choose_strategy(EnergyTier.NORMAL, HeartbeatConfig(planning_enabled=False))
-    assert not strategy.plan_first
-    # 关掉规划只影响调用次数，模型和上下文长度仍按档位。
+    assert strategy.plan_first
     assert strategy.model_preference is ModelPreference.PREFERRED
 
 
-def test_saving_tier_merges_calls_and_shortens_everything() -> None:
+def test_saving_tier_plans_and_shortens_the_reply() -> None:
     config = HeartbeatConfig()
     strategy = choose_strategy(EnergyTier.SAVING, config)
-    assert not strategy.plan_first
+    assert strategy.plan_first
     assert strategy.model_preference is ModelPreference.CHEAPER
     assert strategy.message_limit == config.saving_message_limit
     assert strategy.length_limit is ReplyLength.MEDIUM
@@ -40,7 +39,7 @@ def test_saving_tier_merges_calls_and_shortens_everything() -> None:
 def test_low_tiers_use_the_cheapest_model_and_the_shortest_reply(tier: EnergyTier) -> None:
     config = HeartbeatConfig()
     strategy = choose_strategy(tier, config)
-    assert not strategy.plan_first
+    assert strategy.plan_first
     assert strategy.model_preference is ModelPreference.CHEAPEST
     assert strategy.message_limit == config.low_message_limit
     assert strategy.length_limit is ReplyLength.SHORT
@@ -68,7 +67,7 @@ def test_description_states_what_is_actually_done() -> None:
     assert "更便宜的才会换" not in normal
 
     saving = choose_strategy(EnergyTier.SAVING, HeartbeatConfig()).describe()
-    assert "合并成一次调用" in saving
+    assert "先想好要不要回" in saving
     assert "便宜一档" in saving
     assert "最近 10 条" in saving
     assert "三五句话" in saving
@@ -83,7 +82,7 @@ def test_metadata_is_plain_json() -> None:
     metadata = choose_strategy(EnergyTier.SAVING, HeartbeatConfig()).to_metadata()
     assert metadata == {
         "energy_tier": "节省",
-        "plan_first": False,
+        "plan_first": True,
         "model_preference": "便宜一档",
         "message_limit": 10,
         "length_limit": "中",

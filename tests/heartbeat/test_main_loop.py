@@ -35,7 +35,7 @@ from aureus.heartbeat import (
 )
 from aureus.heartbeat.main_loop import SHUTDOWN_INTERRUPTED, TASK_IDLE, TASK_REPLYING
 from aureus.identity import Identity
-from aureus.organs import CallAttempt, OrganBus, OrganCallError, OrganRequest, OrganResponse
+from aureus.organs import CallAttempt, FakePlanner, OrganBus, OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import (
     EVENT_CALL_REJECTED,
     BudgetExceededError,
@@ -100,6 +100,8 @@ class ScriptedOrgans:
             except asyncio.CancelledError:
                 self.cancelled = True
                 raise
+        if request.context.get("task") == "plan":
+            return OrganResponse(request.organ_id, '{"reply":true,"intent":"回应"}')
         outcome = self.outcomes.pop(0) if self.outcomes else "嗯。"
         if isinstance(outcome, BaseException):
             raise outcome
@@ -142,8 +144,6 @@ class Factory:
         self, organs: ScriptedOrgans | None = None, clock: Any = None, **config: Any
     ) -> Harness:
         clock = clock or self.clock
-        # 这里的测试都按「一次回复一次调用」数请求；规划的行为在 test_planning_flow.py 里测。
-        config.setdefault("planning_enabled", False)
         config.setdefault("split_reply_enabled", False)
         timeline = TimelineDatabase(self.database_file, clock=clock)
         timeline.open()
@@ -260,7 +260,7 @@ async def test_reply_organ_comes_from_config(factory: Factory) -> None:
 
     await harness.exchange("你好")
 
-    assert harness.organs.requests[0].organ_id == "chatter"
+    assert [request.organ_id for request in harness.organs.requests] == ["planner", "chatter"]
 
 
 async def test_history_is_limited_and_excludes_other_visibility(factory: Factory) -> None:
@@ -299,8 +299,13 @@ async def test_messages_arriving_while_thinking_are_answered_together(harness: H
     await harness.heartbeat.wait_for_thought()
     harness.heartbeat.beat()
 
-    assert len(harness.organs.requests) == 2
-    history, second = harness.organs.requests[1].prompt.split("刚收到、还没回复的消息：")
+    assert [request.organ_id for request in harness.organs.requests] == [
+        "planner",
+        "replyer",
+        "planner",
+        "replyer",
+    ]
+    history, second = harness.organs.requests[-1].prompt.split("刚收到、还没回复的消息：")
     assert "想问你个事" in second
     assert "算了，明天说" in second
     # 它对“在吗”的回复，序号比后两句大，也要出现在之前的对话里。
@@ -400,6 +405,7 @@ async def test_with_the_real_gateway_a_budget_rejection_reaches_the_user(
     try:
         bus = OrganBus()
         bus.register(TokenSpendingReplyer())
+        bus.register(FakePlanner("planner"))
         timeline = TimelineDatabase(database, clock=factory.clock)
         timeline.open()
         factory.timelines.append(timeline)
@@ -752,9 +758,9 @@ async def test_replies_resume_after_the_halt_is_lifted(harness: Harness) -> None
     harness.heartbeat.resume()
     await harness.exchange("现在呢")
 
-    assert len(harness.organs.requests) == 1
+    assert [request.organ_id for request in harness.organs.requests] == ["planner", "replyer"]
     # 急停时的那句不补回复：请求里只有解除后才说的这一句。
-    assert "在吗" not in harness.organs.requests[0].prompt.split("刚收到、还没回复的消息：")[1]
+    assert "在吗" not in harness.organs.requests[-1].prompt.split("刚收到、还没回复的消息：")[1]
     assert [m.content for m in harness.sent if m.kind is MessageKind.REPLY] == ["我回来了。"]
 
 

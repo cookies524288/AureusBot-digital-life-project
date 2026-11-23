@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -50,6 +51,7 @@ class OrganRequest:
     embedding_inputs: tuple[str | bytes, ...] = ()
     media_bytes: bytes | None = field(default=None, repr=False)
     media_type: str | None = None
+    stream: bool = False
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,14 @@ class OrganCallError(Exception):
     def wasted_cost(self) -> float | None:
         """失败的请求里已经产生的费用（元）；None 表示算不出来，不是 0（D37）。"""
         return sum_costs(attempt.cost for attempt in self.attempts)
+
+
+class OrganCallCancelled(asyncio.CancelledError):
+    """流式请求被取消，携带安全网关仍需记账的尝试。"""
+
+    def __init__(self, attempts: Sequence[CallAttempt]) -> None:
+        super().__init__()
+        self.attempts = tuple(attempts)
 
 
 class Organ(Protocol):

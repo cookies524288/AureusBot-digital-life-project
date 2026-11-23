@@ -1,9 +1,9 @@
 """按精力档位决定这次怎么回复（04 号文档第 4 节的档位表，路线图 1.6，D59）。
 
-行为由代码定，不靠大模型自觉：档位越低，调用越少、模型越便宜、带的对话越短、回复越短。
+各档先由规划器决定是否回复。档位越低，模型越便宜、带的对话越短、回复越短。
 - 正常（和「不限」）：先由规划器决定回不回、说什么、多长，再由回复器写成话；用首选模型；
-- 节省：规划和回复合并成一次调用，从便宜一档的模型开始，对话和回复都变短；
-- 低电量、透支保护：合并成一次调用，从最便宜的模型开始，只带最近几条对话，回复一两句。
+- 节省：从便宜一档的模型开始，对话和回复都变短；
+- 低电量、透支保护：从最便宜的模型开始，只带最近几条对话，回复一两句。
 这里只做选择，不读写任何状态。
 """
 
@@ -116,7 +116,7 @@ def choose_strategy(
     if tier is None or tier in (EnergyTier.NORMAL, EnergyTier.UNLIMITED):
         return ReplyStrategy(
             tier=tier,
-            plan_first=config.planning_enabled,
+            plan_first=True,
             model_preference=ModelPreference.PREFERRED,
             message_limit=full,
             length_limit=None,
@@ -124,7 +124,7 @@ def choose_strategy(
     if tier is EnergyTier.SAVING:
         return ReplyStrategy(
             tier=tier,
-            plan_first=False,
+            plan_first=True,
             model_preference=ModelPreference.CHEAPER,
             message_limit=min(config.saving_message_limit, full),
             length_limit=ReplyLength.MEDIUM,
@@ -132,7 +132,7 @@ def choose_strategy(
     # 低电量和透支保护走同一条路：透支时网关只放行回应用户的调用，这里本来就是。
     return ReplyStrategy(
         tier=tier,
-        plan_first=False,
+        plan_first=True,
         model_preference=ModelPreference.CHEAPEST,
         message_limit=min(config.low_message_limit, full),
         length_limit=ReplyLength.SHORT,

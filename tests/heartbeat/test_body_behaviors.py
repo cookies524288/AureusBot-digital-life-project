@@ -53,7 +53,10 @@ class RecordingOrgans:
         self.requests.append(request)
         if self.gate is not None:
             await self.gate.wait()
-        return OrganResponse(organ_id=request.organ_id, suggestion="嗯。")
+        suggestion = (
+            '{"reply":true,"intent":"回应"}' if request.context.get("task") == "plan" else "嗯。"
+        )
+        return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
 
 
 @dataclass
@@ -176,9 +179,10 @@ async def test_high_fatigue_holds_the_reply_then_answers_all_messages_together(
     rig.heartbeat.beat()
     await rig.settle()
 
-    [request] = rig.organs.requests  # 两条攒成一次调用
-    assert "在吗" in request.prompt
-    assert "我想问个事" in request.prompt
+    assert [request.organ_id for request in rig.organs.requests] == ["planner", "replyer"]
+    for request in rig.organs.requests:
+        assert "在吗" in request.prompt
+        assert "我想问个事" in request.prompt
     assert len(rig.records(EVENT_MESSAGE)) == 3  # 两条用户消息加一条回复
 
 
@@ -187,7 +191,7 @@ async def test_normal_fatigue_replies_at_once(made: list[Rig], tmp_path: Path) -
     rig.record_calls(5)
     rig.say("在吗")
     await rig.beat()
-    assert len(rig.organs.requests) == 1
+    assert [request.organ_id for request in rig.organs.requests] == ["planner", "replyer"]
 
 
 async def test_disabled_fatigue_replies_at_once_even_when_busy(
@@ -197,7 +201,7 @@ async def test_disabled_fatigue_replies_at_once_even_when_busy(
     rig.record_calls(200)
     rig.say("在吗")
     await rig.beat()
-    assert len(rig.organs.requests) == 1
+    assert [request.organ_id for request in rig.organs.requests] == ["planner", "replyer"]
 
 
 # ---------- 压力：自检 ----------

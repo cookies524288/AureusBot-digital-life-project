@@ -53,7 +53,14 @@ from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
 from aureus.memory import DiaryBook, LanguageStore, MemoryIndex
 from aureus.mood import Mood
-from aureus.organs import FakeReplyer, KeyResolver, OrganBus, PromptStore, load_models_config
+from aureus.organs import (
+    FakePlanner,
+    FakeReplyer,
+    KeyResolver,
+    OrganBus,
+    PromptStore,
+    load_models_config,
+)
 from aureus.organs.api_keys import warn_about_plaintext_keys
 from aureus.people import AccountLink, AffinityBook, PeopleDirectory, PeopleError
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
@@ -115,10 +122,13 @@ def _build_organ_bus(
         resolver,
         fake_organs=fake_organs,
         fake_reply_organ=heartbeat.reply_organ,
+        fake_plan_organ=heartbeat.plan_organ,
         prompts=PromptStore(paths.home / "prompts.toml", registered_templates()),
     )
     if fake_organs:
-        bus.register(FakeReplyer(organ_id=heartbeat.reply_organ))
+        if heartbeat.plan_organ != heartbeat.reply_organ:
+            bus.register(FakeReplyer(organ_id=heartbeat.reply_organ))
+        bus.register(FakePlanner(organ_id=heartbeat.plan_organ))
         models.available_organs = frozenset(bus.list_organs())
         return models
     models_config = load_models_config(paths)
@@ -129,11 +139,10 @@ def _build_organ_bus(
             f"心跳要用的回复器官 {heartbeat.reply_organ} 没有在 models.toml 里配置"
             f"（缺少 [organs.{heartbeat.reply_organ}]）。"
         )
-    if heartbeat.planning_enabled and not bus.is_registered(heartbeat.plan_organ):
+    if not bus.is_registered(heartbeat.plan_organ):
         raise ConfigError(
             f"心跳要用的规划器官 {heartbeat.plan_organ} 没有在 models.toml 里配置"
             f"（缺少 [organs.{heartbeat.plan_organ}]）。"
-            "不想用规划器，可以在 aureus.toml 的 [heartbeat] 里写 planning_enabled = false。"
         )
     return models
 
@@ -223,9 +232,6 @@ def open_core(
                 "配置里的 [heartbeat] advance_biomodel 已不起作用（旧的生物模型在 D69 删除），"
                 "请从配置里删掉它"
             )
-        if fake_organs and heartbeat_config.planning_enabled:
-            # 假器官只有回复器：试运行和测试时不规划，每次一次调用。
-            heartbeat_config = heartbeat_config.model_copy(update={"planning_enabled": False})
         models = _build_organ_bus(paths, heartbeat_config, resolver, fake_organs=fake_organs)
         bus = models.bus
         # 网关和心跳共用同一个权限检查器，两边看到的急停状态一致（D54）。
@@ -300,9 +306,9 @@ def open_core(
                 logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         inbox_store = InboxStore(paths.database_file, the_clock) if runtime.qq.enabled else None
         heartbeat = Heartbeat(
-            working_memory=WorkingMemory(timeline, runtime.heartbeat),
             clock=the_clock,
             timeline=timeline,
+            working_memory=WorkingMemory(timeline, runtime.heartbeat),
             organs=gateway,
             identity=identity,
             config=heartbeat_config,

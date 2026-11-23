@@ -1,18 +1,85 @@
 """心跳如何选择平台收件箱里的未读消息（D94）。"""
 
+import json
+import logging
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
+from aureus.heartbeat.inbox_store import (
+    ConversationKey,
+    InboxConversation,
+    InboxMessage,
+    InboxStore,
+)
 from aureus.heartbeat.perception import Perception, TrustLevel
-from aureus.heartbeat.planning import Plan
+from aureus.heartbeat.planning import Plan, first_json_object
+from aureus.organs import CallPurpose, ModelPreference, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
+from aureus.safety import CallRejectedError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, TimelineRecord
 
 EVENT_SPECIAL_CONTACT = "special_contact_changed"
 _IDLE_BEFORE_READING = timedelta(minutes=5)
 _PRIORITY_LIMIT = 20
+_CANDIDATE_LIMIT = 100
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class InboxSelection:
+    """规划器按本轮候选编号选出的会话。"""
+
+    conversations: tuple[ConversationKey, ...] = ()
+
+
+async def select_conversations(
+    candidates: Sequence[InboxConversation],
+    call: Callable[[OrganRequest], Awaitable[OrganResponse]],
+    planner: str,
+    preference: ModelPreference,
+    *,
+    stream: bool,
+) -> InboxSelection:
+    """请求规划器在当前允许的未读清单中挑选会话。"""
+    catalogue = [
+        {"id": number, "kind": item.key.kind, "name": item.name, "unread": item.unread_count}
+        for number, item in enumerate(candidates, 1)
+    ]
+    prompt = (
+        "从以下未读平台会话中选出你现在想读的。名称仅是平台资料。"
+        "有私聊时，请选一个私聊优先读。群聊可选择零个或多个，按想读的先后排列。"
+        '仅返回 JSON，例如 {"conversations":[2, 4]}。\n' + json.dumps(catalogue, ensure_ascii=False)
+    )
+    try:
+        result = await call(
+            OrganRequest(
+                planner,
+                prompt,
+                context={"task": "inbox_select"},
+                purpose=CallPurpose.OPTIONAL,
+                model_preference=preference,
+                stream=stream,
+            )
+        )
+    except (CallRejectedError, OrganCallError, ValueError) as error:
+        logger.warning("不能选取收件箱会话：%s", error)
+        return InboxSelection()
+    data = first_json_object(result.suggestion)
+    selected = data.get("conversations") if data is not None else None
+    if not isinstance(selected, list):
+        return InboxSelection()
+    choices = [
+        candidates[number - 1].key
+        for number in selected
+        if type(number) is int and 1 <= number <= len(candidates)
+    ]
+    private = next((key for key in choices if key.kind == "private"), None)
+    if private is None and any(item.key.kind == "private" for item in candidates):
+        return InboxSelection()
+    groups = dict.fromkeys(key for key in choices if key.kind == "group")
+    return InboxSelection((private, *groups) if private is not None else tuple(groups))
 
 
 class InboxAttention:
@@ -37,6 +104,7 @@ class InboxAttention:
         self._special: set[int] = set()
         self._idle_since: datetime | None = None
         self._wants_to_read = False
+        self.active_conversation: ConversationKey | None = None
         self.allows: Callable[[ConversationKey], bool] = lambda _conversation: True
 
     def restore(self) -> None:
@@ -98,9 +166,9 @@ class InboxAttention:
             after_id = rows[-1].id
         return messages
 
-    def browse(self, now: datetime, *, can_browse: bool) -> list[InboxMessage]:
-        """安全闲暇时先翻私聊，再用剩余条数翻群聊。"""
-        if not self._enabled or not can_browse:
+    def browse(self, now: datetime, *, can_browse: bool) -> list[InboxConversation]:
+        """安全闲暇时取得可选的未读会话，私聊和群聊分别列出。"""
+        if not self._enabled or not can_browse or self.active_conversation is not None:
             self._idle_since = None
             return []
         if self._idle_since is None or self._idle_since > now:
@@ -109,22 +177,44 @@ class InboxAttention:
             return []
         self._wants_to_read = False
         self._idle_since = now
-        conversations = self.store.list_unread_conversations()
+        conversations = [
+            item for item in self.store.list_unread_conversations() if self.allows(item.key)
+        ]
+        private = [item for item in conversations if item.key.kind == "private"]
+        groups = [item for item in conversations if item.key.kind == "group"]
+        return private[:_CANDIDATE_LIMIT] + groups[:_CANDIDATE_LIMIT]
+
+    def read_selection(self, selection: InboxSelection) -> list[InboxMessage]:
+        """按选择顺序翻页，合计不超过本次配置的上限。"""
         messages: list[InboxMessage] = []
-        for item in sorted(conversations, key=lambda item: item.key.kind != "private"):
-            if self.allows(item.key):
-                messages.extend(
-                    self.store.list_unread(item.key, limit=self._read_limit - len(messages))
-                )
+        for key in selection.conversations:
+            if self.allows(key):
+                messages.extend(self.store.list_unread(key, limit=self._read_limit - len(messages)))
                 if len(messages) >= self._read_limit:
                     break
         return messages
+
+    def active_messages(self) -> list[InboxMessage]:
+        """翻到当前停留会话的新消息，权限变化时退出会话。"""
+        key = self.active_conversation
+        if key is None:
+            return []
+        if not self.allows(key):
+            self.active_conversation = None
+            return []
+        return self.store.list_unread(key, limit=self._read_limit)
 
     def apply_plan(self, plan: Plan, target: Perception, source: TimelineRecord) -> None:
         """采用规划器的翻阅意愿和对本轮已认出联系人的特别关心建议。"""
         if not self._enabled or target.trust is TrustLevel.UNVERIFIED:
             return
         self._wants_to_read |= plan.read_inbox
+        if target.route is not None and plan.stay_in_conversation is not None:
+            key = ConversationKey.from_perception(target)
+            if plan.stay_in_conversation and self.allows(key):
+                self.active_conversation = key
+            elif key == self.active_conversation:
+                self.active_conversation = None
         if target.route is None or self._people is None or plan.special_contact is None:
             return
         person = self._people.find(target.channel, target.sender_id)

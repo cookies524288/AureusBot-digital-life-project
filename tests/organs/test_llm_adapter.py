@@ -1,5 +1,6 @@
 """LLMOrgan（真实器官）的测试：全部用假的调用函数，不联网、不花钱。"""
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ import pytest
 from aureus.common.config import ConfigError
 from aureus.organs import llm_adapter
 from aureus.organs.api_keys import KeyResolver
-from aureus.organs.interface import CallAttempt, OrganCallError, OrganRequest
+from aureus.organs.interface import CallAttempt, OrganCallCancelled, OrganCallError, OrganRequest
 from aureus.organs.llm_adapter import (
     ASSUMED_COMPLETION_TOKENS,
     EMPTY_REPLY_REASON,
@@ -200,6 +201,50 @@ def make_organ(completion: FakeCompletion, keys: KeyResolver, **config_kwargs: A
 
 def ask() -> OrganRequest:
     return OrganRequest(organ_id="replyer", prompt="你好")
+
+
+@pytest.mark.asyncio
+async def test_organ_assembles_stream_chunks_and_uses_final_usage(keys: KeyResolver) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        for fragment in ('{"reply":', "false}"):
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=fragment))]
+            )
+        yield SimpleNamespace(choices=[], usage=make_response(None, 7, 1).usage)
+
+    completion = FakeCompletion(chunks())
+    request = OrganRequest("replyer", "规划材料", stream=True)
+    response = await make_organ(completion, keys).process(request)
+    assert completion.calls[0]["stream"] is True
+    assert response.suggestion == '{"reply":false}'
+    assert response.attempts[0].budget_tokens == 8
+    assert not response.attempts[0].estimated
+
+
+@pytest.mark.asyncio
+async def test_cancelling_organ_stream_closes_it_and_accounts_for_attempt(
+    keys: KeyResolver,
+) -> None:
+    started = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def chunks() -> AsyncIterator[Any]:
+        try:
+            yield SimpleNamespace(choices=[])
+            started.set()
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    organ = make_organ(FakeCompletion(chunks()), keys)
+    task = asyncio.create_task(organ.process(OrganRequest("replyer", "规划材料", stream=True)))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(OrganCallCancelled) as cancellation:
+        await task
+    assert closed.is_set()
+    [attempt] = cancellation.value.attempts
+    assert attempt.estimated and attempt.budget_tokens > 0
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,6 @@
 """主动联系的完整流程：真实原因、可选调用、退避、反馈和重启恢复（D76）。"""
 
 import asyncio
-import logging
 import sqlite3
 from collections.abc import AsyncIterator
 from datetime import UTC, timedelta
@@ -581,17 +580,11 @@ async def test_shutdown_cancels_initiative_without_a_notice(env: Env) -> None:
     assert not record.metadata["sent"] and not rig.sent
 
 
-async def test_missing_planning_disables_initiative_with_one_warning(
-    env: Env, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level(logging.WARNING):
-        rig = env.build(heartbeat=HeartbeatConfig(planning_enabled=False))
+async def test_legacy_planning_switch_keeps_initiative_available(env: Env) -> None:
+    rig = env.build(heartbeat=HeartbeatConfig(planning_enabled=False))
     await rig.exchange("你好")
-    env.clock.advance(timedelta(hours=24))
-    rig.heartbeat.beat()
-    rig.heartbeat.beat()
-    assert not rig.records(EVENT_INITIATIVE_CONSIDERED)
-    assert sum("主动联系要用规划器" in record.message for record in caplog.records) == 1
+    await consider(env, rig)
+    assert len(rig.records(EVENT_INITIATIVE_CONSIDERED)) == 1
 
 
 async def test_agenda_read_failure_does_not_stop_the_heartbeat(

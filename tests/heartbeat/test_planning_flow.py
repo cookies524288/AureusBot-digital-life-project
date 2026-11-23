@@ -1,6 +1,6 @@
 """规划流程的测试（路线图 1.6，D59）。
 
-正常档先规划再回复，低档位合并成一次，规划器出问题不影响回复。
+各档位先规划，只有明确建议回复才调用回复器。
 """
 
 import re
@@ -342,19 +342,15 @@ async def test_group_prompt_keeps_speaker_persona_and_silence(
         RuntimeError("bug"),
     ],
 )
-async def test_a_broken_planner_does_not_stop_the_reply(
+async def test_a_broken_planner_keeps_silent(
     made: list[Rig], tmp_path: Path, planner_outcome: str | BaseException
 ) -> None:
     rig = make_rig(made, tmp_path, planner=[planner_outcome])
     await rig.exchange("在吗")
 
-    assert rig.organ_ids() == ["planner", "replyer"]
-    replyer = rig.organs.requests[1]
-    # 没有规划时回复器自己决定怎么回应，所以和合并的一次调用一样带着行为风格。
-    assert "【行为风格】" in replyer.system_context
-    assert "你已经想好" not in replyer.prompt
-    assert [m.kind for m in rig.sent] == [MessageKind.REPLY]
-    assert "plan" not in rig.my_messages()[0].metadata
+    assert rig.organ_ids() == ["planner"]
+    assert rig.sent == []
+    assert rig.my_messages() == []
 
 
 async def test_a_planner_that_declines_leaves_a_private_record_and_one_line_of_notice(
@@ -386,21 +382,24 @@ async def test_a_gateway_rejection_of_the_planner_stops_before_the_replyer(
     assert "达到上限" in notice.content
 
 
-async def test_saving_tier_merges_into_one_cheaper_shorter_call(
+async def test_saving_tier_plans_and_uses_a_cheaper_shorter_reply(
     made: list[Rig], tmp_path: Path
 ) -> None:
-    rig = make_rig(made, tmp_path, used_today=70_000)  # 今日剩 30%
+    rig = make_rig(
+        made, tmp_path, used_today=70_000, planner=['{"reply":true,"intent":"问好","length":"长"}']
+    )
     await rig.exchange("在吗")
 
-    assert rig.organ_ids() == ["replyer"]
-    [request] = rig.organs.requests
+    assert rig.organ_ids() == ["planner", "replyer"]
+    planner, request = rig.organs.requests
+    assert planner.model_preference is ModelPreference.CHEAPER
     assert request.model_preference is ModelPreference.CHEAPER
     assert "长度：三五句话。" in request.prompt
-    assert "【行为风格】" in request.system_context
+    assert "【行为风格】" in planner.system_context
     assert "精力 30%（节省档）" in request.system_context
     [reply] = rig.my_messages()
-    assert reply.metadata["strategy"]["plan_first"] is False
-    assert "plan" not in reply.metadata
+    assert reply.metadata["strategy"]["plan_first"] is True
+    assert reply.metadata["plan"]["reply"] is True
 
 
 async def test_low_tier_uses_the_cheapest_model_and_the_shortest_reply(
@@ -409,18 +408,19 @@ async def test_low_tier_uses_the_cheapest_model_and_the_shortest_reply(
     rig = make_rig(made, tmp_path, used_today=90_000)  # 今日剩 10%
     await rig.exchange("在吗")
 
-    assert rig.organ_ids() == ["replyer"]
-    [request] = rig.organs.requests
+    assert rig.organ_ids() == ["planner", "replyer"]
+    planner, request = rig.organs.requests
+    assert planner.model_preference is ModelPreference.CHEAPEST
     assert request.model_preference is ModelPreference.CHEAPEST
     assert "长度：一两句话。" in request.prompt
     assert rig.my_messages()[0].metadata["strategy"]["message_limit"] == 5
 
 
-async def test_switching_planning_off_gives_one_call_at_normal_energy(
+async def test_legacy_switch_cannot_bypass_planning(
     made: list[Rig], tmp_path: Path
 ) -> None:
     rig = make_rig(made, tmp_path, planning_enabled=False)
     await rig.exchange("在吗")
 
-    assert rig.organ_ids() == ["replyer"]
+    assert rig.organ_ids() == ["planner", "replyer"]
     assert rig.organs.requests[0].model_preference is ModelPreference.PREFERRED

@@ -20,9 +20,9 @@ from aureus.core import runtime
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import main_loop
 from aureus.heartbeat.inbox_attention import InboxAttention
-from aureus.heartbeat.inbox_store import InboxMessage
+from aureus.heartbeat.inbox_store import InboxConversation
 from aureus.memory import LanguageKind, LanguageStore
-from aureus.organs import KeyResolver, OrganBus, OrganRequest, OrganResponse
+from aureus.organs import FakePlanner, KeyResolver, OrganBus, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
 from aureus.web import PasswordStore
 from tests.test_language_runtime import LanguageOrgan
@@ -146,7 +146,7 @@ def drive_inbox_clock() -> None:
     clock = ManualClock(datetime(2026, 11, 23, 12, tzinfo=UTC))
 
     class TimedInboxAttention(InboxAttention):
-        def browse(self, now: datetime, *, can_browse: bool) -> list[InboxMessage]:
+        def browse(self, now: datetime, *, can_browse: bool) -> list[InboxConversation]:
             clock.advance(timedelta(minutes=5))
             return super().browse(clock.now(), can_browse=can_browse)
 
@@ -176,6 +176,8 @@ def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None
                 )
             if request.context["task"] == "language_learning" and "月兔冲线" not in request.prompt:
                 return OrganResponse(organ_id=self.organ_id, suggestion='{"proposals":[]}')
+            if request.context["task"] == "inbox_select":
+                return await FakePlanner(self.organ_id).process(request)
             response = await super().process(request)
             if browse_inbox and request.context["task"] == "plan":
                 plan = json.loads(response.suggestion)
@@ -190,7 +192,7 @@ def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None
         *,
         fake_organs: bool,
     ) -> ModelRuntime:
-        assert not fake_organs  # CLI 的 --fake 会把 Planner 路径关掉。
+        assert not fake_organs
         bus = OrganBus()
         for organ_id in ("planner", "replyer", "summarizer"):
             bus.register(RecordingOrgan(organ_id, []))

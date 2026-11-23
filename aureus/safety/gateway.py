@@ -17,6 +17,7 @@ from aureus.organs import (
     CallAttempt,
     CallPurpose,
     OrganBus,
+    OrganCallCancelled,
     OrganCallError,
     OrganRequest,
     OrganResponse,
@@ -136,6 +137,9 @@ class SafetyGateway:
 
         try:
             response = await invoke()
+        except OrganCallCancelled as cancelled:
+            self._record_usage(organ_id, cancelled.attempts)
+            raise
         except OrganCallError as failure:
             self._finish(organ_id, failure.attempts, succeeded=False, detail=str(failure))
             raise
@@ -213,6 +217,9 @@ class SafetyGateway:
         self._guard.report(organ_id, succeeded=succeeded)
         if not succeeded:
             self._note_to_timeline(EVENT_CALL_FAILED, detail, {"organ_id": organ_id})
+        self._record_usage(organ_id, attempts)
+
+    def _record_usage(self, organ_id: str, attempts: Sequence[CallAttempt]) -> None:
         try:
             self._ledger.record(organ_id, attempts)
         except Exception as error:

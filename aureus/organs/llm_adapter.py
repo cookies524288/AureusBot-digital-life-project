@@ -31,6 +31,7 @@ from aureus.organs.api_keys import KeyResolver
 from aureus.organs.interface import (
     CallAttempt,
     ModelPreference,
+    OrganCallCancelled,
     OrganCallError,
     OrganRequest,
     OrganResponse,
@@ -52,6 +53,21 @@ CompletionFunction = Callable[..., Awaitable[Any]]
 SleepFunction = Callable[[float], Awaitable[None]]
 # 估算输入 token 数的函数。默认是 count_prompt_tokens；测试时换成假的，结果固定。
 TokenCounter = Callable[[list[dict[str, str]]], int]
+
+
+async def _read_stream(stream: Any) -> tuple[str | None, TokenUsage]:
+    pieces: list[str] = []
+    usage = TokenUsage(known=False)
+    async with aclosing(stream):
+        async for chunk in stream:
+            if chunk.choices and isinstance(
+                content := getattr(chunk.choices[0].delta, "content", None), str
+            ):
+                pieces.append(content)
+            actual = extract_usage(chunk)
+            if actual.known:
+                usage = actual
+    return "".join(pieces).strip() or None, usage
 
 # 协议 → litellm 的模型前缀。openai/responses/ 触发 OpenAI Responses 协议；
 # 四种写法都用 litellm 的 get_llm_provider 离线核对过。
@@ -743,7 +759,13 @@ class LLMOrgan:
         attempts: list[CallAttempt] = []
         for route in order_routes(self._routes, request.model_preference):
             try:
-                text, attempt = await self._call(route, messages, attempts, media, media_type)
+                text, attempt = await self._call(
+                    route, messages, attempts, media, media_type, stream=request.stream
+                )
+            except asyncio.CancelledError:
+                if request.stream:
+                    raise OrganCallCancelled(attempts) from None
+                raise
             except _RouteFailureError as failure:
                 failures.append(f"{route.model.name}：{failure.reason}")
                 logger.warning(
@@ -811,6 +833,8 @@ class LLMOrgan:
         attempts: list[CallAttempt],
         media: bytes | None,
         media_type: str | None,
+        *,
+        stream: bool,
     ) -> tuple[str, CallAttempt]:
         """对一条路线发请求，临时性的失败按 max_retry 重试。
 
@@ -824,6 +848,7 @@ class LLMOrgan:
             attempts: 失败的请求记在这里；成功的那次由返回值带出。
             media: 已取得的图片或语音内容（如有）。
             media_type: 附件的媒体类型（如有）。
+            stream: 是否用服务商流式接口。
 
         Returns:
             回复文字和成功的那次请求。
@@ -860,6 +885,10 @@ class LLMOrgan:
             kwargs["max_tokens"] = route.max_tokens
         if route.reasoning_effort is not None and self.organ_id != "voice":
             kwargs["reasoning_effort"] = route.reasoning_effort
+        if stream:
+            kwargs["stream"] = True
+            if provider.protocol == "openai":
+                kwargs["stream_options"] = {"include_usage": True}
         requests = 1 + provider.max_retry
         for number in range(1, requests + 1):
             try:
@@ -894,6 +923,20 @@ class LLMOrgan:
             completion = self._completion
             assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
             response = await completion(**kwargs)
+            if kwargs.get("stream"):
+                text, usage = await _read_stream(response)
+            else:
+                usage = extract_usage(response)
+                if self.organ_id == "voice":
+                    value = getattr(response, "text", None)
+                    text = value.strip() if isinstance(value, str) and value.strip() else None
+                else:
+                    text = _read_text(response)
+        except asyncio.CancelledError:
+            if kwargs.get("stream"):
+                usage = self._estimate_usage(route, messages, 1, media_size)
+                attempts.append(self._attempt(route, usage, "新消息或运行控制中止流式请求"))
+            raise
         except Exception as error:
             reason = _failure_reason(error)
             if _rejected_before_processing(error):
@@ -907,14 +950,8 @@ class LLMOrgan:
             attempts.append(attempt)
             # from None：不带上原始异常，免得追踪信息里带出请求头里的密钥。
             raise _RouteFailureError(reason, retryable=_retryable(error)) from None
-        usage = extract_usage(response)
         if not usage.known:
             usage = self._estimate_usage(route, messages, 1, media_size)
-        if self.organ_id == "voice":
-            value = getattr(response, "text", None)
-            text = value.strip() if isinstance(value, str) and value.strip() else None
-        else:
-            text = _read_text(response)
         if text is None:
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
             # 思考上），这次请求照样要记账。重试只会再花一次钱，所以不重试。

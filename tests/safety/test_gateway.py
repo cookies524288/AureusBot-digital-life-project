@@ -20,6 +20,7 @@ from aureus.common import BudgetCalendar, ManualClock, SafetyConfig
 from aureus.organs import (
     CallAttempt,
     OrganBus,
+    OrganCallCancelled,
     OrganCallError,
     OrganRequest,
     OrganResponse,
@@ -142,6 +143,22 @@ def harness(tmp_path: Path) -> Iterator[Harness]:
     yield Harness(clock, OrganBus(), ledger, timeline, db_path, stop)
     ledger.close()
     timeline.close()
+
+
+async def test_interrupted_stream_records_usage_without_a_failure(harness: Harness) -> None:
+    class InterruptedOrgan:
+        organ_id = ORGAN
+
+        async def process(self, request: OrganRequest) -> OrganResponse:
+            assert request.stream
+            raise OrganCallCancelled((make_attempt(10, 12, estimated=True, succeeded=False),))
+
+    harness.bus.register(InterruptedOrgan())
+    request = OrganRequest(ORGAN, "规划材料", stream=True)
+    with pytest.raises(asyncio.CancelledError):
+        await harness.build().call(request)
+    assert harness.ledger.tokens_used_in_month(harness.clock.now()) == 22
+    assert harness.events(EVENT_CALL_FAILED) == []
 
 
 def drop_ledger_table(db_path: Path) -> None:

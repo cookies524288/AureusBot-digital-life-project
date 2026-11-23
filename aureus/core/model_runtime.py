@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from aureus.organs import (
+    FakePlanner,
     FakeReplyer,
     KeyResolver,
     LLMOrgan,
@@ -35,6 +36,7 @@ class ModelRuntime:
         *,
         fake_organs: bool,
         fake_reply_organ: str | None = None,
+        fake_plan_organ: str | None = None,
         prompts: PromptStore | None = None,
     ) -> None:
         self.bus = bus
@@ -43,6 +45,7 @@ class ModelRuntime:
         # 来源是启动参数 --fake；热重载不能把假器官切换成真实调用。
         self._fake_organs = fake_organs
         self._fake_reply_organ = fake_reply_organ if fake_organs else None
+        self._fake_plan_organ = fake_plan_organ if fake_organs else None
         # 来源是实际应用的模型路线，只影响可选总结任务是否可以启动。空模型就是关闭。
         self.available_organs: frozenset[str] = frozenset(bus.list_organs())
         self.on_reload: Callable[[frozenset[str]], None] | None = None
@@ -75,14 +78,23 @@ class ModelRuntime:
                 available.add(name)
             if name in ("vlm", "voice") and not supported:
                 continue
+            if name == self._fake_plan_organ:
+                organs.append(FakePlanner(organ_id=name))
+                continue
             organs.append(
                 FakeReplyer(organ_id=name)
                 if self._fake_organs
                 else LLMOrgan(name, routes, self._resolver, prompts=self.prompts)
             )
         # 启动时的假回复器来自心跳配置，models.toml 可以没有同名条目。
-        if self._fake_reply_organ is not None and self._fake_reply_organ not in config.organs:
+        if (
+            self._fake_reply_organ is not None
+            and self._fake_reply_organ not in config.organs
+            and self._fake_reply_organ != self._fake_plan_organ
+        ):
             organs.append(FakeReplyer(organ_id=self._fake_reply_organ))
+        if self._fake_plan_organ is not None and self._fake_plan_organ not in config.organs:
+            organs.append(FakePlanner(organ_id=self._fake_plan_organ))
         return PreparedModels(tuple(organs), frozenset(available))
 
     def apply(self, prepared: PreparedModels) -> None:

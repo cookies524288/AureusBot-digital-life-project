@@ -59,6 +59,7 @@ from aureus.heartbeat.conversation import (
     _JudgeAttempt,
     _organ_request,
     _person_id_of,
+    _PlannerRun,
     _reply_job,
     _ReplyJob,
     _Thought,
@@ -81,7 +82,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
-from aureus.heartbeat.inbox_attention import InboxAttention
+from aureus.heartbeat.inbox_attention import InboxAttention, InboxSelection, select_conversations
 from aureus.heartbeat.inbox_media import AttachmentReader, ImageIndexer
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from aureus.heartbeat.initiative import InitiativeDecision, decide
@@ -386,9 +387,6 @@ class Heartbeat:
         initiative_config = initiative or InitiativeConfig()
         if config.roleplay_mode:
             initiative_config = initiative_config.model_copy(update={"enabled": False})
-        if initiative_config.enabled and not config.planning_enabled:
-            logger.warning("主动联系要用规划器，已关闭主动联系")
-            initiative_config = initiative_config.model_copy(update={"enabled": False})
         calendar = calendar or BudgetCalendar(timezone)
         self._initiative = InitiativeTracker(initiative_config, timeline, feedback, calendar)
         self._cortisol = (
@@ -413,6 +411,8 @@ class Heartbeat:
         self._pending: deque[tuple[Perception, InboxMessage | None]] = deque()
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
         self._thought: _Thought | None = None
+        self._planner_restarts: dict[ConversationKey, int] = {}
+        self._inbox_followups: set[ConversationKey] = set()
         self._wake = asyncio.Event()
         self._phase = _Phase.NOT_STARTED
         self._stop_requested = False
@@ -497,11 +497,12 @@ class Heartbeat:
     def on_inbox_message(self, message: InboxMessage) -> None:
         """来信已保存，重要来信立即叫醒心跳。"""
         inbox = self._platform_inbox
-        if (
-            not self._maintenance_paused
-            and inbox is not None
-            and inbox.is_priority(message.perception)
-        ):
+        if self._maintenance_paused or inbox is None:
+            return
+        if message.conversation == self._inbox_followup_key():
+            self._inbox_followups.add(message.conversation)
+            self._wake.set()
+        elif inbox.is_priority(message.perception):
             self._wake.set()
 
     def apply_identity_edit(
@@ -684,27 +685,14 @@ class Heartbeat:
         if paused == self._maintenance_paused:
             return
         self._maintenance_paused = paused
+        if paused:
+            self._inbox_followups.clear()
         if paused and self._thought is not None:
             thought = self._thought
             self._thought = None
             self._maintenance_task = thought.task
             thought.task.cancel()
-            for heard in thought.replying_to:
-                priority = Priority.USER if heard.is_user else Priority.CONTACT
-                if (
-                    priority is Priority.CONTACT
-                    and self._platform_inbox is not None
-                    and "inbox_message_id" in heard.record.metadata
-                    and self._platform_inbox.is_priority(heard.perception)
-                ):
-                    priority = Priority.SPECIAL
-                self._unanswered.add(
-                    heard,
-                    priority,
-                    _reply_address(
-                        heard.perception, browsed=heard.record.metadata.get("inbox_browsed") is True
-                    ),
-                )
+            self._requeue_reply(thought)
         self._wake.set()
 
     def wake_up(self) -> Downtime:
@@ -836,9 +824,11 @@ class Heartbeat:
         self._watch_emergency_stop()
         inbox = self._platform_inbox
         if inbox is not None:
-            self._submit_inbox(inbox.priority_messages())
+            self._take_inbox_priority(inbox)
         # D76：先收下已到的来信，不能把发送前排队的消息算作发送后的回应。
         self._take_in_perceptions()
+        if inbox is not None:
+            self._take_inbox_followups(inbox)
         had_thought = self._thought is not None
         diary_running = bool(self._thought and self._thought.task.get_name() == "aureus-diary")
         self._collect_finished_thought()
@@ -847,22 +837,7 @@ class Heartbeat:
         self._check_stress()
         self._agenda_hooks._check_agenda()
         if inbox is not None:
-            reading = self._reading
-            self._submit_inbox(
-                inbox.browse(
-                    self._clock.now(),
-                    can_browse=(
-                        not had_thought
-                        and self._thought is None
-                        and not self._unanswered
-                        and not self._pending
-                        and not self._stop_requested
-                        and (reading is None or not reading.sleep.night)
-                        and self._permissions.check(ACTION_CALL_ORGAN).allowed
-                    ),
-                )
-            )
-            self._take_in_perceptions(browsing=True)
+            self._maybe_select_inbox(inbox, had_thought=had_thought)
         thought = self._thought
         if (
             self._unanswered
@@ -956,6 +931,14 @@ class Heartbeat:
         if thought is None or not thought.task.done():
             return
         self._thought = None
+        if thought.planner_run is not None and thought.planner_run.restart_requested:
+            if not self._halt_status.halted:
+                self._requeue_reply(thought)
+            if not thought.task.cancelled():
+                thought.task.exception()
+            return
+        if (conversation := self._thought_conversation(thought)) is not None:
+            self._planner_restarts.pop(conversation, None)
         if thought.task.cancelled():
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
@@ -963,6 +946,11 @@ class Heartbeat:
         if thought.task.get_name() == language_runner.TASK_NAME:
             return
         assert outcome is not None
+        if isinstance(outcome, InboxSelection):
+            if self._platform_inbox is not None and not self._halt_status.halted:
+                self._submit_inbox(self._platform_inbox.read_selection(outcome))
+                self._take_in_perceptions(browsing=True)
+            return
         if isinstance(outcome, SummaryOutcome):
             assert self._working_memory is not None
             self._working_memory.finish(outcome, self._clock.now())
@@ -992,7 +980,16 @@ class Heartbeat:
             and outcome.plan is not None
             and not self._halt_status.halted
         ):
-            self._platform_inbox.apply_plan(outcome.plan, target, thought.replying_to[-1].record)
+            plan = outcome.plan
+            queued = self._unanswered.peek_batch()
+            target_key = self._thought_conversation(thought)
+            if target_key is not None and any(
+                _platform_key(heard) not in (None, target_key)
+                and self._platform_inbox.is_priority(heard.perception)
+                for heard in queued
+            ):
+                plan = replace(plan, stay_in_conversation=False)
+            self._platform_inbox.apply_plan(plan, target, thought.replying_to[-1].record)
         if outcome.judge is not None:
             judgment_record = self._record_judgment(thought, outcome.judge)
             self._record_triggers(outcome.judge.triggers)
@@ -1032,8 +1029,6 @@ class Heartbeat:
             metadata["recall_source_keys"] = list(outcome.recall_source_keys)
         if outcome.effects is not None:
             metadata["hormones"] = outcome.effects.to_metadata()
-            if outcome.forced_reply:
-                metadata["forced_reply"] = True
             if self._hormones is not None:
                 retaliated = outcome.effects.retaliation is RetaliationMode.ALLOWED
                 self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)
@@ -1217,6 +1212,106 @@ class Heartbeat:
             if message.perception.channel in self._sinks and message.id not in existing_ids
         )
 
+    def _thought_conversation(self, thought: _Thought | None = None) -> ConversationKey | None:
+        thought = self._thought if thought is None else thought
+        return _platform_key(thought.replying_to[-1]) if thought and thought.replying_to else None
+
+    def _inbox_followup_key(self) -> ConversationKey | None:
+        inbox = self._platform_inbox
+        if inbox is not None and inbox.active_conversation is not None:
+            return inbox.active_conversation
+        if self._config.inbox_debounce_enabled:
+            batch = self._unanswered.peek_batch()
+            return self._thought_conversation() or (_platform_key(batch[-1]) if batch else None)
+        return None
+
+    def _take_inbox_priority(self, inbox: InboxAttention) -> None:
+        messages = inbox.priority_messages()
+        active = inbox.active_conversation
+        if active is not None and any(message.conversation != active for message in messages):
+            inbox.active_conversation = None
+            if self._thought_conversation() == active:
+                self._restart_planner()
+        self._submit_inbox(messages)
+
+    def _take_inbox_followups(self, inbox: InboxAttention) -> None:
+        if self._halt_status.halted or self._stop_requested:
+            return
+        conversation = self._inbox_followup_key()
+        arrivals, self._inbox_followups = self._inbox_followups, set()
+        if inbox.active_conversation is not None:
+            self._submit_inbox(inbox.active_messages())
+        elif conversation is not None and conversation in arrivals:
+            self._submit_inbox(inbox.read_selection(InboxSelection((conversation,))))
+        self._take_in_perceptions(browsing=True)
+        if (
+            not self._config.inbox_debounce_enabled
+            or conversation is None
+            or conversation not in arrivals
+            or conversation != self._thought_conversation()
+        ):
+            return
+        count = self._planner_restarts.get(conversation, 0)
+        if (
+            count < self._config.inbox_debounce_max_restarts
+            and self._unanswered.peek_batch((None, conversation))
+            and self._restart_planner()
+        ):
+            self._planner_restarts[conversation] = count + 1
+
+    def _restart_planner(self) -> bool:
+        thought = self._thought
+        if thought is None or thought.planner_run is None or thought.task.done():
+            return False
+        run = thought.planner_run
+        if not run.is_planning or run.restart_requested:
+            return False
+        run.restart_requested = True
+        thought.task.cancel()
+        return True
+
+    def _requeue_reply(self, thought: _Thought) -> None:
+        for heard in thought.replying_to:
+            priority = Priority.USER if heard.is_user else Priority.CONTACT
+            if (
+                priority == Priority.CONTACT
+                and _platform_key(heard) is not None
+                and self._platform_inbox is not None
+                and self._platform_inbox.is_priority(heard.perception)
+            ):
+                priority = Priority.SPECIAL
+            self._enqueue_reply(heard, priority)
+
+    def _maybe_select_inbox(self, inbox: InboxAttention, *, had_thought: bool) -> None:
+        reading = self._reading
+        candidates = inbox.browse(
+            self._clock.now(),
+            can_browse=(
+                not had_thought
+                and self._thought is None
+                and not self._unanswered
+                and not self._pending
+                and not self._stop_requested
+                and (reading is None or not reading.sleep.night)
+                and self._permissions.check(ACTION_CALL_ORGAN).allowed
+            ),
+        )
+        if not candidates:
+            return
+        strategy = self._current_strategy()
+        task = asyncio.create_task(
+            select_conversations(
+                candidates,
+                self._call_organ,
+                self._config.plan_organ,
+                strategy.model_preference,
+                stream=self._config.inbox_debounce_enabled,
+            ),
+            name="aureus-inbox-selection",
+        )
+        task.add_done_callback(self._on_thought_done)
+        self._thought = _Thought(task=task, replying_to=(), strategy=strategy)
+
     def _take_in_perceptions(self, *, browsing: bool = False) -> None:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
         while self._pending:
@@ -1296,14 +1391,22 @@ class Heartbeat:
                 record,
                 person is not None and person.is_user and priority is Priority.USER,
             )
-            self._unanswered.add(
-                heard,
-                priority,
-                _reply_address(perception, browsed=browsing and inbox_message is not None),
-            )
+            self._enqueue_reply(heard, priority)
             if priority is Priority.USER:
                 self._last_user_contact = perception
                 self._initiative.note_user_message(record.timestamp)
+
+    def _enqueue_reply(self, heard: _Heard, priority: Priority) -> None:
+        key = _platform_key(heard)
+        inbox = self._platform_inbox
+        group_by_route = key is not None and (
+            heard.record.metadata.get("inbox_browsed") is True
+            or self._config.inbox_debounce_enabled
+            or (inbox is not None and key == inbox.active_conversation)
+        )
+        self._unanswered.add(
+            heard, priority, _reply_address(heard.perception, browsed=group_by_route)
+        )
 
     def _identify(self, perception: Perception) -> Person | None:
         """按（通道, 账号）认人；没有人物档案时返回 None。
@@ -1326,14 +1429,23 @@ class Heartbeat:
             return
         if self._batch_wait_remaining() > 0:
             return  # 疲劳偏高：再等等，攒几条一起回（到点后下一拍会开始）
-        # 一次只回复同一个通道里同一个人的消息，回复才知道发给谁；先回用户，同级先来先回。
-        batch = self._unanswered.peek_batch()
+        active = self._platform_inbox.active_conversation if self._platform_inbox else None
+        address = (None, active) if active is not None else None
+        batch = sorted(self._unanswered.peek_batch(address), key=lambda heard: heard.record.id)
+        if not batch or self._debounce_remaining(batch) > 0:
+            return
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
         job = self._reply_job(batch)
-        self._unanswered.take_next()
+        self._unanswered.take_next(address)
+        run = None
+        if self._config.inbox_debounce_enabled and _platform_key(batch[-1]) is not None:
+            run = _PlannerRun()
+            job = replace(job, planner_run=run)
         task = asyncio.create_task(self._conversation._think(job), name="aureus-thought")
         task.add_done_callback(self._on_thought_done)
-        self._thought = _Thought(task=task, replying_to=batch, strategy=job.strategy)
+        self._thought = _Thought(
+            task=task, replying_to=batch, strategy=job.strategy, planner_run=run
+        )
 
     def _maybe_learn_language(self) -> None:
         """回复优先。空闲时用同一个器官任务槽处理本次运行的新消息。"""
@@ -1769,10 +1881,22 @@ class Heartbeat:
         if reading is not None and reading.sleep.night and self._body is not None:
             interval = max(interval, self._body.config.night_tick_interval_seconds)
         if self._thought is None:
-            remaining = self._batch_wait_remaining()
+            active = self._platform_inbox.active_conversation if self._platform_inbox else None
+            address = (None, active) if active is not None else None
+            remaining = max(
+                self._batch_wait_remaining(),
+                self._debounce_remaining(self._unanswered.peek_batch(address)),
+            )
             if remaining > 0:
                 interval = min(interval, remaining)
         return interval
+
+    def _debounce_remaining(self, batch: Sequence[_Heard]) -> float:
+        if not self._config.inbox_debounce_enabled or not batch or _platform_key(batch[-1]) is None:
+            return 0.0
+        latest = max(heard.record.timestamp for heard in batch)
+        waited = max(0.0, (self._clock.now() - latest).total_seconds())
+        return max(0.0, self._config.inbox_debounce_seconds - waited)
 
     def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""
@@ -1977,6 +2101,12 @@ def _reply_address(
 ) -> tuple[tuple[str, str] | None, ConversationKey | None]:
     route = ConversationKey.from_perception(perception) if perception.route is not None else None
     return (None if browsed and route is not None else _conversation_of(perception)), route
+
+
+def _platform_key(heard: _Heard) -> ConversationKey | None:
+    if "inbox_message_id" in heard.record.metadata and heard.perception.route is not None:
+        return ConversationKey.from_perception(heard.perception)
+    return None
 
 
 def _priority_of(perception: Perception, person: Person | None) -> Priority | None:

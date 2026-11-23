@@ -704,18 +704,18 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="og-flow-head"><h3 id="og-flow-title">一轮来信处理</h3><div class="og-flow-legend"><span>进入本轮后</span><span>条件分支</span></div></div>
 <ol class="og-flow">
 <li><div class="og-lanes">
-<div class="og-step conditional"><b>QQ 来信 → 平台收件箱</b><p>已绑定用户和特别关心的人来信可以优先唤醒心跳。空闲时自主翻阅先取未读私聊，再用剩余条数翻阅未读群聊。一次翻阅可选多个会话，合计条数受运行设置限制。</p></div>
+<div class="og-step conditional"><b>QQ 来信 → 平台收件箱</b><p>已绑定用户和特别关心的人来信可以优先唤醒心跳。空闲时，小豆选一条未读私聊先读，也可选择多个群。每次合计默认读取 35 条。</p></div>
 <div class="og-step conditional"><b>网页、终端来信 → 感知队列</b><p>直接唤醒心跳。日程等内部事件由心跳另行检查，符合条件时也可启动其他任务。</p></div>
 </div></li>
 <li><div class="og-step"><b>心跳收下新来信</b><p>识别来源，追加来信到时间线。收件箱按会话记录已读进度，优先唤醒时跳过的旧来信仍能翻阅。身份无法确认时只记录。</p></div></li>
-<li><div class="og-step"><b>检查本轮能否开始处理</b><p>有待回信、当前空闲、允许调用器官且等待时间已到时，按优先级挑出同一会话的一批来信。没到条件时，本拍继续等待或结束。</p></div></li>
+<li><div class="og-step"><b>检查本轮能否开始处理</b><p>一次处理同一会话的一批来信。小豆可以留在当前会话，直到主动退出或另一个会话有特别关心来信。开启防抖后，同会话新消息在默认 4 秒的窗口内合并。</p></div></li>
 <li><div class="og-lanes">
 <div class="og-step conditional"><b>按需判断</b><p>满足判断配置和触发条件时，请判断器官提供情绪建议。心跳可把产生的变化带入后续处理。</p></div>
-<div class="og-step conditional"><b>按会话规划</b><p>自主翻阅时逐个会话请规划器判断是否回应，收到明确的回复建议才继续。其他来信按当前档位决定是否先规划。规划也可建议后续翻阅或特别关心。</p></div>
+<div class="og-step"><b>按会话规划</b><p>每个精力档位都先规划，再按建议决定是否回复。开启防抖后，规划用流式请求。同会话的新消息可在首次规划期间打断请求并加入本轮，默认最多重开 4 次。</p></div>
 </div></li>
 <li><div class="og-lanes">
-<div class="og-step conditional"><b>沉默</b><p>采纳不回复的计划时，心跳记录该决定并结束本轮。器官调用受限或无法生成回复时，也可能只有系统提示。</p></div>
-<div class="og-step conditional"><b>回复</b><p>回复器生成文稿。心跳收回结果，重新检查发送权限。通过后把完整回复追加到时间线，再经原通道发送。发送权限拦截时，本轮没有回复记录。</p></div>
+<div class="og-step conditional"><b>沉默</b><p>规划明确选择沉默时，心跳记录该决定并结束本轮。规划结果无法读取时也结束本轮。</p></div>
+<div class="og-step conditional"><b>回复</b><p>回复器按计划生成文稿，也可以退回规划器重审一次。心跳取得可发送的回复后重新检查发送权限，获准后记入时间线并发回原会话。</p></div>
 </div></li>
 <li><div class="og-step"><b>结束本轮</b><p>器官在后台工作，心跳在后续拍收回结果。回复、学习、整理等任务按各自条件调用器官。</p></div></li>
 </ol></section>
@@ -2696,7 +2696,7 @@ const CFG_FIELDS = {
   'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
   'heartbeat.low_message_limit': ['低电量对话条数', '低电量时可以参考最近多少条对话。'],
   'heartbeat.reply_organ': ['回复器官', '选择负责生成回复的器官。'],
-  'heartbeat.planning_enabled': ['回复前规划', '回复之前是否先制定计划。'],
+  'heartbeat.planning_enabled': ['旧版回复前规划设置', '仅用于读取旧配置。各精力档位均先规划。'],
   'heartbeat.plan_organ': ['规划器官', '选择负责制定计划的器官。'],
   'heartbeat.split_reply_enabled': ['分条回复', '允许把一次回复拆成多条消息发出。'],
   'heartbeat.max_reply_messages': ['回复条数上限', '一次回复最多拆成多少条。'],
@@ -2708,6 +2708,9 @@ const CFG_FIELDS = {
   'body.state_in_prompt_enabled': ['身体状态提示', '回复前是否把当下的身体状态告诉模型。'],
   'body.saving_below': ['节省档门槛', '剩余精力低于这个比例时进入节省档。'],
   'body.low_below': ['低电量门槛', '剩余精力低于这个比例时进入低电量档。'],
+  'heartbeat.inbox_debounce_enabled': ['会话消息防抖', '合并短时间内同一会话的新消息。开启后规划使用流式请求。保存后重启生效。'],
+  'heartbeat.inbox_debounce_seconds': ['防抖窗口秒数', '同一会话的每条新消息都会重新开始计时。保存后重启生效。'],
+  'heartbeat.inbox_debounce_max_restarts': ['规划重开次数上限', '同一轮规划最多可被新消息打断并重开的次数。保存后重启生效。'],
   'body.overdraft_below': ['透支保护门槛', '剩余精力低于这个比例时启动透支保护。'],
   'body.fatigue_enabled': ['疲劳调节', '是否根据近期调用情况计算疲劳。'],
   'body.fatigue_window_minutes': ['疲劳统计时段（分钟）', '计算疲劳时回看最近多少分钟。'],

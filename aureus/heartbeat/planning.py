@@ -1,8 +1,7 @@
 """规划器的建议：读懂它，读不懂就当没有（03 号文档「器官」，路线图 1.6，D59）。
 
 规划器只返回一段 JSON 文字，说回不回、想表达什么、多长、为什么。这里把它解析成 Plan；
-格式不对、缺字段、类型不对都返回 None，由心跳改走「合并成一次调用」照常回复：
-规划器坏了不能让它不说话。不确定时朝「回复」倒，只有明确写了不回才不回。
+格式不对、缺字段、类型不对都返回 None，心跳只采用明确的回复建议。
 这里只解析文字，不读写任何状态。
 """
 
@@ -125,6 +124,7 @@ class Plan:
     expression_avoid: tuple[str, ...] = ()
     read_inbox: bool = False
     special_contact: bool | None = None
+    stay_in_conversation: bool | None = None
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -145,6 +145,8 @@ class Plan:
                 "interest_id": self.interest.interest_id,
                 "reason": self.interest.reason,
             }
+        if self.stay_in_conversation is not None:
+            metadata["stay_in_conversation"] = self.stay_in_conversation
         return metadata
 
 
@@ -196,6 +198,11 @@ def parse_plan(text: str) -> Plan | None:
         read_inbox=data.get("read_inbox") is True,
         special_contact=(
             data["special_contact"] if isinstance(data.get("special_contact"), bool) else None
+        ),
+        stay_in_conversation=(
+            data["stay_in_conversation"]
+            if isinstance(data.get("stay_in_conversation"), bool)
+            else None
         ),
     )
 
