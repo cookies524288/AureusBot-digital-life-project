@@ -95,9 +95,9 @@ def available_port() -> int:
 
 @asynccontextmanager
 async def run_chat(
-    paths: AureusPaths, *, request_log: Path | None = None
+    paths: AureusPaths, *chat_args: str, request_log: Path | None = None
 ) -> AsyncIterator[asyncio.subprocess.Process]:
-    arguments = ["--home", str(paths.home), "chat"]
+    arguments = ["--home", str(paths.home), "chat", *chat_args]
     command = ["-m", "aureus", *arguments, "--fake"]
     if request_log is not None:
         command = [

@@ -13,7 +13,14 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import WebSocketException
 
 from aureus.common import QQConfig
-from aureus.heartbeat import MessageKind, OutgoingMessage, Perception, TrustLevel, VisibilityScope
+from aureus.heartbeat import (
+    MessageKind,
+    MessageRoute,
+    OutgoingMessage,
+    Perception,
+    TrustLevel,
+    VisibilityScope,
+)
 
 from .onebot import QQ_CHANNEL_NAME, decode_message, encode_message
 from .onebot_transport import OneBotError, OneBotTransport
@@ -35,7 +42,10 @@ class QQChannel:
         heartbeat: HeartbeatHandle,
         is_owner: Callable[[str], bool],
         consume_command: Callable[[Perception], bool] | None = None,
+        *,
+        test_group: str | None = None,
     ) -> None:
+        self._test_group = test_group
         self._config = config
         self._heartbeat = heartbeat
         self._is_owner = is_owner
@@ -64,11 +74,18 @@ class QQChannel:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    def _allows_route(self, route: MessageRoute) -> bool:
+        return self._test_group is None or (
+            route.kind == "group" and route.recipient_id == self._test_group
+        )
+
     def _receive(self, payload: dict[str, Any]) -> None:
         perception = decode_message(payload, self._config.account_id)
         if perception is None or perception.route is None:
             return
         route = perception.route
+        if not self._allows_route(route):
+            return
         key = QQ_CHANNEL_NAME, route.account_id, route.message_id
         if key in self._seen:
             return
@@ -90,8 +107,14 @@ class QQChannel:
     def show(self, message: OutgoingMessage) -> None:
         """把已通过心跳检查的回复交给后台发送，避免网络阻塞心跳"""
         route = message.route
-        if message.kind is not MessageKind.REPLY or route is None:
+        if message.kind is not MessageKind.REPLY:
             return
+        if self._test_group is not None and route is None:
+            raise OneBotError("QQ 测试群模式缺少群地址")
+        if route is None:
+            return
+        if not self._allows_route(route):
+            raise OneBotError("QQ 目的地超出本次测试群范围")
         socket = self._transport.socket
         if socket is None or len(self._sending) >= _OUTGOING_LIMIT:
             raise OneBotError("QQ 连接未就绪或发送队列已满")

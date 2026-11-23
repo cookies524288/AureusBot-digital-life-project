@@ -10,6 +10,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 
 from aureus.channels import CHANNEL_NAME, TerminalChannel
+from aureus.channels.onebot import account_id
 from aureus.common import AureusPaths, ConfigError, SystemClock, WebConfig
 from aureus.common.vault import VaultError
 from aureus.core.runtime import Core, open_core
@@ -22,6 +23,14 @@ EXIT_FAILURE = 1
 
 ReadLine = Callable[[], str]
 WriteLine = Callable[[str], None]
+
+
+def qq_group_argument(value: str) -> str:
+    """按 OneBot 的账号格式校验本次允许收发的群号。"""
+    group = account_id(value)
+    if group is None:
+        raise argparse.ArgumentTypeError("请输入有效的 QQ 群号")
+    return group
 
 
 async def _serve_web(web: WebServer, config: WebConfig, write_line: WriteLine) -> None:
@@ -95,7 +104,9 @@ def run_chat_command(
         terminal: TerminalChannel | None = None
         while True:
             restarting = False
-            with open_core(paths, fake_organs=args.fake) as core:
+            with open_core(
+                paths, fake_organs=args.fake, qq_test_group=getattr(args, "qq_test_group", None)
+            ) as core:
 
                 def request_restart() -> None:
                     nonlocal restarting

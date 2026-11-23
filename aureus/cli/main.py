@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from aureus.cli.agenda_command import DEFAULT_AGENDA_LIMIT, run_agenda_command
-from aureus.cli.chat_command import run_chat_command
+from aureus.cli.chat_command import qq_group_argument, run_chat_command
 from aureus.cli.halt_command import run_halt_command, run_resume_command
 from aureus.cli.init_command import run_init_command
 from aureus.cli.inspect_commands import (
@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
     chat = commands.add_parser("chat", help="启动它，在终端里聊天")
     chat.add_argument(
         "--fake", action="store_true", help="用假器官：不调用模型、不花钱，用来试运行"
+    )
+    chat.add_argument(
+        "--qq-test-group",
+        type=qq_group_argument,
+        metavar="群号",
+        help="本次进程仅收发该 QQ 群的消息",
     )
     timeline = commands.add_parser("timeline", help="查看时间线上最新的几条记录（只读）")
     timeline.add_argument(

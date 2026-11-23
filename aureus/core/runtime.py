@@ -135,6 +135,7 @@ def open_core(
     paths: AureusPaths,
     *,
     fake_organs: bool = False,
+    qq_test_group: str | None = None,
     clock: Clock | None = None,
     to_console: bool = True,
 ) -> Iterator[Core]:
@@ -143,6 +144,7 @@ def open_core(
     Args:
         paths: 数据根目录的路径集合。
         fake_organs: 用假器官代替真实模型（不花钱，用来试运行和测试）。
+        qq_test_group: 本次进程允许收发消息的 QQ 群号，缺省沿用普通路由。
         clock: 时钟；不给就用真实时钟。
         to_console: 日志是否同时输出到终端。
 
@@ -359,7 +361,9 @@ def open_core(
                     ),
                 )
 
-            qq = QQChannel(runtime.qq, token, heartbeat, is_qq_owner, consume_qq_link)
+            qq = QQChannel(
+                runtime.qq, token, heartbeat, is_qq_owner, consume_qq_link, test_group=qq_test_group
+            )
             heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show)
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"

@@ -115,6 +115,8 @@ async def open_replay(
     history_limit: int = 20,
     heuristic: bool = False,
     cortisol: bool | None = None,
+    qq_test_group: str | None = None,
+    initiative: bool = False,
 ) -> AsyncIterator[Replay]:
     paths = AureusPaths(home)
     paths.ensure_directories()
@@ -138,7 +140,9 @@ async def open_replay(
 
     async with asyncio.timeout(15), serve(fake.handle, "127.0.0.1", 0) as server:
         port = server.sockets[0].getsockname()[1]
-        regulation = ""
+        regulation = (
+            "[initiative]\nenabled = true\n[time]\ntimezone = 'UTC'\n" if initiative else ""
+        )
         if cortisol is not None:
             regulation = (
                 "[initiative]\nenabled = true\n[time]\ntimezone = 'UTC'\n"
@@ -175,7 +179,9 @@ endpoint = "ws://127.0.0.1:{port}/onebot"
         )
         with monkeypatch.context() as patch:
             patch.setattr(runtime, "_build_organ_bus", build_bus)
-            with runtime.open_core(paths, clock=clock, to_console=False) as core:
+            with runtime.open_core(
+                paths, clock=clock, to_console=False, qq_test_group=qq_test_group
+            ) as core:
                 assert core.qq is not None
                 accepted: asyncio.Queue[str] = asyncio.Queue()
                 submit = core.heartbeat.submit
