@@ -220,8 +220,8 @@ def test_model_probe_distinguishes_ledger_write_failure_from_rejection(
 
 
 def test_tab_icon_is_served_before_login(rig: ConfigRig) -> None:
-    assert 'rel="icon" href="/favicon.ico"' in rig.client.get("/").text
-    result = rig.client.get("/favicon.ico")
+    assert 'rel="icon" href="/favicon.ico?v=rounded"' in rig.client.get("/").text
+    result = rig.client.get("/favicon.ico?v=rounded")
     assert result.status_code == 200
     assert result.headers["content-type"] == "image/x-icon"
     assert result.content[:4] == b"\x00\x00\x01\x00"
