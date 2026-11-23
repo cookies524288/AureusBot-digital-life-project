@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from aureus.actions.search import SearxngSearch
 from aureus.actions.web import WebReader
 from aureus.agenda import AgendaStore
 from aureus.agenda.findings import FindingStore
@@ -322,7 +323,11 @@ def open_core(
             interests=interests,
             findings=findings,
             exploration=exploration,
-            search=None,  # D79：当前唯一的搜索选项是 none。
+            search=(
+                SearxngSearch(exploration.search_endpoint, exploration.fetch_timeout_seconds)
+                if exploration.search_provider == "searxng" and not fake_organs and not roleplay
+                else None
+            ),
             reader=WebReader(exploration),
             has_exploration_organ=exploration.organ in models.available_organs,
             memory=memory,

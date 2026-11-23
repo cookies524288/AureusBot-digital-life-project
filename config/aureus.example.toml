@@ -325,6 +325,9 @@ config_version = 1
 # enabled = false
 # organ = "summarizer"
 # search_provider = "none"
+# 使用 SearXNG 时填写启用了 JSON 格式的完整搜索端点。
+# search_provider = "searxng"
+# search_endpoint = "http://127.0.0.1:8080/search"
 # max_per_day = 3
 # min_interval_hours = 4.0
 # max_results = 5

@@ -2,8 +2,10 @@
 
 from pathlib import Path
 
+import httpx
 import pytest
 
+from aureus.actions.search import SearchResult, SearxngSearch
 from aureus.agenda import InterestStore
 from aureus.common import AureusPaths, ManualClock
 from aureus.common.logging_setup import LOG_FILE_NAME
@@ -15,6 +17,37 @@ from tests.test_initiative_runtime import FixedOrgan
 from tests.test_roleplay_mode import IDENTITY
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_searxng_maps_json_results_in_order_and_limits_results() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/search"
+        assert request.url.params["q"] == "天文"
+        assert request.url.params["format"] == "json"
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"title": "无网址"},
+                    {"title": "天文", "url": "https://example.test/one", "content": "天文摘要"},
+                    {"url": "https://example.test/two"},
+                ]
+            },
+        )
+
+    search = SearxngSearch("https://search.test/search", 2, transport=httpx.MockTransport(respond))
+    assert await search.search("天文", 1) == [
+        SearchResult("天文", "https://example.test/one", "天文摘要")
+    ]
+
+
+async def test_searxng_propagates_failure_to_exploration() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("测试超时", request=request)
+
+    search = SearxngSearch("https://search.test/search", 2, transport=httpx.MockTransport(respond))
+    with pytest.raises(httpx.ReadTimeout):
+        await search.search("天文", 1)
 
 
 def _paths(tmp_path: Path) -> AureusPaths:

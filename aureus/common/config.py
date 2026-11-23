@@ -517,7 +517,8 @@ class ExplorationConfig(BaseModel):
 
     enabled: bool = False
     organ: str = "summarizer"
-    search_provider: Literal["none"] = "none"
+    search_provider: Literal["none", "searxng"] = "none"
+    search_endpoint: str = ""
     max_per_day: int = Field(default=3, ge=1)
     min_interval_hours: float = Field(default=4.0, gt=0)
     max_results: int = Field(default=5, ge=1, le=10)
@@ -525,6 +526,29 @@ class ExplorationConfig(BaseModel):
     max_page_bytes: int = Field(default=1048576, ge=1024, le=10485760)
     max_page_chars: int = Field(default=6000, ge=200, le=20000)
     share_within_days: float = Field(default=3.0, gt=0)
+
+    @model_validator(mode="after")
+    def _check_search_endpoint(self) -> Self:
+        if not self.search_endpoint and self.search_provider == "none":
+            return self
+        try:
+            endpoint = urlsplit(self.search_endpoint)
+            valid = (
+                endpoint.scheme in ("http", "https")
+                and bool(endpoint.hostname)
+                and endpoint.username is None
+                and not endpoint.query
+                and not endpoint.fragment
+                and not any(character.isspace() for character in self.search_endpoint)
+                and endpoint.port != 0
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError(
+                "search_endpoint 必须是完整的 HTTP(S) 搜索地址，且不能含凭据、查询参数或片段"
+            )
+        return self
 
 
 class MemoryConfig(BaseModel):
