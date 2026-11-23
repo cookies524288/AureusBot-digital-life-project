@@ -15,7 +15,7 @@
 --danger:#dc322f;--danger-soft:#fae0d3;--ok:#728300;--ok-soft:#eef0c6;--warn:#cb4b16;--warn-soft:#fbe3cb;
 --shadow:0 1px 2px rgba(88,110,117,.06),0 2px 10px rgba(88,110,117,.06);
 --radius:16px;--radius-sm:11px;--nav-w:56px;--nav-open:224px;--bar-h:56px;
---ease:cubic-bezier(.22,.72,.24,1);--dur:.48s;--dur-fast:.28s;--dur-reveal:.64s;--dur-out:.42s;
+--ease:cubic-bezier(.22,.72,.24,1);--dur:.40s;--dur-fast:.23s;--dur-reveal:.53s;--dur-out:.35s;
 --font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
 --mono:ui-monospace,'Cascadia Mono',Consolas,monospace;
 --thread-warp:rgb(116 89 53 / 6%);--thread-weft:rgb(116 89 53 / 4%);--thread-glint:rgb(255 255 255 / 42%);
@@ -200,7 +200,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-2)}
 .dot.on{background:var(--ok);animation:ping 3.4s ease-out infinite}.dot.busy{background:var(--accent)}.dot.off{background:var(--danger)}
 @keyframes ping{0%{box-shadow:0 0 0 0 rgba(114,131,0,.45)}100%{box-shadow:0 0 0 7px rgba(114,131,0,0)}}
-.meter>i{background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,white));transition:width 1.05s var(--ease)}
+.meter>i{background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 55%,white));transition:width .88s var(--ease)}
 .state-line{padding:7px 0;border-top:1px solid var(--border)}
 .state-line:first-child{border-top:0}
 /* 九宫格只负责块面的轮廓和厚度。两套主题给同一张底纹着色，文字保持独立。 */
@@ -211,7 +211,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .ov-head{align-items:center;margin-bottom:24px}.ov-head h2{font-size:26px;line-height:1.25}
 .ov-meta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px;color:var(--text-2);font-size:12px}.ov-meta b{color:var(--text);letter-spacing:.06em}.ov-meta time{padding-left:12px;border-left:1px solid var(--stitch)}
 .ov-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px;align-items:stretch}.ov-slot{position:relative;min-width:0;perspective:1100px}
-.ov-face{position:relative;height:100%;padding:20px 22px 25px;filter:drop-shadow(0 4px 1px var(--tile-shadow));transform:var(--ov-tilt,none);transition:transform .22s var(--ease),translate .22s var(--ease)}
+.ov-face{position:relative;height:100%;padding:20px 22px 25px;filter:drop-shadow(0 4px 1px var(--tile-shadow));transform:var(--ov-tilt,none);transition:transform .18s var(--ease),translate .18s var(--ease)}
 .ov-label,.ov-card-head{display:flex;align-items:center;gap:9px}.ov-label{color:var(--tile-muted);font-size:14px;font-weight:600}.ov-card-head{justify-content:space-between;margin-bottom:12px}
 .ov-status-body{display:flex;align-items:center;gap:clamp(16px,2.5vw,32px)}.ov-emitter{display:block;flex:none;width:160px;height:auto;shape-rendering:crispEdges;color:var(--signal)}
 /* 所有轮廓和位移都落在 32 格画布的整格上；四象限复用同一块像素图形。 */
@@ -229,7 +229,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .ov-task{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:baseline;margin-top:12px;padding-top:10px;border-top:1px dashed var(--tile-rule);font-size:14px;overflow-wrap:anywhere}.ov-task span{color:var(--tile-muted)}
 .ov-energy>.ov-face{display:flex;flex-direction:column;justify-content:space-between;gap:12px}.ov-energy-line{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.ov-tier,.ov-period,.ov-activity time{color:var(--tile-muted);font-size:12px}
 .ov-gauge{position:relative;height:14px;margin:2px 4px 4px 0;border:2px solid var(--tile-muted);padding:2px}.ov-gauge::after{content:'';position:absolute;right:-5px;top:2px;bottom:2px;width:3px;background:var(--tile-muted)}
-.ov-cells{height:100%;background:var(--signal-track);mask-image:repeating-linear-gradient(90deg,#000 0 calc(8.33333% - 2px),transparent calc(8.33333% - 2px) 8.33333%)}.ov-cells i{display:block;height:100%;background:var(--signal);transition:width .85s var(--ease)}.ov-gauge.unlimited .ov-cells{background:repeating-linear-gradient(135deg,var(--signal-track) 0 3px,transparent 3px 6px)}
+.ov-cells{height:100%;background:var(--signal-track);mask-image:repeating-linear-gradient(90deg,#000 0 calc(8.33333% - 2px),transparent calc(8.33333% - 2px) 8.33333%)}.ov-cells i{display:block;height:100%;background:var(--signal);transition:width .71s var(--ease)}.ov-gauge.unlimited .ov-cells{background:repeating-linear-gradient(135deg,var(--signal-track) 0 3px,transparent 3px 6px)}
 .ov-state,.ov-activity{font-size:14px;line-height:1.7;overflow-wrap:anywhere}.ov-state .state-line{border:0;padding:0}.ov-state .state-line+.state-line{margin-top:4px}.ov-state details{margin-top:7px}.ov-state summary{cursor:pointer;color:var(--tile-muted);width:fit-content;font-size:13px}.ov-state summary:focus-visible{outline:2px solid var(--signal)}
 .ov-activity{list-style:none;padding:0;margin:0}.ov-activity li{display:flex;justify-content:space-between;gap:10px;align-items:baseline}.ov-activity li+li{margin-top:5px;padding-top:5px;border-top:1px dashed var(--tile-rule)}.ov-activity time{flex:none;font-variant-numeric:tabular-nums}.ov-empty{color:var(--tile-muted);font-size:14px}
 .ov-links{display:grid;grid-column:1/-1;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.ov-link{border:0;background:transparent;padding:0;text-align:left;cursor:pointer}.ov-link>.ov-face{display:flex;align-items:center;gap:9px;padding:14px 13px 19px;line-height:1.4;font-size:14px;font-weight:600}.ov-link .ico{color:var(--tile-muted)}.ov-link .ov-arrow{margin-left:auto;width:12px;height:12px;opacity:.75}.ov-link:focus-visible{outline:2px solid var(--accent-strong);outline-offset:4px}
@@ -452,8 +452,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
   padding:7px 7px 11px;
   pointer-events:none;transform:var(--og-tilt,none)}
 @media(prefers-reduced-motion:no-preference){
-  .og-tile{transition:transform 150ms var(--ease),translate 190ms var(--ease)}
-  .og-node::before{transition:translate 190ms var(--ease),scale 190ms var(--ease),opacity 190ms var(--ease)}
+  .og-tile{transition:transform 125ms var(--ease),translate 160ms var(--ease)}
+  .og-node::before{transition:translate 160ms var(--ease),scale 160ms var(--ease),opacity 160ms var(--ease)}
   .og-tracking .og-node:hover .og-tile{translate:0 3px -6px}
   .og-tracking .og-node:hover::before{translate:0 1px;scale:.97;opacity:.7}
 }
