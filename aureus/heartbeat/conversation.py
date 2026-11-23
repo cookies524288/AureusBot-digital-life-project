@@ -665,7 +665,13 @@ class ConversationFlow:
             return None
         try:
             return await asyncio.to_thread(
-                self._memory.search, words, job.history_ids, self._memory_config.max_results
+                self._memory.search,
+                words,
+                job.history_ids,
+                self._memory_config.max_results,
+                include_user_extractions=(
+                    job.viewer_is_user and job.messages[-1].visibility is VisibilityScope.USER_ONLY
+                ),
             )
         except Exception:
             logger.exception("记忆检索失败，这次检索不附记忆")

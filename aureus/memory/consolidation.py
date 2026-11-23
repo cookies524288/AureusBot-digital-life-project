@@ -17,6 +17,12 @@ from typing import Literal
 type CandidateKind = Literal["experience", "fact", "preference"]
 
 
+def retention_weight(now: float, last_seen: float, half_life_days: float) -> float:
+    """按 A_Memorix 的半衰期公式计算候选在查询时刻的权重。"""
+    elapsed_days = max(0.0, now - last_seen) / 86400
+    return 2.0 ** (-elapsed_days / half_life_days)
+
+
 @dataclass(frozen=True)
 class ConsolidationItem:
     """单条候选材料及可读回原文的指针。"""
@@ -66,6 +72,27 @@ def open_consolidation(conn: sqlite3.Connection) -> None:
             PRIMARY KEY(fingerprint, reference)
         );
     """)
+    # 已部署的整理库可能已有建议。回填和维护触发器在同一事务里就绪。
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'memory_extracted_fts'"
+        ).fetchone()
+        if exists is None:
+            conn.execute(
+                "CREATE VIRTUAL TABLE memory_extracted_fts USING fts5(content, tokenize='trigram')"
+            )
+            conn.execute(
+                "INSERT INTO memory_extracted_fts(rowid, content) "
+                "SELECT rowid, content FROM memory_candidates "
+                "WHERE kind IN ('fact', 'preference')"
+            )
+        conn.execute("""
+            CREATE TRIGGER IF NOT EXISTS memory_extracted_insert AFTER INSERT ON memory_candidates
+            WHEN new.kind IN ('fact', 'preference') BEGIN
+                INSERT INTO memory_extracted_fts(rowid, content) VALUES (new.rowid, new.content);
+            END
+        """)
 
 
 def _cursor(conn: sqlite3.Connection) -> tuple[int, int]:
@@ -220,13 +247,12 @@ def read_candidates(
         )
         if not evidence:
             continue
-        elapsed_days = max(0.0, now - row["last_seen"]) / 86400
         results.append(
             DerivedCandidate(
                 row["kind"],
                 row["content"],
                 evidence,
-                2.0 ** (-elapsed_days / half_life_days),
+                retention_weight(now, row["last_seen"], half_life_days),
             )
         )
         if len(results) == limit:
