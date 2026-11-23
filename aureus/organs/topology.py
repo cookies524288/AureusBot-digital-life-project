@@ -46,6 +46,7 @@ def organ_tasks(runtime: RuntimeConfig) -> dict[str, str]:
         "diary": runtime.diary.organ,
         "persona_review": runtime.persona_growth.organ,
         "language_learning": runtime.language.organ,
+        "memory_consolidation": "summarizer",
     }
 
 

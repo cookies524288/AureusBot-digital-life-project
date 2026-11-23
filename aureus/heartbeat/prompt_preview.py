@@ -25,6 +25,11 @@ from aureus.heartbeat.context import (
 )
 from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.language_runner import build_language_learning_prompt
+from aureus.heartbeat.memory_consolidation import (
+    EXTRACTION_FORMAT,
+    EXTRACTION_PROMPT,
+    build_extraction_prompt,
+)
 from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
 from aureus.heartbeat.persona_growth import REVIEW_TEMPLATES, build_prompt
 from aureus.heartbeat.recall import (
@@ -43,6 +48,7 @@ _CONDITIONAL = {
     "plan": "按开关和本轮输入附加黑话、表达意图、日程、兴趣及召回。",
     "reply": "有命中时附记忆、人际与习得表达。合并回复才附黑话，规划后可附意图和长度。",
     "language_learning": "启用增量学习且收到未处理的新样本时调用。",
+    "memory_consolidation": "夜间空闲且整理达到批量门槛，启用提取、有可用器官和可提取发言时调用。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
     "judge": "仅在判断器官启用且档位允许时调用，有历史才附对话。",
@@ -78,6 +84,8 @@ def registered_templates() -> tuple[PromptTemplate, ...]:
         *CONTEXT_TEMPLATES,
         *REVIEW_TEMPLATES,
         *LANGUAGE_TEMPLATES,
+        EXTRACTION_PROMPT,
+        EXTRACTION_FORMAT,
         PEOPLE_CONTEXT_TEMPLATE,
         HEURISTIC_MEMORY_REFERENCE_MARKER,
         REPLYER_MEMORY_REFERENCE_MARKER,
@@ -292,6 +300,13 @@ def build_prompt_scenes(
         "language_learning",
         "增量语言学习",
         build_language_learning_prompt("〔新入站样本 JSON〕"),
+        "",
+    )
+    add(
+        "memory_consolidation",
+        "memory_consolidation",
+        "夜间记忆提取",
+        build_extraction_prompt("〔编号发言 JSON〕"),
         "",
     )
     return scenes or [

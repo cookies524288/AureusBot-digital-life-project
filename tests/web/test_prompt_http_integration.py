@@ -15,7 +15,6 @@ from aureus.common.language_prompts import (
     language_reference_block,
 )
 from aureus.common.time_format import format_local_time
-from aureus.heartbeat import registered_templates
 from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
@@ -24,10 +23,18 @@ from aureus.heartbeat.context import (
     build_system_context,
 )
 from aureus.heartbeat.language_runner import learn_language
+from aureus.heartbeat.memory_consolidation import _extract
 from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
 from aureus.heartbeat.recall import format_recall
 from aureus.memory import LanguageSample, LanguageStore, MemoryHit
-from aureus.organs import BUILTIN_ORGANS, LLMOrgan, ModelsConfig, OrganRequest, PromptStore
+from aureus.memory.consolidation import ConsolidationItem
+from aureus.organs import (
+    BUILTIN_ORGANS,
+    LLMOrgan,
+    ModelPreference,
+    ModelsConfig,
+    OrganRequest,
+)
 from aureus.organs.api_keys import KeyResolver
 from tests.web.config_rig import ConfigRig
 from tests.web.test_prompt_api import IDENTITY
@@ -129,6 +136,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             prompts=rig.models.prompts,
         )
 
+    restarted_rig = None
     try:
         preview_by_organ = {
             organ: {
@@ -295,11 +303,27 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
                 preview, {"〔新入站样本 JSON〕": data}
             )
             by_scene["language_learning"] = captured[-1]["messages"][1]["content"]
+            items = [
+                ConsolidationItem("timeline:17", (), "模拟发言甲", None, True),
+                ConsolidationItem("timeline:43", (), "模拟发言乙：$messages", None, True),
+            ]
+            previous = len(captured)
+            await _extract(items, adapter("summarizer").process, ModelPreference.CHEAPEST)
+            assert len(captured) == previous + 1
+            scene = next(scene for scene in previews if scene["id"] == "memory_consolidation")
+            assert "夜间" in scene["note"]
+            numbered = '{"1": "模拟发言甲", "2": "模拟发言乙：$messages"}'
+            assert captured[-1]["messages"] == _expanded_messages(
+                scene["messages"], {"〔编号发言 JSON〕": numbered}
+            )
+            by_scene["memory_consolidation"] = captured[-1]["messages"][1]["content"]
             return by_scene
 
-        await compare()
+        baseline = await compare()
         learner_edit = "已编辑学习提示，$max_text、$max_detail、$output_format、$samples"
         edits = {
+            "extraction_prompt": "合成提取：$utterances\n$output_format",
+            "new_messages": "待回应的群消息：\n$messages",
             "people_context": "已编辑人物资料：$people_records",
             "heuristic_memory_reference": "已编辑启发式标题",
             "replyer_memory_reference": "已编辑按需召回标题",
@@ -309,6 +333,8 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         for key, source in edits.items():
             assert rig.client.put(f"/api/prompts/{key}", json={"source": source}).status_code == 200
         edited = await compare()
+        assert edited["memory_consolidation"].startswith('合成提取：{"1": "模拟发言甲"')
+        assert "待回应的群消息：" in edited["plan_references"]
         assert "已编辑人物资料：动态人物资料样例" in edited["reply_references"]
         assert "已编辑按需召回标题" in edited["reply_references"]
         assert "已编辑启发式标题" in edited["plan_references"]
@@ -318,11 +344,20 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         reply = restored["reply_references"]
         assert "已编辑人物资料" not in reply and "已编辑习得表达标题" in reply
         assert set(store.snapshot()) == set(edits) - {"people_context"}
-        rig.models.prompts = PromptStore(rig.paths.home / "prompts.toml", registered_templates())
+        restarted_rig = ConfigRig(rig.paths.home, prompt_identity=IDENTITY)
+        restarted_rig.log_in()
+        rig = restarted_rig
         restarted = await compare()
+        assert restarted["memory_consolidation"] == edited["memory_consolidation"]
+        assert not rig.client.delete("/api/prompts/extraction_prompt").json()["customized"]
+        reset = await compare()
+        assert reset["memory_consolidation"] == baseline["memory_consolidation"]
+        assert reset["plan_references"] == edited["plan_references"]
         assert restarted["reply_references"] == restored["reply_references"]
         assert restarted["plan_references"] == edited["plan_references"]
         assert "已编辑学习提示" in restarted["language_learning"]
     finally:
+        if restarted_rig is not None:
+            restarted_rig.close()
         litellm.in_memory_llm_clients_cache.flush_cache()
         await client.aclose()
