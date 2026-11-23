@@ -1,6 +1,8 @@
 """调试重启入口只打开已发布地址，不启动实例或发重启请求。"""
 
+import json
 from pathlib import Path
+from subprocess import CompletedProcess
 from typing import Any
 
 import httpx
@@ -83,12 +85,18 @@ class FakeClient:
 
 def _fake_restart(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> tuple[FakeClient, list[tuple[str, int] | None]]:
-    target = ("http://127.0.0.1:29501", 42)
-    current: list[tuple[str, int] | None] = [target]
+) -> tuple[FakeClient, list[tuple[str, debug_restart.ListenerIdentity] | None]]:
+    target = (
+        "http://127.0.0.1:29501",
+        debug_restart.ListenerIdentity(42, "2026-01-01", 44, "2026-01-02"),
+    )
+    current: list[tuple[str, debug_restart.ListenerIdentity] | None] = [target]
     client = FakeClient(base_url=target[0])
     monkeypatch.setattr(debug_restart, "_verified_target", lambda home: current[0])
-    monkeypatch.setattr(debug_restart, "_listener_owner", lambda port: (43, 42))
+    monkeypatch.setattr(debug_restart, "_interactive_terminal", lambda: True)
+    monkeypatch.setattr(debug_restart, "running_web_instance", lambda home: (target[0], 42))
+    monkeypatch.setattr(debug_restart, "_listener_identity", lambda port, owner: target[1])
+    monkeypatch.setattr(debug_restart, "_old_listener_exited", lambda listener: True)
     monkeypatch.setattr(debug_restart.httpx, "Client", lambda **kwargs: client)
     monkeypatch.setattr(debug_restart.getpass, "getpass", lambda label: "fake-secret")
     monkeypatch.setattr("builtins.input", lambda label: "yes")
@@ -114,7 +122,10 @@ def test_interactive_restart_target_change_before_password_submission(
     client, current = _fake_restart(monkeypatch, tmp_path)
 
     def change_target(label: str) -> str:
-        current[0] = ("http://127.0.0.1:29502", 77)
+        current[0] = (
+            "http://127.0.0.1:29502",
+            debug_restart.ListenerIdentity(77, "2026-01-01", 78, "2026-01-02"),
+        )
         return "fake-secret"
 
     monkeypatch.setattr(debug_restart.getpass, "getpass", change_target)
@@ -147,15 +158,18 @@ def test_interactive_restart_waits_for_new_listener_and_service(
         "Client",
         lambda **kwargs: client if kwargs["timeout"] == 5 else new_client,
     )
-    owners = iter([(43, 42), (43, 42), (44, 42)])
-    monkeypatch.setattr(debug_restart, "_listener_owner", lambda port: next(owners, (44, 42)))
+    monkeypatch.setattr(
+        debug_restart,
+        "_listener_identity",
+        lambda port, owner: debug_restart.ListenerIdentity(42, "2026-01-01", 45, "2026-01-03"),
+    )
     ticks = iter([0, 1, 2])
     monkeypatch.setattr(debug_restart.time, "monotonic", lambda: next(ticks, 2))
     monkeypatch.setattr(debug_restart.time, "sleep", lambda seconds: None)
     assert debug_restart._restart(tmp_path) == 0
     assert client.posts == ["/api/login", "/api/restart"]
-    assert new_client.posts == ["/api/login"]
-    assert "实例身份已变化" in capsys.readouterr().out
+    assert new_client.posts == []
+    assert "新监听进程接管" in capsys.readouterr().out
 
 
 def test_interactive_restart_refuses_unverified_listener_before_prompt(
@@ -164,7 +178,8 @@ def test_interactive_restart_refuses_unverified_listener_before_prompt(
     monkeypatch.setattr(
         debug_restart, "running_web_instance", lambda home: ("http://127.0.0.1:29501", 42)
     )
-    monkeypatch.setattr(debug_restart, "_listener_owner", lambda port: (77, 88))
+    monkeypatch.setattr(debug_restart, "_listener_identity", lambda port, owner: None)
+    monkeypatch.setattr(debug_restart, "_interactive_terminal", lambda: True)
     monkeypatch.setattr(debug_restart.getpass, "getpass", lambda label: pytest.fail("不应读取密码"))
     assert debug_restart._restart(tmp_path) == 1
 
@@ -182,7 +197,137 @@ def test_interactive_restart_refuses_changed_listener_after_login(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     client, _current = _fake_restart(monkeypatch, tmp_path)
-    owners = iter([(43, 42), (44, 42)])
-    monkeypatch.setattr(debug_restart, "_listener_owner", lambda port: next(owners, (44, 42)))
+    current = iter(
+        [
+            (
+                "http://127.0.0.1:29501",
+                debug_restart.ListenerIdentity(42, "2026-01-01", 44, "2026-01-02"),
+            ),
+            (
+                "http://127.0.0.1:29501",
+                debug_restart.ListenerIdentity(42, "2026-01-01", 44, "2026-01-02"),
+            ),
+            None,
+        ]
+    )
+    monkeypatch.setattr(debug_restart, "_verified_target", lambda home: next(current, None))
     assert debug_restart._restart(tmp_path) == 1
     assert client.posts == ["/api/login"]
+
+
+def test_two_level_launcher_chain_is_accepted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        debug_restart, "running_web_instance", lambda home: ("http://127.0.0.1:29501", 42)
+    )
+    monkeypatch.setattr(debug_restart.sys, "platform", "win32")
+    project = Path(debug_restart.__file__).resolve().parents[2]
+    processes = [
+        {
+            "ProcessId": 44,
+            "ParentProcessId": 43,
+            "ExecutablePath": str(project / ".venv" / "Scripts" / "pythonw.exe"),
+            "Started": "2026-11-23T13:00:02Z",
+        },
+        {
+            "ProcessId": 43,
+            "ParentProcessId": 42,
+            "ExecutablePath": str(project / ".venv" / "Scripts" / "pythonw.exe"),
+            "CommandLine": "pythonw.exe -m aureus.cli.windows_launcher --tray --owner-pid 42",
+            "Started": "2026-11-23T13:00:01Z",
+        },
+        {
+            "ProcessId": 42,
+            "ExecutablePath": str(project / "Aureus.exe"),
+            "Started": "2026-11-23T13:00:00Z",
+        },
+    ]
+    calls: list[list[str]] = []
+
+    def fake_process(command: list[str], **_kwargs: Any) -> CompletedProcess[str]:
+        calls.append(command)
+        output = "44" if len(calls) % 2 else json.dumps(processes)
+        return CompletedProcess(command, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(debug_restart.subprocess, "run", fake_process)
+    identity = debug_restart.ListenerIdentity(
+        42, "2026-11-23T13:00:00Z", 44, "2026-11-23T13:00:02Z"
+    )
+    assert debug_restart._verified_target(tmp_path) == ("http://127.0.0.1:29501", identity)
+    assert len(calls) == 2
+    processes[1]["ParentProcessId"] = 77
+    assert debug_restart._verified_target(tmp_path) is None
+    processes[1]["ParentProcessId"] = 42
+    processes[1]["CommandLine"] = "pythonw.exe -m unrelated.module --tray --owner-pid 42"
+    assert debug_restart._verified_target(tmp_path) is None
+
+
+def test_recovery_does_not_submit_password_or_claim_old_listener_replaced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, _current = _fake_restart(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        debug_restart,
+        "_listener_identity",
+        lambda port, owner: debug_restart.ListenerIdentity(42, "2026-01-01", 45, "2026-01-03"),
+    )
+    monkeypatch.setattr(debug_restart, "_old_listener_exited", lambda listener: False)
+    monkeypatch.setattr(debug_restart.time, "sleep", lambda seconds: None)
+    ticks = iter([0, 1, 60])
+    monkeypatch.setattr(debug_restart.time, "monotonic", lambda: next(ticks))
+    assert debug_restart._restart(tmp_path) == 1
+    assert client.posts == ["/api/login", "/api/restart"]
+
+
+def test_noninteractive_input_cannot_read_password(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _client, _current = _fake_restart(monkeypatch, tmp_path)
+    monkeypatch.setattr(debug_restart, "_interactive_terminal", lambda: False)
+    monkeypatch.setattr(debug_restart.getpass, "getpass", lambda label: pytest.fail("读取了密码"))
+    assert debug_restart._restart(tmp_path) == 1
+
+
+def test_old_listener_exit_requires_absence_not_pid_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(debug_restart.sys, "platform", "win32")
+    listener = debug_restart.ListenerIdentity(42, "2026-01-01", 44, "2026-01-02")
+    output = ['[{"Started":"2026-01-02"}]']
+
+    def fake_process(command: list[str], **_kwargs: Any) -> CompletedProcess[str]:
+        assert "ConvertTo-Json -InputObject @(" in command[-1]
+        return CompletedProcess(command, 0, stdout=output[0], stderr="")
+
+    monkeypatch.setattr(debug_restart.subprocess, "run", fake_process)
+    assert not debug_restart._old_listener_exited(listener)
+    output[0] = "[]"
+    assert debug_restart._old_listener_exited(listener)
+    output[0] = '[{"Started":"2026-01-03"}]'
+    assert debug_restart._old_listener_exited(listener)
+    output[0] = ""
+    assert not debug_restart._old_listener_exited(listener)
+
+
+@pytest.mark.parametrize("interrupted", [EOFError, KeyboardInterrupt])
+def test_confirmation_eof_or_interrupt_does_not_read_password(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, interrupted: type[BaseException]
+) -> None:
+    client, _current = _fake_restart(monkeypatch, tmp_path)
+    monkeypatch.setattr("builtins.input", lambda label: (_ for _ in ()).throw(interrupted()))
+    monkeypatch.setattr(debug_restart.getpass, "getpass", lambda label: pytest.fail("读取了密码"))
+    assert debug_restart._restart(tmp_path) == 1
+    assert client.posts == []
+
+
+@pytest.mark.parametrize("interrupted", [EOFError, KeyboardInterrupt])
+def test_password_eof_or_interrupt_never_sends_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, interrupted: type[BaseException]
+) -> None:
+    client, _current = _fake_restart(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        debug_restart.getpass, "getpass", lambda label: (_ for _ in ()).throw(interrupted())
+    )
+    assert debug_restart._restart(tmp_path) == 1
+    assert client.posts == []

@@ -3,10 +3,12 @@
 import argparse
 import getpass
 import json
+import re
 import subprocess
 import sys
 import time
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -17,8 +19,18 @@ from aureus.web.runner import running_web_instance, running_web_url
 from .windows_launcher import _launcher_home
 
 
-def _listener_owner(port: int) -> tuple[int, int] | None:
-    """由 Windows TCP 表核对监听端口所属进程；读不到时拒绝认证。"""
+@dataclass(frozen=True)
+class ListenerIdentity:
+    """受验证的启动器与内核进程；创建时刻避免复用 PID 冒充。"""
+
+    owner_pid: int
+    owner_started: str
+    listener_pid: int
+    listener_started: str
+
+
+def _listener_identity(port: int, owner: int) -> ListenerIdentity | None:
+    """只认可项目启动器 → 项目中转 → 实际监听者的直属链。"""
     if sys.platform != "win32":
         return None
     command = (
@@ -26,9 +38,7 @@ def _listener_owner(port: int) -> tuple[int, int] | None:
         + str(port)
         + " -State Listen -ErrorAction Stop | "
         + "Where-Object { $_.LocalAddress -eq '127.0.0.1' } | "
-        + "ForEach-Object { Get-CimInstance Win32_Process -Filter "
-        + "('ProcessId = ' + $_.OwningProcess) | "
-        + "Select-Object ProcessId, ParentProcessId }) | ConvertTo-Json -Compress"
+        + "Select-Object -ExpandProperty OwningProcess) | ConvertTo-Json -Compress"
     )
     try:
         completed = subprocess.run(
@@ -38,25 +48,76 @@ def _listener_owner(port: int) -> tuple[int, int] | None:
             timeout=5,
             check=True,
         )
-        owners = json.loads(completed.stdout)
+        listener_pids = json.loads(completed.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    if isinstance(owners, dict):
-        owners = [owners]
-    if not isinstance(owners, list) or not owners:
+    if isinstance(listener_pids, int):
+        listener_pids = [listener_pids]
+    if not isinstance(listener_pids, list) or len(set(listener_pids)) != 1:
         return None
-    if not all(isinstance(process, dict) for process in owners):
+    listener_pid = listener_pids[0]
+    if type(listener_pid) is not int:
         return None
-    processes = {(process.get("ProcessId"), process.get("ParentProcessId")) for process in owners}
-    if len(processes) != 1:
+    query = (
+        "$p = Get-CimInstance Win32_Process -Filter 'ProcessId = "
+        + str(listener_pid)
+        + "' -ErrorAction Stop; "
+        + "$m = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $p.ParentProcessId) "
+        + "-ErrorAction Stop; "
+        + "$o = Get-CimInstance Win32_Process -Filter 'ProcessId = "
+        + str(owner)
+        + "' -ErrorAction Stop; "
+        + "@($p, $m, $o) | Select-Object ProcessId, ParentProcessId, "
+        + "ExecutablePath, CommandLine, "
+        + "@{Name='Started'; Expression={$_.CreationDate.ToUniversalTime().ToString('o')}} "
+        + "| ConvertTo-Json -Compress"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        processes = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    pid, parent = processes.pop()
-    if type(pid) is not int or type(parent) is not int:
+    if not isinstance(processes, list) or len(processes) != 3:
         return None
-    return pid, parent
+    listener, middle, launcher = processes
+    if not all(isinstance(process, dict) for process in processes):
+        return None
+    root = Path(__file__).resolve().parents[2]
+    launcher_path = root / "Aureus.exe"
+    middle_path = root / ".venv" / "Scripts" / "pythonw.exe"
+    middle_args = middle.get("CommandLine")
+    match = (
+        re.search(r"(?<!\S)--owner-pid\s+(\d+)(?=\s|$)", middle_args)
+        if isinstance(middle_args, str)
+        else None
+    )
+    if (
+        listener.get("ProcessId") != listener_pid
+        or middle.get("ProcessId") != listener.get("ParentProcessId")
+        or launcher.get("ProcessId") != middle.get("ParentProcessId")
+        or launcher.get("ProcessId") != owner
+        or launcher.get("ExecutablePath", "").lower() != str(launcher_path).lower()
+        or middle.get("ExecutablePath", "").lower() != str(middle_path).lower()
+        or listener.get("ExecutablePath", "").lower() != str(middle_path).lower()
+        or not isinstance(middle_args, str)
+        or not re.search(r"(?<!\S)-m\s+aureus\.cli\.windows_launcher(?=\s|$)", middle_args)
+        or not re.search(r"(?<!\S)--tray(?=\s|$)", middle_args)
+        or match is None
+        or int(match.group(1)) != owner
+        or not all(isinstance(process.get("Started"), str) for process in processes)
+        or not (launcher["Started"] < middle["Started"] < listener["Started"])
+    ):
+        return None
+    return ListenerIdentity(owner, launcher["Started"], listener_pid, listener["Started"])
 
 
-def _verified_target(home: Path) -> tuple[str, int] | None:
+def _verified_target(home: Path) -> tuple[str, ListenerIdentity] | None:
     instance = running_web_instance(home)
     if instance is None:
         return None
@@ -68,11 +129,10 @@ def _verified_target(home: Path) -> tuple[str, int] | None:
         or not parts.port
         or parts.path not in ("", "/")
         or parts.query
-        or (listener := _listener_owner(parts.port)) is None
-        or owner not in listener
+        or (listener := _listener_identity(parts.port, owner)) is None
     ):
         return None
-    return instance
+    return url, listener
 
 
 def _status(client: httpx.Client) -> str | None:
@@ -84,23 +144,69 @@ def _status(client: httpx.Client) -> str | None:
     return instance if isinstance(instance, str) and instance else None
 
 
+def _interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _old_listener_exited(listener: ListenerIdentity) -> bool:
+    """旧内核是否已退出；不能确认则不报告接管完成。"""
+    if sys.platform != "win32":
+        return False
+    command = (
+        "ConvertTo-Json -InputObject @(Get-CimInstance Win32_Process -Filter 'ProcessId = "
+        + str(listener.listener_pid)
+        + "' -ErrorAction Stop | Select-Object "
+        + "@{Name='Started'; Expression={$_.CreationDate.ToUniversalTime().ToString('o')}}) "
+        + "-Compress"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        processes = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    if isinstance(processes, dict):
+        processes = [processes]
+    return isinstance(processes, list) and not any(
+        isinstance(process, dict) and process.get("Started") == listener.listener_started
+        for process in processes
+    )
+
+
 def _restart(home: Path) -> int:
     """只发一次重启请求；监听归属变化或协议异常均在提交前中止。"""
+    if not _interactive_terminal():
+        print("需要可交互的终端，已退出；未读取密码或发出重启请求。")
+        return 1
     target = _verified_target(home)
     if target is None:
         print("无法确认当前网页地址与监听进程的归属；未提交密码或重启请求。")
         return 1
-    if input("确认向该实例申请正常重启？输入 yes 继续：").strip() != "yes":
+    try:
+        confirmation = input("确认向该实例申请正常重启？输入 yes 继续：")
+    except (EOFError, KeyboardInterrupt):
+        print("已取消；未读取密码或发出重启请求。")
+        return 1
+    if confirmation.strip() != "yes":
         print("已取消；未提交密码或重启请求。")
         return 1
-    password = getpass.getpass("网页登录密码：")
+    try:
+        password = getpass.getpass("网页登录密码：")
+    except (EOFError, KeyboardInterrupt):
+        print("已取消；未发出重启请求。")
+        return 1
     if not password:
         print("未输入密码；未发出重启请求。")
         return 1
     if _verified_target(home) != target:
         print("目标实例发生变化；未提交密码或重启请求。")
         return 1
-    url, _owner = target
+    url, original_listener = target
     try:
         with httpx.Client(
             base_url=url, trust_env=False, follow_redirects=False, timeout=5
@@ -110,16 +216,10 @@ def _restart(home: Path) -> int:
                 print("登录失败或需先在网页修改默认密码；未发出重启请求。")
                 return 1
             previous = _status(client)
-            prior_listener = _listener_owner(httpx.URL(url).port or 0)
-            if previous is None or _verified_target(home) != target or prior_listener is None:
+            if previous is None or _verified_target(home) != target:
                 print("目标身份或监听归属无法确认；未发出重启请求。")
                 return 1
-            original_listener = _listener_owner(httpx.URL(url).port or 0)
-            if (
-                original_listener is None
-                or _verified_target(home) != target
-                or original_listener != prior_listener
-            ):
+            if _verified_target(home) != target:
                 print("提交前目标监听归属发生变化；未发出重启请求。")
                 return 1
             response = client.post("/api/restart", headers={"Origin": url})
@@ -130,29 +230,34 @@ def _restart(home: Path) -> int:
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 time.sleep(1)
-                updated = _verified_target(home)
-                if updated is None:
+                published = running_web_instance(home)
+                if (
+                    published is None
+                    or published[0] != url
+                    or published[1] != original_listener.owner_pid
+                ):
                     continue
                 try:
-                    new_url, _ = updated
-                    current_listener = _listener_owner(httpx.URL(new_url).port or 0)
-                    if current_listener is None or current_listener[0] == original_listener[0]:
+                    current_listener = _listener_identity(
+                        httpx.URL(url).port or 0, original_listener.owner_pid
+                    )
+                    if (
+                        current_listener is None
+                        or current_listener.owner_started != original_listener.owner_started
+                        or current_listener.listener_pid == original_listener.listener_pid
+                        or current_listener.listener_started <= original_listener.listener_started
+                        or not _old_listener_exited(original_listener)
+                    ):
                         continue
                     with httpx.Client(
-                        base_url=new_url, trust_env=False, follow_redirects=False, timeout=3
+                        base_url=url, trust_env=False, follow_redirects=False, timeout=3
                     ) as probe:
                         landing = probe.get("/")
                         if landing.status_code != 200:
                             continue
-                        new_login = probe.post("/api/login", json={"password": password})
-                        if new_login.status_code != 200:
-                            continue
-                        new_instance = _status(probe)
-                        if new_instance is None or new_instance == previous:
-                            continue
                 except (httpx.HTTPError, ValueError):
                     continue
-                print("已确认新监听进程接管，实例身份已变化，网页恢复。")
+                print("已确认同一启动器下的新监听进程接管且网页首页恢复；未核实新网页会话身份。")
                 return 0
             print("等待新内核接管超时；不会重复重启请求，请在网页核实。")
             return 1
