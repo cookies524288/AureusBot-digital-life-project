@@ -6,7 +6,7 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 
 Push-Location -LiteralPath $PSScriptRoot
 try {
-    & $python -m aureus.cli.debug_restart
+    & $python -m aureus.cli.debug_restart @args
     exit $LASTEXITCODE
 }
 finally {
