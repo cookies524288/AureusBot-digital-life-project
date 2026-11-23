@@ -12,7 +12,7 @@ AureusBot 运行在你自己的电脑上。它连续、独立、唯一，不依�
 
 ## 当前状态
 
-认知内核的 Phase 0（地基）、Phase 1（自我监控）和 Phase 2（反馈驱动）均已完成。接下来进入 Phase 3，迁移 MaiBot 的记忆、表达和人际关系，接入 QQ 群聊。内核验证安排在 Phase 3 或 Phase 4 之后。[路线图](docs/08-roadmap.md) · [阶段验收记录](docs/tasks/2.13.md)
+认知内核的 Phase 0 至 Phase 2 已完成。Phase 3 已完成 MaiBot 记忆、表达和人际关系的迁移预演，并通过模拟 QQ 群聊的收发与召回测试。真实群聊验收和生产切换仍在进行准备。内核验证安排在 Phase 3 或 Phase 4 之后。[路线图](docs/08-roadmap.md) · [迁移验收记录](docs/tasks/3.9.md)
 
 ## 快速开始
 
@@ -99,7 +99,7 @@ uv run aureus lab list                         # 列出可离线运行的实验
 
 ## 与 MaiBot 的关系
 
-AureusBot 是独立开发的 MaiBot 衍生项目。它移植了两部分 GPL-3.0 代码，分别用于回复分段与合并，以及记忆检索结果的引用格式化。移植范围、源文件和改动记录见第三方清单。项目整体采用 AGPL-3.0。[MaiBot 上游](https://github.com/Mai-with-u/MaiBot) · [上游许可证](https://github.com/Mai-with-u/MaiBot/blob/main/LICENSE) · [第三方代码清单](THIRD_PARTY.md) · [AureusBot 许可证](LICENSE)
+AureusBot 是独立开发的 MaiBot 衍生项目。来自 MaiBot 的 GPL-3.0 代码用于回复分段与合并、记忆引用格式化、黑话匹配、表达清洗和人物标识映射。长期记忆还复用了 A_Memorix 的有效期筛选、全文检索排序与淡化公式。项目整体采用 AGPL-3.0。[MaiBot 上游](https://github.com/Mai-with-u/MaiBot) · [上游许可证](https://github.com/Mai-with-u/MaiBot/blob/main/LICENSE) · [第三方代码清单](THIRD_PARTY.md) · [AureusBot 许可证](LICENSE)
 
 ## 文档
 

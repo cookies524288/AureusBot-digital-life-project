@@ -10,7 +10,7 @@ It is first a companion. It talks with you in a human-like way and offers emotio
 
 ## Status
 
-The cognitive kernel has completed Phase 0 (foundation), Phase 1 (self-monitoring), and Phase 2 (feedback-driven behavior). Phase 3 covers migration of MaiBot memories, expressions, and relationships, followed by QQ group chat integration. Kernel validation is scheduled for after Phase 3 or Phase 4. [Roadmap](docs/08-roadmap.md) · [Phase 2 acceptance record](docs/tasks/2.13.md) (in Chinese)
+The cognitive kernel has completed Phases 0 through 2. Phase 3 has rehearsed the migration of MaiBot memories, expressions, and relationships and tested message delivery and recall in simulated QQ groups. Live group testing and the production cutover are still pending. Kernel validation is scheduled for after Phase 3 or Phase 4. [Roadmap](docs/08-roadmap.md) · [Migration acceptance record](docs/tasks/3.9.md) (in Chinese)
 
 ## Quick start
 
@@ -96,7 +96,7 @@ For the reasons behind these choices, see [docs/07-tech-stack.md](docs/07-tech-s
 
 ## Relationship with MaiBot
 
-AureusBot is an independently developed derivative of MaiBot. It ports two pieces of GPL-3.0 code, one for splitting and merging replies and one for formatting references to retrieved memories. The third-party notice records the source files, scope, and changes. AureusBot as a whole is licensed under AGPL-3.0. [MaiBot upstream](https://github.com/Mai-with-u/MaiBot) · [Upstream license](https://github.com/Mai-with-u/MaiBot/blob/main/LICENSE) · [Third-party notice](THIRD_PARTY.md) · [AureusBot license](LICENSE)
+AureusBot is an independently developed derivative of MaiBot. It adapts GPL-3.0 code from MaiBot to split and merge replies, format memory references, match slang, normalize learned expressions, and map person identifiers. Its long-term memory also adapts validity filtering, full-text ranking, and time-based decay from A_Memorix. AureusBot as a whole is licensed under AGPL-3.0. [MaiBot upstream](https://github.com/Mai-with-u/MaiBot) · [Upstream license](https://github.com/Mai-with-u/MaiBot/blob/main/LICENSE) · [Third-party notice](THIRD_PARTY.md) · [AureusBot license](LICENSE)
 
 ## Documents
 
