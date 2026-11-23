@@ -29,6 +29,10 @@ class HeartbeatView(Protocol):
         """当前回复上下文的条数。"""
         ...
 
+    def working_memory_summaries(self) -> dict[str, str]:
+        """已持久化的注意力滚动摘要。"""
+        ...
+
     @property
     def cognitive_state(self) -> CognitiveState | None:
         """最近一拍的认知状态。"""
@@ -86,6 +90,7 @@ def register_timeline_routes(
         message_limit = heartbeat.context_message_limit()
         context = recent_dialogue(timeline, visibility=visibility, limit=message_limit)
         return {
+            "summary": heartbeat.working_memory_summaries(),
             "records": [
                 {
                     "id": record.id,

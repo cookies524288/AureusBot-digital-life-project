@@ -20,6 +20,7 @@ from aureus.actions.web import WebReader
 from aureus.agenda import AgendaStore
 from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
+from aureus.attention import WorkingMemory
 from aureus.body import Body, BodySampleStore
 from aureus.channels import CHANNEL_NAME as TERMINAL_CHANNEL
 from aureus.channels import (
@@ -299,6 +300,7 @@ def open_core(
                 logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         inbox_store = InboxStore(paths.database_file, the_clock) if runtime.qq.enabled else None
         heartbeat = Heartbeat(
+            working_memory=WorkingMemory(timeline, runtime.heartbeat),
             clock=the_clock,
             timeline=timeline,
             organs=gateway,

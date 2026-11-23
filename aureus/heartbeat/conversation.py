@@ -13,6 +13,7 @@ from uuid import uuid4
 from aureus.agenda import AgendaStore
 from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
+from aureus.attention import SummaryOutcome, WorkingMemory, route_scope
 from aureus.body import Body, BodyReading
 from aureus.common import (
     Clock,
@@ -67,7 +68,7 @@ from aureus.hormones import (
 from aureus.identity import Identity, IdentityLayer
 from aureus.memory import LanguageStore, MemoryHit, MemoryIndex
 from aureus.mood import MoodReading
-from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
+from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse, join_prompt
 from aureus.people import AffinityBook, HistoricalEntry, PeopleDirectory
 from aureus.safety import (
     CallRejectedError,
@@ -150,6 +151,7 @@ class _ReplyJob:
     effects: HormoneEffects | None = None
     with_interests: bool = False
     history_ids: tuple[int, ...] = ()
+    working_context: str = ""
     people_history: tuple[HistoricalEntry, ...] = ()
     inbox_attention: bool = False
     require_inbox_plan: bool = False
@@ -212,6 +214,7 @@ class _Thought:
         | asyncio.Task[PersonaReviewOutcome]
         | asyncio.Task[None]
         | asyncio.Task[ConsolidationOutcome]
+        | asyncio.Task[SummaryOutcome]
     )
     replying_to: Sequence[_Heard]
     strategy: ReplyStrategy
@@ -243,6 +246,8 @@ def _organ_request(
     purpose: CallPurpose = CallPurpose.USER_REPLY,
 ) -> OrganRequest:
     """规划和回复共用的请求格式；主动联系显式传 OPTIONAL（D76）。"""
+    if job.working_context and task in {"plan", "reply", "initiative_plan", "initiative_reply"}:
+        prompt = join_prompt([job.working_context, prompt])
     return OrganRequest(
         organ_id=organ_id,
         prompt=prompt,
@@ -275,6 +280,7 @@ class ConversationFlow:
         language_config: LanguageConfig | None = None,
         people: PeopleDirectory | None = None,
         people_config: PeopleConfig | None = None,
+        working_memory: WorkingMemory | None = None,
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
@@ -289,6 +295,30 @@ class ConversationFlow:
         self._language_config = language_config or LanguageConfig()
         self._people = people
         self._people_config = people_config or PeopleConfig()
+        self._working_memory = working_memory
+
+    def _working_context(self, target: Perception, ids: tuple[int, ...]) -> str:
+        if self._working_memory is None:
+            return ""
+        route = target.route
+        scope = (
+            route_scope(
+                target.visibility,
+                target.channel,
+                route.account_id,
+                route.kind,
+                route.recipient_id,
+                route.temporary_group_id,
+            )
+            if route is not None
+            else None
+        )
+        return self._working_memory.context(
+            owner=target.trust is TrustLevel.VERIFIED_USER
+            and target.visibility is VisibilityScope.USER_ONLY,
+            route=scope,
+            exclude=ids,
+        )
 
     def _conversation_job(
         self,
@@ -414,6 +444,7 @@ class ConversationFlow:
             and self._people_config.history_in_reply_enabled
             else ()
         )
+        history_ids = tuple(record.id for record in [*history, *messages])
         job = _ReplyJob(
             strategy=strategy,
             history=history,
@@ -428,7 +459,8 @@ class ConversationFlow:
             viewer_is_user=not contact,
             build_contexts=build_contexts,
             with_interests=bool(interests_state),
-            history_ids=tuple(record.id for record in [*history, *messages]),
+            history_ids=history_ids,
+            working_context=self._working_context(target, history_ids),
             people_history=people_history,
             inbox_attention=inbox_attention,
             require_inbox_plan=require_inbox_plan,

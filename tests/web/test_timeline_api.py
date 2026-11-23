@@ -27,6 +27,7 @@ class FakeHeartbeat:
         self.is_thinking = False
         self.limit = 2
         self.maintenance_paused = False
+        self.summaries: dict[str, str] = {}
 
     def set_maintenance_paused(self, paused: bool) -> None:
         self.maintenance_paused = paused
@@ -39,6 +40,9 @@ class FakeHeartbeat:
 
     def context_message_limit(self) -> int:
         return self.limit
+
+    def working_memory_summaries(self) -> dict[str, str]:
+        return self.summaries
 
 
 class Rig:
@@ -134,7 +138,7 @@ def test_types_filter_and_private_metadata_are_returned_without_mutation(rig: Ri
     assert data["records"][0]["metadata"] == metadata
     assert data["records"][0]["channel"] == "terminal"
     assert data["records"][1]["channel"] == ""
-    assert "summary" not in data
+    assert data["summary"] == {}
     assert rig.timeline.count_records() == 3
 
 
@@ -163,10 +167,20 @@ def test_empty_timeline_has_no_boundary_or_next_page(rig: Rig) -> None:
     rig.log_in()
     data = rig.client.get("/api/timeline").json()
     assert data == {
+        "summary": {},
         "records": [],
         "next_before_id": None,
         "context": {"message_limit": 2, "boundary_id": None},
     }
+
+
+def test_timeline_returns_latest_working_memory_summary_to_signed_in_user(rig: Rig) -> None:
+    rig.heartbeat.summaries = {"用户私聊": "已保存的摘要"}
+    assert rig.client.get("/api/timeline").status_code == 401
+    rig.log_in()
+    result = rig.client.get("/api/timeline?types=message").json()
+    assert result["records"] == []
+    assert result["summary"] == {"用户私聊": "已保存的摘要"}
 
 
 @pytest.mark.parametrize(("hours", "expected"), [(0, [2]), (9999, [1, 2])])

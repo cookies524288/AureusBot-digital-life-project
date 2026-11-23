@@ -73,6 +73,9 @@ class TimelineQuery(BaseModel):
     since_time: datetime | None = Field(default=None, description="只返回不早于此刻的记录")
     limit: int = Field(default=100, description="最多返回多少条记录")
     event_type: str = Field(default="", description="按事件类型过滤（留空表示不过滤）")
+    event_types: tuple[str, ...] = Field(
+        default=(), description="允许的事件类型（空元组表示不过滤）"
+    )
     actor_type: ActorType | None = Field(default=None, description="按执行者类型过滤")
     visible_to_current_user: bool = Field(default=False, description="只返回当前用户可见的记录")
     visibility: VisibilityScope | None = Field(default=None, description="只返回这个可见范围的记录")

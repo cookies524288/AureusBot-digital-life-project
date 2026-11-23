@@ -45,6 +45,7 @@ _FALLBACK_ORGANS = {
     "diary": "utils",
     "persona_review": "utils",
     "language_learning": "utils",
+    "working_memory_summary": "utils",
 }
 
 
@@ -72,6 +73,7 @@ def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict
         "persona_review": runtime.persona_growth.organ,
         "language_learning": runtime.language.organ,
         "memory_consolidation": "summarizer",
+        "working_memory_summary": "summarizer",
     }
     return {task: resolve_task_organ(primary, task, available) for task, primary in tasks.items()}
 
@@ -95,6 +97,7 @@ def organ_connections(
                         "diary",
                         "persona_review",
                         "language_learning",
+                        "working_memory_summary",
                     )
                 )
             ),

@@ -236,6 +236,10 @@ class TimelineDatabase:
         if query.event_type:
             conditions.append("event_type = ?")
             params.append(query.event_type)
+        if query.event_types:
+            placeholders = ",".join("?" for _ in query.event_types)
+            conditions.append(f"event_type IN ({placeholders})")
+            params.extend(query.event_types)
 
         if query.actor_type is not None:
             conditions.append("actor_type = ?")

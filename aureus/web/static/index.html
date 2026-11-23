@@ -629,8 +629,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class="page-body">
 <div class="card summary-card">
-<div class="card-head"><h3>滚动摘要</h3><span class="tag">还没有这个功能</span></div>
-<p class="muted" id="tl-summary-note">暂无滚动摘要。</p>
+<div class="card-head"><h3>滚动摘要</h3></div>
+<div id="tl-summary" class="muted">暂无滚动摘要。</div>
 </div>
 <div class="tl-toolbar">
 <select id="tl-hours" aria-label="时间范围">
@@ -1601,6 +1601,20 @@ async function loadTimeline(more, switching = false) {
   }
   missing.classList.add('hidden');
   if (!res.ok) { fail(res); return; }
+  const summary = $('tl-summary');
+  const entries = Object.entries(res.data.summary || {});
+  summary.replaceChildren(...entries.map(([source, text]) => {
+    const row = el('div');
+    let title = source;
+    if (source.startsWith('[')) {
+      const [, platform, account, kind, recipient, temporaryGroup] = JSON.parse(source);
+      const type = kind === 'group' ? '群聊' : '私聊';
+      title = [platform, account, type + ' ' + recipient, temporaryGroup].filter(Boolean).join(' · ');
+    }
+    row.append(el('h4', {text: title}), el('p', {text}));
+    return row;
+  }));
+  if (!entries.length) summary.textContent = '暂无滚动摘要。';
   tl.records = more ? res.data.records.concat(tl.records) : res.data.records;
   tl.next = res.data.next_before_id;
   tl.context = res.data.context;
@@ -2675,6 +2689,9 @@ const CFG_FIELDS = {
   'heartbeat.broadcast_cognitive_state': ['状态变化记录', '是否把认知状态的变化记进时间线。'],
   'heartbeat.shutdown_grace_seconds': ['关机等待上限（秒）', '关机时最多给正在执行的任务多少秒收尾。'],
   'heartbeat.recent_message_limit': ['常规对话条数', '平时回复时可以参考最近多少条对话。'],
+  'heartbeat.working_memory_enabled': ['工作记忆', '把已感知的近期经历和滚动摘要作为对话资料。保存后重启生效。'],
+  'heartbeat.working_memory_capacity': ['工作记忆容量', '累计达到此条数时整理最早的经历。保存后重启生效。'],
+  'heartbeat.working_memory_retain': ['保留近期经历条数', '每次整理后保留在工作记忆中的原始经历条数。保存后重启生效。'],
   'heartbeat.inbox_read_limit': ['自主翻阅条数上限', '每次自主翻阅从所有选中会话合计读取的消息条数。优先唤醒的来信单独处理。保存后重启生效。'],
   'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
   'heartbeat.low_message_limit': ['低电量对话条数', '低电量时可以参考最近多少条对话。'],

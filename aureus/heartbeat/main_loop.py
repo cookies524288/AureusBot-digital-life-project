@@ -26,7 +26,9 @@ from aureus.actions.web import WebReader
 from aureus.agenda import AgendaStore, describe_agenda
 from aureus.agenda.findings import FindingStore
 from aureus.agenda.interests import InterestStore
-from aureus.attention import Inbox, Priority
+from aureus.attention import Inbox, Priority, SummaryOutcome, WorkingMemory, summarize
+from aureus.attention.working_memory import ORGAN as WORKING_MEMORY_ORGAN
+from aureus.attention.working_memory import TASK as WORKING_MEMORY_TASK
 from aureus.body import Body, BodyReading, BodySampleStore, EnergyTier, sample_from_reading
 from aureus.common import (
     BudgetCalendar,
@@ -228,6 +230,7 @@ class Heartbeat:
         persona_growth: PersonaGrowthConfig | None = None,
         has_persona_organ: bool = True,
         inbox_store: InboxStore | None = None,
+        working_memory: WorkingMemory | None = None,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -278,9 +281,11 @@ class Heartbeat:
             persona_growth: 默认关闭的人设成长配置（D81）。
             has_persona_organ: 人设成长的总结器官是否已注册。
             inbox_store: 平台收件箱，未配置 QQ 时不启用。
+            working_memory: 已感知经历的原始焦点与滚动摘要。
         """
         self._clock = clock
         self._timeline = timeline
+        self._working_memory = working_memory
         self._organs = organs
         self._identity = identity
         self._config = config
@@ -343,6 +348,7 @@ class Heartbeat:
             language_config=self._language_config,
             people=people,
             people_config=people_config,
+            working_memory=working_memory,
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._memory_consolidator = (
@@ -603,6 +609,10 @@ class Heartbeat:
         """此刻回复会带多少条最近对话，与实际回复共用档位和压力降档规则（D84）。"""
         return self._current_strategy().message_limit
 
+    def working_memory_summaries(self) -> dict[str, str]:
+        """读取本次运行已恢复的分区摘要，供管理网页展示。"""
+        return self._working_memory.summaries() if self._working_memory is not None else {}
+
     def _describe_signals(self) -> list[str]:
         """疲劳、压力、夜间的一行读数；关掉的信号注明已关闭。"""
         reading = self._reading
@@ -711,6 +721,8 @@ class Heartbeat:
         now = self._clock.now()
         latest = self._timeline.query(TimelineQuery(limit=1, latest=True))
         downtime = assess_downtime(latest[0] if latest else None, now)
+        if self._working_memory is not None:
+            self._working_memory.restore()
         self._timeline.append(
             event_type=EVENT_WOKE_UP,
             content=f"醒来了。{downtime.describe(self._timezone)}",
@@ -851,7 +863,15 @@ class Heartbeat:
                 )
             )
             self._take_in_perceptions(browsing=True)
+        thought = self._thought
+        if (
+            self._unanswered
+            and thought is not None
+            and thought.task.get_name() == WORKING_MEMORY_TASK
+        ):
+            thought.task.cancel()
         self._maybe_start_thought()
+        self._maybe_summarize_working_memory()
         self._maybe_learn_language()
         self._maybe_start_initiative()
         self._maybe_start_exploration()
@@ -943,6 +963,10 @@ class Heartbeat:
         if thought.task.get_name() == language_runner.TASK_NAME:
             return
         assert outcome is not None
+        if isinstance(outcome, SummaryOutcome):
+            assert self._working_memory is not None
+            self._working_memory.finish(outcome, self._clock.now())
+            return
         if isinstance(outcome, ConsolidationOutcome):
             assert self._memory_consolidator is not None
             self._memory_consolidator.finish(outcome, self._clock.now())
@@ -1484,6 +1508,28 @@ class Heartbeat:
             task.add_done_callback(self._on_thought_done)
             self._thought = _Thought(task, (), self._current_strategy())
 
+    def _maybe_summarize_working_memory(self) -> None:
+        tracker = self._working_memory
+        if (
+            tracker is None
+            or self._stop_requested
+            or self._thought is not None
+            or self._unanswered
+            or self._pending
+            or resolve_task_organ(WORKING_MEMORY_ORGAN, WORKING_MEMORY_TASK, self._available_organs)
+            not in self._available_organs
+            or not self._permissions.check(ACTION_CALL_ORGAN).allowed
+        ):
+            return
+        strategy = self._current_strategy()
+        if strategy.effective_tier is EnergyTier.OVERDRAFT:
+            return
+        batch = tracker.prepare(self._clock.now(), strategy.model_preference)
+        if batch is not None:
+            task = asyncio.create_task(summarize(batch, self._call_organ), name=WORKING_MEMORY_TASK)
+            task.add_done_callback(self._on_thought_done)
+            self._thought = _Thought(task, (), strategy)
+
     def _maybe_consolidate_memory(self) -> None:
         """夜间空闲时才检查积累量，沿用唯一后台思考槽。"""
         consolidator, reading = self._memory_consolidator, self._reading
@@ -1857,7 +1903,7 @@ class Heartbeat:
             return  # 取消探索或日记不写结果，也不补记（D79、D80）。
         if thought.task.get_name() in ("aureus-persona-review", language_runner.TASK_NAME):
             return  # D81：取消不写结果，重启后允许再试。
-        if thought.task.get_name() == "aureus-memory-consolidation":
+        if thought.task.get_name() in ("aureus-memory-consolidation", WORKING_MEMORY_TASK):
             return
         if thought.initiative is not None:
             self._collect_initiative(
