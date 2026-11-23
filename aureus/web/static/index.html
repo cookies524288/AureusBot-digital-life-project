@@ -2341,6 +2341,7 @@ const CFG_SECTIONS = [
   ['heartbeat', '心跳与回复'],
   ['body', '身体'],
   ['hormones', '激素'],
+  ['cortisol', '皮质醇调节'],
   ['mood', '心情'],
   ['people', '人际'],
   ['empathy', '同理心'],
@@ -2368,6 +2369,12 @@ const CFG_FIELDS = {
   'safety.failure_pause_seconds': ['失败暂停时长（秒）', '触发失败保护后，等多少秒才允许再试。'],
   'heartbeat.tick_interval_seconds': ['心跳间隔（秒）', '程序每隔多少秒检查一次待处理的事。'],
   'heartbeat.advance_biomodel': ['旧神经递质模型', '心跳时是否推进旧版身体模拟。'],
+  'cortisol.enabled': ['启用调节', '根据本地时相和已结算的承诺失败推迟可选主动联系。'],
+  'cortisol.rise_seconds': ['上升时间（秒）', '从失败结算到该次增量达到峰值的时间。'],
+  'cortisol.half_life_seconds': ['峰后半衰期（秒）', '达到峰值后增量降到一半所需的时间。'],
+  'cortisol.baseline_span': ['昼夜跨度', '本地昼夜基线从谷值到峰值的无量纲跨度。'],
+  'cortisol.failure_peak': ['单次失败增量峰值', '一次结算失败可带来的最大无量纲增量。'],
+  'cortisol.defer_at': ['延后门槛', '读数达到门槛时，后续心跳会重新评估可选主动联系。'],
   'heartbeat.broadcast_cognitive_state': ['状态变化记录', '是否把认知状态的变化记进时间线。'],
   'heartbeat.shutdown_grace_seconds': ['关机等待上限（秒）', '关机时最多给正在执行的任务多少秒收尾。'],
   'heartbeat.recent_message_limit': ['常规对话条数', '平时回复时可以参考最近多少条对话。'],
@@ -2622,11 +2629,15 @@ function cfRow(sec, field) {
   const info = cfFieldInfo(prop);
   const readonly = cf.readonly.has(key);
   const [name, hint] = CFG_FIELDS[key] || [field, prop.description || field];
+  const value = sec === 'cortisol'
+    ? el('div', { class: 'mono' }, String(cfOriginal(sec, field)),
+        el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) }))
+    : cfControl(sec, field, info, readonly);
   return el('div', { class: 'cfg-field' },
     el('div', { class: 'name' }, settingTerm(name, hint, key), ' ',
       el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field }),
       readonly ? el('span', { class: 'tag', text: '只读' }) : null),
-    el('div', { class: 'cfg-control' }, cfControl(sec, field, info, readonly),
+    el('div', { class: 'cfg-control' }, value,
       !readonly && Object.hasOwn(prop, 'default')
         ? restoreButton(name, key, button => restoreConfigField(sec, field, button)) : null));
 }
@@ -2635,6 +2646,10 @@ function renderConfigSection(sec) {
   container.textContent = '';
   const [_, title] = CFG_SECTIONS.find(([k]) => k === sec) || [sec, sec];
   container.append(el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }))));
+  if (sec === 'cortisol') {
+    container.append(el('p', { class: 'muted',
+      text: '恢复单项默认值时，在 config/aureus.toml 的 [cortisol] 节只删除对应的键值行，保留其他项，保存后重启。' }));
+  }
   if (sec === '') {
     const font = el('select', {id:'cf-font'},
       el('option', {value:'pixel', text:'Ark Pixel（像素）'}),

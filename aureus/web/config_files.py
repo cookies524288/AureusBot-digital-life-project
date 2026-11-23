@@ -17,6 +17,7 @@ from aureus.common import (
     apply_toml_edit,
     validate_runtime_config,
 )
+from aureus.common.config import CortisolConfig
 from aureus.common.logging_setup import hide_secrets
 from aureus.common.vault import SecretVault, VaultError
 from aureus.organs import (
@@ -34,8 +35,8 @@ from aureus.organs.topology import organ_connections
 
 logger = logging.getLogger(__name__)
 
-# 改错会关闭网页或改变开放范围，只能直接编辑文件（D84、2.12b）。
 READONLY_CONFIG = (
+    # 改错会关闭网页或改变开放范围，只能直接编辑文件（D84、2.12b）。
     "config_version",
     "web.enabled",
     "web.allow_remote",
@@ -46,6 +47,7 @@ READONLY_CONFIG = (
     "qq.token_key",
     "qq.action_timeout_seconds",
     "qq.reconnect_seconds",
+    *(f"cortisol.{field}" for field in CortisolConfig.model_fields),
 )
 PASSWORD_SECTIONS = ("safety", "web")
 MODEL_ENTRY_TYPES = {"providers": ProviderConfig, "models": ModelConfig, "organs": OrganConfig}
@@ -70,6 +72,16 @@ def model_defaults(section: str) -> dict[str, Any]:
     """从实际配置模型取默认值，供表单和稀疏写入共用。"""
     fields = MODEL_ENTRY_TYPES[section].model_json_schema()["properties"]
     return {name: prop["default"] for name, prop in fields.items() if "default" in prop}
+
+
+class BiochemicalWriteError(ConfigError):
+    """网页保存及恢复入口遇到生化配置时使用同一拒写规则（D89、D91）。"""
+
+
+def check_biochemical_write(targets: Iterable[str]) -> None:
+    """拒绝整节和节内任何写入目标，包括恢复时要删除的键。"""
+    if any(target.partition(".")[0] == "cortisol" for target in targets):
+        raise BiochemicalWriteError("生化参数只能在 config/aureus.toml 中修改或逐项恢复。")
 
 
 def runtime_field_names(changes: dict[str, Any]) -> list[str]:
@@ -395,6 +407,7 @@ class ConfigService:
 
     def write_runtime(self, changes: dict[str, Any]) -> None:
         """只修改提交的字段，保留其他内容和注释；成功后只记字段名并提示重启。"""
+        check_biochemical_write(changes)
 
         def edit(document: TOMLDocument) -> None:
             for name, value in changes.items():
@@ -416,6 +429,7 @@ class ConfigService:
 
     def restore_runtime(self, key: str) -> tuple[Any, bool]:
         """仅删除一个运行配置覆盖，返回有效值和覆盖是否存在。"""
+        check_biochemical_write([key])
         section, separator, field = key.rpartition(".")
         defaults = RuntimeConfig().model_dump(mode="json")
         fields = defaults.get(section) if separator else defaults
