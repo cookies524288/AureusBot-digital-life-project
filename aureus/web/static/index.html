@@ -317,9 +317,15 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 @media (max-width:820px){.model-row{grid-template-columns:1fr}.model-row>.btn{margin-top:0;justify-self:start}}
 
 /* ---------- 设置 ---------- */
-.cfg-layout{display:grid;gap:20px;grid-template-columns:180px 1fr;align-items:start}
-.cfg-tabs{display:flex;flex-direction:column;gap:2px;position:sticky;top:0;max-height:calc(100vh - 150px);overflow-y:auto;scrollbar-width:thin}
-@media (max-width:820px){.cfg-layout{grid-template-columns:1fr}.cfg-tabs{flex-direction:row;overflow-x:auto;position:static}.cfg-tabs .nav-item{flex:none;width:auto}}
+#page-config{overflow:hidden}
+#page-config>.page-head{flex:none}
+.cfg-layout{flex:1;display:grid;gap:20px;grid-template-columns:180px minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-height:0}
+.cfg-layout:has(#cf-content.hidden){grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.cfg-layout:has(#cf-content.hidden)>.cfg-tabs{display:none}
+.cfg-tabs,.cfg-details{min-width:0;min-height:0;overflow:hidden auto;overscroll-behavior:contain;scrollbar-width:thin}
+.cfg-tabs{display:flex;flex-direction:column;gap:2px}
+.cfg-tabs .nav-item{flex:none}
+@media (max-width:820px){.cfg-layout{gap:12px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}.cfg-tabs{flex-direction:row;overflow:auto hidden}.cfg-tabs .nav-item{width:auto}}
 .cfg-field{display:grid;gap:4px 16px;grid-template-columns:minmax(0,1fr) minmax(0,220px);align-items:center;padding:10px 0;border-top:1px solid var(--border)}
 .cfg-field:first-child{border-top:0}
 .cfg-field .name{font-weight:600;font-size:14px}
@@ -657,7 +663,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
 <div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
-<div class="page-body stack">
+<div class="page-body cfg-layout">
+<div id="cf-tabs" class="cfg-tabs"></div>
+<div id="cf-details" class="cfg-details" role="region" aria-label="设置项" tabindex="0"><div class="stack">
 <div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
 <section id="qq-link" class="stack hidden" aria-labelledby="qq-link-title">
 <h3 id="qq-link-title">QQ 账号关联</h3>
@@ -674,13 +682,11 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 </section>
 <div id="cf-missing" class="empty hidden"></div>
-<div id="cf-content" class="cfg-layout hidden">
-<div id="cf-tabs" class="cfg-tabs"></div>
-<div class="stack">
+<div id="cf-content" class="stack hidden">
 <div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="current-password" style="max-width:220px;margin-left:8px"></div>
 <div id="cf-section" class="card"></div>
 </div>
-</div>
+</div></div>
 </div></section>
 <section id="page-prompts" class="page wide"><div class="page-head"><h2>Prompt 管理</h2></div>
 <div class="page-body stack">
@@ -2683,6 +2689,7 @@ function cfRow(sec, field) {
         ? restoreButton(name, key, button => restoreConfigField(sec, field, button)) : null));
 }
 function renderConfigSection(sec) {
+  $('cf-details').scrollTop = 0;
   const container = $('cf-section');
   container.textContent = '';
   const [_, title] = CFG_SECTIONS.find(([k]) => k === sec) || [sec, sec];
