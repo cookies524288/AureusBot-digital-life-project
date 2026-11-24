@@ -104,9 +104,10 @@ def timeline_page(
         canonical = store.existing_message_ids(
             key, (value for value in identifiers if isinstance(value, str) and value)
         )
+        excluded = store.excluded_timeline_ids(key, (row.id for row in page))
         unique = [
             row for row, value in zip(page, identifiers, strict=True)
-            if not isinstance(value, str) or value not in canonical
+            if row.id not in excluded and (not isinstance(value, str) or value not in canonical)
         ]
         rows.extend(unique[skip : skip + remaining])
         skip = max(0, skip - len(unique))

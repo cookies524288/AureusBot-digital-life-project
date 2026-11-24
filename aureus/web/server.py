@@ -37,6 +37,7 @@ from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
+from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
@@ -66,6 +67,7 @@ from .config_api import register_config_routes
 from .config_files import ConfigService
 from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
 from .inbox_api import register_inbox_routes
+from .inbox_retention_api import register_inbox_retention_routes
 from .language_package_api import register_language_package_routes
 from .memory_graph_api import (
     GraphGrants,
@@ -250,6 +252,7 @@ def create_app(
     | None = None,
     qq_link: AccountLink | None = None,
     inbox_store: InboxStore | None = None,
+    inbox_retention: HistoryRetention | None = None,
     allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
     inbox_archive_account_id: str | None = None,
     read_inbox_attachment: AttachmentReader | None = None,
@@ -535,6 +538,10 @@ def create_app(
         inbox_archive_account_id,
         read_inbox_attachment,
         resource_emojis,
+    )
+    register_inbox_retention_routes(
+        app, require_ready, sessions.is_active, _same_http_origin, auth,
+        inbox_retention, allows_inbox_conversation,
     )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock

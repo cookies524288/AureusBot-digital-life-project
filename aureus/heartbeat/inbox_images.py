@@ -7,8 +7,8 @@ from collections.abc import Awaitable, Callable
 from contextlib import closing
 from math import hypot, sumprod
 from pathlib import Path
+from sqlite3 import Connection, Row
 from sqlite3 import Error as SQLiteError
-from sqlite3 import Row
 from typing import Any
 
 from aureus.common.sqlite import open_connection
@@ -124,9 +124,21 @@ class InboxImageIndex:
         with closing(open_connection(self._path)) as connection, connection:
             connection.execute(
                 "INSERT OR IGNORE INTO inbox_image_vectors(message_id, attachment, space, vector)"
-                " VALUES (?, ?, ?, ?)",
-                (message_id, attachment, space, json.dumps(vector)),
+                " SELECT id, ?, ?, ? FROM inbox_messages WHERE id=?",
+                (attachment, space, json.dumps(vector), message_id),
             )
+
+    @staticmethod
+    def retention_vectors(connection: Connection, ids: str, *, remove: bool = False) -> int:
+        """统计或清理这些原件专有的向量；不触碰全局表情目录和其他原件。"""
+        if connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='inbox_image_vectors'"
+        ).fetchone() is None:
+            return 0
+        scope = "FROM inbox_image_vectors WHERE message_id IN (SELECT value FROM json_each(?))"
+        if remove:
+            return connection.execute("DELETE " + scope, (ids,)).rowcount
+        return int(connection.execute("SELECT COUNT(*) " + scope, (ids,)).fetchone()[0])
 
     def browse(self, before: int | None, limit: int) -> list[dict[str, Any]]:
         """按收录顺序显示来源会话、消息时间和附件引用。"""

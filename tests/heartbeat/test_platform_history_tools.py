@@ -1,7 +1,7 @@
 """用合成平台消息验证规划器实际只查本轮已读历史。"""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -114,23 +114,43 @@ async def test_planner_dispatch_reads_at_most_one_tool_and_does_not_fall_back(mo
 
 
 @pytest.mark.asyncio
-async def test_actual_heartbeat_declares_scope_and_uses_tool_message(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["read", "read_then_reply", "cleanup", "revoked_cleanup"])
+async def test_actual_heartbeat_declares_scope_and_uses_tool_message(tmp_path: Path, action: str) -> None:
     path = tmp_path / "test.db"
-    clock = ManualClock(NOW)
+    clock = ManualClock(NOW - timedelta(days=1))
     store, timeline = InboxStore(path, clock), TimelineDatabase(path, clock)
     timeline.open()
     stop = EmergencyStop(tmp_path / "halt.json", clock)
+    authorized = True
+    reading = action.startswith("read")
+    tool_name = "read_platform_history" if reading else "propose_platform_history_cleanup"
 
     class Organs:
         async def call(self, request: OrganRequest) -> OrganResponse:
+            nonlocal authorized
+            if request.organ_id == "replyer":
+                assert action == "read_then_reply"
+                return OrganResponse("replyer", "收到。")
             assert request.organ_id == "planner"
-            assert "read_platform_history" in {tool.name for tool in request.tools}
+            assert tool_name in {tool.name for tool in request.tools}
             if request.tool_history:
-                assert "旧文只给工具" in request.tool_history[0].results[0].content
+                result = request.tool_history[0].results[0].content
+                if reading:
+                    assert "旧文只给工具" in result
+                else:
+                    assert json.loads(result)["originals"] == 1
+                if action == "revoked_cleanup":
+                    authorized = False
                 assert "旧文只给工具" not in request.prompt
+                if action == "read_then_reply":
+                    return OrganResponse("planner", "", tool_calls=(ToolCall("reply", "reply", {
+                        "addressed_to_me": "yes", "reply_reference": "旧文只给工具",
+                        "intent": "旧文只给工具", "reason": "旧文只给工具",
+                    }),))
                 return OrganResponse("planner", "", tool_calls=(ToolCall("stop", "stop", {}),))
+            arguments = {"keyword": "旧文"} if reading else {"before_date": "2026-11-24"}
             return OrganResponse("planner", "", tool_calls=(ToolCall(
-                "read_platform_history", "read", {"keyword": "旧文"},
+                tool_name, action, arguments,
             ),))
 
     heart = Heartbeat(
@@ -142,10 +162,12 @@ async def test_actual_heartbeat_declares_scope_and_uses_tool_message(tmp_path: P
         config=HeartbeatConfig(inbox_debounce_enabled=False),
         permissions=PermissionChecker(stop), emergency_stop=stop, inbox_store=store,
     )
-    heart.attach_channel("qq", lambda _message: pytest.fail("未选择 reply"))
-    heart.set_inbox_route_filter(lambda key: key == KEY)
+    delivered = []
+    heart.attach_channel("qq", delivered.append)
+    heart.set_inbox_route_filter(lambda key: authorized and key == KEY)
     try:
         old = store.add(perception(KEY, "prior", "旧文只给工具"))
+        clock.advance(timedelta(days=1))
         assert old is not None
         store.mark_read([old.id])
         heart.wake_up()
@@ -154,8 +176,12 @@ async def test_actual_heartbeat_declares_scope_and_uses_tool_message(tmp_path: P
         await heart.wait_for_thought()
         heart.beat()
         logs = timeline.query(TimelineQuery(limit=50))
-        assert any("read_platform_history" in str(record.metadata) for record in logs)
+        assert any(tool_name in str(record.metadata) for record in logs)
         assert all("旧文只给工具" not in str(record.metadata) + record.content for record in logs)
+        assert bool(delivered) == (action == "read_then_reply")
+        assert heart.history_retention is not None
+        assert (heart.history_retention.pending(KEY) is not None) == (action == "cleanup")
+        assert store.get_visible_message(KEY, old.id) is not None
     finally:
         await heart.shut_down()
         timeline.close()

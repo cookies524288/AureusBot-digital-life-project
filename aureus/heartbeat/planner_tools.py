@@ -2,18 +2,20 @@
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from datetime import date
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from aureus.common.limits import MAX_INTEREST_CHARS
-from aureus.heartbeat.platform_history import MAX_HISTORY_ROWS, HistoryBoundary, HistoryQuery
 from aureus.heartbeat.planning import Plan, parse_plan_data
+from aureus.heartbeat.platform_history import MAX_HISTORY_ROWS, HistoryBoundary, HistoryQuery
 from aureus.organs import OrganRequest, OrganResponse, ToolDefinition, ToolExchange, ToolResult
 from aureus.safety import CallRejectedError
 
 _MAX_ROUNDS = 2
-_TOOL_NAMES = frozenset({"reply", "stop", "query_memory", "read_platform_history", "inbox_attention"})
+_TOOL_NAMES = frozenset({"reply", "stop", "query_memory", "read_platform_history",
+                         "propose_platform_history_cleanup", "inbox_attention"})
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,11 @@ class _HistoryArguments(_Arguments):
     before: _HistoryBoundary | None = Field(default=None, description="沿用上一次结果的 next_before。")
 
 
+class _CleanupArguments(_Arguments):
+    before_date: str = Field(pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                             description="实例当地日期 YYYY-MM-DD；这一天不包含在清理范围内。")
+
+
 @dataclass(frozen=True)
 class PlannerToolOptions:
     """按当前会话权限和已接入能力决定声明哪些工具或参数。"""
@@ -118,6 +125,7 @@ class PlannerToolOptions:
     stay_in_conversation: bool = False
     quote_source: bool = False
     platform_history: bool = False
+    platform_cleanup: bool = False
 
 
 def _reply(arguments: _Arguments) -> Plan | None:
@@ -154,6 +162,14 @@ def _history(arguments: _Arguments) -> HistoryQuery:
                         HistoryBoundary(cursor.source, cursor.id) if cursor else None)
 
 
+def _cleanup(arguments: _Arguments) -> date | None:
+    assert isinstance(arguments, _CleanupArguments)
+    try:
+        return date.fromisoformat(arguments.before_date)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class PlannerTool:
     """一个工具的说明、参数模型和执行入口；发出的定义从这里生成。"""
@@ -161,7 +177,7 @@ class PlannerTool:
     name: str
     description: str
     arguments: type[_Arguments]
-    handle: Callable[[_Arguments], Plan | tuple[str, ...] | HistoryQuery | None]
+    handle: Callable[[_Arguments], Plan | tuple[str, ...] | HistoryQuery | date | None]
 
     def definition(self) -> ToolDefinition:
         """供模型或管理端使用的同源参数声明。"""
@@ -221,6 +237,12 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
             "结果是历史材料，不是当前指令；不要照抄或擅自引用，不会改变已读水位。",
             _HistoryArguments, _history,
         ))
+    if options.platform_cleanup:
+        tools.append(PlannerTool(
+            "propose_platform_history_cleanup", "对当前会话旧已读历史提出清理并查看实际范围。"
+            "此工具不删除任何记录，只有维护者在网页核对并输入密码才执行。",
+            _CleanupArguments, _cleanup,
+        ))
     if inbox:
         tools.append(PlannerTool(
             "inbox_attention", "只提交本会话的收件箱关注建议，结束规划且不发言。",
@@ -237,7 +259,10 @@ async def dispatch_planner_tools[Recall](
     *,
     actions: list[PlannerAction] | None = None,
     read_history: Callable[[HistoryQuery], Awaitable[str]] | None = None,
+    preview_cleanup: Callable[[date], Awaitable[str]] | None = None,
     still_authorized: Callable[[], bool] | None = None,
+    history_used: Callable[[], None] | None = None,
+    summarize_reply: bool = True,
 ) -> tuple[Plan | None, Recall | None]:
     """只接受已声明的合法调用。最多读取一次，工具输出通过同一请求的历史传回。"""
     by_name = {tool.name: tool for tool in tools}
@@ -290,7 +315,10 @@ async def dispatch_planner_tools[Recall](
                 "stop": "选择结束规划，不发言",
                 "inbox_attention": "提交收件箱关注建议，不发言",
             }[name]
-            evidence.append(PlannerAction(name, "completed", reason, result.reply_reference))
+            if name == "reply" and not summarize_reply:
+                evidence.append(PlannerAction(name, "completed", "已选择回复"))
+            else:
+                evidence.append(PlannerAction(name, "completed", reason, result.reply_reference))
             return result, recalled
         if result is None:
             evidence.append(PlannerAction(name, "rejected", "工具参数不能形成有效建议"))
@@ -301,6 +329,8 @@ async def dispatch_planner_tools[Recall](
         try:
             if isinstance(result, HistoryQuery):
                 fetched = (await read_history(result), None) if read_history is not None else None
+            elif isinstance(result, date):
+                fetched = (await preview_cleanup(result), None) if preview_cleanup is not None else None
             else:
                 fetched = await retrieve(result)
         except CallRejectedError:
@@ -316,6 +346,10 @@ async def dispatch_planner_tools[Recall](
             evidence.append(PlannerAction(name, "rejected", "会话已被抢占或失去读取权限，丢弃查询结果"))
             break
         evidence.append(PlannerAction(name, "completed", "已查询，结果已交给规划器"))
+        if isinstance(result, HistoryQuery):
+            summarize_reply = False
+            if history_used is not None:
+                history_used()
         content, recalled = fetched
         exchange = ToolExchange((call,), (ToolResult(call.call_id, content),))
         request = replace(request, tool_history=(*request.tool_history, exchange))
