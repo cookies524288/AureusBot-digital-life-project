@@ -1,6 +1,6 @@
 # 长期记忆：文字包导入前检视
 
-状态：待实现
+状态：待评审
 范围：路线图 Phase 3 的资源管理后续；沿用 D99 的可逆移除边界。
 
 ## 先读
@@ -12,7 +12,7 @@
 ## 目标和验收
 
 - 实际长期记忆 → 导入导出页选文件即检视，完整校验后可取消或确认追加。坏包、文件变更、取消和迟到结果不得沿用旧确认。
-- `POST /api/resources/memory/transfer/preview` 使用旧导入的登录、同源、媒体类型和 2 GiB 上传限制，共用落盘临时文件和流式解析。扫描到包尾才返回；不连接本地记忆库、不修改记忆、不留存包或整包解析结果。
+- `POST /api/resources/memory/transfer/preview` 使用与旧导入相同的登录就绪条件、同源、媒体类型和 2 GiB 上传限制，共用落盘临时文件和流式解析。检视使用现有只读会话检查，不续期；扫描到包尾才返回，不连接本地记忆库、不修改记忆、不留存包或整包解析结果。
 - 响应只有版本、包内条目总数及按来源表可可靠区分的固定分类计数，未知表合计为其他。无正文、来源键、证据细节或文件名。分类总和等于包内条数，不预估新增。确认把已检视的同一个浏览器 `File` 原样交给原 `POST /api/resources/memory/transfer`，旧接口无需先检视，仍按原样重新校验、原子追加、跳过相同或整包回滚。
 
 ## 改动一览与接口
@@ -26,10 +26,14 @@
 
 ## 自检清单
 
-- [ ] 混合包、空包和有坏尾的包按预期处理；登录、同源、类型和长度限制有效；不读取/写入目标库，响应不泄露正文。
-- [ ] 390 px 实际网页覆盖加载、失败、取消、换文件、迟到预览、确认与结果；无确认时不调用写接口。
-- [ ] 确认走真实导入；测试证实重复跳过，冲突整批回滚，旧接口保持兼容。
-- [ ] 专项先红后绿，记录检查结果与与上游的剩余差异。
+- [x] 混合包及仅读文件：`test_memory_package_preview_counts_all_rows_before_confirming_real_import`；空包、坏尾、版本、同源、类型和长度：`test_memory_package_preview_rejects_bad_tails_and_obeys_upload_guards`；生产组装的登录条件和不续期：`test_memory_package_preview_requires_ready_session_without_touching_it`。
+- [x] `test_memory_package_preview_requires_current_file_confirmation_at_390px` 实点验证加载、坏尾提示、取消、换文件、取消选件、迟到响应、确认、无横向溢出和结果，确认前无写请求，上传的正是当前通过检视的选件。
+- [x] `test_memory_package_browser_confirm_uses_real_transfer` 从 390 px 实际页面进入，通过真实 Web 路由确认并检查合成库，检视前后未写记录，确认后原件入库。`test_memory_package_preview_counts_all_rows_before_confirming_real_import` 和 `test_memory_file_roundtrip_and_conflicts_are_atomic` 覆盖重复跳过、冲突回滚和旧接口兼容。
+- [x] 新增的 3 项接口和 1 项浏览器回归在旧实现上因缺入口/选文件不检视先红；改动后记忆交换、资源浏览、导航、只读检修和 Web 组装 **54 项通过**。5 个改动 Python 文件通过 Ruff 规范/格式、Pyright；8 条架构规则、`node --check` 和 `git diff --check` 通过。留待主审收尾跑全量；未接触正式数据、实例或主线。
+
+## 对照结论
+
+检视通过只表示当前 JSONL 可解析且完整，不能判断目标库冲突或新增数，不是上游安装预检。上游的 `knowledge`/`full` 用带清单和校验值的容器，另有图片向量兼容提示、安装范围及归属、卸载和仅限空库的 `full` 恢复；本步均不实现。上游 `full` 可保存选定范围的关系及实体状态、情景、事实转换及证据、画像、图像和向量等成员；Aureus 文字包不承诺恢复这些子系统的运行状态，也不是整机备份。
 
 ## 不做
 

@@ -922,19 +922,21 @@ function el(tag, props, ...kids) {
 }
 
 // 所有接口都走这里。返回 {ok, status, data, retryAfter}；网络断了 status 是 0。
-async function api(path, method, body, headers = {}) {
+async function api(path, method, body, headers = {}, signal) {
   const session = state.loaded;
-  const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin' };
+  const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin', signal };
   if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/octet-stream'; opt.body = body;
   } else if (path.startsWith('/api/resources/learning/package/') && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/json'; opt.body = body;
+  } else if ((path === '/api/resources/memory/transfer' || path === '/api/resources/memory/transfer/preview') && method === 'POST' && body instanceof Blob) {
+    opt.headers['Content-Type'] = 'application/x-ndjson'; opt.body = body;
   } else if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   let r;
   try { r = await fetch(path, opt); } catch (e) { return { ok: false, status: 0, data: null }; }
   let data = null;
   try { data = await r.json(); } catch (e) { /* 没有正文也可以 */ }
-  if (r.status === 401 && state.loggedIn && session === state.loaded) {
+  if (r.status === 401 && !signal?.aborted && state.loggedIn && session === state.loaded) {
     // 改密码时旧密码不对也会返回 401，先确认会话是否真的失效。
     if (path === '/api/status') showAuth('login', '登录已失效，请重新登录。');
     else await api('/api/status');

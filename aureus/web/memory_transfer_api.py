@@ -1,14 +1,15 @@
-"""网页登录后浏览记忆流、下载和追加导入长期记忆。"""
+"""网页登录后浏览记忆流、下载、检视和追加导入长期记忆。"""
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import timedelta
 from tempfile import TemporaryFile
 from typing import Annotated, Any, BinaryIO, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import AwareDatetime
 from starlette.background import BackgroundTask
 
@@ -18,6 +19,7 @@ from aureus.memory.transfer import (
     ARCHIVE_MEDIA_TYPE,
     MemoryArchiveConflictError,
     MemoryArchiveError,
+    inspect_archive,
 )
 
 from .resource_api import DEFAULT_SIZE, MAX_SIZE
@@ -32,12 +34,34 @@ def _download(file: BinaryIO) -> Iterator[bytes]:
     yield from iter(lambda: file.read(_CHUNK_SIZE), b"")
 
 
+@asynccontextmanager
+async def _read_upload(request: Request) -> AsyncIterator[BinaryIO]:
+    if request.headers.get("content-type") != ARCHIVE_MEDIA_TYPE:
+        raise HTTPException(415, "请选择 Aureus 导出的 JSONL 记忆包。")
+    with cast(BinaryIO, TemporaryFile()) as file:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > _MAX_ARCHIVE_BYTES:
+                raise HTTPException(413, "记忆包最大为 2 GiB。")
+            await asyncio.to_thread(file.write, chunk)
+        file.seek(0)
+        try:
+            yield file
+        except MemoryArchiveConflictError as error:
+            raise HTTPException(409, str(error)) from error
+        except MemoryArchiveError as error:
+            raise HTTPException(422, str(error)) from error
+
+
 def register_memory_transfer_routes(
     app: FastAPI,
     require_ready: Callable[..., Awaitable[str]],
     same_origin: Callable[[Request], bool],
     memory: MemoryIndex | None,
     clock: Clock | None = None,
+    *,
+    require_preview_access: Callable[..., Awaitable[str]],
 ) -> None:
     """注册记忆流及文件交换，数据库和文件操作交给后台线程。"""
     flow_clock = clock or SystemClock()
@@ -109,6 +133,18 @@ def register_memory_transfer_routes(
             },
         )
 
+    @app.post(_TRANSFER_PATH + "/preview")
+    async def preview_memory(
+        request: Request, _token: Annotated[str, Depends(require_preview_access)]
+    ) -> JSONResponse:
+        if not same_origin(request):
+            raise HTTPException(403, "请从当前网页检视长期记忆包。")
+        if memory is None:
+            raise HTTPException(409, "长期记忆功能当前关闭。")
+        async with _read_upload(request) as file:
+            report = await asyncio.to_thread(inspect_archive, file)
+        return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
     @app.post(_TRANSFER_PATH)
     async def import_memory(
         request: Request, _token: Annotated[str, Depends(require_ready)]
@@ -117,20 +153,6 @@ def register_memory_transfer_routes(
             raise HTTPException(403, "请从当前网页导入长期记忆。")
         if memory is None:
             raise HTTPException(409, "长期记忆功能当前关闭。")
-        if request.headers.get("content-type") != ARCHIVE_MEDIA_TYPE:
-            raise HTTPException(415, "请选择 Aureus 导出的 JSONL 记忆包。")
-        with cast(BinaryIO, TemporaryFile()) as file:
-            size = 0
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > _MAX_ARCHIVE_BYTES:
-                    raise HTTPException(413, "记忆包最大为 2 GiB。")
-                await asyncio.to_thread(file.write, chunk)
-            file.seek(0)
-            try:
-                added, skipped = await asyncio.to_thread(memory.import_archive, file)
-            except MemoryArchiveConflictError as error:
-                raise HTTPException(409, str(error)) from error
-            except MemoryArchiveError as error:
-                raise HTTPException(422, str(error)) from error
+        async with _read_upload(request) as file:
+            added, skipped = await asyncio.to_thread(memory.import_archive, file)
         return {"added": added, "skipped": skipped}

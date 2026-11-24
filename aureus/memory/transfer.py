@@ -22,8 +22,10 @@ from aureus.memory.history import (
     read_history,
 )
 
-ARCHIVE_HEADER = {"format": "aureus-memory", "version": 1}
+_ARCHIVE_VERSION = 1
+ARCHIVE_HEADER = {"format": "aureus-memory", "version": _ARCHIVE_VERSION}
 ARCHIVE_MEDIA_TYPE = "application/x-ndjson"
+_ARCHIVE_CATEGORIES = ("messages", "paragraphs", "relations", "fact_claims", "episodes", "other")
 
 
 class MemoryArchiveError(ValueError):
@@ -195,3 +197,13 @@ def import_archive(db_path: Path, file: BinaryIO) -> tuple[int, int]:
     finally:
         conn.close()
     return added, skipped
+
+
+def inspect_archive(file: BinaryIO) -> dict[str, int | dict[str, int]]:
+    """从头到尾校验并按来源表计数，不访问本地库；坏包抛出 MemoryArchiveError。"""
+    counts: dict[str, int] = dict.fromkeys(_ARCHIVE_CATEGORIES, 0)
+    for _, entry in _parse_archive(file):
+        table = entry.source.table
+        category = "messages" if table == "mai_messages" else table
+        counts[category if category in counts else "other"] += 1
+    return {"version": _ARCHIVE_VERSION, "total": sum(counts.values()), "counts": counts}

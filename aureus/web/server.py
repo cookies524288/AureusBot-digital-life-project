@@ -465,7 +465,14 @@ def create_app(
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock
     )
-    register_memory_transfer_routes(app, require_ready, _same_http_origin, resource_memory, clock)
+    register_memory_transfer_routes(
+        app,
+        require_ready,
+        _same_http_origin,
+        resource_memory,
+        clock,
+        require_preview_access=require_inspection_access,
+    )
     register_memory_graph_routes(
         app, require_ready, resource_memory, memory_graph_grants, sessions.is_active
     )
