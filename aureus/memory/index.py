@@ -168,9 +168,10 @@ class MemoryHit:
     is_recallable: bool = True
     original_text: str | None = None
 
-
-def _is_summary_hit(hit: MemoryHit) -> bool:
-    return hit.source is not None and hit.source.table == "summary_facts"
+    @property
+    def is_summary_fact(self) -> bool:
+        """是否来自需要在对话消费时重验的增量事实。"""
+        return self.source is not None and self.source.table == "summary_facts"
 
 
 def _search_extracted(
@@ -526,23 +527,23 @@ class MemoryIndex:
         self, hits: Sequence[MemoryHit], target: SummaryScope | None
     ) -> list[MemoryHit]:
         """规划之后再次核对已选会话事实，不把撤权的材料送给回复器。"""
-        if not any(_is_summary_hit(hit) for hit in hits):
+        if not any(hit.is_summary_fact for hit in hits):
             return list(hits)
         allows, check = self.summary_scope_allowed, self.summary_evidence
         if allows is None or check is None or target is None or not allows(target):
-            return [hit for hit in hits if not _is_summary_hit(hit)]
+            return [hit for hit in hits if not hit.is_summary_fact]
         with closing(open_connection(self._db_path)) as conn:
             conn.execute("BEGIN")
             verified = []
             for hit in hits:
-                if not _is_summary_hit(hit) or hit.source is None:
+                if not hit.is_summary_fact or hit.source is None:
                     verified.append(hit)
                     continue
                 row = summary_detail(conn, hit.source, allows, check)
                 if row is not None and row.is_recallable and row.text[:MAX_HIT_CHARS] == hit.text:
                     verified.append(hit)
             if not allows(target):
-                return [hit for hit in verified if not _is_summary_hit(hit)]
+                return [hit for hit in verified if not hit.is_summary_fact]
             return verified
 
     def set_resources_removed(
