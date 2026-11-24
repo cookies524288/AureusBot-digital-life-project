@@ -17,6 +17,7 @@ from aureus.heartbeat.initiative import InitiativeDecision, InitiativeState
 from aureus.heartbeat.initiative_history import read_initiative_history
 from aureus.heartbeat.perception import Perception
 from aureus.heartbeat.planning import InitiativePlan
+from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.organs import OrganResponse
 from aureus.timeline import (
     ActorType,
@@ -192,6 +193,7 @@ class InitiativeTracker:
                         "channel": target.channel,
                         "organ_id": response.organ_id,
                         "reply_segments": list(parts),
+                        INTERNAL_REPLY_RECORD: True,
                         **route_metadata,
                     },
                 )

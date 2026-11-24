@@ -9,8 +9,29 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from aureus.common.limits import MAX_INTEREST_CHARS
 from aureus.heartbeat.planning import Plan, parse_plan_data
 from aureus.organs import OrganRequest, OrganResponse, ToolDefinition, ToolExchange, ToolResult
+from aureus.safety import CallRejectedError
 
 _MAX_ROUNDS = 2
+_TOOL_NAMES = frozenset({"reply", "stop", "query_memory", "inbox_attention"})
+
+
+@dataclass(frozen=True)
+class PlannerAction:
+    """可展示的行动证据，只保留已知动作、状态与显式回复参考。"""
+
+    action: str
+    status: Literal["requested", "rejected", "not_run", "failed", "completed"]
+    reason: str = ""
+    reference: str = ""
+
+    def to_metadata(self) -> dict[str, str]:
+        """不保存工具参数、工具结果或器官的原始响应。"""
+        details = {"action": self.action, "status": self.status}
+        if self.reason:
+            details["reason"] = self.reason
+        if self.reference:
+            details["reference"] = self.reference
+        return details
 
 
 class _Arguments(BaseModel):
@@ -176,33 +197,74 @@ async def dispatch_planner_tools[Recall](
     tools: tuple[PlannerTool, ...],
     call_organ: Callable[[OrganRequest], Awaitable[OrganResponse]],
     retrieve: Callable[[tuple[str, ...]], Awaitable[tuple[str, Recall] | None]],
+    *,
+    actions: list[PlannerAction] | None = None,
 ) -> tuple[Plan | None, Recall | None]:
     """只接受已声明的合法调用。最多读取一次，工具输出通过同一请求的历史传回。"""
     by_name = {tool.name: tool for tool in tools}
     request = replace(request, tools=tuple(tool.definition() for tool in tools))
     recalled: Recall | None = None
+    evidence = [] if actions is None else actions
     for round_number in range(_MAX_ROUNDS):
-        response = await call_organ(request)
-        if response.metadata.get("tool_calls_invalid") or len(response.tool_calls) != 1:
+        try:
+            response = await call_organ(request)
+        except CallRejectedError:
+            evidence.append(PlannerAction("planner", "rejected", "安全网关拒绝规划调用"))
+            raise
+        except Exception:
+            evidence.append(PlannerAction("planner", "failed", "规划调用失败"))
+            raise
+        calls = response.tool_calls
+        if response.metadata.get("tool_calls_invalid") or len(calls) > 1:
+            evidence.extend(
+                PlannerAction(call.name if call.name in _TOOL_NAMES else "unknown_tool", "requested")
+                for call in calls
+            )
+            evidence.append(PlannerAction("planner", "rejected", "工具请求无效或不止一个，未执行"))
             break
-        call = response.tool_calls[0]
+        if not calls:
+            evidence.append(PlannerAction("planner", "not_run", "没有选择工具"))
+            break
+        call = calls[0]
+        name = call.name if call.name in _TOOL_NAMES else "unknown_tool"
+        evidence.append(PlannerAction(name, "requested"))
         tool = by_name.get(call.name)
         if tool is None or not call.call_id or (
             request.tool_history and call.call_id == request.tool_history[-1].calls[0].call_id
         ):
+            evidence.append(PlannerAction(name, "rejected", "工具未启用或调用编号无效"))
             break
         try:
             arguments = tool.arguments.model_validate(call.arguments)
         except ValidationError:
+            evidence.append(PlannerAction(name, "rejected", "工具参数无效"))
             break
         result = tool.handle(arguments)
         if isinstance(result, Plan):
+            reason = result.reason if result.should_reply else {
+                "stop": "选择结束规划，不发言",
+                "inbox_attention": "提交收件箱关注建议，不发言",
+            }[name]
+            evidence.append(PlannerAction(name, "completed", reason, result.reply_reference))
             return result, recalled
-        if result is None or round_number + 1 == _MAX_ROUNDS:
+        if result is None:
+            evidence.append(PlannerAction(name, "rejected", "工具参数不能形成有效建议"))
             break
-        fetched = await retrieve(result)
+        if round_number + 1 == _MAX_ROUNDS:
+            evidence.append(PlannerAction(name, "not_run", "本轮已达到查询上限"))
+            break
+        try:
+            fetched = await retrieve(result)
+        except CallRejectedError:
+            evidence.append(PlannerAction(name, "rejected", "安全网关拒绝查询"))
+            raise
+        except Exception:
+            evidence.append(PlannerAction(name, "failed", "查询失败"))
+            raise
         if fetched is None:
+            evidence.append(PlannerAction(name, "failed", "没有取得查询结果"))
             break
+        evidence.append(PlannerAction(name, "completed", "已查询，结果已交给规划器"))
         content, recalled = fetched
         exchange = ToolExchange((call,), (ToolResult(call.call_id, content),))
         request = replace(request, tool_history=(*request.tool_history, exchange))

@@ -316,11 +316,15 @@ class QQChannel:
             if previous is not None:
                 await previous
             if self._transport.socket is not socket or not self._allows_route(route):
+                if message.report_delivery_failure is not None:
+                    message.report_delivery_failure("QQ 连接或目的地已失效，未投递。")
                 return
             image = None
             digest = message.emoji_digest
             if digest is not None:
                 if self._read_emoji is None or not self._allows_emoji(message, route):
+                    if message.report_delivery_failure is not None:
+                        message.report_delivery_failure("表情不满足发送条件，未投递。")
                     return
                 image = await asyncio.to_thread(self._read_emoji, digest)
                 if (
@@ -328,6 +332,8 @@ class QQChannel:
                     or self._transport.socket is not socket
                     or not self._allows_emoji(message, route)
                 ):
+                    if message.report_delivery_failure is not None:
+                        message.report_delivery_failure("表情或 QQ 连接不可用，未投递。")
                     return
             params = encode_message(message, route, image=image)
             await self._transport.call(socket, "send_msg", params)
@@ -337,3 +343,5 @@ class QQChannel:
                 await asyncio.to_thread(self._record_emoji_use, digest)
         except (OSError, TimeoutError, WebSocketException, OneBotError, SQLiteError) as error:
             logger.warning("QQ 发送失败（%s）", type(error).__name__)
+            if message.report_delivery_failure is not None:
+                message.report_delivery_failure("QQ 未确认这段回复投递成功。")

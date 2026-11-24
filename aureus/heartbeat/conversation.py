@@ -4,7 +4,7 @@ import asyncio
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import tzinfo
 from math import hypot, sumprod
 from typing import Protocol
@@ -52,7 +52,12 @@ from aureus.heartbeat.perception import (
     TrustLevel,
 )
 from aureus.heartbeat.persona_growth_runner import PersonaReviewOutcome
-from aureus.heartbeat.planner_tools import PlannerToolOptions, dispatch_planner_tools, planner_tools
+from aureus.heartbeat.planner_tools import (
+    PlannerAction,
+    PlannerToolOptions,
+    dispatch_planner_tools,
+    planner_tools,
+)
 from aureus.heartbeat.planning import (
     InitiativePlan,
     Plan,
@@ -169,6 +174,7 @@ class _ReplyJob:
     planner_run: "_PlannerRun | None" = None
     emoji_history: Sequence[TimelineRecord] | None = None
     language_scope_key: str | None = None
+    round_trace: "_RoundTrace | None" = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +185,20 @@ class _JudgeAttempt:
     failure: str = ""
     # 这次判断引起的激素触发（D69 第 2 条）；后台任务只算出来，由收结果的那一拍写进状态和时间线。
     triggers: tuple[HormoneTrigger, ...] = ()
+
+
+@dataclass
+class _RoundTrace:
+    """真实收件批次的首条记录序号，以及供收结果时追加的可展示证据。"""
+
+    id: int
+    actions: list[PlannerAction] = field(default_factory=list)
+    judge: _JudgeAttempt | None = None
+
+
+def _trace_action(job: _ReplyJob, action: PlannerAction) -> None:
+    if job.round_trace is not None:
+        job.round_trace.actions.append(action)
 
 
 @dataclass(frozen=True)
@@ -238,6 +258,7 @@ class _Thought:
     initiative: _InitiativeJob | None = None
     exploration: TimelineRecord | None = None
     planner_run: "_PlannerRun | None" = None
+    round_trace: _RoundTrace | None = None
 
 
 @dataclass
@@ -594,6 +615,8 @@ class ConversationFlow:
             )
             job = replace(job, messages=messages)
         attempt = await self._judge_emotion(job)
+        if job.round_trace is not None:
+            job.round_trace.judge = attempt
         if attempt is not None and attempt.triggers:
             job = self._apply_hormones(job, attempt.triggers)
         automatic: _Recall | None = None
@@ -615,6 +638,10 @@ class ConversationFlow:
             outcome = await self._reply_with_review(job, plan, automatic, recalled)
             if outcome.response is not None:
                 outcome = await self._finish_reply(job, outcome, outcome.response)
+                if outcome.response is None:
+                    _trace_action(job, PlannerAction("replyer", "failed", "没有可发送的正文"))
+                else:
+                    _trace_action(job, PlannerAction("replyer", "completed", "已生成正文，等待投递"))
         return replace(
             outcome,
             reference_plan=outcome.reference_plan or plan,
@@ -634,7 +661,10 @@ class ConversationFlow:
         if outcome.review_reason is None:
             return outcome
         if not outcome.review_reason:
+            _trace_action(job, PlannerAction("replyer", "rejected", "驳回格式无效，不发言"))
             return _ThoughtOutcome(declined=True)
+        _trace_action(job, PlannerAction("replyer", "rejected", "回复器要求重新审视"))
+        _trace_action(job, PlannerAction("review", "requested", "重新判断是否需要回复"))
         try:
             revised, recalled = await self._plan(job, automatic, review_reason=outcome.review_reason)
         except CallRejectedError:
@@ -643,6 +673,7 @@ class ConversationFlow:
             return _ThoughtOutcome(declined=True, reference_plan=revised)
         outcome = await self._reply(job, revised, automatic, recalled)
         if outcome.review_reason is not None:
+            _trace_action(job, PlannerAction("replyer", "rejected", "重新审视后仍被驳回，不发言"))
             outcome = _ThoughtOutcome(declined=True)
         return replace(outcome, reference_plan=revised)
 
@@ -851,7 +882,10 @@ class ConversationFlow:
             return format_recall(words, hits, self._timezone), (words, hits)
 
         try:
-            return await dispatch_planner_tools(request, tools, self._call, retrieve)
+            return await dispatch_planner_tools(
+                request, tools, self._call, retrieve,
+                actions=job.round_trace.actions if job.round_trace is not None else None,
+            )
         except CallRejectedError:
             raise
         except OrganCallError as failure:
@@ -1053,10 +1087,13 @@ class ConversationFlow:
         try:
             response = await self._call(request)
         except CallRejectedError as rejection:
+            _trace_action(job, PlannerAction("replyer", "rejected", "安全网关拒绝生成回复"))
             return _ThoughtOutcome(notice=f"没能调用模型，这次没有回复：{rejection.reason}")
         except OrganCallError as failure:
+            _trace_action(job, PlannerAction("replyer", "failed", "回复器调用失败"))
             return _ThoughtOutcome(notice=f"模型调用失败，这次没有回复。{failure}")
         except Exception as error:
+            _trace_action(job, PlannerAction("replyer", "failed", "回复器调用失败"))
             # 为什么捕获所有异常：后台任务里的异常没人接住，用户只会看到它一直不说话。
             logger.exception("调用器官 %s 时出错", request.organ_id)
             return _ThoughtOutcome(
@@ -1066,6 +1103,7 @@ class ConversationFlow:
             self.expression_recall.backfill(job.language_scope_key)
         text = response.suggestion.strip()
         if not text:
+            _trace_action(job, PlannerAction("replyer", "failed", "没有可发送的正文"))
             return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
         if _REVIEW_SENTINEL_PREFIX in text or "{sentinel}" in text:
             opening, closing = f"<{sentinel}>", f"</{sentinel}>"
