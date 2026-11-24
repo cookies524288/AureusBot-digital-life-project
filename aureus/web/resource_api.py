@@ -42,7 +42,7 @@ from aureus.memory.emoji import (
     emoji_media_type,
 )
 from aureus.memory.language import MAX_REVIEW_REASON
-from aureus.memory.language_matching import ExpressionReviewStatus
+from aureus.memory.language_matching import ExpressionReviewStatus, JargonStatus
 from aureus.people import PeopleDirectory
 from aureus.web.picture_catalog import browse_pictures
 
@@ -107,6 +107,16 @@ class ExpressionReviewUpdate(BaseModel):
     )
     status: ExpressionReviewStatus
     reason: str = Field(default="", max_length=MAX_REVIEW_REASON)
+
+
+class JargonClassification(BaseModel):
+    """维护者核对后选择确认或否定，不接收来源名称或义项。"""
+
+    model_config = ConfigDict(extra="forbid")
+    entry_keys: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
+        min_length=1, max_length=MAX_SIZE
+    )
+    status: Literal[JargonStatus.CONFIRMED, JargonStatus.NON_JARGON]
 
 
 class LearningScopeUpdate(BaseModel):
@@ -522,6 +532,8 @@ def register_resource_routes(
         kind: LanguageKind = LanguageKind.EXPRESSION,
         recall: RecallFilter = "",
         review: ExpressionReviewStatus | None = None,
+        jargon_status: JargonStatus | None = None,
+        shared: bool = False,
         removed: bool = False,
         conversation_key: str = "",
         origin_conversation_key: str = "",
@@ -554,6 +566,8 @@ def register_resource_routes(
                 text=q,
                 is_enabled=(recall == "enabled") if recall else None,
                 review=review,
+                jargon_status=jargon_status,
+                shared=shared,
                 is_removed=removed,
             )
             return [asdict(entry) for entry in rows], total
@@ -572,6 +586,21 @@ def register_resource_routes(
     ) -> dict[str, Any]:
         targets = await asyncio.to_thread(known_conversations, include_temporary=True)
         return {"items": [{"key": key, "label": label} for key, label in targets.items()]}
+
+    @app.patch("/api/resources/learning/jargon/classification")
+    async def classify_jargons(
+        request: Request, body: JargonClassification, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, int | JargonStatus]:
+        if same_origin is None or not same_origin(request):
+            raise HTTPException(403, "请在当前网页上定性黑话。")
+        if language is None:
+            raise HTTPException(409, "学习功能当前关闭。")
+        changed = await asyncio.to_thread(
+            language.classify_jargons, body.entry_keys, body.status, review_clock.now()
+        )
+        if changed is None:
+            raise HTTPException(404, "选中条目有误或已移除；没有写入定性记录。")
+        return {"changed": changed, "status": body.status}
 
     @app.get("/api/resources/learning/scope")
     async def list_learning_scope_targets(

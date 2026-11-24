@@ -1,11 +1,13 @@
 """验证和生成与 MaiBot 1.3.15 公开格式兼容的语言资源包。"""
 
 import json
+from hashlib import sha256
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aureus.memory.language import LanguageContent, LanguageKind, LanguagePackageRow, LanguageStore
+from aureus.memory.language_matching import JargonStatus, LanguageEntry
 
 MAX_PACKAGE_BYTES = 8 * 1024 * 1024
 _MAX_ROWS = 10_000
@@ -36,6 +38,8 @@ class _Jargon(_Fields):
     is_global: bool = False
     created_by: Literal["manual", "ai"] = "manual"
     targets: list[_Target] | None = Field(default=None, max_length=_MAX_ROWS)
+    aureus_jargon_status: Literal[JargonStatus.CANDIDATE] | None = None
+    aureus_jargon_source: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
 
 
 class _Expression(_Fields):
@@ -79,7 +83,13 @@ def read_package(kind: LanguageKind, data: bytes) -> list[LanguagePackageRow]:
                     LanguageContent(item.content, item.meaning),
                     item.count,
                     "",
-                    item.model_dump_json(),
+                    item.model_dump_json(
+                        exclude={
+                            field
+                            for field in ("aureus_jargon_status", "aureus_jargon_source")
+                            if getattr(item, field) is None
+                        }
+                    ),
                 )
                 for item in jargon.jargons
             ]
@@ -116,6 +126,8 @@ def make_package(store: LanguageStore, kind: LanguageKind, timestamp: str) -> by
     originals = store.package_originals(kind)
     items: list[dict[str, object]] = []
     for entry in store.entries(kind, include_disabled=True):
+        if kind == LanguageKind.JARGON and entry.is_removed:
+            continue
         if kind == LanguageKind.EXPRESSION and (
             entry.restricted_scope is not None
             or (entry.requires_approval and not entry.can_reference_expression())
@@ -131,9 +143,9 @@ def make_package(store: LanguageStore, kind: LanguageKind, timestamp: str) -> by
                 content=entry.text,
                 meaning=entry.detail,
                 count=entry.count,
-                is_jargon=True,
                 is_complete=bool(entry.detail),
             ).model_dump()
+            item["aureus_jargon_source"] = sha256(entry.entry_key.encode()).hexdigest()
         else:
             examples = [entry.example] if entry.example else []
             item = _Expression(
@@ -142,6 +154,8 @@ def make_package(store: LanguageStore, kind: LanguageKind, timestamp: str) -> by
                 count=entry.count,
                 content_list=json.dumps(examples, ensure_ascii=False),
             ).model_dump(exclude={"aureus_source_chat_name"})
+        if kind == LanguageKind.JARGON:
+            _export_jargon_status(item, entry)
         items.append(item)
     package: dict[str, object] = {
         "success": True,
@@ -160,3 +174,13 @@ def make_package(store: LanguageStore, kind: LanguageKind, timestamp: str) -> by
     if len(data) > MAX_PACKAGE_BYTES or len(items) > _MAX_ROWS:
         raise ValueError("语言库超过单份资源包上限，暂不能导出整库。")
     return data
+
+
+def _export_jargon_status(item: dict[str, object], entry: LanguageEntry) -> None:
+    if item.get("aureus_jargon_source") is None:
+        item.pop("aureus_jargon_source", None)
+    item["is_jargon"] = entry.jargon_status == JargonStatus.CONFIRMED
+    if entry.jargon_status == JargonStatus.CANDIDATE:
+        item["aureus_jargon_status"] = JargonStatus.CANDIDATE
+    else:
+        item.pop("aureus_jargon_status", None)

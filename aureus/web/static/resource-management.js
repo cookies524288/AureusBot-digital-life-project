@@ -146,6 +146,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     episodes:'情景记忆', experiences:'其他经历'};
   const learningLabels = {jargon:'黑话', expression:'表达方式'};
   const reviewLabels = {pending:'待审', approved:'通过', rejected:'拒绝'};
+  const jargonLabels = {candidate:'候选', confirmed:'已确认', non_jargon:'非黑话'};
   const reviewEndpoint = '/api/resources/learning/reviews';
   const scopeEndpoint = '/api/resources/learning/scope';
   let learningKind = 'expression', expressionView = 'list', memoryTab = 'query', queryKind = 'text';
@@ -243,7 +244,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function editLearning(kind, refresh, item) {
     const title = learningLabels[kind];
     const text = textControl(title, item?.text ?? '', 80, true);
-    const description = textControl(kind === 'jargon' ? '释义' : '使用场景', item?.detail ?? '', 160, true);
+    const description = textControl(kind === 'jargon' ? '释义' : '使用场景', item?.detail ?? '', 160, kind !== 'jargon');
     const example = textControl('例句', item?.example ?? '', 2000);
     const save = el('button', {class:'btn primary small', text:'保存'});
     const form = el('form', {class:'stack'}, text.field, description.field, example.field, save);
@@ -255,6 +256,32 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       }, refresh, save) && form.isConnected) $('editor-dialog').close();
     });
     openEditor((item ? '编辑' : '新增') + title, form);
+  }
+  function classifyJargon(keys, refresh) {
+    if (!keys.length) return;
+    let busy = false;
+    const status = el('p', {role:'status'});
+    const buttons = [['confirmed', '确认为黑话'], ['non_jargon', '判为非黑话']].map(([value, label]) =>
+      action(label, async () => {
+        if (busy) return;
+        busy = true;
+        for (const button of buttons) button.disabled = true;
+        try {
+          const result = await api('/api/resources/learning/jargon/classification', 'PATCH',
+            {entry_keys:keys, status:value});
+          if (!result.ok) { fail(result); return; }
+          status.textContent = `已将 ${result.data.changed} 条定性为${jargonLabels[result.data.status]}。`;
+          toast(status.textContent);
+          await refresh();
+          if (status.isConnected) $('editor-dialog').close();
+        } finally {
+          busy = false;
+          for (const button of buttons) button.disabled = false;
+        }
+      }));
+    detail(`定性 ${keys.length} 条黑话资料`,
+      el('p', {text:'定性不修改释义或召回授权。有释义且启用的已确认黑话才能按授权进入回复。'}),
+      actions('定性结论', ...buttons, action('取消', () => $('editor-dialog').close())), status);
   }
   function importLearning(kind, refresh) {
     const endpoint = '/api/resources/learning/package/' + kind;
@@ -423,6 +450,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const disabled = el('label', {}, el('input', {name:'disabled', type:'checkbox'}), ' 显示停用和待映射');
     const removed = el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除');
     const reviewFilter = kind === 'expression' ? el('select', {name:'review', 'aria-label':'审核状态'}, ...reviewOptions('全部')) : null;
+    const jargonFilter = kind === 'jargon' ? el('select', {name:'jargon_status', 'aria-label':'黑话定性'},
+      ...Object.entries({'':'全部定性', ...jargonLabels}).map(([value, text]) => el('option', {value, text}))) : null;
+    const shared = kind === 'jargon' ? el('input', {name:'shared', type:'checkbox'}) : null;
     const scopeDescription = '来自会话按已确认的学习来源筛选；授权会话只筛选明确授权的语言包。筛选不改变实际召回范围。';
     const scopeHint = el('p', {class:'muted', id:'learning-scope-hint-' + kind,
       'aria-live':'polite', text:scopeDescription});
@@ -432,6 +462,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const originLabels = new Map();
     const toolbar = searchForm('搜索' + learningLabels[kind], '搜索词、释义或例句', disabled, removed,
       reviewFilter && el('label', {}, '审核状态 ', reviewFilter),
+      jargonFilter && el('label', {}, '黑话定性 ', jargonFilter), shared && el('label', {}, shared, ' 仅共享范围'),
       el('label', {}, '来自会话 ', origin), el('label', {}, '授权会话 ', authorized));
     const add = action('添加' + learningLabels[kind], () => editLearning(kind, pager.read));
     const upload = action('导入', () => importLearning(kind, pager.read));
@@ -449,28 +480,36 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       const keys = batch.keys();
       detail(`审核 ${keys.length} 条所选表达`, expressionReviewForm(keys, pager.read));
     });
+    const classifyBatch = jargonFilter && action('定性所选', () => classifyJargon(batch.keys(), pager.read));
     const batch = batchControls(item => item.entry_key, '/api/resources/learning/batch',
       (entry_keys, removed) => ({kind, entry_keys, removed}), () => pager.read(),
-      count => { if (reviewBatch) reviewBatch.disabled = !count; });
+      count => {
+        if (reviewBatch) reviewBatch.disabled = !count;
+        if (classifyBatch) classifyBatch.disabled = !count || removed.firstChild.checked;
+      });
     const tools = [add, upload, download, ...(queue ? [queue] : [])];
     for (const tool of tools) tool.disabled = true;
     panel.append(toolbar, scopeHint, actions(kind === 'expression' ? '表达操作' : '黑话操作', ...tools),
-      actions('所选资料', reviewBatch, batch.remove, batch.restore));
+      actions('所选资料', reviewBatch, classifyBatch, batch.remove, batch.restore));
     function render(item) {
       const title = item.text + (item.is_removed ? ' · 已移除' : item.pending_scope ? ' · 待映射' : item.is_enabled ? '' : ' · 已停用')
-        + (item.review_status ? ' · ' + reviewLabels[item.review_status] : '');
+        + (item.review_status ? ' · ' + reviewLabels[item.review_status] : '')
+        + (item.jargon_status ? ' · ' + jargonLabels[item.jargon_status] : '');
       const open = () => detail(title, field(kind === 'jargon' ? '释义' : '使用场景', item.detail),
         field('例句', item.example), field('证据数', item.count), field('发言者', item.speakers.join('、')),
         field('时间线证据', item.evidence_ids.join('、')), field('来源证据', item.source_refs.map(sourceId).join('；')),
         field('来自会话', originLabels.get(item.learning_source) || (item.learning_source ? '已记录来源键' : '未确认')),
         item.package_source != null && field('包内所载会话名称', item.package_source || '未提供名称'),
         item.package_source != null && field('授权会话数', item.scope_keys.length),
+        item.jargon_status && field('定性', jargonLabels[item.jargon_status]),
+        item.jargon_status && !item.detail && field('释义状态', '尚未填写'),
         item.original && field('原件', item.original.filter(Boolean).join('\n')),
         item.review_status && field('审核状态', reviewLabels[item.review_status]),
         item.review_status && expressionReviewHistory(item),
         item.review_status && expressionReviewForm([item.entry_key], pager.read,
           item.review_status === 'pending' ? '' : item.review_status),
         el('div', {class:'row'}, action('编辑', () => editLearning(kind, pager.read, item)),
+          item.jargon_status && !item.is_removed && action('定性', () => classifyJargon([item.entry_key], pager.read)),
           item.package_source != null && action('设置生效会话', () => editLearningScope(kind, item, pager.read)),
           !item.pending_scope && !item.is_removed && action(item.is_enabled ? '停用' : '恢复', async event => {
             const button = event.currentTarget;
@@ -485,6 +524,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }, loaded:data => { for (const tool of tools) tool.disabled = !data.enabled; }}, toolbar, '/api/resources/learning',
     fields => ({kind, q:fields.q.value, recall:fields.disabled.checked || fields.removed.checked ? '' : 'enabled',
       removed:fields.removed.checked, origin_conversation_key:origin.value, authorized_conversation_key:authorized.value,
+      ...(fields.jargon_status?.value ? {jargon_status:fields.jargon_status.value} : {}),
+      ...(shared?.checked ? {shared:true} : {}),
       ...(fields.review?.value ? {review:fields.review.value} : {})}));
     let scopeGeneration = 0;
     function loadScopes() {

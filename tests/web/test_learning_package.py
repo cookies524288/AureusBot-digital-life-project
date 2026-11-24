@@ -201,6 +201,53 @@ def test_language_package_preview_round_trip_and_deduplication(
         assert not destination.entries(kind)
 
 
+def test_jargon_classification_is_atomic_and_survives_package_round_trip(tmp_path: Path) -> None:
+    store = LanguageStore(tmp_path / "language.db")
+    store.open()
+    candidate = store.add_entry(LanguageKind.JARGON, LanguageContent("月兔", ""))
+    second_candidate = store.add_entry(LanguageKind.JARGON, LanguageContent("白兔", ""))
+    denied = store.add_entry(LanguageKind.JARGON, LanguageContent("月兔", "不作为黑话"))
+    removed = store.add_entry(LanguageKind.JARGON, LanguageContent("月兔", "隐藏释义"))
+    assert store.set_removed(LanguageKind.JARGON, [removed], True)
+    endpoint = f"{LEARNING}/jargon/classification"
+    with _client(store) as client:
+        params = {"kind": "jargon", "jargon_status": "candidate", "shared": True}
+        assert client.get(LEARNING, params=params).json()["total"] == 2
+        body = {"entry_keys": [candidate, removed], "status": "non_jargon"}
+        assert client.patch(endpoint, json=body).status_code == 403
+        assert client.patch(endpoint, json=body, headers=ORIGIN).status_code == 404
+        assert client.get(LEARNING, params=params).json()["total"] == 2
+        body["entry_keys"] = [candidate, denied, candidate]
+        assert client.patch(endpoint, json=body, headers=ORIGIN).json()["changed"] == 2
+        assert client.patch(endpoint, json=body, headers=ORIGIN).json()["changed"] == 0
+        assert (
+            client.get(LEARNING, params=params).json()["items"][0]["entry_key"] == second_candidate
+        )
+        assert not store.jargon_reference(("月兔",), 500)
+        payload = client.get(f"{LEARNING}/package/jargon").content
+    destination = LanguageStore(tmp_path / "destination.db")
+    destination.open()
+    with _client(destination) as client:
+        headers = {**ORIGIN, "Content-Type": "application/json"}
+        preview = client.post(f"{LEARNING}/package/jargon", content=payload, headers=headers).json()
+        assert (
+            client.post(
+                f"{LEARNING}/package/jargon",
+                content=payload,
+                headers=headers,
+                params={"confirmed": preview["digest"]},
+            ).json()["added"]
+            == 3
+        )
+        listed = client.get(LEARNING, params={"kind": "jargon"}).json()["items"]
+        assert all(item["pending_scope"] for item in listed)
+        assert sorted(item["jargon_status"] for item in listed) == [
+            "candidate",
+            "non_jargon",
+            "non_jargon",
+        ]
+
+
 @pytest.mark.parametrize("kind", list(LanguageKind))
 def test_language_batch_restores_prior_recall_state(tmp_path: Path, kind: LanguageKind) -> None:
     store = LanguageStore(tmp_path / "language.db")

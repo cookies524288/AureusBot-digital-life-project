@@ -16,6 +16,7 @@ from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.language_runner import learn_language
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore
 from aureus.memory.language import LanguageContent, LanguagePackageRow
+from aureus.memory.language_matching import JargonStatus
 from aureus.organs import CallPurpose, KeyResolver, OrganBus, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineQuery, VisibilityScope
 from aureus.web.language_package_api import register_language_package_routes
@@ -352,11 +353,17 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
     conversations = message("group", "10"), message("group", "20"), message("private", "10")
     first, second, private = conversations
     keys = [ConversationKey.from_perception(item).language_scope_key() for item in conversations]
-    for item, name in zip(conversations, ("合成甲群", "合成乙群", "合成私聊"), strict=True):
+    for item, name in zip(conversations, ("合成同名群", "合成同名群", "合成私聊"), strict=True):
         assert inbox.add(item, conversation_name=name) is not None
     store = LanguageStore(paths.database_file)
     store.open()
     store.add_entry(LanguageKind.JARGON, LanguageContent("GG", "旧有释义"))
+    empty = store.add_entry(LanguageKind.JARGON, LanguageContent("GG", ""))
+    assert store.classify_jargons([empty], JargonStatus.CONFIRMED, NOW) == 1
+    denied = store.add_entry(LanguageKind.JARGON, LanguageContent("GG", "已否定义项"))
+    assert store.classify_jargons([denied], JargonStatus.NON_JARGON, NOW) == 1
+    removed_key = store.add_entry(LanguageKind.JARGON, LanguageContent("GG", "已移除义项"))
+    assert store.set_removed(LanguageKind.JARGON, [removed_key], True)
     entries = [
         (LanguageKind.JARGON, LanguageContent("GG", "甲群异义"), [keys[0]]),
         (LanguageKind.JARGON, LanguageContent("GG", "乙群异义"), [keys[1]]),
@@ -412,10 +419,29 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
             assert "旧有释义" in plan.prompt and "永不映射" not in plan.prompt
+            reply_text = dialogue_text(reply)
+            assert "旧有释义" in reply_text
+            assert all(word not in reply_text for word in ("永不映射", "已否定义项", "已移除义项"))
+            assert "GG：\n" not in reply_text
             for word in ("甲群异义", "乙群异义"):
                 assert (word in plan.prompt) == (word == jargon)
+                assert (word in reply_text) == (word == jargon)
             for word in ("甲群招呼", "乙群招呼"):
                 assert (word in dialogue_text(reply)) == (word == expression)
+        assert store.update_entry(
+            LanguageKind.JARGON, empty, LanguageContent("GG", "新增义项"), None
+        )
+        assert store.classify_jargons([denied], JargonStatus.CONFIRMED, NOW) == 1
+        assert store.set_removed(LanguageKind.JARGON, [removed_key], False)
+        requests.clear()
+        assert heart.submit(message("group", "10", 3))
+        for _ in range(3):
+            heart.beat()
+            await heart.wait_for_thought()
+        reply = next(request for request in requests if request.context["task"] == "reply")
+        assert all(
+            word in dialogue_text(reply) for word in ("新增义项", "已否定义项", "已移除义项")
+        )
         await heart.shut_down()
 
     with TestClient(app) as client:

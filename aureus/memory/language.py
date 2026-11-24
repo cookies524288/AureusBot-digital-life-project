@@ -40,6 +40,7 @@ from aureus.memory.language_import import (
 from aureus.memory.language_matching import (
     MIN_JARGON_EVIDENCE,
     ExpressionReviewStatus,
+    JargonStatus,
     LanguageEntry,
     format_language,
     is_reference,
@@ -109,6 +110,13 @@ CREATE TABLE IF NOT EXISTS language_package_rows (
     original TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS language_removed (entry_key TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS language_jargon_reviews (
+    id INTEGER PRIMARY KEY,
+    entry_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS language_jargon_reviews_entry ON language_jargon_reviews (entry_key, id);
 CREATE TABLE IF NOT EXISTS language_package_scopes (
     digest TEXT NOT NULL REFERENCES language_package_rows(digest),
     conversation_key TEXT NOT NULL,
@@ -145,10 +153,10 @@ class LanguageContent:
     detail: str
     example: str = ""
 
-    def validated(self) -> LanguageContent:
+    def validated(self, *, allow_empty_detail: bool = False) -> LanguageContent:
         """去掉首尾空白，检查必填内容和最大长度。"""
         text, detail, example = self.text.strip(), self.detail.strip(), self.example.strip()
-        if not text or not detail:
+        if not text or (not detail and not allow_empty_detail):
             raise ValueError("请填写词或表达，以及释义或使用场景。")
         if len(text) > MAX_TEXT or len(detail) > MAX_DETAIL or len(example) > MAX_EXAMPLE:
             raise ValueError(
@@ -608,7 +616,7 @@ class LanguageStore:
 
     def add_entry(self, kind: LanguageKind, content: LanguageContent) -> str:
         """新增一条维护者指定的语言参考，返回稳定标识。"""
-        content = content.validated()
+        content = content.validated(allow_empty_detail=kind == LanguageKind.JARGON)
         with closing(open_connection(self._path)) as connection, connection:
             row = connection.execute(
                 "INSERT INTO language_manual (kind, text, detail, example) VALUES (?, ?, ?, ?) "
@@ -706,6 +714,31 @@ class LanguageStore:
             connection.executemany(statement, ((key,) for key in keys))
         return True
 
+    def classify_jargons(
+        self, keys: Sequence[str], status: JargonStatus, now: datetime
+    ) -> int | None:
+        """锁定后复验整批条目，只记载真正变化的定性。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            entries = {
+                entry.entry_key: entry
+                for entry in self._catalog_entries(
+                    connection, LanguageKind.JARGON, include_disabled=True
+                )
+                if not entry.is_removed
+            }
+            if not set(keys) <= entries.keys():
+                return None
+            return connection.executemany(
+                """INSERT INTO language_jargon_reviews (entry_key, status, recorded_at)
+                   VALUES (?, ?, ?)""",
+                (
+                    (key, status, now.isoformat())
+                    for key in dict.fromkeys(keys)
+                    if entries[key].jargon_status != status
+                ),
+            ).rowcount
+
     def review_expressions(
         self,
         keys: Sequence[str],
@@ -756,7 +789,8 @@ class LanguageStore:
         is_enabled: bool | None,
     ) -> bool:
         """保存指定条目的内容或启停覆盖，返回条目是否存在。"""
-        content = content.validated() if content is not None else None
+        if content is not None:
+            content = content.validated(allow_empty_detail=kind == LanguageKind.JARGON)
         with closing(open_connection(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             entry = next(
@@ -834,6 +868,20 @@ class LanguageStore:
                 )
                 for entry in entries
             ]
+        else:
+            classifications = {
+                row["entry_key"]: JargonStatus(row["status"])
+                for row in connection.execute(
+                    """SELECT entry_key, status, max(id) FROM language_jargon_reviews
+                       GROUP BY entry_key"""
+                )
+            }
+            entries = [
+                replace(
+                    entry, jargon_status=classifications.get(entry.entry_key, entry.jargon_status)
+                )
+                for entry in entries
+            ]
         entries = [self._apply_edit(entry, edits.get(entry.entry_key)) for entry in entries]
         entries = [
             replace(entry, is_enabled=False, is_removed=True)
@@ -841,7 +889,11 @@ class LanguageStore:
             else entry
             for entry in entries
         ]
-        return entries if include_disabled else [entry for entry in entries if entry.is_enabled]
+        if include_disabled:
+            return entries
+        if kind == LanguageKind.JARGON:
+            return [entry for entry in entries if entry.can_reference_jargon()]
+        return [entry for entry in entries if entry.is_enabled]
 
     def browse_page(
         self,
@@ -855,6 +907,8 @@ class LanguageStore:
         text: str = "",
         is_enabled: bool | None = None,
         review: ExpressionReviewStatus | None = None,
+        jargon_status: JargonStatus | None = None,
+        shared: bool = False,
         is_removed: bool = False,
     ) -> tuple[list[LanguageEntry], int]:
         """分别筛选可信来源和明确授权，兼容旧调用的并集语义。"""
@@ -872,6 +926,8 @@ class LanguageStore:
             and entry.is_removed == is_removed
             and (is_enabled is None or entry.is_enabled == is_enabled)
             and (review is None or entry.review_status == review)
+            and (jargon_status is None or entry.jargon_status == jargon_status)
+            and (not shared or (entry.package_source is None and entry.restricted_scope is None))
             and (
                 not term
                 or any(
@@ -924,6 +980,9 @@ class LanguageStore:
                         tuple(row["record_id"] for row in evidence),
                         frozenset(row["speaker"] for row in evidence),
                         entry_key=_local_key("observed", entry_id),
+                        jargon_status=JargonStatus.CONFIRMED
+                        if kind == LanguageKind.JARGON
+                        else None,
                     )
                 )
         source_table = JARGON_TABLE if kind == LanguageKind.JARGON else EXPRESSION_TABLE
@@ -939,6 +998,13 @@ class LanguageStore:
                 (),
                 frozenset(),
                 entry_key=_local_key("manual", row["id"]),
+                jargon_status=(
+                    None
+                    if kind != LanguageKind.JARGON
+                    else JargonStatus.CONFIRMED
+                    if row["detail"]
+                    else JargonStatus.CANDIDATE
+                ),
             )
             for row in connection.execute(
                 "SELECT * FROM language_manual WHERE kind = ? ORDER BY id DESC", (kind,)
@@ -974,6 +1040,11 @@ class LanguageStore:
                     pending_scope=not keys,
                     scope_keys=keys,
                     package_source=row["source_chat_name"],
+                    jargon_status=(
+                        _packaged_jargon_status(row["original"])
+                        if kind == LanguageKind.JARGON
+                        else None
+                    ),
                 )
             )
         return entries
@@ -981,7 +1052,7 @@ class LanguageStore:
     def jargon_reference(
         self, texts: Sequence[str], budget: int, *, conversation_key: str | None = None
     ) -> str:
-        """生成 Planner 的黑话参考，按统一库的高频词加权。"""
+        """生成规划与回复的黑话参考，按统一库的高频词加权。"""
         with closing(open_connection(self._path)) as connection:
             frequencies = imported_frequencies(connection)
         entries = self._visible_entries(LanguageKind.JARGON, conversation_key)
@@ -1020,3 +1091,10 @@ class LanguageStore:
         self, kind: LanguageKind, conversation_key: str | None
     ) -> list[LanguageEntry]:
         return [entry for entry in self.entries(kind) if entry.visible_in(conversation_key)]
+
+
+def _packaged_jargon_status(original: str) -> JargonStatus:
+    fields = json.loads(original)
+    if fields.get("aureus_jargon_status") == JargonStatus.CANDIDATE:
+        return JargonStatus.CANDIDATE
+    return JargonStatus.CONFIRMED if fields.get("is_jargon", True) else JargonStatus.NON_JARGON

@@ -34,6 +34,14 @@ class ExpressionReviewStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class JargonStatus(StrEnum):
+    """黑话定性与释义、启停或召回授权相互独立。"""
+
+    CANDIDATE = "candidate"
+    CONFIRMED = "confirmed"
+    NON_JARGON = "non_jargon"
+
+
 @dataclass(frozen=True)
 class LanguageEntry:
     """一项候选及其可定位的本地消息证据。"""
@@ -56,6 +64,7 @@ class LanguageEntry:
     learning_source: str | None = None
     requires_approval: bool = False
     restricted_scope: str | None = None
+    jargon_status: JargonStatus | None = None
 
     def visible_in(self, conversation_key: str | None) -> bool:
         """在线来源仅用于管理筛选；导入包仍遵守显式授权。"""
@@ -67,6 +76,15 @@ class LanguageEntry:
         """受质检管理的新表达必须另获人工批准；旧条目沿用原规则。"""
         return self.review_status != ExpressionReviewStatus.REJECTED and (
             not self.requires_approval or self.review_status == ExpressionReviewStatus.APPROVED
+        )
+
+    def can_reference_jargon(self) -> bool:
+        """确认、有义项、启用且未移除才可成为黑话参考。"""
+        return (
+            self.jargon_status == JargonStatus.CONFIRMED
+            and bool(self.detail.strip())
+            and self.is_enabled
+            and not self.is_removed
         )
 
 
@@ -126,7 +144,7 @@ def match_jargons(
     matches: list[tuple[float, int, LanguageEntry]] = []
     for entry in entries:
         term = normalize(entry.text)
-        if not term or not normalize(entry.detail):
+        if not term or not entry.can_reference_jargon():
             continue
         for index, text in enumerate(normalized_texts):
             if term in text:
