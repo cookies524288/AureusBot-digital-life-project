@@ -1,6 +1,6 @@
 # 路线图 3.4 / 3.11 后续：学习页表达簇浏览
 
-状态：待实现
+状态：待评审
 
 ## 先读
 
@@ -21,9 +21,15 @@
 2. 接学习页只读标签和详情，用 390 px 浏览器覆盖结果、总页数、空态及迟到列表和详情。
 3. 跑新功能与相邻回归、静态检查，记录结果及夹具路径后提交待复审。
 
-- [ ] 无可信网页授权不查快照；只返回仍有效的授权成员，过滤后分页，跨空间同号簇不串；快照变化及撤权不保留旧详情。
-- [ ] 浏览器验证窄屏、分页、只读详情、空态及旧响应失效。
-- [ ] 专项与改动静态检查通过；不把旧全量基线写成通过。
+- [x] `tests/web/test_expression_cluster_api.py` 三项通过：未登录及未改初始口令被拒，缺授权时不读取快照；合成快照验证过滤后计数、跨空间隔离、快照替换及撤权；列表及详情都丢弃读取期间被撤权的结果。
+- [x] `test_expression_clusters_paginate_and_discard_stale_results_at_390px` 通过：验收 390 px 窄屏、总页数、末页、长成员文本换行、只读请求和撤权空态，旧列表和详情均不得重现。
+- [x] 联合专项 52 项通过（17.14 秒），包括新的 API、浏览器整文件、资源 API、图谱 API、快照存取和聚类。改动文件 Ruff 格式及规范、Pyright、8 条架构规则、JavaScript 语法和差异检查通过。未跑全量。
+
+## 验证记录（2026-11-24）
+
+- 基线 `efee879`，任务书 `a9f5e1f`，工作树 `E:/WorkShopE/Projects/Aureus-expression-cluster-browser-dev`（`codex/expression-cluster-browser`）。
+- 主树虚拟环境运行 `pytest -q -p no:cacheprovider`，`PYTHONPATH` 指向开发树，`AUREUS_HOME` 指向隔离测试目录内的合成路径。首次专项三项接口通过；浏览器两次失败因测试在学习页容器内找全局对话框，改为查找全局弹窗后加入联合回归并通过。
+- 联合夹具 `E:/Temp/aureus-expression-browser-regression-b72fb440f6c04c88b9a2c78a9da26877`；早期接口及浏览器夹具 `E:/Temp/aureus-expression-cluster-browser-3428985cb76942c5915f5c3e4840a43e` 保留待复审。未操作正式实例、数据、主线及远程。
 
 ## 不做
 

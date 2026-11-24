@@ -1366,6 +1366,83 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
     )
 
 
+def test_expression_clusters_paginate_and_discard_stale_results_at_390px(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => find('#learning-panel-jargon')?.querySelector('.resource-record'),
+        '学习页就绪');
+      const path = '/api/resources/learning/clusters';
+      let granted = true, size = 0, delay = '', resume;
+      const realFetch = window.fetch;
+      window.fetch = (resource, options) => {
+        const url = new URL(resource, location.origin);
+        if (![path, path + '/detail'].includes(url.pathname)) return realFetch(resource, options);
+        check(!options?.method || options.method === 'GET', '仅发出读请求');
+        let result, status = 200;
+        if (url.pathname.endsWith('/detail')) {
+          status = granted ? 200 : 404;
+          result = granted ? {members:[{text:'合成成员' + '长'.repeat(80), detail:'合成成员情景'}]}
+            : {detail:'找不到这个表达簇。'};
+        } else {
+          const offset = Number(url.searchParams.get('offset'));
+          size = Number(url.searchParams.get('limit'));
+          const total = granted ? size * 2 + 1 : 0;
+          result = {total, next_offset:offset + size < total ? offset + size : null,
+            items:Array.from({length:Math.max(0, Math.min(size, total - offset))}, (_, index) => ({
+              location:String(offset + index), number:offset + index + 1, count:1,
+              title:`合成簇${offset + index}`
+            }))};
+        }
+        const response = Response.json(result, {status});
+        if (delay === url.pathname) {
+          delay = '';
+          return new Promise(resolve => { resume = () => resolve(response); });
+        }
+        return Promise.resolve(response);
+      };
+      press('表达簇');
+      await waitFor(() => page() === '第 1 / 3 页' && text('合成簇0'), '首屏表达簇');
+      check(text(`共 ${size * 2 + 1} 个可见表达簇`), '正确可见总数');
+      check(innerWidth === 390 && root().scrollWidth <= innerWidth, '窄屏列表不横向溢出');
+      press('下一页');
+      await waitFor(() => page() === '第 2 / 3 页', '第二页');
+      press('下一页');
+      await waitFor(() => page() === '第 3 / 3 页' && button('下一页').disabled, '末页');
+      press('刷新');
+      await waitFor(() => text('合成簇0'), '刷新回到首屏');
+      const panel = find('#learning-panel-clusters');
+      const memberButton = () => panel.querySelector('.resource-record button');
+      const detail = () => document.querySelector('[data-cluster-detail]');
+      memberButton().click();
+      const dialog = document.querySelector('#editor-dialog');
+      await waitFor(() => dialog?.open && detail()?.textContent.includes('合成成员情景'),
+        '显示成员详情');
+      check(detail().scrollWidth <= detail().clientWidth + 1, '长成员文本可换行');
+      dialog.close();
+      delay = path + '/detail';
+      memberButton().click();
+      await waitFor(() => resume, '旧详情已发起');
+      const oldDetail = resume;
+      resume = null;
+      delay = path;
+      press('刷新');
+      await waitFor(() => resume, '旧列表已发起');
+      const oldList = resume;
+      granted = false;
+      press('黑话');
+      press('表达簇');
+      await waitFor(() => text('当前没有可见的表达簇') && page() === '第 0 / 0 页', '撤权空态');
+      oldDetail();
+      oldList();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      check(!dialog.open && !detail(), '旧详情未重现');
+      check(!panel.textContent.includes('合成簇0') && page() === '第 0 / 0 页', '旧列表未重现');
+    """,
+    )
+
+
 def test_image_prompt_preview_displays_text_then_attachment(browser: Browser) -> None:
     browser.open("timeline", 390, 740)
     _run(

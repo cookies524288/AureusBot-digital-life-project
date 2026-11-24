@@ -1,3 +1,9 @@
+# 当前独立交付：学习页表达簇浏览
+
+[表达簇只读浏览](tasks/expression-cluster-browser.md) 已实现，待 Astra 复审。独立工作树 `E:/WorkShopE/Projects/Aureus-expression-cluster-browser-dev`，分支 `codex/expression-cluster-browser`，基线 `efee879`，任务书 `a9f5e1f`。学习页增加「表达簇」标签，支持可见簇分页、只读成员详情和窄屏空态。服务端只采用逐表达键的独立网页授权；默认未接正式授权或快照入口，网页不会自动建簇或调用嵌入器。
+
+合成联合专项 **52 项通过**，覆盖撤权、过时快照、预先过滤计数和迟到响应；改动文件的 Ruff、Pyright、架构、JavaScript 语法与差异检查通过。未跑全量，未操作 `main`、正式实例或正式数据。下一步复核权限与前端生命周期，再决定发布安排；正式材料授权来源仍待另行明确。
+
 # 当前进度：工作记忆摘要预览与表达聚类快照
 
 [工作记忆摘要预览](tasks/working-memory-prompt-preview.md)（实现 `9ce6df9`）通过复审。开发专项 13 项通过，主会话独立复跑模拟 HTTP 对照 1 项通过。预览只用合成记录，不读取正式时间线，不发送模型请求。正式实例尚未核验此版本。
