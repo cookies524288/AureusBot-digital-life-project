@@ -16,7 +16,7 @@ from tempfile import TemporaryDirectory
 from threading import Thread
 from time import monotonic, sleep
 from typing import cast
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 from PIL import Image
@@ -240,18 +240,20 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         digest = sha256(data).hexdigest()
         uploads = self.emoji_uploads
         created = digest not in uploads
+        description = self.headers.get("X-Emoji-Registration-Description")
+        text = unquote(description) if description is not None else ""
         uploads.setdefault(
             digest,
             {
-                "text": "",
-                "description": "",
+                "text": text,
+                "description": text,
                 "tags": [],
                 "source": None,
                 "media_kind": "emoji",
                 "digest": digest,
                 "is_banned": False,
                 "has_file": True,
-                "is_registered": False,
+                "is_registered": description is not None,
                 "use_count": 0,
                 "collection_count": 0,
             },
@@ -1056,6 +1058,43 @@ def test_emoji_upload_edit_search_and_status_maintenance(browser: Browser) -> No
     )
 
 
+def test_emoji_single_upload_can_register_on_narrow_screen(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    with BytesIO() as stream:
+        Image.new("RGB", (8, 8), "teal").save(stream, format="PNG")
+        image_data = base64.b64encode(stream.getvalue()).decode("ascii")
+    _run(
+        browser,
+        f"""
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      await waitFor(() => button('上传表情') && !button('上传表情').disabled, '表情列表加载');
+      press('上传表情');
+      const dialog = document.querySelector('#editor-dialog');
+      const form = dialog.querySelector('form');
+      const register = form.querySelector('input[type="checkbox"]');
+      const description = form.querySelector('textarea');
+      check(register && !register.checked, '单张默认不登记');
+      check(!description.getClientRects().length, '默认不显示描述');
+      const input = form.querySelector('input[type="file"]');
+      const transfer = new DataTransfer();
+      const imageBytes = Uint8Array.from(atob('{image_data}'), byte => byte.charCodeAt(0));
+      transfer.items.add(new File([imageBytes], 'fixture.png', {{type:'image/png'}}));
+      input.files = transfer.files; input.dispatchEvent(new Event('change', {{bubbles:true}}));
+      register.click();
+      check(description.getClientRects().length && description.required && !form.checkValidity(),
+        '勾选后显示必填描述');
+      register.click();
+      check(form.checkValidity(), '取消勾选不要求描述');
+      register.click();
+      description.value = '海兔打招呼 🐰';
+      check(form.scrollWidth <= dialog.clientWidth, '窄屏表单不横向溢出');
+      form.requestSubmit();
+      await waitFor(() => !dialog.open && button('已登记 · 海兔打招呼 🐰'), '直接登记并刷新');
+    """,
+    )
+
+
 def test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence(browser: Browser) -> None:
     browser.open("learning", 390, 740)
     with BytesIO() as stream:
@@ -1102,6 +1141,12 @@ def test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence(browser:
       let dialog = document.querySelector('#editor-dialog');
       const uploadButton = () => [...dialog.querySelectorAll('button')]
         .find(node => node.textContent.trim() === '上传所选图片');
+      const enableRegistration = () => {{
+        const checkbox = dialog.querySelector('form input[type="checkbox"]');
+        check(checkbox && !checkbox.checked, '批次默认不登记');
+        checkbox.click();
+        dialog.querySelector('form textarea').value = '批次筛选';
+      }};
       check(uploadButton().disabled, '尚未选择文件时不可提交');
       choose();
       check(!uploadButton().disabled, '选择文件后可提交');
@@ -1110,25 +1155,27 @@ def test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence(browser:
       check(uploadButton().disabled, '清空选择后再次不可提交');
       choose();
       check(dialog.innerText.includes('已选择 3 张'), '确认前显示文件数');
+      enableRegistration();
       document.querySelector('#editor-close').click();
       check(requests.length === 0, '取消不发上传请求');
       press('批量上传'); choose();
       dialog = document.querySelector('#editor-dialog');
+      enableRegistration();
       dialog.querySelector('form').requestSubmit();
       await waitFor(() => requests.length === 1 && dialog.querySelector('fieldset').disabled,
         '第一张上传中禁用操作');
       dialog.querySelector('form').requestSubmit();
       check(requests.length === 1, '重复确认不增加请求');
       release();
-      await waitFor(() => dialog.innerText.includes('first.png：已上传') &&
+      await waitFor(() => dialog.innerText.includes('first.png：已上传并登记') &&
         dialog.innerText.includes('again.png：已存在，保留原有记录') &&
         dialog.innerText.includes('broken.svg：图片格式不支持') &&
         !dialog.querySelector('fieldset').disabled, '逐张保留结果');
       check(requests.length === 3, '每个文件仅上传一次');
-      await waitFor(() => countValue() === beforeCount + 1,
+      await waitFor(() => countValue() === beforeCount + 1 && button('已登记 · 批次筛选'),
         '刷新全库统计');
-      check(search.value === '批次筛选' && !button('未登记 · 未填写描述'),
-        '筛选保留且当前页不插入未命中图片');
+      check(search.value === '批次筛选' && button('已登记 · 批次筛选'),
+        '筛选保留且登记后匹配批次描述');
       window.fetch = nativeFetch;
     """,
     )

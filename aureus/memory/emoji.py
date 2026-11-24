@@ -159,6 +159,16 @@ def _validate_image(data: bytes) -> None:
         raise ValueError("图片损坏或无法完整读取。") from None
 
 
+_REGISTRATION_DESCRIPTION_REQUIRED = "请先填写表情描述，再登记或恢复使用。"
+
+
+def _clean_description(description: str) -> str:
+    description = description.strip()
+    if len(description) > MAX_EMOJI_DESCRIPTION:
+        raise ValueError("表情描述过长。")
+    return description
+
+
 class EmojiStore:
     """维护资源目录及内容寻址附件，各操作使用独立连接。"""
 
@@ -259,16 +269,22 @@ class EmojiStore:
                 ).rowcount
         return source_count, asset_count
 
-    def upload(self, data: bytes) -> tuple[str, bool]:
+    def upload(
+        self, data: bytes, *, registration_description: str | None = None
+    ) -> tuple[str, bool]:
         """存入经过检查的媒体，返回内容地址和是否新建；重复上传不改元数据。"""
+        description = _clean_description(registration_description or "")
+        registered = registration_description is not None
+        if registered and not description:
+            raise ValueError(_REGISTRATION_DESCRIPTION_REQUIRED)
         _validate_image(data)
         digest = sha256(data).hexdigest()
         self._write_media(digest, data)
         with closing(open_connection(self._database_file)) as connection, connection:
             created = connection.execute(
-                """INSERT INTO emoji_assets VALUES (?, '', '[]', 0, 0, 0, 0, ?, NULL)
+                """INSERT INTO emoji_assets VALUES (?, ?, '[]', ?, 0, 0, 0, ?, NULL)
                    ON CONFLICT(digest) DO NOTHING""",
-                (digest, self._clock.now().timestamp()),
+                (digest, description, registered, self._clock.now().timestamp()),
             ).rowcount
         return digest, bool(created)
 
@@ -283,9 +299,7 @@ class EmojiStore:
     ) -> bool:
         """修订当前目录字段，不改媒体、计数和迁移来源；禁用独立于登记。"""
         if description is not None:
-            description = description.strip()
-            if len(description) > MAX_EMOJI_DESCRIPTION:
-                raise ValueError("表情描述过长。")
+            description = _clean_description(description)
         if tags is not None:
             tags = tuple(dict.fromkeys(tag.strip() for tag in tags if tag.strip()))
             if len(tags) > MAX_EMOJI_TAGS or any(len(tag) > MAX_EMOJI_TAG for tag in tags):
@@ -317,7 +331,7 @@ class EmojiStore:
                 and (registering or restoring or description is not None)
                 and not (new_description.strip())
             ):
-                raise ValueError("请先填写表情描述，再登记或恢复使用。")
+                raise ValueError(_REGISTRATION_DESCRIPTION_REQUIRED)
             if (registering or restoring) and media_error:
                 raise ValueError(media_error)
             connection.execute(

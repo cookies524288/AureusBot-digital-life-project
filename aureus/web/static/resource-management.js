@@ -481,16 +481,44 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     image.addEventListener('error', () => image.replaceWith(field('原图', '暂不可用')));
     return image;
   }
+  function emojiUploadRegistration(label) {
+    const register = el('input', {type:'checkbox'});
+    const description = textControl(label, '', 500, true);
+    const details = el('div', {hidden:true}, description.field);
+    description.input.disabled = true;
+    register.addEventListener('change', () => {
+      details.hidden = description.input.disabled = !register.checked;
+    });
+    return {
+      fields:[el('label', {}, register, ' 上传后直接登记'), details],
+      headers() {
+        if (!register.checked) return {};
+        const text = description.input.value.trim();
+        if (text) return {'X-Emoji-Registration-Description':encodeURIComponent(text)};
+        toast('请填写表情描述后再登记。', 'error');
+        description.input.focus();
+        return null;
+      },
+    };
+  }
+  function emojiUploadResult(response, headers) {
+    if (!response.ok) return errorText(response);
+    if (!response.data.created) return '已存在，保留原有记录';
+    return headers['X-Emoji-Registration-Description'] ? '已上传并登记' : '已上传';
+  }
   function emojiForm(refresh, item) {
-    const submit = el('button', {type:'submit', class:'btn primary small', text:item ? '保存' : '上传'});
+    const submit = el('button', {type:'submit', class:'btn primary small', text:item ? '保存' : '上传', disabled:!item});
     const file = el('input', {type:'file', accept:'image/png,image/jpeg,image/gif,image/webp', required:true});
     const description = textControl('表情描述', item?.text ?? '', 500, item?.is_registered);
     const tags = textControl('标签（每行一个）', item?.tags?.join('\n') ?? '', 819);
+    const registration = emojiUploadRegistration('表情描述');
     const controls = el('fieldset', {class:'stack'}, item ? [description.field, tags.field] : [
       el('label', {class:'stack'}, '图片文件', file),
-      el('p', {class:'muted', text:'支持 PNG、JPEG、GIF 和 WebP，最多 5 MB。上传后可填写描述并登记。'}),
+      el('p', {class:'muted', text:'支持 PNG、JPEG、GIF 和 WebP，最多 5 MB。未勾选时可稍后登记。'}),
+      ...registration.fields,
     ], submit);
     const form = el('form', {class:'stack'}, controls);
+    file.addEventListener('change', () => { submit.disabled = !file.files.length; });
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (controls.disabled) return;
@@ -499,15 +527,17 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         toast('最多填写 20 个标签，每个不超过 40 字。', 'error');
         return;
       }
+      const headers = item ? {} : registration.headers();
+      if (!headers) return;
       const endpoint = '/api/resources/emoji' + (item ? '/' + encodeURIComponent(item.digest) : '');
       controls.disabled = true;
       try {
         const response = await api(endpoint, item ? 'PATCH' : 'POST', item ? {
           description:description.input.value, tags:values,
-        } : file.files[0]);
+        } : file.files[0], headers);
         if (!response.ok) { fail(response); return; }
         if (form.isConnected) $('editor-dialog').close();
-        toast(item ? '已保存' : response.data.created ? '已上传' : '已存在，保留原有记录');
+        toast(item ? '已保存' : emojiUploadResult(response, headers));
         await refresh();
       } finally { controls.disabled = false; }
     });
@@ -518,8 +548,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const summary = el('p', {class:'muted', 'aria-live':'polite', text:'尚未选择图片'});
     const results = el('div', {class:'stack', 'aria-live':'polite'});
     const submit = el('button', {type:'submit', class:'btn primary small', text:'上传所选图片', disabled:true});
+    const registration = emojiUploadRegistration('表情描述（应用于本批新图）');
     const controls = el('fieldset', {class:'stack'},
-      el('label', {class:'stack'}, '图片文件', file), summary, results, submit);
+      el('label', {class:'stack'}, '图片文件', file), summary, ...registration.fields, results, submit);
     const form = el('form', {class:'stack'}, controls);
     file.addEventListener('change', () => {
       summary.textContent = `已选择 ${file.files.length} 张图片。每张最多 5 MB。`;
@@ -529,15 +560,15 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (controls.disabled || !file.files.length) return;
+      const headers = registration.headers();
+      if (!headers) return;
       const files = [...file.files];
       controls.disabled = true;
       results.replaceChildren();
       try {
         for (const image of files) {
-          const response = await api('/api/resources/emoji', 'POST', image);
-          const outcome = response.ok ? response.data?.created ? '已上传' : '已存在，保留原有记录'
-            : errorText(response);
-          results.append(el('p', {text:image.name + '：' + outcome}));
+          const response = await api('/api/resources/emoji', 'POST', image, headers);
+          results.append(el('p', {text:image.name + '：' + emojiUploadResult(response, headers)}));
         }
         await refresh();
       } finally { controls.disabled = false; submit.disabled = !file.files.length; }
