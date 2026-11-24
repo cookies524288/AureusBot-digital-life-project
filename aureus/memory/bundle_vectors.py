@@ -1,18 +1,14 @@
-"""只解码有边界的数值 NPZ 成员，并在已配置空间内提供可逆向量读取。"""
+"""只解码有边界的数值 NPZ 成员；校验后一律跳过，向量由本机嵌入模型重建（D105）。"""
 
 import ast
-import json
 import math
 import re
-import sqlite3
 import struct
 import zipfile
-from collections.abc import Collection, Sequence
 from io import BytesIO
 from typing import Any
 
 from aureus.memory.bundle_format import VECTOR_MEMBERS, MemoryBundle, MemoryBundleError
-from aureus.memory.history import MemorySource
 
 MAX_VECTOR_BYTES = 16 * 1024 * 1024
 _MAX_HEADER = 32 * 1024
@@ -167,64 +163,3 @@ def prepare_vectors(bundle: MemoryBundle) -> list[dict[str, Any]]:
         parse_vectors(bundle.binary_members[member])
         report.append({"name": member, "status": "skip", "reason": VECTOR_REBUILD_REASON})
     return report
-
-
-def open_bundle_vectors(connection: sqlite3.Connection) -> None:
-    """向量按包归属；复用的记忆原件不依赖单一包的向量。"""
-    connection.execute("""CREATE TABLE IF NOT EXISTS memory_bundle_vectors (
-        installation_id TEXT NOT NULL, space TEXT NOT NULL, fingerprint TEXT NOT NULL,
-        source_key TEXT NOT NULL, vector BLOB NOT NULL,
-        PRIMARY KEY (installation_id, space, source_key)
-    ) WITHOUT ROWID""")
-
-
-def search_vectors(
-    connection: sqlite3.Connection,
-    scope: str,
-    fingerprint: dict[str, Any],
-    query: Sequence[float],
-    limit: int,
-    now: float,
-    allowed_sources: Collection[MemorySource] = (),
-) -> list[tuple[MemorySource, float]]:
-    """只读相同配置空间且仍有效的已安装向量，不调用模型。"""
-    if (
-        not query
-        or len(query) != fingerprint.get("dimension")
-        or not all(math.isfinite(value) for value in query)
-    ):
-        return []
-    allowed = {source.encode() for source in allowed_sources}
-    query_norm = math.hypot(*query)
-    if not query_norm or not math.isfinite(query_norm):
-        return []
-    decoded: dict[str, float] = {}
-    for key, packed in connection.execute(
-        """
-        SELECT vector.source_key, vector.vector FROM memory_bundle_vectors vector
-        JOIN memory_bundles bundle USING (installation_id)
-        JOIN memory_history original USING (source_key)
-        LEFT JOIN memory_edits edit ON edit.kind='history' AND edit.entry_id=original.id
-        WHERE bundle.installed AND vector.space=? AND vector.fingerprint=?
-          AND original.status IN ('active', 'missing') AND coalesce(edit.is_enabled, 1)
-          AND NOT coalesce(edit.is_removed, 0) AND NOT coalesce(edit.is_bundle_removed, 0)
-          AND edit.edited_content IS NULL
-          AND (original.valid_from IS NULL OR original.valid_from <= ?)
-          AND (original.valid_to IS NULL OR original.valid_to > ?)
-        """,
-        (scope, json.dumps(fingerprint, sort_keys=True), now, now),
-    ):
-        if allowed and key not in allowed:
-            continue
-        values = struct.unpack("<" + "f" * len(query), packed)
-        norm = math.hypot(*values)
-        if norm:
-            distance = sum(
-                (left / query_norm) * (right / norm)
-                for left, right in zip(query, values, strict=True)
-            )
-            decoded[key] = max(distance, decoded.get(key, -1.0))
-    return [
-        (MemorySource.decode(key), value)
-        for key, value in sorted(decoded.items(), key=lambda item: (-item[1], item[0]))[:limit]
-    ]

@@ -19,7 +19,7 @@ from aureus.memory.bundle_format import (
 )
 from aureus.memory.bundle_images import open_bundle_images, store_images
 from aureus.memory.bundle_projection import BundleProjection, project_bundle
-from aureus.memory.bundle_vectors import open_bundle_vectors, prepare_vectors
+from aureus.memory.bundle_vectors import prepare_vectors
 from aureus.memory.graph import put_graph_sources
 from aureus.memory.history import MemorySource, put_history_record
 
@@ -76,7 +76,6 @@ def open_bundles(connection: sqlite3.Connection) -> None:
             CREATE TABLE IF NOT EXISTS memory_bundle_owned (entry_id INTEGER PRIMARY KEY)
         """)
         open_bundle_images(connection)
-        open_bundle_vectors(connection)
         connection.execute("""
             CREATE TABLE IF NOT EXISTS memory_bundle_originals (
                 installation_id TEXT PRIMARY KEY, archive BLOB NOT NULL

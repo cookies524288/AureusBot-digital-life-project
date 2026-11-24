@@ -115,7 +115,7 @@ def test_v2_reversible_media_ownership_and_vectors_skipped(tmp_path: Path) -> No
     clock = ManualClock(NOW)
     database = tmp_path / "index.db"
     timeline = TimelineDatabase(database, clock)
-    index = MemoryIndex(database, timeline, clock, bundle_vector_spaces={"paragraphs": SPACE})
+    index = MemoryIndex(database, timeline, clock)
     timeline.open()
     index.open()
     data = _png()
@@ -132,7 +132,6 @@ def test_v2_reversible_media_ownership_and_vectors_skipped(tmp_path: Path) -> No
         assert index.install_bundle(first, "merge")["already_installed"]
         right = index.install_bundle(second, "merge")["installation_id"]
         assert index.read_bundle_image(digest) == (data, "image/png")
-        assert not index.search_bundle_vectors("paragraphs", (1.0, 0.0), 5)
         assert index.set_bundle_installed(left, False)
         assert index.read_bundle_image(digest) is not None
         assert index.set_bundle_installed(right, False)
@@ -154,7 +153,7 @@ def test_matching_vector_member_skipped_while_knowledge_installs_and_uninstalls(
     clock = ManualClock(NOW)
     database = tmp_path / "index.db"
     timeline = TimelineDatabase(database, clock)
-    index = MemoryIndex(database, timeline, clock, bundle_vector_spaces={"paragraphs": SPACE})
+    index = MemoryIndex(database, timeline, clock)
     timeline.open()
     index.open()
     try:
@@ -165,9 +164,10 @@ def test_matching_vector_member_skipped_while_knowledge_installs_and_uninstalls(
             {"name": "vectors/paragraphs.npz", "status": "skip", "reason": VECTOR_REBUILD_REASON}
         ]
         with closing(sqlite3.connect(database)) as connection:
-            count = connection.execute("SELECT count(*) FROM memory_bundle_vectors").fetchone()
-            assert count[0] == 0
-        assert not index.search_bundle_vectors("paragraphs", (1.0, 0.0), 5)
+            tables = connection.execute(
+                "SELECT name FROM sqlite_schema WHERE name LIKE '%vector%'"
+            ).fetchall()
+            assert tables == []
         assert index.search(["冰川调查"], (), 5)
         assert index.set_bundle_installed(installed["installation_id"], False)
         assert not index.search(["冰川调查"], (), 5)
