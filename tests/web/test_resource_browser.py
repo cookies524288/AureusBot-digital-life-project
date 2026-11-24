@@ -2013,18 +2013,26 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       const path = '/api/resources/memory/graph';
       const entity = index => ({kind:'entity', source:`["合成","memory","entities",[${index}]]`,
         name:`合成图谱实体${index}`, evidence:[]});
-      const relation = {kind:'relation', source:'["合成","memory","relations",[1]]',
-        subject:entity(0), object:entity(1), predicate:'观察', confidence:0.7, evidence:[]};
+      const sameName = {...entity(2), name:entity(1).name};
+      const link = (index, predicate, subject, object) => ({kind:'relation',
+        source:`["合成","memory","relations",[${index}]]`, subject, object, predicate, confidence:0.7, evidence:[]});
+      const relation = link(1, '观察', entity(0), entity(1));
+      const parallel = link(2, '<b>帮助</b>', entity(0), entity(1));
+      const loop = link(3, '复盘', entity(1), entity(1));
+      const records = [entity(0), entity(1), sameName, relation, parallel, loop];
       let granted = true, size = 0, delay = '', resume;
       const realFetch = window.fetch;
       window.fetch = (resource, options) => {
         const url = new URL(resource, location.origin);
-        if (![path, path + '/detail'].includes(url.pathname)) return realFetch(resource, options);
+        if (![path, path + '/access', path + '/detail'].includes(url.pathname)) return realFetch(resource, options);
         const params = url.searchParams;
         let result, status = 200;
-        if (url.pathname.endsWith('/detail')) {
-          result = granted ? entity(0) : {detail:'找不到这条图谱资料。'};
-          status = granted ? 200 : 404;
+        if (url.pathname.endsWith('/access')) {
+          result = {};
+        } else if (url.pathname.endsWith('/detail')) {
+          const item = granted && records.find(item => item.source === params.get('source'));
+          result = item || {detail:'找不到这条图谱资料。'};
+          status = item ? 200 : 404;
         } else {
           const offset = Number(params.get('offset'));
           size = Number(params.get('limit'));
@@ -2033,9 +2041,9 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
           result = {covered:granted, total,
             next_offset:offset + size < total ? offset + size : null,
             items:Array.from({length:Math.max(0, Math.min(size, total - offset))},
-              (_, index) => neighbor ? relation : entity(offset + index))};
+              (_, index) => neighbor ? relation : records[offset + index] ?? entity(offset + index))};
         }
-        const response = Response.json(result, {status});
+        const response = Response.json(result, {status, headers:{'X-Aureus-Graph-Revision':granted ? 'open' : 'closed'}});
         if (delay === url.pathname) {
           delay = '';
           return new Promise(resolve => { resume = () => resolve(response); });
@@ -2047,12 +2055,46 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       check(text(`共 ${size * 2 + 1} 项可见资料`), '只显示可见总数');
       const panel = find('#memory-panel-graph');
       check(innerWidth === 390 && root().scrollWidth <= innerWidth, '窄屏不横向溢出');
+      const canvas = panel.querySelector('.memory-graph-viewport svg');
+      const graphNodes = [...canvas.querySelectorAll('.memory-graph-node')];
+      const graphEdges = [...canvas.querySelectorAll('.memory-graph-edge')];
+      check(graphNodes.length === size - 3 && graphEdges.length === 3, '保留孤点、自环和不同谓词');
+      const identities = graphNodes.filter(node => node.getAttribute('aria-label').includes('合成图谱实体1（'));
+      check(identities.length === 2 && identities.every(node => node.tabIndex === 0), '同名实体分别可定位');
+      check(new Set(graphEdges.map(edge => edge.querySelector('path').getAttribute('d'))).size === 3,
+        '平行边和自环路径不同');
+      check(graphEdges.every(edge => edge.querySelector('path').hasAttribute('marker-end')), '每条边标出方向');
+      identities[0].focus();
+      check(graphEdges.some(edge => edge.classList.contains('is-neighbor'))
+        && graphNodes.some(node => node.classList.contains('is-muted')), '键盘定位会突出邻接');
+      const helping = graphEdges.find(edge => edge.getAttribute('aria-label').includes('<b>帮助</b>'));
+      helping.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'}));
+      await waitFor(() => document.querySelector('#editor-dialog').open, '键盘打开具体关系详情');
+      check(document.querySelector('[data-graph-detail]').textContent.includes('<b>帮助</b>')
+        && !document.querySelector('[data-graph-detail] b'), '关系谓词按文本显示');
+      document.querySelector('#editor-dialog').close();
+      const originalWidth = canvas.style.width;
+      press('放大');
+      check(canvas.style.width !== originalWidth, '可缩放');
+      press('复位');
+      check(canvas.style.width === originalWidth, '可复位');
+      press('隐藏关系图');
+      check(!canvas.getClientRects().length && panel.querySelector('.resource-record'), '不用图也能浏览');
+      press('显示关系图');
       const height = panel.scrollHeight;
+      delay = path;
       press('下一页');
-      await waitFor(() => page() === '第 2 / 3 页', '第二页');
-      press('下一页');
+      await waitFor(() => resume, '延迟第二页');
+      const oldPage = resume;
+      resume = null;
+      const jump = panel.querySelector('.resource-page-jump');
+      jump.value = '3';
+      jump.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'}));
       await waitFor(() => page() === '第 3 / 3 页', '末页');
       check(button('下一页').disabled && panel.scrollHeight <= height + 1, '末页不接成长列表');
+      oldPage();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      check(page() === '第 3 / 3 页' && !text(`合成图谱实体${size}`), '较早页不得覆盖跳页结果');
       press('刷新');
       await waitFor(() => text('合成图谱实体0'), '刷新回到第一页');
       press('实体 · 合成图谱实体0');
@@ -2088,6 +2130,16 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       check(!panel.textContent.includes('合成图谱实体'), '迟到列表不得重现旧资料');
       check(!document.querySelector('#editor-dialog').open, '迟到详情不得重开对话框');
       check(text('当前没有获准的图谱资料') && page() === '第 0 / 0 页', '撤权后保留正确空态');
+      check(!canvas.childElementCount, '撤权清除 SVG 节点和边');
+      granted = true;
+      press('刷新');
+      await waitFor(() => canvas.querySelector('.memory-graph-node'), '重新查询获准图谱');
+      press('实体 · 合成图谱实体0');
+      await waitFor(() => document.querySelector('#editor-dialog').open, '撤权前已有详情');
+      granted = false;
+      window.dispatchEvent(new Event('focus'));
+      await waitFor(() => text('当前没有获准的图谱资料'), '活动图谱遇到授权变化');
+      check(!canvas.childElementCount && !document.querySelector('#editor-dialog').open, '撤权清除当前画布和详情');
     """,
     )
 

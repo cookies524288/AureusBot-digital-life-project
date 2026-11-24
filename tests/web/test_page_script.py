@@ -91,7 +91,7 @@ const context = vm.createContext({
       if (!nodes.has(id)) nodes.set(id, element());
       return nodes.get(id);
     },
-    querySelectorAll: () => [], createElement: element,
+    querySelectorAll: () => [], createElement: element, addEventListener() {},
     createElementNS: (_, tag) => element(tag),
     createTextNode: text => Object.assign(element(), { nodeType: 3, textContent: text }),
     documentElement: { dataset: {} },
@@ -128,7 +128,12 @@ def run_page_script(code: str) -> None:
     html = (static / "index.html").read_text(encoding="utf-8")
     scripts = [
         (static / name).read_text(encoding="utf-8")
-        for name in ("organ-graph.js", "resource-management.js", "memory-flow-transfer.js")
+        for name in (
+            "organ-graph.js",
+            "memory-graph.js",
+            "resource-management.js",
+            "memory-flow-transfer.js",
+        )
     ]
     result = subprocess.run(
         [node, "-e", HARNESS],

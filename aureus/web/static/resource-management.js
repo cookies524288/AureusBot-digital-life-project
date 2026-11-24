@@ -1111,66 +1111,162 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   });
   function graphView(panel) {
     const endpoint = '/api/resources/memory/graph';
+    const pageSize = 16, accessInterval = 5000;
     const refresh = action('刷新', () => pager.reset());
     const unanchor = action('返回全部图谱', () => browse(null));
     const form = searchForm('搜索关系图', '实体名或关系谓词', refresh, unanchor);
     const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
-    let generation = 0, anchor = null, query = '';
-    panel.append(form, count);
+    const detailStatus = el('span', {class:'muted', role:'status'});
+    const list = el('div', {id:'memory-graph-result', class:'resource-list memory-graph-list',
+      tabindex:'0', role:'region', 'aria-label':'当前页图谱列表', 'aria-live':'polite'});
+    const canvas = createMemoryGraphCanvas({el, open, label});
+    let anchor = null, query = '', active = false, suspended = false, revision;
+    let detailRequest, accessRequest, accessTimer;
+    const sources = new Set();
     unanchor.classList.add('hidden');
 
-    function invalidate() {
-      generation++;
-      count.textContent = '';
+    function closeDetail() {
+      detailRequest?.abort();
+      detailRequest = null;
+      detailStatus.textContent = '';
       const dialog = $('editor-dialog');
-      if (dialog.open && $('editor-body').querySelector('[data-graph-detail]')) dialog.close();
+      const body = $('editor-body');
+      if (!body.querySelector('[data-graph-detail]')) return;
+      body.replaceChildren();
+      if (dialog.open) dialog.close();
     }
-    function browse(source) {
+    function invalidate() {
+      clearTimeout(accessTimer);
+      accessRequest?.abort();
+      accessRequest = null;
+      revision = null;
+      sources.clear();
+      count.textContent = '';
+      list.scrollTop = 0;
+      canvas.clear();
+      closeDetail();
+    }
+    function applyBrowse(source) {
       anchor = source;
       unanchor.classList.toggle('hidden', !anchor);
       query = form.elements.q.value = '';
       return pager.reset();
+    }
+    function browse(source) {
+      if (!source || sources.has(source)) return applyBrowse(source);
+    }
+    function accessChanged() {
+      return anchor ? applyBrowse(null) : pager.reset();
+    }
+    async function checkAccess() {
+      clearTimeout(accessTimer);
+      if (!revision || accessRequest) return;
+      const request = new AbortController();
+      accessRequest = request;
+      const response = await api(endpoint + '/access', 'GET', undefined, {}, request.signal);
+      if (request !== accessRequest) return;
+      accessRequest = null;
+      if (!response.ok || response.graphRevision !== revision) return accessChanged();
+      accessTimer = setTimeout(checkAccess, accessInterval);
     }
     function label(item) {
       return item.kind === 'entity' ? `实体 · ${item.name}`
         : `${item.subject.name} → ${item.predicate} → ${item.object.name}`;
     }
     async function open(source) {
-      const current = ++generation;
-      const response = await api(endpoint + '/detail?' + new URLSearchParams({source}));
-      if (current !== generation) return;
+      if (!sources.has(source)) return;
+      closeDetail();
+      const request = new AbortController();
+      detailRequest = request;
+      detailStatus.textContent = '正在读取关系图详情…';
+      const response = await api(endpoint + '/detail?' + new URLSearchParams({source}), 'GET', undefined, {}, request.signal);
+      if (request !== detailRequest) return;
+      detailRequest = null;
+      detailStatus.textContent = '';
       if (!response.ok) {
         fail(response);
-        return pager.reset();
+        return response.status === 404 || response.status === 409 ? accessChanged() : pager.reset();
       }
+      if (revision !== response.graphRevision || response.data.source !== source) return accessChanged();
       const item = response.data;
       const evidence = item.evidence.map(key => field('证据来源', sourceId(key)));
-      const nodes = item.kind === 'entity' ? [item] : [item.subject, item.object];
+      const nodes = item.kind === 'entity' ? [item] : item.subject.source === item.object.source
+        ? [item.subject] : [item.subject, item.object];
       openEditor('关系图详情', el('div', {class:'stack resource-detail', 'data-graph-detail':''},
         field('资料', label(item)), field('来源', sourceId(item.source)),
+        ...(item.kind === 'relation' ? [field('起点来源', sourceId(item.subject.source)),
+          field('终点来源', sourceId(item.object.source))] : []),
         field('置信度', item.confidence), ...evidence,
-        ...nodes.map(node => action(`浏览 ${node.name} 的一跳关系`, () => browse(node.source)))));
+        ...nodes.map(node => action(`浏览 ${node.name} 的一跳关系`, () => browse(node.source))),
+        ...(item.kind === 'relation' ? nodes.map((node, index) =>
+          action(`查看${index === 0 ? '起点' : '终点'}实体：${node.name}`, () => open(node.source))) : [])));
     }
-    const pager = createResourcePager({el, panel, id:'memory-graph', error:fail, prepare:invalidate, clearOnError:true,
+    const pager = createPagedResource({el, list, measure:() => pageSize, label:'关系图分页', error:fail,
+      prepare:invalidate, clearOnError:true, isVisible:() => active && !suspended && !document.hidden,
       request:async ({offset, limit, signal}) => {
         const params = new URLSearchParams({q:query, offset, limit});
         if (anchor) params.set('neighbor_of', anchor);
         const response = await api(endpoint + '?' + params, 'GET', undefined, {}, signal);
-        if (response.ok) response.data.enabled = true;
+        if (response.ok) Object.assign(response.data, {enabled:true, revision:response.graphRevision});
         return response;
       },
       empty:data => data.covered ? '没有符合条件的图谱资料' : '当前没有获准的图谱资料',
-      loaded:data => { if (data.covered) count.textContent = `共 ${data.total} 项可见资料`; },
-      render:item => record(label(item), () => open(item.source)),
+      loaded:data => {
+        revision = data.revision;
+        if (revision) accessTimer = setTimeout(checkAccess, accessInterval);
+        if (!data.covered) return;
+        count.textContent = `共 ${data.total} 项可见资料（当前查询）`;
+        for (const item of data.items) {
+          sources.add(item.source);
+          if (item.kind === 'relation') {
+            sources.add(item.subject.source);
+            sources.add(item.object.source);
+          }
+        }
+        canvas.draw(data.items);
+      },
+      render:item => {
+        const row = record(label(item), () => open(item.source));
+        const accessibleLabel = `${label(item)} · 来源：${sourceId(item.source)}`;
+        row.lastChild.setAttribute('aria-label', accessibleLabel);
+        row.lastChild.setAttribute('title', accessibleLabel);
+        return row;
+      },
     });
+    panel.append(form, count, detailStatus, el('div', {class:'memory-graph-layout'}, canvas.element,
+      el('div', {class:'stack'}, el('h3', {text:'当前页图谱列表'}), list, pager.navigation)));
     form.addEventListener('submit', event => {
       event.preventDefault();
       query = form.elements.q.value;
       return pager.reset();
     });
+    function suspend() {
+      if (!active || suspended) return;
+      suspended = true;
+      pager.hide();
+      list.replaceChildren();
+    }
+    function resume() {
+      if (!active || !suspended || document.hidden) return;
+      suspended = false;
+      return pager.show();
+    }
+    document.addEventListener('visibilitychange', () => document.hidden ? suspend() : resume());
+    window.addEventListener('pagehide', suspend);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('focus', checkAccess);
     return {
-      show:() => pager.show(),
-      hide:() => { pager.hide(); pager.list.replaceChildren(); },
+      show() {
+        active = true;
+        suspended = Boolean(document.hidden);
+        if (!suspended) return pager.show();
+      },
+      hide() {
+        active = suspended = false;
+        pager.hide();
+        list.replaceChildren();
+        applyBrowse(null);
+      },
     };
   }
   const graph = graphView($('memory-panel-graph'));

@@ -1,8 +1,10 @@
 """把已独立授权的记忆图查询结果转换成网页只读资料。"""
 
 import asyncio
+import hmac
 import json
 import math
+import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable, Collection
 from typing import Annotated, Any
@@ -23,6 +25,7 @@ from .resource_api import DEFAULT_SIZE, MAX_SIZE
 type GraphGrants = Callable[[str], Collection[MemorySource]]
 
 _NO_STORE = {"Cache-Control": "no-store"}
+_REVISION_HEADER = "X-Aureus-Graph-Revision"
 _MISSING = "找不到这条图谱资料。"
 _UNAVAILABLE = "暂时无法读取图谱资料。"
 _PAGE_CHANGED = "图谱可见范围已变更，请刷新。"
@@ -79,15 +82,28 @@ def register_memory_graph_routes(
 ) -> None:
     """注册图谱只读入口；没有可信授权提供者时不访问任何图数据。"""
 
+    revision_key = secrets.token_bytes(32)
+
     def snapshot(token: str) -> tuple[MemorySource, ...]:
         return tuple(grants(token)) if grants is not None else ()
 
     def scope(sources: Collection[MemorySource]) -> frozenset[str]:
         return frozenset(source.encode() for source in sources)
 
+    def revision_headers(token: str, sources: frozenset[str]) -> dict[str, str]:
+        payload = json.dumps([token, sorted(sources)], ensure_ascii=True).encode("ascii")
+        return {**_NO_STORE, _REVISION_HEADER: hmac.digest(revision_key, payload, "sha256").hex()}
+
     def ensure_active(token: str) -> None:
         if not session_is_active(token):
             raise HTTPException(401, "请先登录。", headers=_NO_STORE)
+
+    @app.get("/api/resources/memory/graph/access")
+    async def graph_access(token: Annotated[str, Depends(require_ready)]) -> JSONResponse:
+        """只核对当前会话与授权范围的版本，不读取记忆。"""
+        original = scope(snapshot(token)) if memory is not None else frozenset()
+        ensure_active(token)
+        return JSONResponse({}, headers=revision_headers(token, original))
 
     @app.get("/api/resources/memory/graph")
     async def read_graph(
@@ -99,9 +115,9 @@ def register_memory_graph_routes(
     ) -> JSONResponse:
         anchor = _location(neighbor_of) if neighbor_of is not None else None
         result = MemoryGraphPage()
+        allowed = snapshot(token) if memory is not None else ()
+        original = scope(allowed)
         if memory is not None and (neighbor_of is None or anchor is not None):
-            allowed = snapshot(token)
-            original = scope(allowed)
             try:
                 result = await asyncio.to_thread(
                     memory.query_graph,
@@ -123,7 +139,7 @@ def register_memory_graph_routes(
                 "total": result.total,
                 "next_offset": result.next_offset,
             },
-            headers=_NO_STORE,
+            headers=revision_headers(token, original),
         )
 
     @app.get("/api/resources/memory/graph/detail")
@@ -142,5 +158,5 @@ def register_memory_graph_routes(
                 raise HTTPException(503, _UNAVAILABLE, headers=_NO_STORE) from None
             ensure_active(token)
             if result is not None and original == scope(snapshot(token)):
-                return JSONResponse(_item(result), headers=_NO_STORE)
+                return JSONResponse(_item(result), headers=revision_headers(token, original))
         raise HTTPException(404, _MISSING, headers=_NO_STORE)

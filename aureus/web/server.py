@@ -576,6 +576,7 @@ def create_app(
     index_html = INDEX_PAGE.read_bytes()
     organ_graph = INDEX_PAGE.with_name("organ-graph.js").read_bytes()
     resources_ui = INDEX_PAGE.with_name("resource-management.js").read_bytes()
+    memory_graph_ui = INDEX_PAGE.with_name("memory-graph.js").read_bytes()
     memory_flow_ui = INDEX_PAGE.with_name("memory-flow-transfer.js").read_bytes()
     organ_tile = INDEX_PAGE.with_name("organ-tile.png").read_bytes()
 
@@ -599,6 +600,12 @@ def create_app(
     @app.get("/assets/organ-tile.png", include_in_schema=False)
     async def organ_tile_asset() -> Response:
         return Response(organ_tile, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.get("/assets/memory-graph.js", include_in_schema=False)
+    async def memory_graph_asset() -> Response:
+        return Response(
+            memory_graph_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
 
     @app.get("/assets/memory-flow-transfer.js", include_in_schema=False)
     async def memory_flow_asset() -> Response:
