@@ -129,6 +129,7 @@ def test_inbox_read_limit_saves_and_restores_for_restart(rig: ConfigRig) -> None
         "memory.recall_enabled",
         "memory.heuristic_recall_enabled",
         "memory.recall_feedback_enabled",
+        "memory.removal_operations_enabled",
         "memory.max_results",
         "memory.index_batch",
         "memory.consolidation_enabled",
@@ -148,6 +149,7 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
             "recall_enabled": False,
             "heuristic_recall_enabled": True,
             "recall_feedback_enabled": False,
+            "removal_operations_enabled": False,
             "max_results": 12,
             "index_batch": 321,
             "consolidation_enabled": True,
@@ -167,17 +169,19 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
     path = rig.paths.runtime_config_file
     assert tomllib.loads(path.read_text(encoding="utf-8")) == changes
     section, name = field.split(".")
-    default = RuntimeConfig().model_dump()[section][name]
+    defaults = RuntimeConfig().model_dump()
+    default = defaults[section][name]
     assert changes[section].pop(name) != default
     restored = client.post(RUNTIME_RESTORE, json={"field": field})
     assert restored.status_code == 200
     assert restored.json() == {"value": default, "changed": True, "restart_required": True}
     assert tomllib.loads(path.read_text(encoding="utf-8")) == changes
-    changes[section][name] = default
     page_config = client.get("/api/config").json()["config"]
     loaded = load_runtime_config(rig.paths).model_dump()
     for group, values in changes.items():
-        assert page_config[group] == loaded[group] == values
+        expected = {**defaults[group], **values}
+        assert page_config[group] == expected
+        assert loaded[group] == expected
 
 
 def test_model_edit_preserves_sparse_values_and_has_no_restore(rig: ConfigRig) -> None:
