@@ -98,6 +98,15 @@ class EmojiRecord:
 
 
 @dataclass(frozen=True)
+class EmojiIntegrityPreview:
+    """当前活跃登记条目的原件检查统计与问题示例。"""
+
+    checked: int
+    unavailable: int
+    examples: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ImportedEmoji:
     """一条旧表情记录的稳定来源、媒体地址及原始元数据。"""
 
@@ -437,6 +446,24 @@ class EmojiStore:
         return replace(
             entry, has_file=media_type is not None, is_removed=removed, media_type=media_type
         )
+
+    def preview_integrity(self, limit: int) -> EmojiIntegrityPreview:
+        """核对活跃登记条目的原件，不改变登记状态或媒体。"""
+        with closing(open_connection(self._database_file)) as connection:
+            rows = connection.execute(
+                f"""{_CATALOG} SELECT digest, description FROM catalog
+                    WHERE is_registered AND NOT is_banned AND NOT is_removed
+                    ORDER BY digest, source"""
+            ).fetchall()
+        unavailable = 0
+        examples: list[str] = []
+        for row in rows:
+            digest = row["digest"]
+            if digest is None or self.read_media(digest) is None:
+                unavailable += 1
+                if len(examples) < limit:
+                    examples.append(row["description"])
+        return EmojiIntegrityPreview(len(rows), unavailable, tuple(examples))
 
     def candidates(self) -> list[EmojiRecord]:
         """列出已经登记、未禁用且有本地媒体的表情。"""

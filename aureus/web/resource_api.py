@@ -33,6 +33,7 @@ from aureus.memory.emoji import (
     MAX_EMOJI_TAG,
     MAX_EMOJI_TAGS,
     EmojiFormat,
+    EmojiIntegrityPreview,
     EmojiSort,
     EmojiStatus,
     emoji_media_type,
@@ -212,6 +213,13 @@ def register_resource_routes(
         except OSError:
             raise HTTPException(409, "无法保存图片；原有文件未被覆盖。") from None
         return {"digest": digest, "created": created}
+
+    @app.post("/api/resources/emoji/integrity-preview")
+    async def preview_emoji_integrity(
+        response: Response, store: Annotated[EmojiStore, Depends(require_emoji_editor)]
+    ) -> EmojiIntegrityPreview:
+        response.headers["Cache-Control"] = "no-store"
+        return await asyncio.to_thread(store.preview_integrity, DEFAULT_SIZE)
 
     @app.patch("/api/resources/emoji/batch")
     async def batch_emoji(

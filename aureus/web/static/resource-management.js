@@ -544,6 +544,17 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     openEditor('批量上传表情', form);
   }
+  async function emojiIntegrityPreview() {
+    const result = el('div', {class:'stack', 'aria-live':'polite'}, el('p', {text:'正在检查原图…'}));
+    detail('表情完整性预览', result,
+      el('p', {class:'muted', text:'预览不修改登记、记录或文件。未启用周期检查，无下次运行时间。'}));
+    const response = await api('/api/resources/emoji/integrity-preview', 'POST');
+    if (!response.ok) { result.textContent = errorText(response); return; }
+    const {checked, unavailable, examples} = response.data;
+    result.replaceChildren(el('p', {text:`检查 ${checked} 条活跃登记记录 · 原图不可用 ${unavailable} 条`}));
+    if (examples.length) result.append(el('p', {class:'muted', text:'问题示例（最多 30 条）'}),
+      el('ul', {}, ...examples.map(description => el('li', {text:description || '未填写描述'}))));
+  }
   function emojiActions(item, refresh) {
     const actions = el('div', {class:'row'});
     const edit = action('编辑', () => emojiForm(refresh, item));
@@ -594,8 +605,18 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       (entry_keys, removed) => ({entry_keys, removed}), () => pager.read()) : null;
     const upload = kind === 'emoji' ? action('上传表情', () => emojiForm(pager.read)) : null;
     const batchUpload = kind === 'emoji' ? action('批量上传', () => emojiBatchForm(pager.read)) : null;
+    let checkingIntegrity = false;
+    let emojiEnabled = false;
+    const integrity = emoji ? action('完整性预览', async event => {
+      if (checkingIntegrity || !emojiEnabled) return;
+      const button = event.currentTarget;
+      checkingIntegrity = button.disabled = true;
+      try { await emojiIntegrityPreview(); }
+      finally { checkingIntegrity = false; button.disabled = !emojiEnabled; }
+    }) : null;
     if (upload) { upload.disabled = true; form.append(upload); }
     if (batchUpload) { batchUpload.disabled = true; form.append(batchUpload); }
+    if (integrity) { integrity.disabled = true; form.append(integrity); }
     if (batch) form.append(batch.remove, batch.restore);
     panel.append(form);
     if (counts) panel.append(counts);
@@ -606,6 +627,10 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       loaded:data => {
         if (upload) upload.disabled = !data.enabled;
         if (batchUpload) batchUpload.disabled = !data.enabled;
+        if (integrity) {
+          emojiEnabled = data.enabled;
+          integrity.disabled = !emojiEnabled || checkingIntegrity;
+        }
         if (counts) {
           const total = data.counts;
           counts.textContent = total ? `全库 ${total.total} 条 · 已登记 ${total.registered} · 未登记 ${total.unregistered} · 已禁用 ${total.banned} · 已移除 ${total.removed}` : '';

@@ -948,6 +948,42 @@ def test_emoji_filters_sort_and_keep_global_counts_on_narrow_screen(browser: Bro
     )
 
 
+def test_emoji_integrity_preview_runs_only_on_click_on_narrow_screen(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      const original = window.fetch;
+      let calls = 0;
+      let finish;
+      window.fetch = (url, options) => {
+        if (url !== '/api/resources/emoji/integrity-preview') return original(url, options);
+        check(options.method === 'POST' && options.credentials === 'same-origin', '同源 POST 预览');
+        calls++;
+        return new Promise(resolve => { finish = resolve; });
+      };
+      click('[data-learning-tab="emoji"]');
+      const preview = () => button('完整性预览');
+      await waitFor(() => preview() && !preview().disabled, '完整性预览可用');
+      check(calls === 0, '打开表情页不检查');
+      preview().click();
+      check(preview().disabled, '检查中不重复请求');
+      preview().click();
+      check(calls === 1, '只有一次请求');
+      finish(new Response(JSON.stringify({checked:42, unavailable:1, examples:['合成缺图']})));
+      const dialog = document.querySelector('#editor-dialog');
+      await waitFor(() => dialog.open && dialog.innerText.includes('合成缺图'), '显示预览结果');
+      for (const expected of ['检查 42 条', '原图不可用 1 条', '不修改', '无下次运行']) {
+        check(dialog.innerText.includes(expected), `应说明：${expected}`);
+      }
+      check(dialog.getBoundingClientRect().right <= innerWidth, '窄屏弹窗不横向溢出');
+      document.querySelector('#editor-close').click();
+      check(calls === 1, '关闭不请求');
+    """,
+    )
+
+
 def test_emoji_upload_edit_search_and_status_maintenance(browser: Browser) -> None:
     browser.open("learning", 1280, 900)
     with BytesIO() as stream:

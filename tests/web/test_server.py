@@ -7,8 +7,10 @@
 import asyncio
 import base64
 import re
+import sqlite3
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Iterator
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from io import BytesIO
@@ -91,6 +93,99 @@ def login(client: TestClient, password: str = "admin") -> Any:
 
 def set_password(rig: Rig) -> None:
     rig.passwords.set_password(GOOD)
+
+
+def test_emoji_integrity_preview_requires_ready_same_origin_login(rig: Rig) -> None:
+    endpoint = "/api/resources/emoji/integrity-preview"
+    origin = {"Origin": "http://testserver"}
+    with rig.client() as client:
+        assert client.post(endpoint, headers=origin).status_code == 401
+        assert login(client).json()["must_change_password"]
+        response = client.post(endpoint, headers=origin)
+        assert response.status_code == 403 and "默认密码" in response.json()["detail"]
+        set_password(rig)
+        assert login(client, GOOD).status_code == 200
+        assert client.post(endpoint).status_code == 403
+        assert client.post(endpoint, headers={"Origin": "http://other.test"}).status_code == 403
+        assert client.post(endpoint, headers=origin).status_code == 409
+
+
+def test_emoji_integrity_preview_reports_unavailable_without_writes(tmp_path: Path) -> None:
+    database = tmp_path / "emoji.db"
+    store = EmojiStore(database, tmp_path, ManualClock(START))
+    store.open()
+    rig = Rig(tmp_path, resource_emojis=store)
+    set_password(rig)
+    endpoint = "/api/resources/emoji/integrity-preview"
+    origin = {"Origin": "http://testserver"}
+
+    def snapshot() -> tuple[list[str], dict[str, bytes]]:
+        with closing(sqlite3.connect(database)) as connection:
+            rows = list(connection.iterdump())
+        attachments = tmp_path / "attachments"
+        return rows, {path.name: path.read_bytes() for path in attachments.iterdir()}
+
+    def collect(description: str, color: str) -> str:
+        with BytesIO() as stream:
+            Image.new("RGB", (8, 8), color).save(stream, format="PNG")
+            digest, _created = store.upload(stream.getvalue())
+        assert store.update_catalog(digest, description=description, is_registered=True)
+        return digest
+
+    try:
+        with rig.client() as client:
+            assert login(client, GOOD).status_code == 200
+            empty = client.post(endpoint, headers=origin)
+            assert empty.status_code == 200
+            assert empty.json() == {"checked": 0, "unavailable": 0, "examples": []}
+            assert empty.headers["cache-control"] == "no-store"
+
+            healthy = collect("正常", "blue")
+            changed = collect("校验不符", "red")
+            (tmp_path / "attachments" / changed).write_bytes(b"GIF89a changed")
+            banned = collect("禁用", "green")
+            store.set_status(banned, is_registered=True, is_banned=True)
+            removed = collect("移除", "yellow")
+            assert store.set_removed([f"asset:{removed}"], True)
+            unregistered = collect("未登记", "white")
+            store.set_status(unregistered, is_registered=False, is_banned=False)
+            missing = sha256(b"missing original").hexdigest()
+            originals = [
+                ImportedEmoji(
+                    MemorySource("fixture", "main", "images", (number,)),
+                    missing if number == 0 else None,
+                    "缺文件" if number == 0 else f"迁入无摘要 {number:02}",
+                    True,
+                    False,
+                    1,
+                    0,
+                    None,
+                    None,
+                    '{"is_registered":true,"description":"迁入无摘要"}',
+                )
+                for number in range(32)
+            ]
+            store.import_records(originals[:2])
+            before = snapshot()
+            preview = client.post(endpoint, headers=origin)
+            assert preview.status_code == 200
+            assert preview.headers["cache-control"] == "no-store"
+            result = preview.json()
+            assert result["checked"] == 4 and result["unavailable"] == 3
+            assert set(result["examples"]) == {"校验不符", "缺文件", "迁入无摘要"}
+            assert snapshot() == before
+            assert store.read_sendable(healthy) is not None
+            assert store.read_sendable(changed) is None
+
+            store.import_records(originals[2:])
+            before = snapshot()
+            limited = client.post(endpoint, headers=origin).json()
+            assert limited["checked"] == 34 and limited["unavailable"] == 33
+            assert len(limited["examples"]) == 30
+            assert client.post(endpoint, headers=origin).json() == limited
+            assert snapshot() == before
+    finally:
+        rig.close()
 
 
 def test_emoji_catalog_filters_actual_format_before_paging_and_keeps_global_counts(
