@@ -3362,18 +3362,19 @@ function renderIndexProgress(item) {
     el('p', { class: 'muted', text: isCache ? ({ missing: '尚未缓存', partial: '部分已缓存', complete: '已缓存' }[item.state] || detail) : detail }),
     item.state === 'disabled' && INDEX_PROGRESS_SWITCHES[item.kind] ? renderSwitchHint(item.kind) : null);
 }
-// 功能未启用时，告诉维护者该开哪个设置；设置名取自设置页同一份 CFG_FIELDS，不另存一份（3.15 追加）。
+// 功能未启用时，告诉维护者还差哪个设置；向量索引本身随嵌入模型自动建立，没有开关可指（D107）。
+// 设置名取自设置页同一份 CFG_FIELDS，不另存一份（3.15 追加）。
 const INDEX_PROGRESS_SWITCHES = {
-  expression: { key: 'language.use_vector_expression',
-    requires: name => `另需${name('language.recall_enabled')}开启，且${name('language.reference_chars')}大于零` },
-  emoji_cache: { key: 'heartbeat.qq_emoji_semantic_enabled',
-    requires: name => `另需${name('qq.enabled')}已开启，且${name('heartbeat.qq_emoji_visual_enabled')}保持关闭` },
+  expression: { key: 'language.recall_enabled',
+    requires: name => `需${name('language.recall_enabled')}开启，且${name('language.reference_chars')}大于零` },
+  emoji_cache: { key: 'heartbeat.qq_emoji_visual_enabled',
+    requires: name => `需${name('qq.enabled')}和${name('heartbeat.qq_emoji_selection_enabled')}开启，且${name('heartbeat.qq_emoji_visual_enabled')}保持关闭` },
 };
 function renderSwitchHint(kind) {
   const { key, requires } = INDEX_PROGRESS_SWITCHES[kind];
   const name = field => `「${CFG_FIELDS[field][0]}」`;
   const group = CFG_SECTIONS.find(([sec]) => sec === key.split('.')[0])[1];
-  return el('p', { class: 'muted' }, `请在设置页「${group}」分组开启${name(key)}；${requires(name)}。保存后重启生效。 `,
+  return el('p', { class: 'muted' }, `配置嵌入模型后自动建立；${requires(name)}（设置页「${group}」分组）。保存后重启生效。 `,
     el('button', { type: 'button', class: 'btn small', text: '去设置页查看', onclick: () => jumpToSetting(key) }));
 }
 function jumpToSetting(key) {
@@ -3726,7 +3727,6 @@ const CFG_FIELDS = {
   'heartbeat.qq_emoji_registration_limit': ['表情登记上限', '限制新增活跃登记；不自动撤销旧登记。'],
   'heartbeat.qq_emoji_replacement_suggestion_enabled': ['表情替换建议', '默认关闭。只在手动请求时通过表情器官建议一个旧登记，可能收费，不自动改动目录。'],
   'heartbeat.qq_emoji_visual_enabled': ['QQ 表情视觉选择', '让视觉模型直接看候选表情图片来选择，开启后不走语义或文字选择。'],
-  'heartbeat.qq_emoji_semantic_enabled': ['QQ 表情语义匹配', '未开启视觉选择时，使用已配置的向量模型匹配表情；没有合适的语义结果时仍可按文字挑选。'],
   'heartbeat.qq_emoji_semantic_refresh_seconds': ['表情语义缓存刷新间隔（秒）', '表情描述的向量候选使用多久后需要重新检查。'],
   'heartbeat.qq_emoji_semantic_threshold': ['表情语义相似度下限', '表情与当前语境的相似度至少达到多少才允许按语义选中。'],
   'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
@@ -3811,7 +3811,6 @@ const CFG_FIELDS = {
   'empathy.base_amount': ['共情基础量', '计算一次共情反应时采用的起始强度。'],
   'empathy.affinity_floor': ['好感系数下限', '好感很低时，计算共情至少使用这个系数。'],
   'judge.enabled': ['事件判断', '是否让判断器官解读事件。'],
-  'judge.organ': ['判断器官', '选择负责解读事件的器官。'],
   'judge.timeout_seconds': ['判断超时（秒）', '一次判断最多等多少秒。'],
   'judge.context_messages': ['判断参考消息数', '判断时额外参考最近多少条对话。'],
   'judge.state_context_enabled': ['判断前读取自身状态', '判断时参考当前可用的身体、情绪和心情读数；关闭不影响判断器调用或回复调节。'],
@@ -3833,7 +3832,6 @@ const CFG_FIELDS = {
   'interests.max_active': ['活跃兴趣上限', '同时可以保留多少个活跃兴趣。'],
   'interests.max_changes_per_day': ['每日兴趣变更上限', '一天最多自行调整兴趣多少次。'],
   'exploration.enabled': ['自主探索', '是否允许围绕兴趣主动查找资料。'],
-  'exploration.organ': ['探索总结器官', '选择负责整理探索资料的器官。'],
   'exploration.search_provider': ['搜索服务', '探索时使用哪个搜索服务。'],
   'exploration.search_endpoint': ['搜索服务地址', '填写 SearXNG 的完整搜索地址，例如 https://search.example.com/search。'],
   'exploration.max_per_day': ['每日探索上限', '一天最多发起多少次探索。'],
@@ -3855,21 +3853,15 @@ const CFG_FIELDS = {
   'memory.consolidation_batch': ['记忆整理批量条数', '每批后台整理最多读取多少条候选记录。'],
   'memory.consolidation_half_life_days': ['记忆权重半衰期（天）', '整理记忆时，按这个时长计算时间衰减：经过一个半衰期，记忆的时间权重减半。'],
   'memory.consolidation_extract_enabled': ['整理时提取记忆要点', '开启后台记忆整理后，是否再用总结器官提取事实或关系。'],
-  'language.recall_enabled': ['回复参考习得语言', '回复前是否检索可用的表达方式和黑话作为语言参考。'],
+  'language.recall_enabled': ['回复参考习得语言', '回复前检索可用的表达方式和黑话。配好本机嵌入模型后，自动使用表达向量；没有向量结果时使用普通候选。'],
   'language.learning_enabled': ['自动学习语言资料', '允许从符合条件的对话提取新的表达方式和黑话。'],
-  'language.organ': ['语言学习器官', '指定整理候选表达和黑话时使用的器官。'],
-  'language.expression_quality_enabled': ['独立质检表达', '默认关闭。开启后，学习每批最多额外检查 10 个表达，按可选模型预算计费。不合适、检查失败或预算拒绝的条目不入库；模型通过仍需人工批准才用于回复。'],
-  'language.expression_quality_organ': ['表达质检器官', '独立判断说法是否适合情境及是否过于特指。开启后若未指定或器官未配置，则不采纳新表达；不影响黑话学习。'],
+  'language.expression_quality_enabled': ['独立质检表达', '默认关闭。开启后，判断器官每批最多额外检查 10 个表达，按可选模型预算计费。不合适、检查失败或预算拒绝的条目不入库；模型通过仍需人工批准才用于回复。'],
   'language.reference_chars': ['语言参考字数上限', '每种语言参考块最多可带多少字符；设为零时不带入参考。'],
-  'language.use_vector_expression': ['表达向量检索', '开启后优先用本地向量索引匹配与当前语境相近的表达候选。'],
-  'language.expression_selector_organ': ['表达筛选器官', '指定从向量候选中筛选表达的器官；不填写时不启用该筛选器官。'],
   'diary.enabled': ['日记', '是否根据当天的经历写日记。'],
-  'diary.organ': ['日记器官', '选择负责写日记的器官。'],
   'diary.write_after_hour': ['日记起写时间', '每天几点以后可以开始写日记。'],
   'diary.max_input_chars': ['经历字数上限', '写日记时最多参考多少字符的经历。'],
   'diary.max_chars': ['日记字数上限', '单篇日记最多保留多少字符。'],
   'persona_growth.enabled': ['人设成长', '是否允许根据经历调整可成长的人设层。'],
-  'persona_growth.organ': ['人设成长器官', '选择负责提出人设调整建议的器官。'],
   'persona_growth.max_input_chars': ['材料字数上限', '提出建议前最多参考多少字符的材料。'],
   'persona_growth.layer_cooldown_days': ['同层调整间隔（天）', '同一层人设两次调整至少相隔多少天。'],
   'persona_growth.min_similarity': ['新旧相似度下限', '新内容和原内容至少要有多相似才允许采用。'],

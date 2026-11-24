@@ -73,6 +73,15 @@ HIDDEN_CONFIG = frozenset(
         "heartbeat.roleplay_mode",
         "heartbeat.plan_organ",
         "heartbeat.reply_organ",
+        "heartbeat.qq_emoji_semantic_enabled",
+        "judge.organ",
+        "exploration.organ",
+        "language.organ",
+        "language.expression_quality_organ",
+        "language.expression_selector_organ",
+        "language.use_vector_expression",
+        "diary.organ",
+        "persona_growth.organ",
     }
 )
 NO_DEFAULT_CONFIG = frozenset({"exploration.search_endpoint"})

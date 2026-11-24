@@ -103,7 +103,7 @@ class EmojiSelector:
                 return None
             dialogue = _dialogue_lines(history, user_name, self._timezone)
             digest = None
-            if self._config.qq_emoji_semantic_enabled and has_embedding:
+            if has_embedding:
                 digest = await self._semantic(
                     intent.emotion or dialogue[:_QUERY_CONTEXT_CHARS], candidates
                 )

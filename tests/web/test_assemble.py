@@ -133,9 +133,6 @@ def test_normal_web_connects_published_graph_display_grants(paths: AureusPaths) 
 def test_normal_web_grants_and_revokes_only_selected_expression(paths: AureusPaths) -> None:
     password = "correct horse"
     PasswordStore(paths.web_password_file, FAST_HASHER).set_password(password)
-    paths.runtime_config_file.write_text(
-        "[language]\nuse_vector_expression = true\n", encoding="utf-8"
-    )
     clock = ManualClock(START)
     with (
         open_core(paths, fake_organs=True, clock=clock, to_console=False) as core,

@@ -139,7 +139,6 @@ def test_inbox_read_limit_saves_and_restores_for_restart(rig: ConfigRig) -> None
         "memory.consolidation_half_life_days",
         "language.recall_enabled",
         "language.learning_enabled",
-        "language.organ",
         "language.reference_chars",
     ],
 )
@@ -161,7 +160,6 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
         "language": {
             "recall_enabled": False,
             "learning_enabled": True,
-            "organ": "planner",
             "reference_chars": 1500,
         },
     }
@@ -404,3 +402,39 @@ def test_web_keeps_legacy_settings_off_the_page_and_preserves_file(rig: ConfigRi
     assert response.status_code == 200 and response.json()["value"] is True
     assert load_runtime_config(rig.paths).heartbeat.inbox_debounce_enabled is True
     assert tomllib.loads(path.read_text(encoding="utf-8")) == tomllib.loads(legacy_toml)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("heartbeat", "qq_emoji_semantic_enabled", False),
+        ("language", "use_vector_expression", False),
+        ("judge", "organ", "old-judge"),
+        ("exploration", "organ", "old-explorer"),
+        ("language", "organ", "old-learner"),
+        ("language", "expression_quality_organ", "old-reviewer"),
+        ("language", "expression_selector_organ", "old-selector"),
+        ("diary", "organ", "old-writer"),
+        ("persona_growth", "organ", "old-growth"),
+    ],
+)
+def test_d107_legacy_settings_hidden_and_not_writable(
+    rig: ConfigRig, section: str, field: str, value: str | bool
+) -> None:
+    path = rig.paths.runtime_config_file
+    raw_value = f'"{value}"' if isinstance(value, str) else str(value).lower()
+    before = f"[{section}]\n{field} = {raw_value}\n".encode()
+    path.write_bytes(before)
+    client = rig.client
+    view = client.get("/api/config").json()
+    schema = view["schema"]
+    definition = schema["properties"][section]["$ref"].rsplit("/", 1)[-1]
+    assert field not in view["config"][section]
+    assert field not in schema["$defs"][definition]["properties"]
+
+    replacement = "new-organ" if isinstance(value, str) else not value
+    for changes in ({section: {field: replacement}}, {f"{section}.{field}": replacement}):
+        assert client.put("/api/config", json={"changes": changes}).status_code == 403
+    assert client.post(RUNTIME_RESTORE, json={"field": f"{section}.{field}"}).status_code == 403
+    assert path.read_bytes() == before
+    assert not rig.service.restart_required
