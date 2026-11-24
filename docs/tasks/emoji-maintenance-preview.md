@@ -3,6 +3,8 @@
 状态：完成
 设计：延续 [3.14 表情库](3.14.md)和[学习功能对照](maibot-learning-parity.md)的原件保留和现有网页授权；不改变上线策略。
 
+本文记录原只读预览的验收。后续运行行为见[表情周期维护](emoji-periodic-runtime.md)。
+
 ## 先读
 
 - [3.14](3.14.md)、[资源管理](resource-management.md)和[开发守则](../11-dev-guide.md)。

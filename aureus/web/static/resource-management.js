@@ -657,7 +657,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   async function emojiIntegrityPreview() {
     const result = el('div', {class:'stack', 'aria-live':'polite'}, el('p', {text:'正在检查原图…'}));
     detail('表情完整性预览', result,
-      el('p', {class:'muted', text:'预览不修改登记、记录或文件。未启用周期检查，无下次运行时间。'}));
+      el('p', {class:'muted', text:'预览不修改登记、记录或文件。后台完整性检查只维护发送候选。'}));
     const response = await api('/api/resources/emoji/integrity-preview', 'POST');
     if (!response.ok) { result.textContent = errorText(response); return; }
     const {checked, unavailable, examples} = response.data;

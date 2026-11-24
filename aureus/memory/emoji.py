@@ -177,6 +177,7 @@ class EmojiStore:
         self._memory_dir = memory_dir
         self._attachments = memory_dir / "attachments"
         self._clock = clock
+        self._unavailable_digests: frozenset[str] = frozenset()
 
     def open(self) -> None:
         """初始化表情资源与迁移来源表。"""
@@ -463,21 +464,31 @@ class EmojiStore:
 
     def preview_integrity(self, limit: int) -> EmojiIntegrityPreview:
         """核对活跃登记条目的原件，不改变登记状态或媒体。"""
+        checked, unavailable = self._check_integrity()
+        return EmojiIntegrityPreview(
+            checked,
+            len(unavailable),
+            tuple(description for _, description in unavailable[: max(0, limit)]),
+        )
+
+    def refresh_sendable_pool(self) -> None:
+        """按现有原件检查刷新内存排除项，不修改目录和文件。"""
+        _, unavailable = self._check_integrity()
+        self._unavailable_digests = frozenset(digest for digest, _ in unavailable if digest)
+
+    def _check_integrity(self) -> tuple[int, list[tuple[str | None, str]]]:
         with closing(open_connection(self._database_file)) as connection:
             rows = connection.execute(
                 f"""{_CATALOG} SELECT digest, description FROM catalog
                     WHERE is_registered AND NOT is_banned AND NOT is_removed
                     ORDER BY digest, source"""
             ).fetchall()
-        unavailable = 0
-        examples: list[str] = []
-        for row in rows:
-            digest = row["digest"]
-            if digest is None or self.read_media(digest) is None:
-                unavailable += 1
-                if len(examples) < limit:
-                    examples.append(row["description"])
-        return EmojiIntegrityPreview(len(rows), unavailable, tuple(examples))
+        unavailable = [
+            (digest, row["description"])
+            for row in rows
+            if (digest := row["digest"]) is None or self.read_media(digest) is None
+        ]
+        return len(rows), unavailable
 
     def candidates(self) -> list[EmojiRecord]:
         """列出已经登记、未禁用且有本地媒体的表情。"""
@@ -488,7 +499,12 @@ class EmojiStore:
                      SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)
                    ORDER BY use_count, last_used_at, digest"""
             ).fetchall()
-        return [entry for row in rows if (entry := self._record(row)).has_file]
+        unavailable = self._unavailable_digests
+        return [
+            entry
+            for row in rows
+            if row["digest"] not in unavailable and (entry := self._record(row)).has_file
+        ]
 
     def read_media(self, digest: str) -> bytes | None:
         """读回表情字节，校验文件格式和内容地址。"""

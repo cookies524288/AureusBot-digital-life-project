@@ -79,6 +79,7 @@ class HeartbeatConfig(BaseModel):
     plan_organ: ClassVar[str] = "planner"
     qq_emoji_collection_enabled: bool = True
     qq_emoji_selection_enabled: bool = True
+    qq_emoji_maintenance_enabled: bool = True
     qq_emoji_visual_enabled: bool = False
     qq_emoji_semantic_enabled: bool = False
     qq_emoji_semantic_refresh_seconds: float = Field(default=300.0, gt=0, allow_inf_nan=False)

@@ -1,5 +1,6 @@
 """核心组装的测试：用假器官和临时数据根目录，不调用模型、不碰真实的数据。"""
 
+import asyncio
 import logging
 import os
 import textwrap
@@ -64,6 +65,46 @@ async def test_assembles_with_fake_organs_and_closes_cleanly(paths: AureusPaths)
         ]
     # 退出 with 块后数据库已经关掉：Windows 上文件没被锁住，能删掉。
     paths.database_file.unlink()
+
+
+@pytest.mark.asyncio
+async def test_periodic_emoji_maintenance_refreshes_real_candidates(paths: AureusPaths) -> None:
+    clock = ManualClock(START)
+    with open_core(paths, fake_organs=True, clock=clock, to_console=False) as core:
+        store = core.emoji_store
+        assert store is not None
+        image = b"GIF89a synthetic media"
+        entry = store.collect(image, description="表情", register=True)
+        cancelled = store.collect(
+            b"GIF89a manual cancellation", description="取消", register=True
+        )
+        assert entry.digest is not None and cancelled.digest is not None
+        assert store.update_catalog(cancelled.digest, is_registered=False)
+        attachment = paths.memory_dir / "attachments" / entry.digest
+        attachment.write_bytes(b"GIF89a wrong checksum")
+
+        async def advance_maintenance() -> None:
+            clock.advance(timedelta(minutes=10))
+            core.heartbeat.beat()
+            await next(
+                task for task in asyncio.all_tasks() if task.get_name() == "aureus-emoji-maintenance"
+            )
+
+        core.heartbeat.wake_up()
+        core.heartbeat.beat()
+        assert [item.digest for item in store.candidates()] == [entry.digest]
+        await advance_maintenance()
+        assert not store.candidates()
+        assert attachment.read_bytes() == b"GIF89a wrong checksum"
+
+        attachment.write_bytes(image)
+        assert store.preview_integrity(30).unavailable == 0
+        assert not store.candidates()
+        await advance_maintenance()
+        assert [item.digest for item in store.candidates()] == [entry.digest]
+        assert store.read_sendable(entry.digest) == image
+        assert not store.browse("取消", 0, 1)[0].is_registered
+        await core.heartbeat.shut_down()
 
 
 def test_second_instance_is_refused(paths: AureusPaths) -> None:

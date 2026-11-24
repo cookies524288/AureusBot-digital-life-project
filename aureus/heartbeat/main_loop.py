@@ -68,6 +68,7 @@ from aureus.heartbeat.conversation import (
 from aureus.heartbeat.cortisol import CortisolTiming
 from aureus.heartbeat.diary_runner import DiaryOutcome, DiaryTracker, write_diary
 from aureus.heartbeat.downtime import Downtime, assess_downtime
+from aureus.heartbeat.emoji_maintenance import EmojiMaintenance
 from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
@@ -342,6 +343,11 @@ class Heartbeat:
         self._language_samples: deque[language_runner.QueuedLanguageSample] = deque()
         # 模型热重载提供当前路线；清空备用器官的模型即可关闭其路由。
         self._available_organs: frozenset[str] = frozenset()
+        self._emoji_maintenance = (
+            EmojiMaintenance(emoji_store)
+            if config.qq_emoji_maintenance_enabled and emoji_store is not None
+            else None
+        )
         self._conversation = ConversationFlow(
             clock=clock,
             timeline=timeline,
@@ -849,6 +855,8 @@ class Heartbeat:
             self._maintenance_task = None
         if self._maintenance_paused or self._maintenance_task is not None:
             return
+        if self._emoji_maintenance is not None:
+            self._emoji_maintenance.maybe_start(self._clock.now())
         self._initiative.begin_beat(self._clock.now())
         self._exploration.begin_beat(self._clock.now())
         self._watch_emergency_stop()
@@ -916,6 +924,8 @@ class Heartbeat:
             try:
                 await self._settle_thought_before_shutdown()
                 self._take_in_perceptions()
+                if self._emoji_maintenance is not None:
+                    await self._emoji_maintenance.wait()
             except Exception:
                 logger.exception("关闭时没能把进行中的想法或排队的消息记进时间线")
             try:
