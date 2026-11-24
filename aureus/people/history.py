@@ -445,7 +445,12 @@ def profile_details(
         return {
             "choices": target.evidence,
             "effective": _profile_view(target, target.edit),
-            "edit": target.edit.model_dump(exclude={"anchor"}),
+            # 挂接失效时不回传旧正文与证据，避免前端原样回传后挂到新画像版本（3.15 自检）。
+            "edit": (
+                target.edit
+                if target.edit.anchor == target.anchor
+                else target.edit.model_copy(update={"summary": None, "evidence": None})
+            ).model_dump(exclude={"anchor"}),
             "history": [
                 dict(
                     id=row["id"],
@@ -673,29 +678,25 @@ def _profiles_for_recall(
             else (None, None, None)
         )
         anchor = primary or next(iter(group.values()))
+        # 挂接失效时正文与证据位置一并作废，不留空覆盖占召回名额（3.15 自检）。
         if primary is None or primary.id != anchor_id:
-            summary = None
-        if summary is not None or positions is not None:
-            choices = _evidence_choices(primary.record.evidence) if primary else []
-            evidence = None
-            if positions is not None:
-                evidence = (
-                    [choices[point] for point in positions]
-                    if primary and primary.id == anchor_id
-                    else []
-                )
+            summary = positions = None
+        if primary is not None and (summary is not None or positions is not None):
+            choices = _evidence_choices(primary.record.evidence)
             selected.append(
                 replace(
-                    anchor,
+                    primary,
                     record=HistoricalRecord(
                         instance=instance,
                         kind=HistoricalKind.LOCAL_PROFILE_OVERRIDE,
                         source_key=subject_key or "",
                         subject_key=subject_key,
-                        summary=summary
-                        if summary is not None
-                        else (primary.record.summary if primary else None),
-                        evidence=evidence,
+                        summary=summary if summary is not None else primary.record.summary,
+                        evidence=(
+                            [choices[point] for point in positions]
+                            if positions is not None
+                            else primary.record.evidence
+                        ),
                     ),
                 )
             )
