@@ -42,7 +42,13 @@ from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
-from aureus.memory import EmojiStore, ExpressionClusterStore, LanguageStore, MemoryIndex
+from aureus.memory import (
+    EmojiStore,
+    ExpressionClusterStore,
+    LanguageStore,
+    MemoryGraphDisplay,
+    MemoryIndex,
+)
 from aureus.memory.imported_messages import ImportedPlatformHistory
 from aureus.organs import OrganResponse, ToolDefinition
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
@@ -61,7 +67,11 @@ from .config_files import ConfigService
 from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
 from .inbox_api import register_inbox_routes
 from .language_package_api import register_language_package_routes
-from .memory_graph_api import GraphGrants, register_memory_graph_routes
+from .memory_graph_api import (
+    GraphGrants,
+    register_memory_graph_grant_routes,
+    register_memory_graph_routes,
+)
 from .memory_inspection_api import register_memory_inspection_routes
 from .memory_transfer_api import register_memory_transfer_routes
 from .prompt_api import register_prompt_routes
@@ -252,6 +262,7 @@ def create_app(
     resource_database: Path | None = None,
     recall_feedback_enabled: bool = False,
     memory_graph_grants: GraphGrants | None = None,
+    memory_graph_display: MemoryGraphDisplay | None = None,
     expression_cluster_store: ExpressionClusterStore | None = None,
     expression_cluster_grants: ExpressionClusterGrants | None = None,
     embedding_progress: EmbeddingProgress | None = None,
@@ -534,7 +545,11 @@ def create_app(
         people=resource_people,
     )
     register_memory_graph_routes(
-        app, require_ready, resource_memory, memory_graph_grants, sessions.is_active
+        app, require_ready, resource_memory, memory_graph_grants, sessions.is_active,
+        display=memory_graph_display,
+    )
+    register_memory_graph_grant_routes(
+        app, require_ready, sessions.is_active, _same_http_origin, auth, memory_graph_display
     )
     register_expression_cluster_routes(
         app,

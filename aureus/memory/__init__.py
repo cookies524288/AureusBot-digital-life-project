@@ -13,6 +13,12 @@ from aureus.memory.expression_clusters import ExpressionClusterStore, VisibleExp
 from aureus.memory.expression_index import ExpressionVectorIndex
 from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphNode, MemoryGraphSource
+from aureus.memory.graph_access import (
+    GRAPH_CATEGORIES,
+    GraphAccess,
+    GraphCategory,
+    MemoryGraphDisplay,
+)
 from aureus.memory.graph_query import MemoryGraphPage, MemoryGraphRelationDetail
 from aureus.memory.history import (
     HistoricalMemory,
@@ -47,6 +53,7 @@ __all__ = [
     "BATCH_SIZE",
     "EXPRESSION_TABLE",
     "FREQUENCY_TABLE",
+    "GRAPH_CATEGORIES",
     "JARGON_TABLE",
     "MAX_DETAIL",
     "MAX_EMOJI_BYTES",
@@ -61,6 +68,8 @@ __all__ = [
     "EmojiStore",
     "ExpressionClusterStore",
     "ExpressionVectorIndex",
+    "GraphAccess",
+    "GraphCategory",
     "HistoricalMemory",
     "ImportedLanguageRow",
     "JargonInference",
@@ -76,6 +85,7 @@ __all__ = [
     "MemoryEventType",
     "MemoryEvidence",
     "MemoryGraph",
+    "MemoryGraphDisplay",
     "MemoryGraphEvidence",
     "MemoryGraphNode",
     "MemoryGraphPage",
