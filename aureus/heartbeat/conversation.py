@@ -1,11 +1,12 @@
 """从主循环搬来的对话流程；拍里准备材料，后台只调用器官（D80）。"""
 
 import asyncio
+import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, tzinfo
+from datetime import date, datetime, tzinfo
 from math import hypot, sumprod
 from typing import Protocol
 from uuid import uuid4
@@ -41,9 +42,10 @@ from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
 from aureus.heartbeat.expression_recall import ExpressionRecall
+from aureus.heartbeat.history_retention import CleanupPreview, HistoryRetention
 from aureus.heartbeat.inbox_attention import InboxResidence, InboxSelection
 from aureus.heartbeat.inbox_media import InboxMedia
-from aureus.heartbeat.inbox_store import ConversationKey
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
 from aureus.heartbeat.language_runner import local_language_scope, speaker_key
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome
@@ -222,6 +224,8 @@ class _RoundTrace:
     id: int
     actions: list[PlannerAction] = field(default_factory=list)
     judge: _JudgeAttempt | None = None
+    cleanup_preview: CleanupPreview | None = None
+    used_platform_history: bool = False
 
 
 def _trace_action(job: _ReplyJob, action: PlannerAction) -> None:
@@ -360,11 +364,13 @@ class ConversationFlow:
         people_config: PeopleConfig | None = None,
         working_memory: WorkingMemory | None = None,
         platform_history: PlatformHistory | None = None,
+        history_retention: HistoryRetention | None = None,
+        inbox_store: InboxStore | None = None,
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
         self.inbox_media = InboxMedia(
-            call, emoji_store if config.qq_emoji_collection_enabled else None
+            call, emoji_store if config.qq_emoji_collection_enabled else None, inbox_store
         )
         self._judge, self._hormones, self._affinity = judge, hormones, affinity
         self._empathy, self._empathy_focus, self._agenda = empathy, empathy_focus, agenda
@@ -391,6 +397,7 @@ class ConversationFlow:
         self._people_config = people_config or PeopleConfig()
         self._working_memory = working_memory
         self.platform_history = platform_history
+        self.history_retention = history_retention
 
     def _working_context(
         self, memory: WorkingMemory, target: Perception, batch_ids: set[int], limit: int
@@ -705,6 +712,7 @@ class ConversationFlow:
 
     async def _think(self, job: _ReplyJob) -> _ThoughtOutcome:
         """在后台先规划，明确需要开口才调用回复器。"""
+        originals = job.messages
         if job.media_sources:
             messages = await self.inbox_media.enrich(
                 job.messages, job.media_sources, job.strategy.model_preference
@@ -719,7 +727,7 @@ class ConversationFlow:
             )
         automatic: _Recall | None = None
         if self._memory_config.heuristic_recall_enabled and self._can_recall():
-            words = heuristic_keywords(job.messages)
+            words = heuristic_keywords(originals)
             if words and (hits := await self._retrieve(job, words)):
                 automatic = words, hits
         try:
@@ -967,6 +975,7 @@ class ConversationFlow:
         stay_in_conversation: bool,
         quote_source: bool,
         platform_history: bool = False,
+        platform_cleanup: bool = False,
     ) -> PlannerToolOptions:
         """把会话范围和已装配的能力合成对话规划的工具选项。"""
         return PlannerToolOptions(
@@ -982,6 +991,11 @@ class ConversationFlow:
             platform_history=(
                 platform_history and self.platform_history is not None
                 and self.platform_history.allows is not None and not self._config.roleplay_mode
+            ),
+            platform_cleanup=(
+                platform_cleanup and platform_history and self.history_retention is not None
+                and self.history_retention.available() and not self._config.roleplay_mode
+                and self.platform_history is not None and self.platform_history.allows is not None
             ),
         )
 
@@ -1002,6 +1016,11 @@ class ConversationFlow:
                 and (job.planner_run is None or not job.planner_run.restart_requested)
             )
 
+        can_read_history = (
+            job.history_visibility in (
+                VisibilityScope.USER_ONLY, VisibilityScope.GROUP, VisibilityScope.PUBLIC,
+            ) and still_authorized()
+        )
         options = self.planner_tool_options(
             interests=job.with_interests,
             emoji=job.emoji_history is not None,
@@ -1009,10 +1028,8 @@ class ConversationFlow:
             special_contact=job.person_id is not None and not job.viewer_is_user,
             stay_in_conversation=any("inbox_message_id" in record.metadata for record in job.messages),
             quote_source=job.can_quote,
-            platform_history=(
-                job.history_visibility in (VisibilityScope.USER_ONLY, VisibilityScope.GROUP,
-                                           VisibilityScope.PUBLIC) and still_authorized()
-            ),
+            platform_history=can_read_history,
+            platform_cleanup=job.round_trace is not None and not review_reason,
         )
         tools = planner_tools(options)
         heuristic_recall = (
@@ -1056,13 +1073,36 @@ class ConversationFlow:
             assert history is not None and key is not None
             return await asyncio.to_thread(history.read, key, job.history_visibility, query)
 
-        try:
-            return await dispatch_planner_tools(
-                request, tools, self._call, retrieve,
-                actions=job.round_trace.actions if job.round_trace is not None else None,
-                read_history=read_history if options.platform_history else None,
-                still_authorized=still_authorized if options.platform_history else None,
+        pending: CleanupPreview | None = None
+        trace = job.round_trace
+
+        def mark_history_used() -> None:
+            if trace is not None:
+                trace.used_platform_history = True
+
+        async def preview_cleanup(cutoff: date) -> str:
+            nonlocal pending
+            assert self.history_retention is not None and key is not None
+            pending = await asyncio.to_thread(
+                self.history_retention.preview, key, job.history_visibility, cutoff,
             )
+            if pending is None:
+                return '{"status":"invalid_cutoff","detail":"截止日期不能晚于当地今天。"}'
+            return json.dumps(pending.summary(), ensure_ascii=False)
+
+        try:
+            result = await dispatch_planner_tools(
+                request, tools, self._call, retrieve,
+                actions=trace.actions if trace is not None else None,
+                read_history=read_history if options.platform_history else None,
+                preview_cleanup=preview_cleanup if options.platform_cleanup else None,
+                still_authorized=still_authorized if options.platform_history else None,
+                history_used=mark_history_used,
+                summarize_reply=trace is None or not trace.used_platform_history,
+            )
+            if pending is not None and still_authorized() and trace is not None:
+                trace.cleanup_preview = pending
+            return result
         except CallRejectedError:
             raise
         except OrganCallError as failure:

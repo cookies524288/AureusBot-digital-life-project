@@ -12,6 +12,7 @@ from aureus.core import CognitiveState
 from aureus.heartbeat import EVENT_REPLY_REFERENCE, recent_dialogue
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
+from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord, VisibilityScope
 from aureus.web.recall_feedback_api import feedback_available
 
@@ -90,6 +91,13 @@ class HeartbeatView(Protocol):
     @property
     def is_thinking(self) -> bool:
         """是否有进行中的想法。"""
+        ...
+
+    def is_replying_to(
+        self, *, conversation: ConversationKey | None = None,
+        web_visibility: VisibilityScope | None = None,
+    ) -> bool:
+        """指定会话是否有进行中的回复。"""
         ...
 
 

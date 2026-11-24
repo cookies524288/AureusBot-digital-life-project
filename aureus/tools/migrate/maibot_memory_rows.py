@@ -53,6 +53,10 @@ class MemoryRows:
         values = (source_timezone, self.manifests["main"], self.manifests["memory"])
         return sha256(json.dumps(values).encode()).hexdigest()
 
+    def bundle_origin(self) -> str:
+        """给同一暂存批次的人物和记忆发布提供统一指纹。"""
+        return self.fingerprint("bundle-origin-v1")
+
     def rows(self, role: str, name: str) -> Iterator[StagedRow]:
         """逐条读已识别表，每张表必须与 3.2 的已导出条数一致。"""
         count = 0

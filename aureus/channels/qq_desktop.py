@@ -12,7 +12,7 @@ from aureus.heartbeat import MessageKind, MessageRoute, OutgoingMessage, Visibil
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage
 
 from .onebot import account_id, encode_message, message_id
-from .onebot_transport import OneBotError, OneBotTransport, OneBotUnsupported
+from .onebot_transport import OneBotError, OneBotTransport, OneBotUnsupportedError
 
 
 @dataclass(frozen=True)
@@ -39,8 +39,10 @@ class QQDesktop:
     def check_scope(self, key: ConversationKey) -> None:
         """核对普通私聊或群聊仍在当前部署允许的范围。"""
         if (
-            key.temporary_group_id is not None or key.kind not in {"private", "group"}
-            or account_id(key.recipient_id) is None or not self._allows(key)
+            key.temporary_group_id is not None
+            or key.kind not in {"private", "group"}
+            or account_id(key.recipient_id) is None
+            or not self._allows(key)
         ):
             raise DesktopError(403, "此会话不在当前 QQ 操作范围内；临时私聊不支持桌面外发。")
 
@@ -60,8 +62,12 @@ class QQDesktop:
             raise DesktopError(503, "QQ 连接已切换，没有发送。")
 
     async def send_text(
-        self, key: ConversationKey, text: str, quote: InboxMessage | None,
-        mention: InboxMessage | None, authorize: Callable[[], None],
+        self,
+        key: ConversationKey,
+        text: str,
+        quote: InboxMessage | None,
+        mention: InboxMessage | None,
+        authorize: Callable[[], None],
     ) -> str:
         """发送文字和可选的单条显式引用、单个已核定群成员提及。"""
         socket = self.ready(key)
@@ -70,8 +76,14 @@ class QQDesktop:
         target = await self._member(socket, key, mention) if mention is not None else None
         route = MessageRoute(key.account_id, key.kind, key.recipient_id, quote_id or "")
         outgoing = OutgoingMessage(
-            key.platform, key.recipient_id, text, MessageKind.REPLY, key.account_id,
-            route=route, quote_source=quote_id is not None, visibility=_visibility(key),
+            key.platform,
+            key.recipient_id,
+            text,
+            MessageKind.REPLY,
+            key.account_id,
+            route=route,
+            quote_source=quote_id is not None,
+            visibility=_visibility(key),
         )
         params = encode_message(outgoing, route)
         if target is not None:
@@ -112,7 +124,8 @@ class QQDesktop:
         else:
             action, recipient = "upload_private_file", "user_id"
         params = {
-            recipient: key.recipient_id, "name": name,
+            recipient: key.recipient_id,
+            "name": name,
             "file": "base64://" + b64encode(content).decode("ascii"),
         }
         self._recheck(socket, key, authorize)
@@ -122,25 +135,59 @@ class QQDesktop:
             raise DesktopError(502, "QQ 未返回有效文件编号，请先检查会话或群文件，不要直接重试。")
         return identifier
 
+    async def avatar_source(
+        self,
+        socket: ClientConnection,
+        row: InboxMessage,
+        sender: str,
+        authorized: Callable[[], bool],
+    ) -> str | None:
+        """仅取固定版装扮查询实际返回、且归属正确的 avatar_url。"""
+        key = row.conversation
+        if not authorized() or self.ready(key) is not socket:
+            return None
+        if key.kind == "group" and sender != key.account_id:
+            await self._member(socket, key, row)
+        if not authorized() or self.ready(key) is not socket:
+            return None
+        data = await self._call(
+            socket,
+            "_get_friend_dress",
+            {"user_id": sender},
+            "读取 QQ 头像资料",
+            preflight=True,
+        )
+        url = data.get("avatar_url")
+        if account_id(data.get("target_uin")) != sender or not isinstance(url, str):
+            return None
+        return url
+
     async def _member(
         self, socket: ClientConnection, key: ConversationKey, message: InboxMessage | None
     ) -> str:
         target = account_id(message.perception.sender_id) if message is not None else None
         if (
-            key.kind != "group" or message is None or message.conversation != key
+            key.kind != "group"
+            or message is None
+            or message.conversation != key
             or message.direction not in {"incoming", "archived"}
-            or target is None or target == key.account_id
+            or target is None
+            or target == key.account_id
         ):
             raise DesktopError(422, "只能从当前群聊的消息中选择成员。")
         data = await self._call(
-            socket, "get_group_member_info",
+            socket,
+            "get_group_member_info",
             {"group_id": key.recipient_id, "user_id": target, "no_cache": True},
-            "核对群成员", preflight=True,
+            "核对群成员",
+            preflight=True,
         )
+        nickname = data.get("nickname")
         if (
             account_id(data.get("group_id")) != key.recipient_id
             or account_id(data.get("user_id")) != target
-            or not isinstance(data.get("nickname"), str) or not data["nickname"].strip()
+            or not isinstance(nickname, str)
+            or not nickname.strip()
         ):
             raise DesktopError(409, "QQ 没有确认对方仍是当前群成员，没有发送。")
         return target
@@ -162,7 +209,8 @@ class QQDesktop:
             peer = account_id(data.get("target_id")) if sender == key.account_id else sender
             matches = data.get("sub_type") == "friend" and peer == key.recipient_id
         if (
-            not matches or data.get("message_type") != key.kind
+            not matches
+            or data.get("message_type") != key.kind
             or sender != item.perception.sender_id
             or message_id(data.get("message_id")) != identifier
         ):
@@ -170,12 +218,17 @@ class QQDesktop:
         return identifier
 
     async def _call(
-        self, socket: ClientConnection, action: str, params: dict[str, Any], label: str,
-        *, preflight: bool = False,
+        self,
+        socket: ClientConnection,
+        action: str,
+        params: dict[str, Any],
+        label: str,
+        *,
+        preflight: bool = False,
     ) -> dict[str, object]:
         try:
             return await self._transport.call(socket, action, params)
-        except OneBotUnsupported:
+        except OneBotUnsupportedError:
             raise DesktopError(501, f"当前 QQ 连接不支持{label}。") from None
         except (OSError, TimeoutError, WebSocketException, OneBotError):
             detail = "没有发送。" if preflight else "未确认是否成功，请先检查 QQ，不要直接重试。"

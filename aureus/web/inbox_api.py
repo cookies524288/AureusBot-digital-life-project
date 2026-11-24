@@ -3,12 +3,12 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
-from hashlib import sha256
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from aureus.channels import QQAvatars
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.memory import EmojiStore
@@ -30,6 +30,7 @@ def _conversation_key(
     recipient_id: Annotated[str, Query(min_length=1)],
     temporary_group_id: Annotated[str | None, Query(min_length=1)] = None,
 ) -> ConversationKey:
+    """解码网页当前所选会话，不代表该会话已经授权。"""
     return ConversationKey(platform, account_id, kind, recipient_id, temporary_group_id)
 
 
@@ -43,8 +44,23 @@ def register_inbox_routes(
     archive_account_id: str | None,
     read_attachment: AttachmentReader | None = None,
     emojis: EmojiStore | None = None,
+    avatars: QQAvatars | None = None,
+    is_active: Callable[[str], bool] | None = None,
+    *,
+    is_replying: Callable[[ConversationKey], bool] | None = None,
 ) -> None:
     """注册只读查询；收件箱存储每次查询打开独立的数据库连接。"""
+
+    @app.get("/api/inbox/typing")
+    async def inbox_typing(
+        _token: Annotated[str, Depends(require_ready)],
+        key: Annotated[ConversationKey, Depends(_conversation_key)],
+    ) -> JSONResponse:
+        return JSONResponse(
+            {"typing": store is not None and allows_conversation is not None
+             and allows_conversation(key) and is_replying is not None and is_replying(key)},
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/inbox/conversations")
     async def list_conversations(
@@ -121,39 +137,73 @@ def register_inbox_routes(
 
     @app.get("/api/inbox/messages/{identifier}/images/{position}")
     async def read_image(
-        _token: Annotated[str, Depends(require_ready)],
+        token: Annotated[str, Depends(require_ready)],
         key: Annotated[ConversationKey, Depends(_conversation_key)],
         identifier: Annotated[int, Path(gt=0, le=2**63 - 1)],
         position: Annotated[int, Path(ge=0)],
         view: Literal["image", "description"] = "image",
     ) -> Response:
-        unavailable = HTTPException(404, "这个会话中的图片暂不可读取。")
-        if store is None or read_attachment is None or allows_conversation is None:
-            raise unavailable
-        if not allows_conversation(key):
-            raise unavailable
-        message = await asyncio.to_thread(store.get_visible_message, key, identifier)
-        if message is None or position >= len(message.perception.attachments):
-            raise unavailable
-        attachment = message.perception.attachments[position]
-        if attachment.kind != "image" or not allows_conversation(key):
-            raise unavailable
-        if view == "description" and (not attachment.is_emoji or emojis is None):
-            return JSONResponse({"description": None}, headers={"Cache-Control": "no-store"})
-        media = await read_attachment(message.perception, attachment)
-        if media is None or media[1] not in IMAGE_TYPES or not allows_conversation(key):
-            raise unavailable
-        if view == "description" and emojis is not None:
-            description = await asyncio.to_thread(
-                emojis.read_catalog_description, sha256(media[0]).hexdigest()
+        def authorized() -> bool:
+            return (
+                is_active is not None and is_active(token) and allows_conversation is not None
+                and allows_conversation(key)
             )
-            if not allows_conversation(key):
+
+        unavailable = HTTPException(404, "这个会话中的图片暂不可读取。")
+        if store is None or not authorized():
+            raise unavailable
+        image = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
+        if image is None or not authorized():
+            raise unavailable
+        perception, attachment, note = image
+        if view == "description":
+            description = None
+            if note is not None and note.source == "vlm":
+                description = note.value
+            elif note is not None and note.source == "emoji_catalog" and emojis is not None:
+                description = await asyncio.to_thread(emojis.read_catalog_description, note.value)
+            current = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
+            if current != image or not authorized():
                 raise unavailable
             return JSONResponse(
-                {"description": description, "source": "emoji_catalog" if description else None},
+                {"description": description, "source": note.source if description and note else None},
                 headers={"Cache-Control": "no-store"},
             )
+        if read_attachment is None:
+            raise unavailable
+        media = await read_attachment(perception, attachment)
+        if media is None or media[1] not in IMAGE_TYPES or not authorized():
+            raise unavailable
+        current = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
+        if current is None or current[:2] != image[:2] or not authorized():
+            raise unavailable
         return Response(media[0], media_type=media[1], headers={
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+
+    @app.get("/api/inbox/messages/{identifier}/avatar")
+    async def read_avatar(
+        request: Request, token: Annotated[str, Depends(require_ready)],
+        key: Annotated[ConversationKey, Depends(_conversation_key)],
+        identifier: Annotated[int, Path(gt=0, le=2**63 - 1)],
+    ) -> Response:
+        def authorized() -> bool:
+            return (
+                allows_conversation is not None and allows_conversation(key)
+                and is_active is not None and is_active(token)
+            )
+
+        unavailable = HTTPException(404, "这条消息没有可读取的 QQ 头像。")
+        if (
+            request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
+            or avatars is None or store is None or not authorized()
+        ):
+            raise unavailable
+        message = await asyncio.to_thread(store.get_visible_message, key, identifier)
+        if message is None or (avatar := await avatars.read(message, authorized)) is None:
+            raise unavailable
+        return Response(avatar[0], media_type=avatar[1], headers={
             "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
             "Cross-Origin-Resource-Policy": "same-origin",
         })

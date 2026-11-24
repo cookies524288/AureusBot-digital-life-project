@@ -199,7 +199,8 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
                 )
             ]
         )
-        live = core.timeline.append("message", "本地记录纸鸢", ActorType.USER)
+        message = core.timeline.append("message", "聊天原文钴蓝鹭", ActorType.USER)
+        live = core.timeline.append("experience", "本地记录纸鸢", ActorType.USER)
         assert core.memory.index_more(100, lambda row: MemoryEntry("合成用户", row.content)) > 0
     with (
         open_core(paths, fake_organs=True, clock=clock, to_console=False) as core,
@@ -221,6 +222,14 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
             assert client.post("/api/login", json={"password": password}).status_code == 200
             assert client.get("/assets/resource-management.js").status_code == 200
             assert client.get("/assets/memory-flow-transfer.js").status_code == 200
+            assert (
+                client.patch(
+                    memory, json={"kind": "live", "entry_id": message.id, "text": "不应写入"}
+                ).status_code
+                == 404
+            )
+            assert not core.memory.search(["钴蓝鹭"], (), 10)
+            assert not core.memory.search(["不应写入"], (), 10)
             flow = client.get(memory + "/flow").json()["items"]
             [profile_event] = flow
             assert profile_event["event_type"] == "profile_snapshot"

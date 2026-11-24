@@ -126,9 +126,10 @@ class PlatformHistory:
         canonical = self.store.existing_message_ids(key, (
             value for value in identifiers if isinstance(value, str) and value
         ))
+        excluded = self.store.excluded_timeline_ids(key, (record.id for record in old))
         for record, identifier in zip(old, identifiers, strict=True):
             platform_id = identifier if isinstance(identifier, str) and identifier else None
-            if platform_id in canonical:
+            if platform_id in canonical or record.id in excluded:
                 continue
             name = record.metadata.get("sender_name")
             rows.append(_HistoryRow("timeline", record.id, record.timestamp, record.actor_id,

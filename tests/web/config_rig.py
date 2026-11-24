@@ -5,11 +5,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aureus.channels import WebChannel
-from aureus.channels.qq_desktop import QQDesktop
+from aureus.channels import QQAvatars, QQDesktop, WebChannel
 from aureus.common import AureusPaths, ManualClock, RuntimeConfig, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import registered_templates
+from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.identity import Identity
@@ -27,11 +27,14 @@ class ConfigRig:
         tmp_path: Path,
         *,
         password_set: bool = True,
+        clock: ManualClock | None = None,
         prompt_identity: Identity | None = None,
         inbox_store: InboxStore | None = None,
+        inbox_retention: HistoryRetention | None = None,
         allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
         read_inbox_attachment: AttachmentReader | None = None,
         qq_desktop: QQDesktop | None = None,
+        qq_avatars: QQAvatars | None = None,
         allows_qq_delivery: Callable[[], bool] | None = None,
         emoji_store: EmojiStore | None = None,
         runtime: RuntimeConfig | None = None,
@@ -39,7 +42,7 @@ class ConfigRig:
     ) -> None:
         self.paths = AureusPaths(tmp_path)
         self.paths.ensure_directories()
-        self.clock = ManualClock(NOW)
+        self.clock = clock or ManualClock(NOW)
         config = WebConfig(login_max_failures=3)
         passwords = PasswordStore(self.paths.web_password_file, FAST_HASHER)
         if password_set:
@@ -77,9 +80,11 @@ class ConfigRig:
             prompt_identity=read_identity if prompt_identity is not None else None,
             planner_tool_definitions=planner_tool_definitions,
             inbox_store=inbox_store,
+            inbox_retention=inbox_retention,
             allows_inbox_conversation=allows_inbox_conversation,
             read_inbox_attachment=read_inbox_attachment,
             qq_desktop=qq_desktop,
+            qq_avatars=qq_avatars,
             allows_qq_delivery=allows_qq_delivery,
             resource_emojis=emoji_store,
             resource_database=self.paths.database_file,

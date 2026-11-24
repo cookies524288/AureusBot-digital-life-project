@@ -23,7 +23,7 @@ from aureus.heartbeat.events import (
     EVENT_REPLY_REFERENCE,
 )
 from aureus.heartbeat.inbox_attention import InboxAttention, InboxSelection, select_conversations
-from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.perception import MessageRoute
 from aureus.identity import Identity
 from aureus.organs import ModelPreference, OrganRequest, OrganResponse
@@ -316,12 +316,19 @@ async def test_active_conversation_keeps_each_batch_separate(tmp_path: Path) -> 
 
     try:
         receive("first-alert", sender="owner")
+        selected = ConversationKey("qq", "bot", "group", "ongoing")
+        other = ConversationKey("qq", "bot", "group", "priority-group")
+        assert not heart.is_replying_to(conversation=selected)
         clock.advance(timedelta(seconds=3))
         receive("second-window")
         assert not plans and heart.seconds_until_next_beat() == 4
         await advance_to_planner()
+        assert heart.is_replying_to(conversation=selected)
+        assert not heart.is_replying_to(conversation=other)
+        assert not heart.is_replying_to(web_visibility=VisibilityScope.USER_ONLY)
         assert all(text in plans[0].prompt for text in ("first-alert", "second-window"))
         await finish_plan()
+        assert not heart.is_replying_to(conversation=selected)
 
         receive("ongoing-message")
         await advance_to_planner()
@@ -337,6 +344,8 @@ async def test_active_conversation_keeps_each_batch_separate(tmp_path: Path) -> 
 
         receive("priority-elsewhere", sender="owner", group="priority-group")
         await advance_to_planner()
+        assert not heart.is_replying_to(conversation=selected)
+        assert heart.is_replying_to(conversation=other)
         assert "priority-elsewhere" in plans[-1].prompt
         await finish_plan()
         receive("离开当前群", group="priority-group")
@@ -453,7 +462,10 @@ async def test_priority_preemption_discards_stale_selection_reply_or_segments(
             assert timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED)) == []
         else:
             await asyncio.wait_for(entered.wait(), timeout=1)
+        old_scope = ConversationKey("qq", "bot", "group", "old")
+        assert heart.is_replying_to(conversation=old_scope) is (phase == "plan")
         receive("优先会话消息", "owner", "urgent")
+        assert not heart.is_replying_to(conversation=old_scope)
         if phase == "delivery":
             assert sent[0].can_deliver is not None and not sent[0].can_deliver()
         else:

@@ -31,14 +31,14 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from aureus.channels import WebChannel
-from aureus.channels.qq_desktop import QQDesktop
+from aureus.channels import QQAvatars, QQDesktop, WebChannel
 from aureus.common import Clock, WebConfig
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
 from aureus.heartbeat.expression_recall import ExpressionRecall
+from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
@@ -71,6 +71,7 @@ from .expression_quality_api import register_expression_quality_routes
 from .expression_vector_api import register_expression_vector_routes
 from .inbox_api import register_inbox_routes
 from .inbox_operations import register_inbox_operations
+from .inbox_retention_api import register_inbox_retention_routes
 from .language_package_api import register_language_package_routes
 from .memory_graph_api import (
     GraphGrants,
@@ -255,10 +256,12 @@ def create_app(
     | None = None,
     qq_link: AccountLink | None = None,
     inbox_store: InboxStore | None = None,
+    inbox_retention: HistoryRetention | None = None,
     allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
     inbox_archive_account_id: str | None = None,
     read_inbox_attachment: AttachmentReader | None = None,
     qq_desktop: QQDesktop | None = None,
+    qq_avatars: QQAvatars | None = None,
     allows_qq_delivery: Callable[[], bool] | None = None,
     resource_language: LanguageStore | None = None,
     resource_memory: MemoryIndex | None = None,
@@ -509,6 +512,15 @@ def create_app(
 
     # ---------- WebSocket：实时收发 ----------
 
+    @app.get("/api/chat/typing")
+    async def chat_typing(_token: Annotated[str, Depends(require_ready)]) -> JSONResponse:
+        return JSONResponse(
+            {"typing": heartbeat is not None and heartbeat.is_replying_to(
+                web_visibility=channel.user_visibility
+            )},
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.websocket("/ws")
     async def websocket(socket: WebSocket) -> None:
         token = socket.cookies.get(SESSION_COOKIE, "")
@@ -543,10 +555,17 @@ def create_app(
         inbox_archive_account_id,
         read_inbox_attachment,
         resource_emojis,
+        qq_avatars,
+        sessions.is_active,
+        is_replying=(lambda key: heartbeat.is_replying_to(conversation=key)) if heartbeat else None,
     )
     register_inbox_operations(
         app, require_ready, sessions.is_active, _same_http_origin,
         inbox_store, qq_desktop, clock, allows_qq_delivery,
+    )
+    register_inbox_retention_routes(
+        app, require_ready, sessions.is_active, _same_http_origin, auth,
+        inbox_retention, allows_inbox_conversation,
     )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock

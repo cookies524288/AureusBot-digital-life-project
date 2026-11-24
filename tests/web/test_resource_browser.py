@@ -643,6 +643,191 @@ def test_inbox_components_render_in_order_and_treat_poke_hints_as_text(browser: 
     """)
 
 
+def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browser) -> None:
+    browser.open("inbox", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof followConversationTyping === 'function' && state.loggedIn, '网页未就绪');
+      closeSocket();
+      const key = {platform:'qq', account_id:'bot', kind:'group', recipient_id:'A'};
+      const first = {key, name:'同名群'};
+      const second = {key:{...key,recipient_id:'B'}, name:'同名群'};
+      const requests = [];
+      window.api = async (path, method, body, headers, signal) => {
+        if (path.includes('/typing')) {
+          return new Promise(resolve => requests.push({path, signal, resolve}));
+        }
+        if (path.includes('/operations')) return {ok:true,data:{enabled:true}};
+        return {ok:true,data:[]};
+      };
+      await showPage('chat');
+      inbox.view = 'qq';
+      inbox.conversations = [first, second];
+      const wrappedApi = window.api;
+      window.api = (path, ...args) => {
+        if (path === '/api/inbox/conversations') return Promise.resolve({ok:true,data:{
+          enabled:true, conversations:[first, second],
+        }});
+        if (path.startsWith('/api/inbox/messages?')) return Promise.resolve({ok:true,data:{messages:[]}});
+        return wrappedApi(path, ...args);
+      };
+      await showPage('inbox');
+      const latest = () => requests.at(-1);
+      const respond = (request, typing) => request.resolve({ok:true,data:{typing}});
+      const bubble = id => document.querySelector(`#${id}-typing .typing-status`);
+      await waitFor(() => latest()?.path.includes('recipient_id=A'), '无 WS 时桌面仍请求认证接口');
+      const stale = latest();
+      const conversations = document.querySelectorAll('#inbox-conversations button');
+      conversations[1].click();
+      await waitFor(() => latest()?.path.includes('recipient_id=B'), '后续请求只取 B');
+      check(stale.signal.aborted, '离开 A 立即取消旧请求');
+      respond(stale, true);
+      respond(latest(), false);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      check(!bubble('inbox'), '迟到的 A 不得让 B 显示气泡');
+      const count = requests.length;
+      await waitFor(() => requests.length > count, 'B 继续按需轮询');
+      respond(latest(), true);
+      await waitFor(() => bubble('inbox')?.textContent === '输入中', 'B 显示真实输入');
+      check(bubble('inbox').getBoundingClientRect().left > 195, '窄屏贴平台机器人右侧');
+      check(getComputedStyle(bubble('inbox').lastChild).display === 'none', '减少动效时只留静态文字');
+      check(visible(document.querySelector('#inbox-send')), '不影响发送按钮');
+      await showPage('chat');
+      check(!bubble('inbox') && !bubble('chat'), '切页立即清除桌面，不显示跨会话输入');
+      window.WebSocket = class {
+        static OPEN = 1;
+        readyState = 1;
+        close() {}
+      };
+      openSocket();
+      const connection = socket;
+      connection.onopen();
+      await waitFor(() => latest()?.path === '/api/chat/typing', '连上后查询当前私聊');
+      respond(latest(), true);
+      await waitFor(() => bubble('chat')?.textContent === '输入中', '网页私聊显示气泡');
+      check(bubble('chat').getBoundingClientRect().left < 50, '网页气泡贴 bot 左侧');
+      check(!document.querySelector('#chat-log .typing-status'), '不计入聊天消息');
+      connection.onclose();
+      check(!bubble('chat'), '断开立刻清除网页输入');
+      openSocket();
+      socket.onopen();
+      await waitFor(() => latest()?.path === '/api/chat/typing', '重连重新查询');
+      respond(latest(), false);
+      closeSocket();
+      check(!bubble('chat'), '重连不能恢复旧结果');
+    """)
+
+
+def test_narrow_inbox_captions_are_independent_and_ignore_stale_requests(browser: Browser) -> None:
+    browser.open("inbox", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof renderInboxImage === 'function' && state.loggedIn, '页面未就绪');
+      const key = {platform:'qq',account_id:'bot',kind:'group',recipient_id:'A'};
+      const requests = [];
+      window.api = (path, method, body, headers, signal) => {
+        if (path.includes('view=description')) {
+          return new Promise(resolve => requests.push({path, resolve, signal}));
+        }
+        return Promise.resolve({ok:true,data:{messages:[],enabled:false}});
+      };
+      inbox.view = 'qq';
+      inbox.enabled = true;
+      inbox.conversations = [{key,name:'甲'}, {key:{...key,recipient_id:'B'},name:'乙'}];
+      await renderInboxView();
+      const message = {source:'inbox',id:20,conversation:key};
+      const list = document.querySelector('#inbox-messages');
+      const images = [renderInboxImage(message, 0), renderInboxImage(message, 1)];
+      list.append(...images);
+      const first = images[0].querySelector('button');
+      const second = images[1].querySelector('button');
+      first.click();
+      second.click();
+      check(requests[0].path.includes('/images/0?') && requests[1].path.includes('/images/1?'), '位置独立');
+      first.click();
+      check(requests[0].signal.aborted && first.textContent === '查看描述', '第一张可独立返回');
+      requests[0].resolve({ok:true,data:{description:'过期图注',source:'vlm'}});
+      requests[1].resolve({ok:true,data:{description:'第二张描述',source:'vlm'}});
+      await waitFor(() => images[1].textContent.includes('第二张描述'), '第二张显示真实来源');
+      check(images[1].textContent.includes('视觉模型') && !list.textContent.includes('过期图注'), '不串附件');
+      first.click();
+      requests[2].resolve({ok:true,data:{description:null,source:null}});
+      await waitFor(() => images[0].textContent.includes('没有可核验'), '缺图注如实显示');
+      first.click();
+      check(!images[0].firstElementChild.classList.contains('hidden'), '缺图注仍能返回原图');
+      second.click();
+      second.click();
+      await selectInboxConversation(inbox.conversations[1]);
+      requests[3].resolve({ok:true,data:{description:'旧会话图注',source:'vlm'}});
+      await new Promise(resolve => setTimeout(resolve, 50));
+      check(!list.textContent.includes('旧会话图注'), '切会话丢弃迟到结果');
+      check(root().scrollWidth <= root().clientWidth, '窄屏没有横向溢出');
+    """)
+
+
+def test_narrow_qq_desktop_confirms_and_keeps_operations_in_selected_conversation(
+    browser: Browser,
+) -> None:
+    browser.open("inbox", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof executeInboxOperation === 'function', '桌面脚本未就绪');
+      const group = {platform:'qq',account_id:'1',kind:'group',recipient_id:'2'};
+      const received = {source:'inbox',id:20,conversation:group,direction:'incoming',
+        sender_id:'3',platform_message_id:'-10',content:'合成文字'};
+      const posted = [];
+      window.api = async (path, method, body, headers) => {
+        if (method === 'POST') {
+          posted.push({path, body, headers});
+          const data = path.includes('/file?') ? {file_id:'fixture-file'} : {message_id:'-55'};
+          return {ok:true,data};
+        }
+        if (path.startsWith('/api/inbox/operations?')) return {ok:true,data:{enabled:true}};
+        return {ok:true,data:{messages:[received],next_before_id:null}};
+      };
+      const conversation = {key:group,name:'合成群'};
+      const other = {key:{...group,recipient_id:'4'},name:'另一群'};
+      await showPage('inbox', () => {});
+      inbox.view = 'qq';
+      inbox.conversations = [conversation, other];
+      await renderInboxView();
+      const desktopPage = document.querySelector('#page-inbox');
+      check(desktopPage.scrollWidth <= desktopPage.clientWidth, '窄屏不得横向溢出');
+      const messages = document.querySelector('#inbox-messages');
+      await waitFor(() => !messages.querySelector('.inbox-avatar img'), '头像失败时回到像素人头');
+      const fallback = messages.querySelector('.inbox-avatar svg use');
+      check(fallback.getAttribute('href') === '#i-inbox-person', '缺省头像');
+      const dialog = document.querySelector('#confirm-dialog');
+      const textarea = document.querySelector('#inbox-text');
+      messages.querySelectorAll('.inbox-row-actions button')[0].click();
+      messages.querySelectorAll('.inbox-row-actions button')[1].click();
+      textarea.value = '合成外发';
+      document.querySelector('#inbox-send-text').requestSubmit();
+      await waitFor(() => dialog.open, '发送前确认');
+      check(dialog.textContent.includes('合成群') && dialog.textContent.includes('引用消息 -10'),
+        '确认显示目的地与引用');
+      await selectInboxConversation(other);
+      await selectInboxConversation(conversation);
+      dialog.close('yes');
+      await waitFor(() => !inbox.operating, '旧确认结束');
+      check(posted.length === 0 && textarea.value === '', '切走再切回也不能使用旧确认');
+      textarea.value = '只发文字';
+      document.querySelector('#inbox-send-text').requestSubmit();
+      await waitFor(() => dialog.open, '再次确认');
+      dialog.close('yes');
+      await waitFor(() => posted.length === 1 && !inbox.operating, '等待合成消息回执');
+      check(posted[0].body.quote === null && posted[0].body.text === '只发文字', '不默认引用');
+      const input = document.querySelector('#inbox-file');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['hello'], 'sample.txt', {type:'text/plain'}));
+      input.files = transfer.files;
+      document.querySelector('#inbox-send-file').requestSubmit();
+      await waitFor(() => dialog.open, '必须确认文件传输');
+      dialog.close('yes');
+      await waitFor(() => posted.length === 2 && !inbox.operating, '等待合成文件回执');
+      check(posted[1].body instanceof File && posted[1].path.includes('name=sample.txt'),
+        '上传选件的实际字节');
+      check(desktopPage.textContent.includes('文件 fixture-file'), '只显示收到的文件回执');
+    """)
+
+
 @pytest.mark.parametrize("motion", ["no-preference", "reduce"])
 def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser, motion: str) -> None:
     browser.open("learning", 1280, 900)
