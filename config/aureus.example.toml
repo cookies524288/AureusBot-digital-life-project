@@ -366,6 +366,7 @@ config_version = 1
 # recall_enabled = true
 # heuristic_recall_enabled = false  # 在规划前按本轮回忆提示词检索
 # recall_feedback_enabled = true    # 人工评价已投递回复的召回依据；不参与排序
+# removal_operations_enabled = true # 记录本地文字记忆的移除和恢复；不影响批量维护
 # 一次最多给回复器几条，1～20。
 # max_results = 5
 # 每拍最多处理几条新的时间线记录，1～5000。

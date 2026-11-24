@@ -702,6 +702,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
       <button class="btn small primary" data-memory-tab="query" aria-pressed="true">记忆查询</button>
       <button class="btn small" data-memory-tab="images" aria-pressed="false">图片记忆</button>
       <button class="btn small" data-memory-tab="flow" aria-pressed="false">记忆流</button>
+      <button class="btn small" data-memory-tab="operations" aria-pressed="false">操作记录</button>
       <button class="btn small" data-memory-tab="transfer" aria-pressed="false">导入导出</button>
     </div>
     <div id="memory-panel-query" class="stack resource-panel">
@@ -733,6 +734,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
       <div id="memory-pictures" class="stack resource-panel"></div>
     </div>
     <div id="memory-panel-flow" class="stack resource-panel hidden"></div>
+    <div id="memory-panel-operations" class="stack resource-panel hidden">
+      <p class="muted">仅显示启用后成功移除或恢复的、在当前可见范围内的本地文字记忆。不含迁入记录或旧历史。</p>
+    </div>
     <div id="memory-panel-transfer" class="stack hidden"></div>
   </div>
 </section>

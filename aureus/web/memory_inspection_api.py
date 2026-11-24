@@ -1,4 +1,4 @@
-"""为已登录的维护者提供本地文字索引的分项结果。"""
+"""为已登录的维护者提供本地文字索引检修及操作记录。"""
 
 import asyncio
 import sqlite3
@@ -6,11 +6,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from aureus.memory import MemoryIndex
 from aureus.timeline import VisibilityScope
+
+from .resource_api import DEFAULT_SIZE, MAX_SIZE
 
 _COVERAGE = (
     "只检查已有文字索引、且时间线原件确认在当前网页可见范围内的本地记录。"
@@ -50,5 +53,32 @@ def register_memory_inspection_routes(
                     for key, label, detail in _CHECKS
                 ],
             },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/resources/memory/operations")
+    async def read_operations(
+        _token: Annotated[str, Depends(require_ready)],
+        offset: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0,
+        limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
+    ) -> JSONResponse:
+        try:
+            result = (
+                await asyncio.to_thread(memory.browse_removal_operations, visibility, offset, limit)
+                if memory is not None
+                else None
+            )
+        except sqlite3.Error:
+            raise HTTPException(503, "暂时无法读取长期记忆操作记录。") from None
+        items, total = result if result is not None else ([], 0)
+        return JSONResponse(
+            jsonable_encoder(
+                {
+                    "enabled": result is not None,
+                    "items": items,
+                    "total": total,
+                    "next_offset": offset + limit if offset + limit < total else None,
+                }
+            ),
             headers={"Cache-Control": "no-store"},
         )
