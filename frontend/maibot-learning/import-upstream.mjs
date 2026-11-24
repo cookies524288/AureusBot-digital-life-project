@@ -57,7 +57,9 @@ for (const name of ['Jersey20-OFL.txt', 'DepartureMono-OFL.txt', 'ArkPixel12-OFL
 const manifest = {}
 for (const name of [...files].sort()) {
   const input = join(upstream, name)
-  const output = resolve(target, name === 'package.json' ? 'package.json' : name)
+  const destination = name === 'package.json' ? 'upstream-package.json'
+    : name === 'package-lock.json' ? 'upstream-package-lock.json' : name
+  const output = resolve(target, destination)
   const location = relative(target, output)
   if (location.startsWith('..') || isAbsolute(location)) throw new Error('导入路径越界')
   mkdirSync(dirname(output), { recursive: true })

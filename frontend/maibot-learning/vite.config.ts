@@ -5,7 +5,13 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   base: '/learning-workbench/',
-  plugins: [tailwindcss(), react()],
+  plugins: [tailwindcss(), react(), {
+    name: 'aureus-local-fonts',
+    enforce: 'pre',
+    transform(source, id) {
+      if (id.endsWith('.css')) return source.replaceAll("url('/fonts/", "url('/learning-workbench/fonts/")
+    },
+  }],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   build: {
     outDir: '../../aureus/web/static/learning-workbench',

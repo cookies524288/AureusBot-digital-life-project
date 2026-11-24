@@ -2003,7 +2003,34 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   $('memory-inspect-text').addEventListener('click', () => jumpToQuery('text', $('memory-search')));
   $('memory-inspect-profiles').addEventListener('click', () => jumpToQuery('profiles', profileForm));
   $('memory-removal-query').addEventListener('click', () => jumpToQuery('text', $('memory-search')));
-  PAGES.learning = {prepare:prepareLearning, leave:() => activeLearning?.hide()};
+  const workbenchHost = $('learning-workbench-host');
+  const workbenchFrame = $('learning-workbench-frame');
+  const workbenchOpen = $('learning-workbench-open');
+  const legacyLearning = $('page-learning').querySelector('.page-body');
+  let workbenchVisible = false;
+  workbenchOpen.addEventListener('click', () => {
+    workbenchVisible = true;
+    activeLearning?.hide();
+    workbenchHost.classList.remove('hidden');
+    legacyLearning.classList.add('hidden');
+    workbenchOpen.classList.add('hidden');
+    if (!workbenchFrame.getAttribute('src')) workbenchFrame.src = '/learning-workbench/';
+  });
+  $('learning-workbench-close').addEventListener('click', () => {
+    workbenchVisible = false;
+    workbenchHost.classList.add('hidden');
+    legacyLearning.classList.remove('hidden');
+    workbenchOpen.classList.remove('hidden');
+    prepareLearning()();
+  });
+  workbenchFrame.addEventListener('load', () => {
+    workbenchFrame.contentWindow.postMessage({type:'aureus-theme', theme:document.documentElement.dataset.theme}, location.origin);
+  });
+  window.addEventListener('message', event => {
+    if (event.origin === location.origin && event.source === workbenchFrame.contentWindow
+      && event.data?.type === 'aureus-login-required') location.reload();
+  });
+  PAGES.learning = {prepare:() => workbenchVisible ? () => {} : prepareLearning(), leave:() => activeLearning?.hide()};
   PAGES.memory = {prepare:prepareMemory, leave:() => activeMemory?.hide()};
   return showMemoryTab;
 }

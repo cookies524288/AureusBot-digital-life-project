@@ -6,7 +6,7 @@
  */
 export { createApiClient } from './client'
 export { ApiError } from './errors'
-export { authApi, backendApi, statsApi, STATS_SERVICE_BASE_URL } from './instances'
+export { backendApi } from './instances'
 export { requireSuccess } from './envelope'
 export type { ApiClient, ApiClientOptions, HttpMethod, QueryValue, RequestOptions } from './client'
 export type { SuccessEnvelope } from './envelope'

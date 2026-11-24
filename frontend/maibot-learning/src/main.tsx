@@ -46,7 +46,7 @@ declare module '@tanstack/react-router' {
 
 router.subscribe('onResolved', ({ toLocation }) => {
   const current = new URL(location.href)
-  current.searchParams.set('tab', toLocation.search.tab ?? 'expression')
+  current.searchParams.set('tab', new URLSearchParams(toLocation.searchStr).get('tab') ?? 'expression')
   history.replaceState(null, '', current)
 })
 

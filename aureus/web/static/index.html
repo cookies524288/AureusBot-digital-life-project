@@ -799,7 +799,11 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="row" style="justify-content:center;margin-top:16px"><button id="tl-more" class="btn hidden" disabled>加载更早的</button></div>
 </div></section>
 <section id="page-learning" class="page wide resource-page">
-  <div class="page-head"><h2>学习</h2></div>
+  <div class="page-head"><h2>学习</h2><button id="learning-workbench-open" class="btn small" type="button">打开完整学习工作台</button></div>
+  <div id="learning-workbench-host" class="hidden" style="height:calc(100vh - 170px);min-height:360px">
+    <button id="learning-workbench-close" class="btn small" type="button">返回原学习页面</button>
+    <iframe id="learning-workbench-frame" title="完整学习工作台" style="width:100%;height:calc(100% - 38px);border:0;margin-top:8px" referrerpolicy="same-origin"></iframe>
+  </div>
   <div class="page-body stack">
     <div class="row resource-navigation" role="group" aria-label="学习类型">
       <button class="btn small primary" type="button" data-learning-tab="expression" aria-pressed="true" aria-disabled="true" aria-controls="learning-panel-expression">表达方式</button>
@@ -1362,7 +1366,10 @@ for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.addEven
 window.addEventListener('hashchange', () => { if (state.loggedIn) showPage(location.hash.slice(1)); });
 
 // ---------- 主题：默认亮色（不看系统设置），点一下在亮色和深色之间切；只记在这台浏览器里 ----------
-function applyTheme(theme) { if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; }
+function applyTheme(theme) {
+  if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
+  $('learning-workbench-frame')?.contentWindow?.postMessage({type:'aureus-theme', theme}, location.origin);
+}
 try { applyTheme(localStorage.getItem('aureus-theme')); } catch (e) { /* 浏览器不让存就用亮色 */ }
 const DEFAULT_UI_FONT = 'pixel';
 document.documentElement.dataset.font = DEFAULT_UI_FONT;

@@ -54,9 +54,11 @@ export function StreamlineIcon({
     return <Fallback className={className} color={color} size={size} />
   }
 
+  if (!icon) return null
+
   return (
     <Icon
-      icon={icon ?? `${collection}:${name}`}
+      icon={icon}
       className={cn('inline-block shrink-0', className)}
       color={color}
       width={size}
