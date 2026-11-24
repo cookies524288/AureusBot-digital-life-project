@@ -145,7 +145,8 @@ async def test_cli_scope_lasts_one_process(tmp_path: Path) -> None:
     async with asyncio.timeout(30), serve(fake.handle, "127.0.0.1", 0) as server:
         port = server.sockets[0].getsockname()[1]
         paths.runtime_config_file.write_text(
-            "[heartbeat]\nsplit_reply_enabled = false\n[web]\nenabled = false\n"
+            "[heartbeat]\nsplit_reply_enabled = false\ntick_interval_seconds = 1\n"
+            "[body]\nsleep_enabled = false\n[web]\nenabled = false\n"
             f'[qq]\nenabled = true\naccount_id = "{ACCOUNT}"\n'
             f'endpoint = "ws://127.0.0.1:{port}/onebot"\n',
             encoding="utf-8",
