@@ -286,6 +286,10 @@ def _assign(vectors: Sequence[_Vector], centers: Sequence[_Vector]) -> list[int]
 
 
 def _cluster_vectors(raw_vectors: Sequence[_Vector], count: int) -> list[int]:
+    return _fit_clusters(raw_vectors, count)[0]
+
+
+def _fit_clusters(raw_vectors: Sequence[_Vector], count: int) -> tuple[list[int], list[_Vector]]:
     if any(len(vector) != len(raw_vectors[0]) for vector in raw_vectors):
         raise ValueError("表达向量维度不一致。")
     vectors = [_unit(vector, label="表达向量") for vector in raw_vectors]
@@ -302,4 +306,4 @@ def _cluster_vectors(raw_vectors: Sequence[_Vector], count: int) -> list[int]:
         centers = [
             _unit(tuple(map(sum, zip(*group, strict=True))), label="表达簇中心") for group in groups
         ]
-    return labels
+    return labels, centers

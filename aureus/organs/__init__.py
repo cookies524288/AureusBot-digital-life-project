@@ -10,6 +10,7 @@ from aureus.common.prompt_text import (
 from .api_keys import KeyResolver
 from .fake import FakePlanner, FakeReplyer
 from .interface import (
+    LOCAL_EXPRESSION_EMBEDDING,
     CallAttempt,
     CallPurpose,
     ModelPreference,
@@ -46,6 +47,7 @@ __all__ = [
     "API_KEY_ENV_PATTERN",
     "BUILTIN_ORGANS",
     "EMPTY_SYSTEM_MESSAGE",
+    "LOCAL_EXPRESSION_EMBEDDING",
     "CallAttempt",
     "CallPurpose",
     "FakePlanner",

@@ -617,6 +617,8 @@ class LanguageConfig(BaseModel):
     learning_enabled: bool = False
     organ: str = "summarizer"
     reference_chars: int = Field(default=700, ge=0, le=2000)
+    use_vector_expression: bool = False
+    expression_selector_organ: str | None = None
 
 
 class DiaryConfig(BaseModel):

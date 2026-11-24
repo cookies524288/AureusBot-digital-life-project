@@ -18,6 +18,7 @@ MAX_RECALL_KEYWORDS = 3
 MIN_RECALL_KEYWORD_CHARS = 2
 MAX_RECALL_KEYWORD_CHARS = 20
 _EXPRESSION_INTENT_FIELDS = ("focus", "reply_act", "scene", "tone", "prefer")
+_EXPRESSION_INTENT_LABELS = ("贴合对象", "回复动作", "表达场景", "期望语气", "优先表达", "避免表达")
 _MAX_EXPRESSION_INTENT_CHARS = 80
 _MAX_EXPRESSION_INTENT_ITEMS = 3
 
@@ -134,6 +135,8 @@ class Plan:
     special_contact: bool | None = None
     stay_in_conversation: bool | None = None
     emoji: EmojiIntent | None = None
+    expression_intent_lines: tuple[str, ...] = ()
+    reply_reference: str = ""
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -210,6 +213,14 @@ def parse_plan(text: str) -> Plan | None:
             for item in _expression_terms(expression_intent.get(field))
         ),
         expression_avoid=_expression_terms(expression_intent.get("avoid")),
+        expression_intent_lines=tuple(
+            f"- {label}：{'、'.join(terms)}"
+            for field, label in zip(
+                (*_EXPRESSION_INTENT_FIELDS, "avoid"), _EXPRESSION_INTENT_LABELS, strict=True
+            )
+            if (terms := _expression_terms(expression_intent.get(field)))
+        ),
+        reply_reference=clean_text(data.get("reply_reference"), _MAX_INTENT_CHARS),
         emoji=(
             EmojiIntent(
                 clean_text(emoji.get("emotion"), _MAX_INTENT_CHARS),

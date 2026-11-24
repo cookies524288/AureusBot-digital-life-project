@@ -603,6 +603,7 @@ def build_plan_prompt(
     with_recall: bool = False,
     jargon: str = "",
     with_expressions: bool = False,
+    with_expression_vectors: bool = False,
     heuristic_recall: str = "",
     review_reason: str = "",
 ) -> str:
@@ -618,6 +619,7 @@ def build_plan_prompt(
         with_recall: 记忆和召回都开着时，说明按需提供关键词（D80）。
         jargon: 当前聊天命中的内部黑话参考。
         with_expressions: 是否请 Planner 在需要时描述表达意图。
+        with_expression_vectors: 是否请求表达向量查询的回复参考字段。
         heuristic_recall: 按本轮回忆线索取得的记忆参考。
         review_reason: 回复器提出的内部再审理由。
 
@@ -635,6 +637,8 @@ def build_plan_prompt(
     parts.append(join_prompt([_PLAN_TASK.fill(), _PLAN_INSTRUCTION.fill()], ""))
     if with_expressions:
         parts.append(LANGUAGE_PLANNER_EXPRESSION_INTENT.fill())
+    if with_expression_vectors:
+        parts.append('如有用于选择表达的回复信息参考，可加 "reply_reference" 字符串；没有则省略。')
     if with_agenda:
         parts.append(_PLAN_AGENDA_INSTRUCTION.fill())
     if with_interests:

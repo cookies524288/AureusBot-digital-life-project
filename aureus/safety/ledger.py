@@ -15,7 +15,7 @@ from pathlib import Path
 from aureus.common import BudgetCalendar, Clock, SystemClock
 from aureus.common.clock import ensure_aware
 from aureus.common.sqlite import open_connection
-from aureus.organs import CallAttempt
+from aureus.organs import LOCAL_EXPRESSION_EMBEDDING, CallAttempt
 
 # 时间固定写成带微秒的 UTC，格式等宽，这样 SQLite 里按字符串比较大小就等于按时间比较。
 _TIMESTAMP_PRECISION = "microseconds"
@@ -215,9 +215,9 @@ class Ledger:
         row = conn.execute(
             """
             SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS used
-            FROM ledger WHERE timestamp >= ? AND timestamp < ?
+            FROM ledger WHERE timestamp >= ? AND timestamp < ? AND organ_id != ?
             """,
-            (_format_timestamp(start), _format_timestamp(end)),
+            (_format_timestamp(start), _format_timestamp(end), LOCAL_EXPRESSION_EMBEDDING),
         ).fetchone()
         return int(row["used"])
 

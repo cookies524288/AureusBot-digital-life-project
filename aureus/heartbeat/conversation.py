@@ -39,6 +39,7 @@ from aureus.heartbeat.emoji_selection import EMOJI_CONTEXT_LIMIT, EMOJI_PLAN_NOT
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
+from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.inbox_attention import InboxSelection
 from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import ConversationKey
@@ -75,7 +76,7 @@ from aureus.hormones import (
     make_triggers_from_judgment,
 )
 from aureus.identity import Identity, IdentityLayer
-from aureus.memory import EmojiStore, LanguageStore, MemoryHit, MemoryIndex
+from aureus.memory import EmojiStore, ExpressionVectorIndex, LanguageStore, MemoryHit, MemoryIndex
 from aureus.mood import MoodReading
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse, join_prompt
 from aureus.people import AffinityBook, HistoricalEntry, PeopleDirectory
@@ -303,6 +304,7 @@ class ConversationFlow:
         memory_config: MemoryConfig | None = None,
         language: LanguageStore | None = None,
         language_config: LanguageConfig | None = None,
+        expression_index: ExpressionVectorIndex | None = None,
         people: PeopleDirectory | None = None,
         people_config: PeopleConfig | None = None,
         working_memory: WorkingMemory | None = None,
@@ -326,6 +328,13 @@ class ConversationFlow:
         self.has_fast_model = False
         self._language = language
         self._language_config = language_config or LanguageConfig()
+        self.expression_recall = (
+            ExpressionRecall(language, expression_index, self._language_config, call)
+            if language is not None
+            and expression_index is not None
+            and self._language_config.use_vector_expression
+            else None
+        )
         self._people = people
         self._people_config = people_config or PeopleConfig()
         self._working_memory = working_memory
@@ -810,6 +819,8 @@ class ConversationFlow:
             with_recall=self._can_recall(),
             jargon=await self._jargon_reference(job),
             with_expressions=self._can_recall_language(),
+            with_expression_vectors=self.expression_recall is not None
+            and self.expression_recall.space is not None,
             heuristic_recall=heuristic_recall,
             review_reason=review_reason,
         )
@@ -893,6 +904,10 @@ class ConversationFlow:
     async def _expression_reference(self, job: _ReplyJob, plan: Plan | None) -> str:
         if self._language is None or not self._can_recall_language():
             return ""
+        if self.expression_recall is not None:
+            vector_reference = await self.expression_recall.reference(plan, job.language_scope_key)
+            if vector_reference is not None:
+                return vector_reference
         topic = "\n".join(record.content for record in job.messages)
         intent = " ".join((plan.intent, *plan.expression_focus)) if plan is not None else ""
         avoid = plan.expression_avoid if plan is not None else ()
@@ -1038,6 +1053,8 @@ class ConversationFlow:
             return _ThoughtOutcome(
                 notice=f"调用模型时出错（{type(error).__name__}），这次没有回复，详情见日志。"
             )
+        if self.expression_recall is not None:
+            self.expression_recall.backfill(job.language_scope_key)
         text = response.suggestion.strip()
         if not text:
             return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")

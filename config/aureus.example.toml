@@ -389,6 +389,9 @@ recall_enabled = true
 learning_enabled = false
 organ = "summarizer"
 reference_chars = 700
+# D101：只使用 text_embedding 中未标价的本机回环 OpenAI 兼容路线。
+use_vector_expression = false
+# expression_selector_organ = "fast_model"  # 可选；不填则直接用排好的候选。
 
 [diary]
 # enabled = true
