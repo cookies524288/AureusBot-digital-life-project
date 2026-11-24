@@ -9,7 +9,7 @@
       "source": "dashboard/package-lock.json",
       "sha256": "4b7b442e92d785c04097305f5363490021eeba6d11d664345c772584160e893e"
     },
-    "upstream-package.json": {
+    "package.json": {
       "source": "dashboard/package.json",
       "sha256": "b8c26a60286294d8cd504052c14e66e3bfe3e817f9d98df13a8a26d6eff52922"
     },
