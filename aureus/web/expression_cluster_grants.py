@@ -32,9 +32,11 @@ class ExpressionClusterDisplay:
         """仅返回当前仍符合授权内容和来源范围的原件。"""
         with closing(open_connection(self._path, read_only=True)) as connection:
             connection.execute("BEGIN")
-            saved = dict(connection.execute(
-                "SELECT entry_key, fingerprint FROM web_expression_cluster_grants"
-            ))
+            saved = dict(
+                connection.execute(
+                    "SELECT entry_key, fingerprint FROM web_expression_cluster_grants"
+                )
+            )
             if not saved:
                 return {}
             return {
@@ -76,11 +78,18 @@ class ExpressionClusterDisplay:
         """返回具体选择的当前版本及是否有一笔可撤回授权，不返回正文。"""
         with closing(open_connection(self._path, read_only=True)) as connection:
             connection.execute("BEGIN")
-            saved = connection.execute(
-                "SELECT 1 FROM web_expression_cluster_grants WHERE entry_key = ?", (key,)
-            ).fetchone() is not None
-            mark = next((
-                display_version(entry) for entry in self._language.expression_pool(connection)
-                if entry.entry_key == key and self._visible(entry, scopes)
-            ), None)
+            saved = (
+                connection.execute(
+                    "SELECT 1 FROM web_expression_cluster_grants WHERE entry_key = ?", (key,)
+                ).fetchone()
+                is not None
+            )
+            mark = next(
+                (
+                    display_version(entry)
+                    for entry in self._language.expression_pool(connection)
+                    if entry.entry_key == key and self._visible(entry, scopes)
+                ),
+                None,
+            )
             return mark, saved

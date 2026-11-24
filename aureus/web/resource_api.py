@@ -841,10 +841,17 @@ def register_resource_routes(
                 rows, total, counts = (
                     await asyncio.to_thread(
                         memory.browse_text_resources,
-                        q.strip(), category, status, recall, offset, limit,
-                        removed=removed, can_show_summary=can_show_summary,
+                        q.strip(),
+                        category,
+                        status,
+                        recall,
+                        offset,
+                        limit,
+                        removed=removed,
+                        can_show_summary=can_show_summary,
                     )
-                    if memory else ([], 0, {})
+                    if memory
+                    else ([], 0, {})
                 )
             except SummaryVisibilityChangedError:
                 raise HTTPException(

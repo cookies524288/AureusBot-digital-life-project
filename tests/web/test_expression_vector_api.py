@@ -52,8 +52,12 @@ class VectorRig:
         self.inbox = InboxStore(path, self.web.clock)
         self.allowed: set[ConversationKey] = set()
         progress = EmbeddingProgress(
-            self.models, True, self.language, self.index,
-            inbox=self.inbox, allows_conversation=self.allowed.__contains__,
+            self.models,
+            True,
+            self.language,
+            self.index,
+            inbox=self.inbox,
+            allows_conversation=self.allowed.__contains__,
         )
         self.recall = ExpressionRecall(self.language, self.index, LanguageConfig(), self.embed)
         self.recall.space = ACTIVE
@@ -89,8 +93,12 @@ class VectorRig:
 
     def scoped_package(self) -> str:
         heard = Perception(
-            "qq", "synthetic-speaker", "测试材料", VisibilityScope.GROUP,
-            TrustLevel.VERIFIED_CONTACT, MessageRoute("bot", "group", "group", "1"),
+            "qq",
+            "synthetic-speaker",
+            "测试材料",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            MessageRoute("bot", "group", "group", "1"),
         )
         self.inbox.add(heard)
         route = ConversationKey.from_perception(heard)
