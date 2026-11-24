@@ -1,6 +1,6 @@
 # 路线图 3.11 后续：长期记忆关系图只读页
 
-状态：待实现
+状态：待评审
 设计：D99、D100；沿用[关系图只读查询](memory-graph-query.md)的独立授权边界。
 
 ## 先读
@@ -25,10 +25,20 @@
 2. 接入长期记忆分页面板，窄屏验证可见浏览、总页数、两种空态、切换和撤权后的迟到响应。
 3. 跑图谱、网页及 D100 专项，记录检查和独立夹具路径，提交并交 Astra 复审。
 
-- [ ] 后端权限边界、定位、分页及撤权通过合成测试。
-- [ ] 窄屏分页、详情、单跳、空态及旧响应失效通过浏览器测试。
-- [ ] D100 召回回归及改动文件质量检查通过；无正式数据和实例变更。
+- [x] 后端权限边界、定位、分页及撤权：`tests/web/test_memory_graph_api.py` 三项通过。
+- [x] 窄屏分页、详情、单跳、空态及旧响应失效：`test_memory_graph_pages_and_discards_stale_results_at_390px` 通过；资源页浏览器整文件 21 项通过。
+- [x] D99 移除与恢复及 D100 实际群聊回复请求通过；改动 Python 文件的 Ruff、Pyright、8 条架构规则及 JavaScript 语法检查通过。未操作正式数据、实例、`main` 或远程。
+
+## 实现与验证（2026-11-24）
+
+- 设计 `1542284`，实现 `0d41176`。联合专项运行图查询、图来源、网页服务端、网页检修、操作记录、资源页浏览器及 D99/D100 回归：82 项通过、1 项失败。失败为翻页时计数栏清空改变列表高度，可能触发页容量重新计算。固定计数栏最小高度后，只复跑受影响的 `tests/web/test_resource_browser.py`，21 项全部通过；按范围未重跑全量。
+- 使用项目主树现有 Python 虚拟环境，开发树为 `PYTHONPATH`，设置 `PYTHONUTF8=1`，执行 `python -m pytest -q --basetemp <独立目录>`、`ruff check`、`ruff format --check`、`python -m pyright --venvpath <主树>`、`import-linter`、`node --check` 及 `git diff --check`。
+- 联合夹具：`E:/Temp/aureus-graph-web-regression-b5dc3bce98e7485f80b33e996f71fd14`；浏览器回归夹具：`E:/Temp/aureus-graph-web-browser-929ba91c1aed4ac0b31ff6c8c6726063`。
 
 ## 待设计问题
 
 本步无阻塞。正式图谱授权仍待单独设计和确认。
+
+## 验收意见
+
+待 Astra 复审。
