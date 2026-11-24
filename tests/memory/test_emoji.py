@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from aureus.common import ManualClock
 from aureus.memory.emoji import EmojiStore, ImportedEmoji
 from aureus.memory.history import MemorySource
@@ -92,3 +94,33 @@ def test_import_keeps_source_status_and_counts_when_repeated(tmp_path: Path) -> 
     latest = store.browse("", 0, 10)[0]
     assert latest.is_banned and not latest.is_registered
     assert latest.use_count == 12
+
+
+@pytest.mark.parametrize("change", ["ban", "remove", "description", "tags"])
+def test_automatic_emoji_registration_preserves_intervening_maintenance(
+    tmp_path: Path, change: str
+) -> None:
+    store = EmojiStore(
+        tmp_path / "aureus.db", tmp_path, ManualClock(datetime(2026, 1, 1, tzinfo=UTC))
+    )
+    store.open()
+    image = b"GIF89a synthetic media"
+    entry = store.collect(image)
+    assert entry.digest is not None
+    if change == "ban":
+        store.set_status(entry.digest, is_registered=False, is_banned=True)
+    elif change == "remove":
+        assert store.set_removed([entry.entry_key], True)
+    elif change == "description":
+        assert store.update_catalog(entry.digest, description="人工描述")
+    else:
+        assert store.update_catalog(entry.digest, tags=("人工标签",))
+
+    assert not store.register_recognition(entry.digest, ("惊讶",))
+    [preserved] = store.browse_page("", 0, 10, removed=change == "remove")[0]
+    assert not preserved.is_registered and preserved.collection_count == 1
+    assert preserved.description == ("人工描述" if change == "description" else "")
+    assert preserved.tags == (("人工标签",) if change == "tags" else ())
+    assert preserved.is_banned == (change == "ban")
+    assert preserved.is_removed == (change == "remove")
+    assert store.read_media(entry.digest) == image
