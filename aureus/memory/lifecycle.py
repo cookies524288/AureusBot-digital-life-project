@@ -132,8 +132,8 @@ def _target(
         flags is not None and bool(flags["is_frozen"]),
         flags is not None and bool(flags["is_protected"]),
     )
-    # 版本只取原件、生效状态和旧入口写入计数；不含计划行，撤销较新的计划后才能还原较早计划的版本（3.15 自检）。
-    # 计数只由旧入口递增，用来识别改回同一个值；应用与撤销不改它。
+    # 版本只取原件、生效状态和旧入口写入计数；不含计划行，撤销较新的计划后才能还原较早计划的版本。
+    # 计数只由旧入口递增，用来识别改回同一个值；应用与撤销不改它（3.15 自检）。
     legacy_writes = edit["revision"] if edit is not None else 0
     version = sha256(
         _json([list(original), legacy_writes, asdict(state), current]).encode()
@@ -178,6 +178,15 @@ def _propose(
 
 def _view(plan: object, source: MemorySource, state: LifecycleState) -> dict[str, object]:
     return {"source": asdict(source), "state": asdict(state), "plan_id": plan}
+
+
+def _latest_applied(connection: Connection, source: MemorySource) -> str | None:
+    row = connection.execute(
+        """SELECT id FROM memory_lifecycle_plans WHERE source_key=? AND applied_at IS NOT NULL
+           AND undone_at IS NULL ORDER BY applied_at DESC, rowid DESC LIMIT 1""",
+        (source.encode(),),
+    ).fetchone()
+    return row["id"] if row is not None else None
 
 
 def preview_change(
@@ -249,6 +258,7 @@ def operation_history(
         current = _target(connection, source, now, access)
         if current is None or not session_active():
             return None
+        latest = _latest_applied(connection, source)
         return [
             LifecycleOperation(
                 row["id"],
@@ -256,7 +266,7 @@ def operation_history(
                 row["applied_at"],
                 row["undone_at"],
                 current.is_current
-                and row["undone_at"] is None
+                and row["id"] == latest
                 and row["applied_version"] == current.version,
             )
             for row in rows
@@ -306,7 +316,8 @@ def change_plan(
         if target is None:
             return None
         if undo:
-            expected = plan["applied_version"] if plan["undone_at"] is None else None
+            latest = _latest_applied(connection, source)
+            expected = plan["applied_version"] if identifier == latest else None
         else:
             fresh = now < datetime.fromisoformat(plan["created_at"]) + _PREVIEW_TTL
             expected = plan["expected"] if plan["applied_at"] is None and fresh else None
@@ -327,4 +338,9 @@ def change_plan(
                 "UPDATE memory_lifecycle_plans SET applied_version=? WHERE id=?",
                 (current.version, identifier),
             )
+        connection.execute(
+            """UPDATE memory_lifecycle_plans SET expected=''
+               WHERE source_key=? AND applied_at IS NULL""",
+            (source.encode(),),
+        )
         return _view(identifier, source, state) | {"status": "undone" if undo else "applied"}

@@ -675,7 +675,6 @@ def test_older_plan_can_be_undone_after_newer_plan_is_undone(rig: Rig) -> None:
 
     def run(plan: str, *, undo: bool = False) -> None:
         assert rig.index.apply_lifecycle(plan, None, lambda: True, undo=undo)
-        rig.clock.advance(timedelta(seconds=1))
 
     older = preview("disable")
     run(older)
@@ -690,9 +689,23 @@ def test_older_plan_can_be_undone_after_newer_plan_is_undone(rig: Rig) -> None:
     interim = preview("disable")
     run(interim)
     run(interim, undo=True)
-    run(late)
-    [changed] = rig.index.browse_history("", "", 0, 10)
-    assert changed.text == "迟到的修订" and changed.is_enabled
+    with pytest.raises(LifecycleConflictError):
+        run(late)
+    [unchanged] = rig.index.browse_history("", "", 0, 10)
+    assert unchanged.text == "原值" and unchanged.is_enabled
+
+    first = preview("disable")
+    run(first)
+    second = preview("enable")
+    run(second)
+    third = preview("disable")
+    run(third)
+    operations, _ = rig.index.lifecycle_history(source, None, lambda: True, 0, 10) or ([], 0)
+    assert [item.plan_id for item in operations if item.can_undo] == [third]
+    with pytest.raises(LifecycleConflictError):
+        run(first, undo=True)
+    for identifier in (third, second, first):
+        run(identifier, undo=True)
 
 
 @pytest.mark.asyncio

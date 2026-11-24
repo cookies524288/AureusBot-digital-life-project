@@ -124,11 +124,18 @@ def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(
         latest = preview("再修订画像")
         assert client.post(f"{endpoint}/{latest}/apply").status_code == 200
         assert client.post(f"{endpoint}/{plan}/undo").status_code == 409
+        same = preview("修订画像")
+        assert client.post(f"{endpoint}/{same}/apply").status_code == 200
+        operations = client.get(endpoint, params={"source": first}).json()["history"]
+        assert [item["id"] for item in operations if item["can_undo"]] == [same]
+        assert client.post(f"{endpoint}/{plan}/undo").status_code == 409
+        assert client.post(f"{endpoint}/{same}/undo").status_code == 200
         assert client.post(f"{endpoint}/{latest}/undo").status_code == 200
         assert client.get(endpoint, params={"source": first}).json()["effective"] == effective
         assert client.post(f"{endpoint}/{plan}/undo").status_code == 200
         restored = client.get(endpoint, params={"source": first}).json()
         assert restored["effective"] == original["effective"]
+        assert client.post(f"{endpoint}/{competing}/apply").status_code == 409
         stored = directory.historical_record("old", HistoricalKind.PROFILE_SNAPSHOT, "[1]")
         assert stored is not None and stored.record == records[1]
         pending = preview("待处理旧版本")
@@ -153,6 +160,45 @@ def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(
             entry.record.summary == "新来源画像"
             for entry in directory.history_for(person.id, limit=10)
         )
+
+
+def test_profile_plans_reject_alias_changes_even_if_legacy_endpoint_restores_value(
+    tmp_path: Path,
+) -> None:
+    people, _clock, _record, source = _maintained_profile(tmp_path)
+    try:
+        original = people.historical_record("old", HistoricalKind.PROFILE_SNAPSHOT, "[1]")
+        assert original is not None
+        app = FastAPI()
+
+        async def ready() -> str:
+            return "synthetic-session"
+
+        register_profile_lifecycle_routes(app, ready, people, lambda _: True, lambda _: True)
+        endpoint = "/api/resources/profiles/maintenance"
+        assert people.set_profile_aliases(original.id, ["原别名"]) is not None
+        with TestClient(app) as client:
+            response = client.post(
+                endpoint + "/preview", json={"source": source, "edit": {"summary": "修订画像"}}
+            )
+            assert response.status_code == 200
+            plan_id = response.json()["plan_id"]
+            assert client.post(f"{endpoint}/{plan_id}/apply").status_code == 200
+            response = client.post(
+                endpoint + "/preview", json={"source": source, "edit": {"summary": "尚未应用"}}
+            )
+            assert response.status_code == 200
+            pending_id = response.json()["plan_id"]
+            assert people.set_profile_aliases(original.id, ["暂时别名"]) is not None
+            assert people.set_profile_aliases(original.id, None) is not None
+            assert client.post(f"{endpoint}/{pending_id}/apply").status_code == 409
+            assert client.post(f"{endpoint}/{plan_id}/undo").status_code == 409
+            assert (
+                client.get(endpoint, params={"source": source}).json()["effective"]["summary"]
+                == "修订画像"
+            )
+    finally:
+        people.close()
 
 
 def _maintained_profile(

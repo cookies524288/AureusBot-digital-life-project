@@ -436,10 +436,11 @@ def profile_details(
         target = _profile_target(conn, source, now)
         if target is None or not active():
             return None
-        latest = conn.execute(
+        latest = profile_maintenance.latest_applied(conn, target.key)
+        rows = conn.execute(
             """SELECT id, applied_at, undone_at, applied_version FROM people_profile_plans
                WHERE instance=? AND person_key=? AND applied_at IS NOT NULL
-               ORDER BY rowid DESC LIMIT 20""",
+               ORDER BY applied_at DESC, rowid DESC LIMIT 20""",
             target.key,
         )
         return {
@@ -456,9 +457,9 @@ def profile_details(
                     id=row["id"],
                     applied_at=row["applied_at"],
                     undone_at=row["undone_at"],
-                    can_undo=row["applied_version"] == target.version and not row["undone_at"],
+                    can_undo=row["id"] == latest and row["applied_version"] == target.version,
                 )
-                for row in latest
+                for row in rows
             ],
         }
 
@@ -548,7 +549,9 @@ def change_profile(
         target = _profile_target(conn, source, now)
         if target is None:
             return False
-        if profile_maintenance.expected_version(row, now, undo=undo) != target.version:
+        latest = profile_maintenance.latest_applied(conn, target.key) if undo else None
+        expected = profile_maintenance.expected_version(row, now, undo=undo, latest=latest)
+        if expected != target.version:
             raise ProfileChangedError("原件或版本已变化，请重新预览。")
         edit = ProfileEdit.model_validate_json(row["previous" if undo else "proposed"])
         profile_maintenance.write_content(conn, target.key, edit)
@@ -565,6 +568,7 @@ def change_profile(
                 "UPDATE people_profile_plans SET applied_version=? WHERE id=?",
                 (current.version, identifier),
             )
+        profile_maintenance.invalidate_plans(conn, target.key)
         return True
 
 
@@ -642,6 +646,7 @@ def profile_alias_details(
     source = (str(target["instance"]), str(target["person_key"]))
     if write:
         profile_aliases.write(conn, source, aliases)
+        profile_maintenance.invalidate_plans(conn, source, legacy=True)
     group = _latest_profiles(conn, person_id)[source]
     manual = group.get(HistoricalKind.ALIAS_OVERRIDE)
     snapshot = group.get(HistoricalKind.PROFILE_SNAPSHOT)
