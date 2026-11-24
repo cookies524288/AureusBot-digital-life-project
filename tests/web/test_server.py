@@ -111,6 +111,67 @@ def test_emoji_integrity_preview_requires_ready_same_origin_login(rig: Rig) -> N
         assert client.post(endpoint, headers=origin).status_code == 409
 
 
+def test_emoji_review_persists_and_gates_sending_without_changing_registration(tmp_path: Path) -> None:
+    database = tmp_path / "emoji.db"
+    store = EmojiStore(database, tmp_path, ManualClock(START))
+    store.open()
+    with BytesIO() as stream:
+        Image.new("RGB", (8, 8), "blue").save(stream, format="PNG")
+        image = stream.getvalue()
+    digest, _created = store.upload(image, registration_description="合成握手")
+    endpoint = f"/api/resources/emoji/{digest}/review"
+    origin = {"Origin": "http://testserver"}
+    rejected = {"verdict": "rejected"}
+    approved = {"verdict": "approved"}
+    rig = Rig(tmp_path, resource_emojis=store)
+    try:
+        with rig.client() as client:
+            assert store.read_sendable(digest) == image
+            assert client.patch(endpoint, json=rejected, headers=origin).status_code == 401
+            assert login(client).json()["must_change_password"]
+            assert client.patch(endpoint, json=rejected, headers=origin).status_code == 403
+            set_password(rig)
+            assert login(client, GOOD).status_code == 200
+            assert client.patch(endpoint, json=rejected).status_code == 403
+            foreign = {"Origin": "http://other.test"}
+            assert client.patch(endpoint, json=rejected, headers=foreign).status_code == 403
+            invalid = {**rejected, "is_banned": True}
+            assert client.patch(endpoint, json=invalid, headers=origin).status_code == 422
+            assert store.read_sendable(digest) == image
+
+            assert client.patch(endpoint, json=rejected, headers=origin).json() == {
+                "review": "rejected"
+            }
+            listing = client.get(
+                "/api/resources/media", params={"kind": "emoji", "review": "rejected"}
+            ).json()
+            [item] = listing["items"]
+            assert item["review"] == "rejected" and item["is_registered"] and not item["is_banned"]
+            reopened = EmojiStore(database, tmp_path, ManualClock(START))
+            reopened.open()
+            assert reopened.collect(image).review == "rejected"
+            assert not reopened.candidates() and reopened.read_sendable(digest) is None
+            assert reopened.read_catalog_media(digest) == image
+
+            assert store.set_removed([f"asset:{digest}"], True)
+            assert client.patch(endpoint, json=approved, headers=origin).status_code == 404
+            assert store.set_removed([f"asset:{digest}"], False)
+            assert store.update_catalog(digest, is_registered=False)
+            assert store.update_catalog(digest, description="")
+            assert client.patch(endpoint, json=approved, headers=origin).status_code == 422
+            assert store.browse("", 0, 10)[0].review == "rejected"
+            assert store.update_catalog(digest, description="合成握手", is_banned=True)
+            assert client.patch(endpoint, json=approved, headers=origin).json() == {
+                "review": "approved"
+            }
+            assert not reopened.candidates() and reopened.read_sendable(digest) is None
+            assert store.update_catalog(digest, is_registered=True, is_banned=False)
+            assert [entry.digest for entry in reopened.candidates()] == [digest]
+            assert reopened.read_sendable(digest) == image
+    finally:
+        rig.close()
+
+
 def test_emoji_integrity_preview_reports_unavailable_without_writes(tmp_path: Path) -> None:
     database = tmp_path / "emoji.db"
     store = EmojiStore(database, tmp_path, ManualClock(START))

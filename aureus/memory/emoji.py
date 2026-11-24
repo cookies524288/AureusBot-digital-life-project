@@ -29,6 +29,8 @@ _MAX_TOTAL_PIXELS = 64_000_000
 _MAX_FRAMES = 200
 _UPLOAD_FORMATS = ("PNG", "JPEG", "GIF", "WEBP")
 type EmojiStatus = Literal["", "registered", "unregistered", "banned"]
+type EmojiReview = Literal["unreviewed", "approved", "rejected"]
+type EmojiVerdict = Literal["approved", "rejected"]
 type EmojiFormat = Literal["", "png", "jpeg", "gif", "webp"]
 type EmojiSort = Literal["recent", "most_used", "most_collected", "last_used"]
 _SORT_COLUMNS: dict[EmojiSort, str] = {
@@ -37,16 +39,20 @@ _SORT_COLUMNS: dict[EmojiSort, str] = {
     "most_collected": "collection_count",
     "last_used": "last_used_at",
 }
-_CATALOG = """WITH entries AS (
-    SELECT asset.*, (SELECT min(source_key) FROM emoji_sources source
-        WHERE source.digest = asset.digest) AS source
-    FROM emoji_assets asset
+_REVIEW = """coalesce((SELECT verdict FROM emoji_reviews
+    WHERE emoji_reviews.digest = emoji_assets.digest), 'unreviewed')"""
+_SENDABLE = f"""is_registered AND NOT is_banned AND {_REVIEW} <> 'rejected' AND NOT EXISTS (
+    SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)"""
+_CATALOG = f"""WITH entries AS (
+    SELECT emoji_assets.*, (SELECT min(source_key) FROM emoji_sources source
+        WHERE source.digest = emoji_assets.digest) AS source, {_REVIEW} AS review
+    FROM emoji_assets
     UNION ALL
     SELECT NULL, coalesce(json_extract(original, '$.description'), ''), '[]',
         coalesce(json_extract(original, '$.is_registered') IN (1, '1', 'True'), 0),
         coalesce(json_extract(original, '$.is_banned') IN (1, '1', 'True'), 0), 1,
         max(0, coalesce(CAST(json_extract(original, '$.query_count') AS INTEGER), 0)),
-        NULL, NULL, source_key
+        NULL, NULL, source_key, 'unreviewed'
     FROM emoji_sources WHERE digest IS NULL
 ), catalog AS (
     SELECT *, EXISTS (SELECT 1 FROM emoji_removed WHERE entry_key =
@@ -72,6 +78,10 @@ CREATE TABLE IF NOT EXISTS emoji_sources (
 );
 CREATE INDEX IF NOT EXISTS emoji_sources_digest ON emoji_sources(digest);
 CREATE TABLE IF NOT EXISTS emoji_removed (entry_key TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS emoji_reviews (
+    digest TEXT PRIMARY KEY REFERENCES emoji_assets(digest),
+    verdict TEXT NOT NULL CHECK (verdict IN ('approved', 'rejected'))
+);
 """
 
 
@@ -90,6 +100,7 @@ class EmojiRecord:
     source: str | None = None
     is_removed: bool = False
     media_type: str | None = None
+    review: EmojiReview = "unreviewed"
 
     @property
     def entry_key(self) -> str:
@@ -200,14 +211,15 @@ class EmojiStore:
         description = description.strip()
         with closing(open_connection(self._database_file)) as connection, connection:
             row = connection.execute(
-                """INSERT INTO emoji_assets VALUES (?, ?, ?, ?, 0, 1, 0, ?, NULL)
+                f"""INSERT INTO emoji_assets VALUES (?, ?, ?, ?, 0, 1, 0, ?, NULL)
                    ON CONFLICT(digest) DO UPDATE SET collection_count = collection_count + ?,
                        is_registered = is_registered OR (
                            excluded.is_registered AND NOT is_banned AND description = ''),
                        description = CASE WHEN description = '' THEN excluded.description
                                           ELSE description END,
                        tags = CASE WHEN tags = '[]' THEN excluded.tags ELSE tags END
-                   RETURNING *, NULL AS source, EXISTS (SELECT 1 FROM emoji_removed
+                   RETURNING *, NULL AS source, {_REVIEW} AS review,
+                       EXISTS (SELECT 1 FROM emoji_removed
                        WHERE entry_key = 'asset:' || ?) AS is_removed""",
                 (
                     digest,
@@ -348,6 +360,32 @@ class EmojiStore:
             )
         return True
 
+    def review_catalog(self, digest: str, verdict: EmojiVerdict) -> bool:
+        """保存用户审核决定；拒绝不改变登记、禁用或移除，但会拦截发送。"""
+        data = self.read_media(digest) if verdict == "approved" else None
+        if data is not None:
+            _validate_image(data)
+        with closing(open_connection(self._database_file)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT description FROM emoji_assets WHERE digest = ? AND NOT EXISTS (
+                       SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)""",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                return False
+            if verdict == "approved":
+                if data is None:
+                    raise ValueError("找不到可用原件，不能通过表情审批。")
+                if not row["description"].strip():
+                    raise ValueError("请先填写表情描述，再通过审批。")
+            connection.execute(
+                """INSERT INTO emoji_reviews VALUES (?, ?)
+                   ON CONFLICT(digest) DO UPDATE SET verdict = excluded.verdict""",
+                (digest, verdict),
+            )
+        return True
+
     def set_status(self, digest: str, *, is_registered: bool, is_banned: bool) -> None:
         """设置表情当前的登记、禁用状态。"""
         with closing(open_connection(self._database_file)) as connection, connection:
@@ -404,16 +442,17 @@ class EmojiStore:
         removed: bool = False,
         image_format: EmojiFormat = "",
         sort: EmojiSort = "recent",
+        review: EmojiReview | Literal[""] = "",
     ) -> tuple[list[EmojiRecord], int]:
         """返回筛选后的一页；指定格式时先核对媒体内容，再计算页码。"""
         filtered = f"""{_CATALOG}, filtered AS (SELECT * FROM catalog
             WHERE (instr(lower(description), lower(?)) > 0
                 OR instr(lower(tags), lower(?)) > 0)
-                AND is_removed = ?
+                AND is_removed = ? AND (? = '' OR review = ?)
                 AND CASE ? WHEN 'registered' THEN is_registered AND NOT is_banned
                     WHEN 'unregistered' THEN NOT is_registered AND NOT is_banned
                     WHEN 'banned' THEN is_banned ELSE 1 END)"""
-        params = (query, query, removed, status)
+        params = (query, query, removed, review, review, status)
         order = f"ORDER BY {_SORT_COLUMNS[sort]} DESC, digest, source"
         with closing(open_connection(self._database_file)) as connection:
             connection.execute("BEGIN")
@@ -491,12 +530,11 @@ class EmojiStore:
         return len(rows), unavailable
 
     def candidates(self) -> list[EmojiRecord]:
-        """列出已经登记、未禁用且有本地媒体的表情。"""
+        """列出已经登记、未被拒绝或禁用且有本地媒体的表情。"""
         with closing(open_connection(self._database_file)) as connection:
             rows = connection.execute(
-                """SELECT *, NULL AS source FROM emoji_assets
-                   WHERE is_registered AND NOT is_banned AND NOT EXISTS (
-                     SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)
+                f"""SELECT *, NULL AS source, {_REVIEW} AS review FROM emoji_assets
+                   WHERE {_SENDABLE}
                    ORDER BY use_count, last_used_at, digest"""
             ).fetchall()
         unavailable = self._unavailable_digests
@@ -518,12 +556,10 @@ class EmojiStore:
         return data if sha256(data).hexdigest() == digest and emoji_media_type(data) else None
 
     def read_sendable(self, digest: str) -> bytes | None:
-        """实际发送时再次核对表情登记状态，并读取完整媒体。"""
+        """实际发送时再次核对表情使用资格，并读取完整媒体。"""
         with closing(open_connection(self._database_file)) as connection:
             allowed = connection.execute(
-                """SELECT 1 FROM emoji_assets WHERE digest = ? AND is_registered AND NOT is_banned
-                   AND NOT EXISTS (
-                       SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)""",
+                f"SELECT 1 FROM emoji_assets WHERE digest = ? AND {_SENDABLE}",
                 (digest,),
             ).fetchone()
         return self.read_media(digest) if allowed else None
@@ -548,6 +584,7 @@ class EmojiStore:
             row["use_count"],
             path is not None and path.is_file(),
             row["source"],
+            review=row["review"],
         )
 
     def _attachment(self, digest: str | None) -> Path | None:

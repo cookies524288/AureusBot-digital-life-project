@@ -483,6 +483,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .resource-tile-selection{position:relative;min-width:0}
 .resource-tile-selection>.resource-tile{width:100%}
 .resource-tile-selection>input[type=checkbox]{position:absolute;top:7px;right:7px;z-index:1}
+.resource-tile-selection>.emoji-review-control{position:absolute;bottom:3px;right:3px;min-width:44px;min-height:36px;padding:2px 4px}
+.resource-tile.emoji-reviewable>span:last-child{padding-right:44px;text-align:left}
+@media(pointer:coarse){.resource-tile-selection>.emoji-review-control{min-height:44px}}
 .resource-tile .resource-placeholder{display:grid;place-items:center;background:var(--surface-2);border-radius:var(--radius-sm);white-space:normal;text-align:center}
 .resource-pagination{justify-content:center;gap:8px;min-height:32px}
 .resource-pagination input.resource-page-jump[type=text][inputmode=numeric]{width:4em;text-align:center;padding:4px;font-size:13px}
