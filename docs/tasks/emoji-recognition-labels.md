@@ -1,6 +1,6 @@
 # 路线图 3.11：QQ 表情识别与标签
 
-状态：待评审
+状态：完成
 
 设计：沿用 [3.11 资源管理](resource-management.md) 与 [3.14 表情库](3.14.md) 的媒体授权、登记和维护边界。只补 [学习核对](maibot-learning-parity.md#表情) 与 [提示词核对](maibot-prompt-parity.md) 中的识别差距。
 
@@ -58,3 +58,7 @@
 - `test_qq_legacy_emoji_uses_only_this_incoming_image` 从合成 OneBot 群消息解码、入站持久化再到识别：旧版正常入站失败，其他三个状态通过；修复后四种状态均通过，除收集计数恰增一次外，目录元数据和原件不变。
 - 本轮 QQ 媒体、QQ 表情回放、抽帧、表情存储和实际 HTTP 联测共 35 项通过；两处 Python 改动 Ruff、格式、Pyright 通过，依赖检查 8 条通过。未跑全量、未调用真实 QQ 或模型、未动正式实例。
 - 本轮临时根：失败复现 `E:/Temp/pytest-aureus-emoji-labels-review1-red`，通过验证 `E:/Temp/pytest-aureus-emoji-labels-review1-green`。
+
+### 复审结论（2026-11-24）
+
+实现 `85611e7`、返工 `bf825a2` 通过。主会话核对了实际识别请求、GIF 解码限额、登记写入条件与旧条目分支。首轮独立复跑媒体与解码专项 17 项，返工后独立复跑 `test_qq_legacy_emoji_uses_only_this_incoming_image` 的四种状态，全部通过。复审不等于合并或发布；待上一项正式内核接管得到验证后再串行合并。
