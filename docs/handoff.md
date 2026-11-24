@@ -14,7 +14,7 @@ SnowLuma 的正向 WebSocket 使用本机回环端口 23104。OneBot 已核实�
 
 ## 下一步
 
-独立资源页工作树 `codex/resource-page-ux` 的[语言学习会话分批与提示词证据](tasks/language-session-evidence.md)已实现，提交为 `待填`，状态待 Astra 复审。队列按持久收件箱完整 `ConversationKey` 分组；可信终端和网页按自身通道与已确认用户分组，缺路由平台消息各自单独处理。学习请求现在是 `system` 规则、每条样本一条带本轮号及原文片段的 `user`，最后一条 `user` 输出要求；预览复用请求构建器。新提议只接受经核验的本轮整数编号，存储层还确认展示内容是真实样本前缀；真实来源键和完整原文普通观察不变。实现前缀反例先失败，修后通过。`test_language_learning_batches_by_trusted_conversation`、`test_language_learning_maps_only_presented_evidence_ids`、`test_presented_evidence_must_be_a_prefix_of_the_original` 和 MockTransport 提示/HTTP 联测在 105 项七文件专项中全通过。全检 2649 通过、8 失败、4 跳过；其中 5 项为旧基线已知失败，另 3 项（回复分段两个测试、记忆批量移除浏览器测试）在 `25ff850` 旧基线工作树独立复现。Ruff 规范与架构检查通过；全仓格式检查有两个无关文件未格式化，Pyright 有 4 项无关可选依赖缺失。未调用真实模型或 QQ，未动正式分支、实例、数据或远程；不重启。等 Astra 完成差异和专项复审后，再由主会话决定合并与重启。
+独立资源页工作树 `codex/resource-page-ux` 的[长期记忆批量移除与恢复浏览器回归](tasks/memory-batch-browser-regression.md)已实现，任务文档状态为待 Astra 复审。基线失败是测试夹具在页面 DOM 加载前缓存 `#editor-dialog`，导致 `Cannot read properties of null (reading 'open')`；将查询移到初始列表就绪后，未改生产页面或批量接口。目标用例 `1 passed`，资源浏览器整文件 `18 passed`，记忆传输与恢复直接回归 `5 passed`，`git diff --check` 通过；实现提交为 `3be293f`，任务书和本交接记录待提交。未调用真实模型或 QQ，未动正式分支、实例、数据或远程；不重启。等 Astra 完成差异和专项复审后，再由主会话决定合并与重启。
 
 **本地发布已核实。** 关系图来源复审 `7f6f3f4` 已快进合并到 `main`；检查期间另有打字延迟提交 `7210f69`，未回退。原内核 20872 已退出，启动器 22536 经虚拟环境进程 49376 启动新内核 13912，继续监听原端口 28976；首页与资源脚本 HTTP 200，资源脚本 SHA-256 与本地发布文件相同。未发测试消息。全检 2648 通过、6 失败、4 跳过，格式和类型检查未全过；其中 5 项已在旧基线复现，第 6 项心跳示例默认值用例在 `7210f69` 上独立复跑通过。因为完整检查期间 HEAD 变化，不能称最终版本全绿。已回收本次全检与配置复查夹具及上轮 final-fixtures；保留检查日志和 8 个 Chrome 进程仍在使用的临时目录。
 
