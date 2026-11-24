@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import AsyncIterator, Callable, Collection, Sequence
+from contextlib import closing
 from datetime import datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -15,14 +16,22 @@ from fastapi.testclient import TestClient
 from aureus.agenda import FindingStore
 from aureus.body import Body
 from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, ManualClock, MemoryConfig
+from aureus.common.sqlite import open_connection
 from aureus.heartbeat import Heartbeat, OutgoingMessage, Perception, TrustLevel
 from aureus.heartbeat.context import build_initiative_plan_prompt
 from aureus.heartbeat.events import EVENT_RECALL_REPLY_DELIVERED
 from aureus.heartbeat.planning import parse_plan
 from aureus.heartbeat.recall import MemoryTracker, format_recall, memory_entry
 from aureus.identity import Identity
-from aureus.memory import HistoricalMemory, MemoryEntry, MemoryHit, MemoryIndex, MemorySource
-from aureus.organs import OrganRequest, OrganResponse
+from aureus.memory import (
+    HistoricalMemory,
+    MemoryEntry,
+    MemoryEvidence,
+    MemoryHit,
+    MemoryIndex,
+    MemorySource,
+)
+from aureus.organs import OrganRequest, OrganResponse, ToolCall
 from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import (
@@ -77,16 +86,22 @@ class CountingIndex(MemoryIndex):
 
 class RecallOrgans:
     def __init__(self) -> None:
-        self.plan = '{"reply":true,"intent":"聊聊以前的约定","recall":["木卫二"]}'
+        self.keywords: list[str] | int | None = ["木卫二"]
         self.requests: list[OrganRequest] = []
 
     async def call(self, request: OrganRequest) -> OrganResponse:
         self.requests.append(request)
-        from tests.planner_fixtures import plan_response
-
-        if request.context.get("task") == "plan":
-            return plan_response(request, self.plan)
-        return OrganResponse(request.organ_id, "记得。")
+        if request.context.get("task") != "plan":
+            return OrganResponse(request.organ_id, "记得。")
+        if self.keywords is not None and not request.tool_history:
+            call = ToolCall("query_memory", "synthetic_query", {"keywords": self.keywords})
+        else:
+            call = ToolCall(
+                "reply",
+                "synthetic_reply",
+                {"addressed_to_me": "yes", "reply_reference": "聊聊以前的约定"},
+            )
+        return OrganResponse(request.organ_id, "", tool_calls=(call,))
 
 
 class MemoryEnv:
@@ -96,10 +111,11 @@ class MemoryEnv:
         self.path, self.clock = path, ManualClock(NOW)
         self.calendar = BudgetCalendar(ZoneInfo("Asia/Shanghai"))
         db = path / "aureus.db"
+        self.database = db
         self.timeline = TimelineDatabase(db, self.clock)
         self.people = PeopleDirectory(db, self.clock)
         self.findings = FindingStore(db, self.clock)
-        self.index = CountingIndex(db, self.timeline)
+        self.index = CountingIndex(db, self.timeline, clock=self.clock)
         for store in (self.timeline, self.people, self.findings, self.index):
             store.open()
         self.people.ensure_user("阿明", [("terminal", "local")])
@@ -149,6 +165,20 @@ class MemoryEnv:
 
     def records(self, kind: str) -> list[TimelineRecord]:
         return list(self.timeline.query(TimelineQuery(event_type=kind, limit=1000)))
+
+    def seed_legacy_fact(self, original: TimelineRecord, kind: str, text: str) -> MemorySource:
+        """模拟旧版已提取的稳定事实；现行整理不会从消息原件生成它。"""
+        fingerprint = sha256(text.encode()).hexdigest()
+        with closing(open_connection(self.database)) as connection, connection:
+            connection.execute(
+                "INSERT INTO memory_candidates VALUES (?, ?, ?, ?)",
+                (fingerprint, kind, text, original.timestamp.timestamp()),
+            )
+            connection.execute(
+                "INSERT INTO memory_candidate_evidence VALUES (?, ?)",
+                (fingerprint, f"timeline:{original.id}"),
+            )
+        return MemorySource("aureus", "memory", "extracted_facts", (fingerprint,))
 
     async def exchange(
         self,
@@ -237,19 +267,27 @@ async def test_recall_reaches_reply_prompt_and_metadata(
     trust: TrustLevel,
     visibility: VisibilityScope,
 ) -> None:
-    old = env.timeline.append("message", "约好一起看木卫二的照片", ActorType.USER)
+    old = env.timeline.append("diary_written", "约好一起看木卫二的照片", ActorType.ME)
+    original = env.timeline.append("message", "聊天原句：木卫二照片别忘了", ActorType.USER)
     env.index_more()
+    assert [hit.record_id for hit in env.index.search(["木卫二"], (), 10)] == [old.id]
     rig = env.build()
     await env.exchange(rig, trust=trust, visibility=visibility)
     planner, continued, replyer = env.organs.requests
-    assert "query_memory" in {tool.name for tool in planner.tools}
+    [query] = [tool for tool in planner.tools if tool.name == "query_memory"]
+    assert query.parameters["required"] == ["keywords"]
     assert continued.prompt == planner.prompt
     [exchange] = continued.tool_history
+    assert exchange.calls == (
+        ToolCall("query_memory", "synthetic_query", {"keywords": ["木卫二"]}),
+    )
     assert exchange.results[0].call_id == exchange.calls[0].call_id
     assert "命中：1 条" in exchange.results[0].content
+    assert original.content not in exchange.results[0].content
     text = dialogue_text(replyer)
     assert "【长期记忆检索结果·内部参考】" in text
-    assert "2026-11-17 20:00 用户：约好一起看木卫二的照片" in text
+    assert "2026-11-17 20:00 日记：约好一起看木卫二的照片" in text
+    assert original.content not in planner.prompt and original.content not in text
     assert "查询：木卫二\n命中：1 条" in text
     reply = env.records("message")[-1]
     assert reply.metadata["recall_keywords"] == ["木卫二"]
@@ -258,13 +296,15 @@ async def test_recall_reaches_reply_prompt_and_metadata(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "plan", ['{"reply":true,"intent":"聊聊"}', '{"reply":true,"intent":"聊聊","recall":42}']
-)
-async def test_no_keywords_does_not_query_or_add_block(env: MemoryEnv, plan: str) -> None:
-    env.organs.plan = plan
+@pytest.mark.parametrize("keywords", [None, 42])
+async def test_missing_or_invalid_keywords_do_not_query(
+    env: MemoryEnv, keywords: int | None
+) -> None:
+    env.organs.keywords = keywords
     await env.exchange(env.build())
     assert not env.index.searches
+    assert len(env.organs.requests) == (2 if keywords is None else 1)
+    assert bool(env.sent) is (keywords is None)
     assert "长期记忆检索结果" not in dialogue_text(env.organs.requests[-1])
     assert "recall_keywords" not in env.records("message")[-1].metadata
     assert "recall_record_ids" not in env.records("message")[-1].metadata
@@ -282,29 +322,37 @@ async def test_existing_history_is_excluded_and_empty_result_is_explicit(env: Me
     rig = env.build(heartbeat=HeartbeatConfig(recent_message_limit=20))
     await env.exchange(rig)
     assert old.id in env.index.searches[-1][1]
+    assert "已经在本次上下文中的木卫二" in env.organs.requests[0].prompt
+    assert old.content not in env.organs.requests[1].tool_history[0].results[0].content
     assert "命中：0 条\n没有找到相关的记忆。" in dialogue_text(env.organs.requests[-1])
     assert env.records("message")[-1].metadata["recall_record_ids"] == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("explicit", [True, False])
-async def test_imported_history_reaches_planner_and_replyer(env: MemoryEnv, explicit: bool) -> None:
-    source = MemorySource("fixture", "main", "mai_messages", (1,))
+async def test_imported_summary_reaches_planner_and_replyer(env: MemoryEnv, explicit: bool) -> None:
+    source = MemorySource("fixture", "memory", "paragraphs", (1,))
+    message_source = MemorySource("fixture", "main", "mai_messages", (1,))
+    original_text = "迁入聊天原句：木卫二照片在哪里"
     env.index.publish(
         [
             HistoricalMemory(
                 source, "我们约好看木卫二照片", "阿明", recorded_at=NOW - timedelta(days=31)
-            )
+            ),
+            HistoricalMemory(message_source, original_text, "阿明", recorded_at=NOW),
         ]
     )
     if not explicit:
-        env.organs.plan = '{"reply":true,"intent":"回忆观测"}'
+        env.organs.keywords = None
     await env.exchange(env.build(MemoryConfig(heuristic_recall_enabled=True)))
     planner, *_, replyer = env.organs.requests
     assert "启发式记忆" in planner.prompt and "我们约好看木卫二照片" in planner.prompt
     text = dialogue_text(replyer)
     assert ("长期记忆检索结果" if explicit else "启发式记忆") in text
-    assert "我们约好看木卫二照片" in text and "来源 mai_messages/" in text
+    assert "我们约好看木卫二照片" in text and "来源 paragraphs/" in text
+    assert original_text not in planner.prompt and original_text not in text
+    if explicit:
+        assert original_text not in env.organs.requests[1].tool_history[0].results[0].content
     assert env.records("message")[-1].metadata["recall_source_keys"] == [source.encode()]
     assert len(env.index.searches) == (2 if explicit else 1)
 
@@ -317,9 +365,9 @@ async def test_reply_metadata_only_records_hits_that_fit_the_prompt(
     local = {}
     for number in range(3):
         marker = f"本地木卫二{number}号"
-        local[marker] = env.timeline.append("message", marker + "甲" * 170, ActorType.USER).id
+        local[marker] = env.timeline.append("diary_written", marker + "甲" * 170, ActorType.ME).id
     history = {
-        f"历史木卫二{number}号": MemorySource("fixture", "main", "mai_messages", (number,))
+        f"历史木卫二{number}号": MemorySource("fixture", "memory", "paragraphs", (number,))
         for number in range(3)
     }
     env.index.publish(
@@ -328,7 +376,7 @@ async def test_reply_metadata_only_records_hits_that_fit_the_prompt(
     )
     env.index_more()
     if not explicit:
-        env.organs.plan = '{"reply":true,"intent":"回忆观测"}'
+        env.organs.keywords = None
     await env.exchange(env.build(MemoryConfig(max_results=8, heuristic_recall_enabled=True)))
     prompt = dialogue_text(env.organs.requests[-1])
     reply = env.records("message")[-1]
@@ -374,9 +422,9 @@ async def test_reply_metadata_only_records_hits_that_fit_the_prompt(
 async def test_batch_removal_suppresses_real_recall_without_changing_original_states(
     env: MemoryEnv,
 ) -> None:
-    local = env.timeline.append("message", "本地木卫二相片", ActorType.USER)
-    source = MemorySource("fixture", "main", "mai_messages", (1,))
-    disabled = MemorySource("fixture", "main", "mai_messages", (2,))
+    local = env.timeline.append("diary_written", "本地木卫二相片", ActorType.ME)
+    source = MemorySource("fixture", "memory", "paragraphs", (1,))
+    disabled = MemorySource("fixture", "memory", "paragraphs", (2,))
     expired = MemorySource("fixture", "memory", "fact_claims", (3,))
     env.index.publish(
         [
@@ -460,7 +508,7 @@ async def test_batch_removal_suppresses_real_recall_without_changing_original_st
 
 @pytest.mark.asyncio
 async def test_heuristic_empty_search_keeps_both_prompts_clear(env: MemoryEnv) -> None:
-    env.organs.plan = '{"reply":true,"intent":"照常回复"}'
+    env.organs.keywords = None
     await env.exchange(env.build(MemoryConfig(heuristic_recall_enabled=True)))
     assert len(env.index.searches) == 1
     assert all("启发式记忆" not in dialogue_text(request) for request in env.organs.requests)
@@ -468,7 +516,9 @@ async def test_heuristic_empty_search_keeps_both_prompts_clear(env: MemoryEnv) -
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled", [False, True])
-async def test_derived_preference_recalls_original_in_reply(env: MemoryEnv, enabled: bool) -> None:
+async def test_legacy_preference_recalls_fact_without_original(
+    env: MemoryEnv, enabled: bool
+) -> None:
     config = MemoryConfig(
         consolidation_enabled=enabled,
         consolidation_extract_enabled=True,
@@ -482,21 +532,26 @@ async def test_derived_preference_recalls_original_in_reply(env: MemoryEnv, enab
         visibility=VisibilityScope.USER_ONLY,
     )
     env.index_more()
-    batch = env.index.consolidation_batch(1)
-    assert batch is not None
-    assert env.index.save_consolidation(batch, [("preference", "偏好木卫二", batch.items[0])])
+    assert env.index.consolidation_batch(1) is None
+    fact = "偏好木卫二"
+    source = env.seed_legacy_fact(original, "preference", fact)
     # 两组使用同一份已整理的材料，只改变正常运行时的开关。
     env.index.close()
-    env.index = CountingIndex(env.path / "aureus.db", env.timeline, clock=env.clock, config=config)
+    env.index = CountingIndex(env.database, env.timeline, clock=env.clock, config=config)
     env.index.open()
     await env.exchange(env.build(config))
     planner, continued, replyer = env.organs.requests
-    assert (original.content in dialogue_text(replyer)) == enabled
-    assert (original.content in planner.prompt) == enabled
-    assert (original.content in continued.tool_history[0].results[0].content) == enabled
-    assert env.records("message")[-1].metadata["recall_record_ids"] == (
-        [original.id] if enabled else []
-    )
+    for prompt in (
+        dialogue_text(replyer),
+        planner.prompt,
+        continued.tool_history[0].results[0].content,
+    ):
+        assert (fact in prompt) is enabled
+        assert original.content not in prompt
+    metadata = env.records("message")[-1].metadata
+    assert metadata["recall_record_ids"] == []
+    assert metadata.get("recall_source_keys", []) == ([source.encode()] if enabled else [])
+    assert not env.index.search([original.content], (), 5)
 
 
 @pytest.mark.asyncio
@@ -519,7 +574,7 @@ async def test_fact_decay_and_visibility_change_reply_evidence(
         max_results=1,
     )
     env.index.close()
-    env.index = CountingIndex(env.path / "aureus.db", env.timeline, clock=env.clock, config=config)
+    env.index = CountingIndex(env.database, env.timeline, clock=env.clock, config=config)
     env.index.open()
     original = env.timeline.append(
         "message",
@@ -529,30 +584,30 @@ async def test_fact_decay_and_visibility_change_reply_evidence(
         metadata={"person_id": 17},
     )
     env.index_more()
-    batch = env.index.consolidation_batch(1)
-    assert batch is not None
-    assert env.index.save_consolidation(batch, [("fact", "木卫二存在地下海洋", batch.items[0])])
+    assert env.index.consolidation_batch(1) is None
+    fact = "木卫二存在地下海洋"
+    extracted = env.seed_legacy_fact(original, "fact", fact)
     source = MemorySource("synthetic", "memory", "paragraphs", (1,))
     historical = HistoricalMemory(source, "木卫二观测记录", recorded_at=NOW)
     env.index.publish([historical])
     env.clock.advance(timedelta(days=days))
-    env.organs.plan = '{"reply":true,"intent":"查旧资料","recall":["木卫二","地下海洋"]}'
+    env.organs.keywords = ["木卫二", "地下海洋"]
     await env.exchange(env.build(config), trust=viewer, visibility=scope)
     prompt = dialogue_text(env.organs.requests[-1])
     assert "命中：1 条" in prompt
-    assert (original.content in prompt) == expect_fact
+    assert original.content not in prompt
+    assert (fact in prompt) is expect_fact
     assert (historical.text in prompt) != expect_fact
     reply = env.records("message")[-1]
-    assert reply.metadata["recall_record_ids"] == ([original.id] if expect_fact else [])
-    assert reply.metadata.get("recall_source_keys", []) == (
-        [] if expect_fact else [source.encode()]
-    )
+    assert reply.metadata["recall_record_ids"] == []
+    assert reply.metadata["recall_source_keys"] == [(extracted if expect_fact else source).encode()]
     assert env.index.get_history(source) == historical
     assert not env.index.search(["地下海洋"], (), 1, person_key="aureus:18")
     assert not env.index.search(["地下海洋"], (), 1, before=NOW)
     assert not env.index.search(["地下海洋"], (), 1, since=NOW + timedelta(seconds=1))
-    matches = env.index.search(["地下海洋"], (), 1, person_key="aureus:17", since=NOW)
-    assert [hit.record_id for hit in matches] == [original.id]
+    [hit] = env.index.search(["地下海洋"], (), 1, person_key="aureus:17", since=NOW)
+    assert hit.record_id is None and hit.source == extracted and hit.text == fact
+    assert hit.evidence == (MemoryEvidence("platform_message", f"timeline:{original.id}"),)
     assert not env.index.search(["地下海洋"], [original.id], 1)
     assert not env.index.search(["不相关的关键词"], (), 1)
 
@@ -569,7 +624,7 @@ async def test_switch_hides_rule_and_prevents_search(env: MemoryEnv, config: Mem
 
 @pytest.mark.asyncio
 async def test_no_recall_request_does_not_search(env: MemoryEnv) -> None:
-    env.organs.plan = '{"reply":true,"intent":"照常回复"}'
+    env.organs.keywords = None
     await env.exchange(
         env.build(MemoryConfig(heuristic_recall_enabled=True)), content="今天阳光很好。"
     )
@@ -693,18 +748,22 @@ async def test_heartbeat_indexes_only_when_enabled(
     env: MemoryEnv, monkeypatch: pytest.MonkeyPatch, enabled: bool, recall_enabled: bool
 ) -> None:
     calls: list[int] = []
-    original = env.index.index_more
+    index_more = env.index.index_more
 
     def counted(limit: int, describe: Callable[[TimelineRecord], MemoryEntry | None]) -> int:
         calls.append(limit)
-        return original(limit, describe)
+        return index_more(limit, describe)
 
     monkeypatch.setattr(env.index, "index_more", counted)
     rig = env.build(MemoryConfig(enabled=enabled, recall_enabled=recall_enabled, index_batch=7))
-    env.timeline.append("message", "记住木卫二", ActorType.USER)
+    diary = env.timeline.append("diary_written", "日记记下木卫二", ActorType.ME)
+    original = env.timeline.append("message", "聊天原句：记住木卫二", ActorType.USER)
     rig.beat()
     assert calls == ([7] if enabled else [])
-    assert bool(env.index.search(["木卫二"], (), 5)) is enabled
+    assert [hit.record_id for hit in env.index.search(["木卫二"], (), 5)] == (
+        [diary.id] if enabled else []
+    )
+    assert env.timeline.get(original.id) == original
 
 
 @pytest.mark.asyncio
@@ -713,13 +772,14 @@ async def test_index_switch_and_failure_stop_without_disabling_search(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    r = env.timeline.append("message", "记住木卫二", ActorType.USER)
+    diary = env.timeline.append("diary_written", "日记记下木卫二", ActorType.ME)
+    env.timeline.append("message", "聊天原句：记住木卫二", ActorType.USER)
     off = MemoryTracker(env.index, MemoryConfig(enabled=False), env.people, env.findings)
     off.index_more()
     assert not env.index.search(["木卫二"], (), 5)
     on = MemoryTracker(env.index, MemoryConfig(recall_enabled=False), env.people, env.findings)
     on.index_more()
-    assert env.index.search(["木卫二"], (), 5)[0].record_id == r.id
+    assert [hit.record_id for hit in env.index.search(["木卫二"], (), 5)] == [diary.id]
 
     def broken(*args: object) -> int:
         raise OSError("假索引故障")
@@ -728,4 +788,4 @@ async def test_index_switch_and_failure_stop_without_disabling_search(
     on.index_more()
     on.index_more()
     assert on.failed and caplog.text.count("记忆索引失败，本次运行停止索引") == 1
-    assert env.index.search(["木卫二"], (), 5)
+    assert [hit.record_id for hit in env.index.search(["木卫二"], (), 5)] == [diary.id]
