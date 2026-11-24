@@ -5,14 +5,13 @@
 [English version](README.en.md)
 
 AureusBot 运行在你自己的电脑上。它连续、独立、唯一，不依附任何聊天平台。
-大模型是它的器官，负责理解、思考和说话；它的身体感受是真实的系统信号。
+大模型是器官，负责理解、规划和表达；是否行动由内核决定。内核持续读取身体状态、情绪和行动反馈，这些信号会改变后续的注意力和回复策略，而不只是显示在仪表盘上。
 
-它首先是你的陪伴者，用拟人的方式和你相处、提供情绪价值。
-需要干活时，它仅将专业工作外包给其他 agent，自己只负责决定、委托、验收和汇报。这些能力按路线图逐步实现。
+Aureus 首先是陪伴者，用拟人的方式和你相处。按路线图，专业工作会委托给其他 agent，Aureus 负责决定、验收和汇报。
 
 ## 当前状态
 
-认知内核的 Phase 0 至 Phase 2 已完成。Phase 3 已将小豆的 MaiBot 记忆、表达、黑话和人际资料迁入 Aureus。小豆沿用现有 Aureus 人格，在指定 QQ 群和维护者私聊中正式运行，已通过真实收发与旧记忆召回验收。内核验证安排在 Phase 3 或 Phase 4 之后。[路线图](docs/08-roadmap.md) · [迁移验收记录](docs/tasks/3.9.md)
+认知内核的 Phase 0 至 Phase 2 已完成。Phase 3 的测试 bot 已迁入原 MaiBot 的记忆、表达、黑话和人际资料，沿用 Aureus 人格，在获准的 QQ 群和私聊通过真实收发与旧记忆召回验收。后续功能的进度和验收分别记录，不以该次验收代替。[路线图](docs/08-roadmap.md) · [迁移验收记录](docs/tasks/3.9.md)
 
 ## 快速开始
 
@@ -28,7 +27,7 @@ uv run aureus lab list                         # 列出可离线运行的实验
 
 源码运行默认把用户数据放在项目根目录的 `aureus_home/`，移动整个项目即可一起带走；升级时保留这个文件夹。需要另存到其他位置时，可用 `--home` 或环境变量 `AUREUS_HOME` 指定，见 [docs/14-user-data.md](docs/14-user-data.md)。网页默认地址为 `http://127.0.0.1:28976`。接入真实模型见 [docs/15-model-management.md](docs/15-model-management.md)。
 
-提交代码前，用 `uv run python scripts/check.py` 一次跑完格式、类型、架构和测试检查。
+完整检查入口为 `uv run python scripts/check.py`，涵盖格式、类型、架构和测试；日常小步与最终发布的检查约定见[开发守则](docs/11-dev-guide.md)。
 
 ---
 

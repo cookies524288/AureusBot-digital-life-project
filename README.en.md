@@ -4,13 +4,13 @@
 
 [中文版](README.md)
 
-AureusBot runs on your own computer. It is continuous, independent, and unique. It does not depend on any chat platform. A large language model is its organ for understanding, thinking, and speaking. Its bodily sensations are real system signals.
+AureusBot runs on your own computer, independently of any chat platform. Models interpret messages, propose plans and compose replies. The kernel decides whether to act: body signals, emotions and feedback from earlier actions affect attention and reply strategy, not just the dashboard.
 
 It is first a companion. It talks with you in a human-like way and offers emotional support. When work needs doing, it only outsources specialist tasks to other agents. Its own part is limited to deciding, delegating, accepting results, and reporting. These abilities arrive step by step, following the roadmap.
 
 ## Status
 
-The cognitive kernel has completed Phases 0 through 2. Phase 3 migrated XiaoDou’s MaiBot memories, expressions, slang, and relationship history into Aureus. XiaoDou now uses the existing Aureus persona in the designated QQ group and in direct messages with the maintainer. Live message delivery and recall of pre-migration memories have been verified. Kernel validation is scheduled for after Phase 3 or Phase 4. [Roadmap](docs/08-roadmap.md) · [Migration acceptance record](docs/tasks/3.9.md) (in Chinese)
+The cognitive kernel has completed Phases 0 through 2. In Phase 3, a test bot retained its Aureus persona while importing MaiBot memories, expressions, slang and relationship history. Live delivery and recall of pre-migration memories were verified in the authorized QQ group and direct conversation. That acceptance applies to the migration, not to later features. [Roadmap](docs/08-roadmap.md) · [Migration acceptance record](docs/tasks/3.9.md) (in Chinese)
 
 ## Quick start
 
@@ -23,7 +23,7 @@ uv run aureus --home ./aureus_home init         # create the data root
 uv run aureus --home ./aureus_home chat --fake  # trial run with a fake organ: no model calls, no cost
 ```
 
-Source checkouts store user data in the project-root `aureus_home/` folder by default. Keep this folder when updating; moving the project also moves its data. Use `--home` or `AUREUS_HOME` to choose another location (see [docs/14-user-data.md](docs/14-user-data.md)). The web interface defaults to `http://127.0.0.1:28976`. To connect real models, see [docs/15-model-management.md](docs/15-model-management.md). Before committing code, run `uv run python scripts/check.py` to check formatting, types, architecture, and tests in one go.
+Source checkouts store user data in the project-root `aureus_home/` folder by default. Keep this folder when updating; moving the project also moves its data. Use `--home` or `AUREUS_HOME` to choose another location (see [docs/14-user-data.md](docs/14-user-data.md)). The web interface defaults to `http://127.0.0.1:28976`. To connect real models, see [docs/15-model-management.md](docs/15-model-management.md). The full check, `uv run python scripts/check.py`, covers formatting, types, architecture and tests; see the [development guide](docs/11-dev-guide.md) for the release workflow.
 
 The design documents are in Chinese only.
 
