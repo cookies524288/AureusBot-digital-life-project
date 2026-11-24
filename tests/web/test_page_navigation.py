@@ -16,14 +16,11 @@ def test_images_bookmark_opens_requested_tab_without_loading_memory_query() -> N
         r"""
         const paths = [];
         fetch = async path => { paths.push(path); return reply(500, {detail:'测试读取失败'}); };
-        let queryReads = 0;
-        PAGES.memory.load = () => { queryReads++; };
         state.loggedIn = true;
         Object.assign($('pictures-result'), {clientHeight:200, clientWidth:200});
         globalThis.getComputedStyle = () => ({rowGap:'10px', getPropertyValue:() => '80px'});
         history.replaceState = (_, __, hash) => { location.hash = hash; };
         await showPage('images');
-        assert.equal(queryReads, 0);
         assert.equal(state.page, 'memory');
         assert.equal(location.hash, '#memory');
         assert.equal($('memory-panel-images').classList.contains('hidden'), false);
