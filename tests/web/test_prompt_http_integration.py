@@ -41,13 +41,19 @@ from aureus.heartbeat.emoji_selection import EmojiSelector
 from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.language_runner import learn_language
-from aureus.heartbeat.memory_consolidation import _extract
+from aureus.heartbeat.memory_consolidation import _extract, summary_material
 from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
 from aureus.heartbeat.perception import MessageRoute
 from aureus.heartbeat.planning import EmojiIntent
 from aureus.heartbeat.recall import format_recall
-from aureus.memory import EmojiStore, LanguageSample, LanguageStore, MemoryHit
-from aureus.memory.consolidation import ConsolidationItem
+from aureus.memory import (
+    EmojiStore,
+    LanguageSample,
+    LanguageStore,
+    MemoryHit,
+    SummaryMessage,
+    SummaryWindow,
+)
 from aureus.organs import (
     BUILTIN_ORGANS,
     CallPurpose,
@@ -134,6 +140,59 @@ def _dialogue(record_id: int, actor: ActorType, content: str) -> TimelineRecord:
         visibility=VisibilityScope.GROUP,
         content=content,
     )
+
+
+@pytest.mark.asyncio
+async def test_memory_summary_preview_and_fake_organ_share_narrative_protocol(
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
+
+    captured: list[dict[str, Any]] = []
+    window = SummaryWindow(
+        ("synthetic", "group"), 0,
+        (SummaryMessage(1, "m1", "p1", "甲", "星舟项目演练定在海桐馆，已经确认。", True),),
+    )
+    narrative = "演练方案确定下来，星舟项目将在海桐馆开展活动。"
+
+    def provider_reply(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "prompt-test.invalid"
+        captured.append(json.loads(request.content))
+        suggestion = json.dumps({
+            "summary": narrative, "entities": ["星舟项目", "海桐馆"],
+            "relations": [{"subject": "星舟项目", "predicate": "演练地点", "object": "海桐馆"}],
+            "facts": [{
+                "fact_id": "f1", "text": "星舟项目计划前往海桐馆演练。",
+                "predicate": "演练地点", "value": "海桐馆", "shared": True,
+                "source": {"message_id": "m1", "sender_id": "p1", "excerpt": "星舟项目演练定在海桐馆"},
+                "image_evidence": [],
+            }],
+        })
+        return httpx.Response(200, json={
+            "id": "synthetic", "model": "sample-model", "object": "chat.completion", "created": 1,
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": suggestion}}],
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider_reply)) as client:
+        monkeypatch.setattr(litellm, "aclient_session", client)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        preview = rig.client.get("/api/organs/summarizer/prompt-preview").json()["scenes"]
+        summary = next(item for item in preview if item["id"] == "memory_consolidation")
+        assert not captured
+        adapter = LLMOrgan(
+            "summarizer", mock_models().routes_for("summarizer"),
+            KeyResolver(rig.paths.home / "does-not-exist.env",
+                        environ={"AUREUS_KEY_PROMPT_HTTP_TEST": "sk-mock-only"}),
+            token_counter=lambda _messages: 12, prompts=rig.models.prompts,
+        )
+        result = await _extract(window, adapter.process, ModelPreference.CHEAPEST)
+        assert result is not None and result.summary == narrative != result.facts[0].text
+        assert captured[0]["messages"] == _expanded_messages(summary["messages"], {
+            "〔合成会话窗口、历史摘要和图片目录 JSON〕": summary_material(window, ""),
+        })
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.mark.asyncio
@@ -1300,18 +1359,21 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             assert "会话暗号" in language.jargon_reference(["CC"], 700, conversation_key=scope)
             assert "会话暗号" in language.jargon_reference(["CC"], 700, conversation_key="其他会话")
             assert not language.jargon_reference(["伪造词"], 700, conversation_key="其他会话")
-            items = [
-                ConsolidationItem("timeline:17", (), "模拟发言甲", None, True),
-                ConsolidationItem("timeline:43", (), "模拟发言乙：$messages", None, True),
-            ]
+            window = SummaryWindow(
+                ("模拟会话", "user_only"),
+                0,
+                (
+                    SummaryMessage(17, "17", "p1", "甲", "模拟发言甲", True),
+                    SummaryMessage(43, "43", "p1", "甲", "模拟发言乙：$messages", True),
+                ),
+            )
             previous = len(captured)
-            await _extract(items, adapter("summarizer").process, ModelPreference.CHEAPEST)
+            await _extract(window, adapter("summarizer").process, ModelPreference.CHEAPEST)
             assert len(captured) == previous + 1
             scene = next(scene for scene in previews if scene["id"] == "memory_consolidation")
             assert "夜间" in scene["note"]
-            numbered = '{"1": "模拟发言甲", "2": "模拟发言乙：$messages"}'
             assert captured[-1]["messages"] == _expanded_messages(
-                scene["messages"], {"〔编号发言 JSON〕": numbered}
+                scene["messages"], {"〔合成会话窗口、历史摘要和图片目录 JSON〕": summary_material(window, "")}
             )
             by_scene["memory_consolidation"] = captured[-1]["messages"][1]["content"]
             return by_scene
@@ -1357,7 +1419,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
         assert "日常且口语化的回复" not in edited["reply_references"]
         assert review_sentinel in edited["reply_references"]
         await _check_derived_recall(rig.paths.home, adapter, captured)
-        assert edited["memory_consolidation"].startswith('合成提取：{"1": "模拟发言甲"')
+        assert edited["memory_consolidation"].startswith('合成提取：{"bot_name": ""')
         assert "待回应的群消息：" in edited["plan_references"]
         assert "已编辑人物资料：动态人物资料样例" in edited["reply_references"]
         assert "已编辑按需召回标题" in edited["reply_references"]

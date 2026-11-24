@@ -45,6 +45,7 @@ from aureus.common import (
     PersonaGrowthConfig,
 )
 from aureus.common.config import CortisolConfig
+from aureus.common.web_identity import WEB_CHANNEL_NAME
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat import exploration_runner, interest_changes, language_runner
@@ -105,6 +106,7 @@ from aureus.heartbeat.memory_consolidation import (
     ORGAN as MEMORY_CONSOLIDATION_ORGAN,
 )
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome, MemoryConsolidator
+from aureus.heartbeat.memory_summary_source import PlatformSummarySource
 from aureus.heartbeat.perception import (
     MessageKind,
     MessageRoute,
@@ -402,6 +404,11 @@ class Heartbeat:
             and not config.roleplay_mode
             else None
         )
+        if self._memory_consolidator is not None and memory is not None:
+            source = PlatformSummarySource(inbox_store, memory, timeline)
+            source.web_enabled = lambda: WEB_CHANNEL_NAME in self._sinks
+            self._memory_consolidator.source = source
+            memory.summary_evidence = source.check_evidence
         self._diary: DiaryTracker | None = None
         diary_config = diary_config or DiaryConfig()
         if diary is not None:
@@ -571,6 +578,8 @@ class Heartbeat:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
+        if (consolidator := self._memory_consolidator) is not None and consolidator.source:
+            consolidator.source.allows = allows
 
     def set_inbox_attachment_reader(self, reader: AttachmentReader) -> None:
         """接上通道提供的后台收件箱附件读取器。"""
@@ -2079,7 +2088,7 @@ class Heartbeat:
             return
         strategy = self._current_strategy()
         task = asyncio.create_task(
-            consolidator.run(self._call_organ, strategy.model_preference),
+            consolidator.run(self._call_organ, strategy.model_preference, self._identity.facts.name),
             name="aureus-memory-consolidation",
         )
         task.add_done_callback(self._on_thought_done)

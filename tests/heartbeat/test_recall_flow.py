@@ -60,6 +60,7 @@ class CountingIndex(MemoryIndex):
         since: datetime | None = None,
         before: datetime | None = None,
         include_user_extractions: bool = True,
+        summary_scope: tuple[str, str] | None = None,
     ) -> list[MemoryHit]:
         self.searches.append((tuple(keywords), tuple(exclude_ids), limit))
         return super().search(
@@ -70,6 +71,7 @@ class CountingIndex(MemoryIndex):
             since=since,
             before=before,
             include_user_extractions=include_user_extractions,
+            summary_scope=summary_scope,
         )
 
 
@@ -182,26 +184,9 @@ async def env(tmp_path: Path) -> AsyncIterator[MemoryEnv]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled,extract", [(False, True), (True, False), (True, True)])
-async def test_sleep_consolidation_threshold_and_extraction(
+async def test_sleep_consolidation_keeps_messages_out_of_legacy_sorting(
     env: MemoryEnv, enabled: bool, extract: bool
 ) -> None:
-    class SummaryOrgans(RecallOrgans):
-        async def call(self, request: OrganRequest) -> OrganResponse:
-            self.requests.append(request)
-            assert request.organ_id == "summarizer" and "合成材料" in request.prompt
-            return OrganResponse(
-                request.organ_id,
-                json.dumps(
-                    [
-                        {"kind": "fact", "text": "越界", "item": 99},
-                        {"kind": "preference", "text": "非法编号", "item": "1"},
-                        {"kind": "fact", "text": "合成事实", "item": 1},
-                        {"kind": "preference", "text": "合成偏好", "item": 2},
-                    ]
-                ),
-            )
-
-    env.organs = SummaryOrgans()
     config = MemoryConfig(
         consolidation_enabled=enabled, consolidation_batch=2, consolidation_extract_enabled=extract
     )
@@ -217,7 +202,7 @@ async def test_sleep_consolidation_threshold_and_extraction(
         )
         rig = env.build(config, body=body)
         rig.update_available_organs(frozenset({"summarizer"}))
-        first = env.timeline.append(
+        env.timeline.append(
             "message", "合成材料", ActorType.USER, visibility=VisibilityScope.USER_ONLY
         )
         rig.beat()
@@ -227,30 +212,13 @@ async def test_sleep_consolidation_threshold_and_extraction(
         await rig.wait_for_thought()
         rig.beat()
         assert env.index.consolidated_candidates(10) == [] and not env.organs.requests
-        second = env.timeline.append(
+        env.timeline.append(
             "message", "合成材料", ActorType.USER, visibility=VisibilityScope.USER_ONLY
         )
         env.clock.advance(timedelta(minutes=1))
         rig.beat()
         await rig.wait_for_thought()
-        candidates = {c.kind: c for c in env.index.consolidated_candidates(10)}
-        expected = {"experience"} if enabled else set()
-        if enabled and extract:
-            expected.update(("fact", "preference"))
-            assert candidates["fact"].evidence == (f"timeline:{first.id}",)
-            assert candidates["preference"].evidence == (f"timeline:{second.id}",)
-            assert {c.text for c in env.index.consolidated_candidates(10)} == {
-                "合成材料",
-                "合成事实",
-                "合成偏好",
-            }
-        assert set(candidates) == expected
-        if enabled:
-            assert set(candidates["experience"].evidence) == {
-                f"timeline:{first.id}",
-                f"timeline:{second.id}",
-            }
-        assert len(env.organs.requests) == int(enabled and extract)
+        assert env.index.consolidated_candidates(10) == [] and not env.organs.requests
     finally:
         ledger.close()
 
