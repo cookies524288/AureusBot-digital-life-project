@@ -5,10 +5,12 @@ import json
 from base64 import b64encode
 from contextlib import closing
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 from websockets.asyncio.server import ServerConnection, serve
 
 from aureus.channels.onebot import decode_message
@@ -62,7 +64,9 @@ async def test_qq_collects_marked_emoji_and_preserves_moderation(tmp_path: Path)
     )
 
     async def read(_source: object, attachment: MediaReference) -> tuple[bytes, str]:
-        return IMAGE + attachment.file_id.encode(), "image/png"
+        image = BytesIO()
+        Image.new("RGB", (1, 1), "red" if attachment.is_emoji else "blue").save(image, "PNG")
+        return image.getvalue(), "image/png"
 
     rejected = True
     prompts = []
@@ -71,7 +75,7 @@ async def test_qq_collects_marked_emoji_and_preserves_moderation(tmp_path: Path)
         prompts.append(request.prompt)
         if rejected:
             raise CallRejectedError(request.organ_id, "测试拒绝")
-        return OrganResponse(request.organ_id, "打招呼的笑脸")
+        return OrganResponse(request.organ_id, "高兴，打招呼")
 
     flow = InboxMedia(recognize, store)
     flow.read = read
@@ -85,20 +89,76 @@ async def test_qq_collects_marked_emoji_and_preserves_moderation(tmp_path: Path)
         visibility=source.visibility,
     )
     await flow.enrich([record], [message.perception], ModelPreference.PREFERRED)
-    assert any(prompt.endswith("请用一句简短中文注明画面和它表达的情绪。") for prompt in prompts)
+    assert prompts[0].startswith("输入类型：STATIC\n")
+    assert prompts[1].startswith("请用中文详细描述这张图片的内容。")
     [entry] = store.browse("", 0, 10)
     assert entry.collection_count == 1 and not entry.is_registered
 
     rejected = False
     await flow.enrich([record], [message.perception], ModelPreference.PREFERRED)
     [entry] = store.candidates()
-    assert entry.description == "打招呼的笑脸" and entry.collection_count == 2
+    assert entry.description == "高兴，打招呼" and entry.collection_count == 2
+    assert entry.tags == ("高兴", "打招呼")
     assert entry.digest is not None
     store.set_status(entry.digest, is_registered=False, is_banned=True)
     await flow.enrich([record], [message.perception], ModelPreference.PREFERRED)
     assert not store.candidates()
     [entry] = store.browse("", 0, 10)
     assert entry.collection_count == 3 and entry.is_banned and not entry.is_registered
+    assert sum(prompt.startswith("输入类型：STATIC\n") for prompt in prompts) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("format_name", ["GIF", "PNG"])
+async def test_invalid_emoji_recognition_keeps_original_unregistered(
+    tmp_path: Path, format_name: str
+) -> None:
+    now = datetime(2026, 11, 23, tzinfo=UTC)
+    clock = ManualClock(now)
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, clock)
+    store.open()
+    with BytesIO() as buffer:
+        Image.new("RGB", (4, 4), "red").save(buffer, format_name)
+        original = buffer.getvalue()
+    if format_name == "GIF":
+        original = original[:-1]
+    source = decode_message(
+        event(
+            50,
+            2100,
+            "",
+            message=[{"type": "image", "data": {"file": "broken", "sub_type": 1}}],
+        ),
+        str(ACCOUNT),
+    )
+    assert source is not None
+
+    async def read(_source: object, _attachment: MediaReference) -> tuple[bytes, str]:
+        return original, f"image/{format_name.lower()}"
+
+    calls: list[str] = []
+
+    async def recognize(request: OrganRequest) -> OrganResponse:
+        calls.append(request.prompt)
+        return OrganResponse(request.organ_id, '标签：["惊讶"]')
+
+    flow = InboxMedia(recognize, store)
+    flow.read = read
+    flow.available = frozenset({"vlm"})
+    record = TimelineRecord(
+        id=1,
+        timestamp=now,
+        actor_type=ActorType.PERSON,
+        event_type="message",
+        content=source.content,
+        visibility=source.visibility,
+    )
+    assert await flow.enrich([record], [source], ModelPreference.PREFERRED) == [record]
+    assert len(calls) == int(format_name == "PNG")
+    assert not store.candidates()
+    [entry] = store.browse("", 0, 10, "unregistered")
+    assert entry.digest is not None and store.read_media(entry.digest) == original
+    assert entry.collection_count == 1 and not entry.description and not entry.tags
 
 
 @pytest.mark.asyncio

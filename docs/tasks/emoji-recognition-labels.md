@@ -1,6 +1,6 @@
 # 路线图 3.11：QQ 表情识别与标签
 
-状态：待实现
+状态：待评审
 
 设计：沿用 [3.11 资源管理](resource-management.md) 与 [3.14 表情库](3.14.md) 的媒体授权、登记和维护边界。只补 [学习核对](maibot-learning-parity.md#表情) 与 [提示词核对](maibot-prompt-parity.md) 中的识别差距。
 
@@ -29,11 +29,15 @@
 
 1. 先提交任务书。合成用例先复现旧识别行为，后实现请求、登记和预览，并跑覆盖改动的专项后提交；独立开发工作树，不运行正式实例。
 
-- [ ] `MockTransport` 捕获真实入站产生的普通图片、标记静态图、标记 GIF 请求；文字、媒体顺序及 MIME 正确，GIF 解码回看帧排列。图像安全开关不放行时不产生视觉 HTTP。
-- [ ] 模拟响应正常化并限制五个真实标签，目录 API 能按真实标签搜索；原件和去重计数正确，已有的禁用、移除和人工维护不被覆盖。
-- [ ] 合成异常/超界 GIF、无效模型输出保留未登记原件；帧数、像素、拼图边界有专项。不连真实 QQ 或模型，不发送群消息。
-- [ ] 网页预览和实际请求共用正文、角色顺序；静态表情、GIF 拼图占位和普通图片占位不同，不展示任何实际媒体。
-- [ ] 相关 QQ 媒体、表情存储/目录、视觉 HTTP 及预览回归运行并记录结果；变更文件的 Ruff 和类型检查。任务只要求专项，不重复已知有基线问题的全量检查。
+- [x] `test_image_prompt_preview_matches_inbox_vision_http_request` 从 OneBot 入站解码和持久化开始，`MockTransport` 核对四种实际请求、GIF 像素及原件，真实安全网关急停时没有视觉 HTTP；在旧代码先因表情仍请求普通描述而失败。
+- [x] 同一联测在目录 API 查回标签、验证上限和原件计数；`test_qq_collects_marked_emoji_and_preserves_moderation` 验证合并计数且禁用不再请求；`test_automatic_emoji_registration_preserves_intervening_maintenance` 验证推理中的禁用、移除和人工编辑不被覆盖。
+- [x] `test_gif_limits_reject_before_sending` 覆盖帧数、总像素、越界、拼图分配和截断；`test_invalid_emoji_recognition_keeps_original_unregistered` 验证异常 GIF 和无效模型输出保留原件及未登记状态。仅合成数据，不连真实 QQ 或模型，不发送群消息。
+- [x] HTTP 联测对照三个预览的文字、角色及图片占位；`test_image_prompt_preview_displays_text_then_attachment` 用 Chrome 在普通图和表情拼图间切换，页面不加载真实图片。
+- [x] QQ 媒体和表情回复回放、抽帧、存储、表情选择、资源 API、提示接口、HTTP 和 Chrome 专项合计 45 项通过；改动 Python 文件 Ruff、格式和 Pyright 检查通过，依赖检查 8 条通过。未跑全量。
+
+## 已知边界
+
+- 不补录已有描述但无标签的历史条目；它们仍可按原描述浏览，不会因重复收到而覆盖人工或迁入内容。支持标准画布内、不超过限额的 GIF；超限保留原件，不降级发送原 GIF 给识别器。不接入上游视觉选择和周期维护。
 
 ## 不做
 

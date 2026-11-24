@@ -24,6 +24,7 @@ from aureus.heartbeat.context import (
     build_system_context,
 )
 from aureus.heartbeat.downtime import Downtime
+from aureus.heartbeat.emoji_recognition import build_emoji_analysis_request
 from aureus.heartbeat.inbox_media import build_image_description_request
 from aureus.heartbeat.language_runner import build_language_learning_request
 from aureus.heartbeat.memory_consolidation import (
@@ -59,6 +60,8 @@ _CONDITIONAL = {
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
     "judge": "仅在判断器官启用且档位允许时调用，有历史才附对话。",
     "image_description": "实际请求会附上来信图片；预览不读取或发送图片。",
+    "emoji_static": "仅用于 QQ 标记的静态表情；预览不读取或发送图片。",
+    "emoji_gif": "仅用于 QQ 标记的 GIF 表情，实际请求会附上抽帧拼图；预览不读取或发送图片。",
 }
 
 
@@ -389,14 +392,30 @@ def build_prompt_scenes(
         "",
     )
     if "image_description" in tasks:
-        scenes.append(
-            PromptScene(
-                "image_description",
-                "image_description",
-                "普通图片描述",
-                build_image_description_request(),
-                image_label="〔来信图片〕",
-            )
+        scenes.extend(
+            [
+                PromptScene(
+                    "image_description",
+                    "image_description",
+                    "普通图片描述",
+                    build_image_description_request(),
+                    image_label="〔来信图片〕",
+                ),
+                PromptScene(
+                    "emoji_static",
+                    "emoji_static",
+                    "静态 QQ 表情识别",
+                    build_emoji_analysis_request("STATIC"),
+                    image_label="〔静态表情〕",
+                ),
+                PromptScene(
+                    "emoji_gif",
+                    "emoji_gif",
+                    "GIF QQ 表情识别",
+                    build_emoji_analysis_request("GIF"),
+                    image_label="〔GIF 表情拼图〕",
+                ),
+            ]
         )
     return scenes or [
         PromptScene("custom", "custom", "通用请求", OrganRequest(organ, "〔调用方提示词〕"))
