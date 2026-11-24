@@ -574,10 +574,12 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
     page.write_text("<p>first</p>", encoding="utf-8")
     graph = tmp_path / "organ-graph.js"
     resources = tmp_path / "resource-management.js"
+    memory_graph = tmp_path / "memory-graph.js"
     memory_flow = tmp_path / "memory-flow-transfer.js"
     tile = tmp_path / "organ-tile.png"
     graph.write_text("first()", encoding="utf-8")
     resources.write_text("loadFirst()", encoding="utf-8")
+    memory_graph.write_text("graphFirst()", encoding="utf-8")
     memory_flow.write_text("transferFirst()", encoding="utf-8")
     tile.write_bytes(b"first tile")
     monkeypatch.setattr("aureus.web.server.INDEX_PAGE", page)
@@ -586,12 +588,14 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         page.write_text("<p>second</p>", encoding="utf-8")
         graph.write_text("second()", encoding="utf-8")
         resources.write_text("loadSecond()", encoding="utf-8")
+        memory_graph.write_text("graphSecond()", encoding="utf-8")
         memory_flow.write_text("transferSecond()", encoding="utf-8")
         tile.write_bytes(b"second tile")
         client = running.client()
         assert client.get("/").text == "<p>first</p>"
         assert client.get("/assets/organ-graph.js").text == "first()"
         assert client.get("/assets/resource-management.js").text == "loadFirst()"
+        assert client.get("/assets/memory-graph.js").text == "graphFirst()"
         assert client.get("/assets/memory-flow-transfer.js").text == "transferFirst()"
         assert client.get("/assets/organ-tile.png").content == b"first tile"
     finally:
@@ -605,6 +609,7 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         assert response.headers["Cache-Control"] == "no-store"
         assert client.get("/assets/organ-graph.js").text == "second()"
         assert client.get("/assets/resource-management.js").text == "loadSecond()"
+        assert client.get("/assets/memory-graph.js").text == "graphSecond()"
         assert client.get("/assets/memory-flow-transfer.js").text == "transferSecond()"
         image = client.get("/assets/organ-tile.png")
         assert image.headers["Content-Type"] == "image/png"

@@ -22,6 +22,8 @@ from tests.web.test_server import FakeHeartbeat, Rig, set_password
 
 GRAPH = "/api/resources/memory/graph"
 DETAIL = GRAPH + "/detail"
+ACCESS = GRAPH + "/access"
+REVISION = "X-Aureus-Graph-Revision"
 LEFT = MemorySource("合成实例", "memory", "entities", ("left",))
 RIGHT = MemorySource("合成实例", "memory", "entities", ({"blob": "42"},))
 EDGE = MemorySource("合成实例", "memory", "relations", ("edge",))
@@ -148,3 +150,27 @@ def test_page_with_inflight_revocation_never_returns_old_grants(
         assert page.status_code == 409 and "蓝鲸" not in page.text
         detail = client.get(DETAIL, params={"source": LEFT.encode()})
         assert detail.status_code == 404 and "蓝鲸" not in detail.text
+
+
+def test_graph_access_revision_tracks_sources_and_session_without_exposing_contents(
+    graph: tuple[Rig, MemoryIndex],
+) -> None:
+    rig, memory = graph
+    set_password(rig)
+    grants = [LEFT, RIGHT, EDGE]
+    with _client(rig, memory, lambda _token: grants) as client:
+        assert client.get(ACCESS).status_code == 401
+        client.cookies.set(SESSION_COOKIE, rig.sessions.create())
+        page = client.get(GRAPH)
+        revision = page.headers[REVISION]
+        access = client.get(ACCESS)
+        assert access.json() == {} and access.headers["cache-control"] == "no-store"
+        assert access.headers[REVISION] == revision
+        assert client.get(DETAIL, params={"source": EDGE.encode()}).headers[REVISION] == revision
+        grants.reverse()
+        assert client.get(ACCESS).headers[REVISION] == revision
+        grants.remove(EDGE)
+        assert client.get(ACCESS).headers[REVISION] != revision
+        grants.append(EDGE)
+        client.cookies.set(SESSION_COOKIE, rig.sessions.create())
+        assert client.get(ACCESS).headers[REVISION] != revision
