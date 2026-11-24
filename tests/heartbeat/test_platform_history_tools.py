@@ -1,25 +1,168 @@
 """用合成平台消息验证规划器实际只查本轮已读历史。"""
 
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from aureus.common import HeartbeatConfig, ManualClock
+from aureus.common import HeartbeatConfig, ManualClock, MemoryConfig
 from aureus.heartbeat import Heartbeat, MessageRoute, Perception, TrustLevel
+from aureus.heartbeat.events import EVENT_REPLY_REFERENCE
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.memory_summary_source import PlatformSummarySource
 from aureus.heartbeat.planner_tools import PlannerToolOptions, dispatch_planner_tools, planner_tools
 from aureus.heartbeat.platform_history import HistoryBoundary, HistoryQuery, PlatformHistory
 from aureus.heartbeat.recall import MAX_RECALL_CHARS
 from aureus.identity import Identity
+from aureus.memory import HistoricalMemory, MemoryHit, MemoryIndex, MemorySource, parse_delta
 from aureus.organs import OrganRequest, OrganResponse, ToolCall
 from aureus.safety import EmergencyStop, PermissionChecker
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from tests.planner_fixtures import plan_response
+from tests.prompt_assertions import dialogue_text
 
 NOW = datetime(2026, 11, 24, tzinfo=UTC)
 KEY = ConversationKey("qq", "bot", "group", "target")
 VISIBILITY = VisibilityScope.GROUP
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", [
+    "explicit", "explicit_revoked", "automatic", "other_query_revoked", "expression_revoked",
+    "before_first_call",
+])
+async def test_private_fact_reaches_group_planner_and_replyer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    path = tmp_path / "summary.db"
+    clock = ManualClock(NOW)
+    store, timeline = InboxStore(path, clock), TimelineDatabase(path, clock)
+    timeline.open()
+    automatic = mode not in {"explicit", "explicit_revoked"}
+    config = MemoryConfig(
+        consolidation_enabled=True, consolidation_extract_enabled=True,
+        heuristic_recall_enabled=automatic,
+    )
+    index = MemoryIndex(path, timeline, clock, config=config)
+    index.open()
+    private = ConversationKey("qq", "bot", "private", "sender")
+    allowed = {private, KEY}
+    original = "每回拍照时我最爱用的是远晴镜头。"
+    fact = "阿禾的常用摄影器材是远晴镜头。"
+    ordinary = "远晴镜头与竹质三脚架的保养记录"
+    planner_reference = "规划器产出的合成回复参考"
+    private_message = Perception(
+        "qq", "sender", original, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_CONTACT,
+        route=MessageRoute("bot", "private", "sender", "private-origin"),
+    )
+    requests: list[OrganRequest] = []
+
+    class Organs:
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            requests.append(request)
+            if request.organ_id == "replyer":
+                assert (fact in dialogue_text(request)) == (not automatic)
+                assert ordinary in dialogue_text(request)
+                assert original not in dialogue_text(request)
+                assert "不要向对方透露" in request.system_context
+                return OrganResponse("replyer", "合成回复")
+            assert original not in request.prompt
+            assert (fact in request.prompt) == (automatic and mode != "before_first_call")
+            if automatic:
+                assert ordinary in request.prompt
+            if request.tool_history:
+                result = request.tool_history[0].results[0].content
+                assert (fact in result) == (not automatic)
+                assert ordinary in result and original not in result
+                assert "private-origin" not in result
+                if mode == "explicit_revoked":
+                    allowed.remove(private)
+            return plan_response(request, {
+                "reply": True, "recall": ["竹质三脚架" if automatic else "远晴镜头"],
+                "intent": planner_reference,
+            })
+
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    heart = Heartbeat(
+        clock=clock, timeline=timeline, organs=Organs(),
+        identity=Identity.model_validate({
+            "facts": {"name": "测试", "birthday": "2026-11-24"}, "user": {"name": "维护者"},
+            "persona": {"immutable": "温和。"},
+        }),
+        config=HeartbeatConfig(inbox_debounce_enabled=False),
+        permissions=PermissionChecker(stop), emergency_stop=stop, inbox_store=store,
+        memory=index, memory_config=config,
+    )
+    heart.attach_channel("qq", lambda outgoing: None)
+    heart.set_inbox_route_filter(lambda key: key in allowed)
+    search = index.search
+
+    def search_and_revoke(words: Sequence[str], *args: Any, **kwargs: Any) -> list[MemoryHit]:
+        if mode == "other_query_revoked" and tuple(words) == ("竹质三脚架",):
+            allowed.remove(private)
+        return search(words, *args, **kwargs)
+
+    async def jargon_reference(_job: object) -> str:
+        if mode == "before_first_call":
+            allowed.discard(private)
+        return "合成黑话参考"
+
+    async def expression_reference(_job: object, _plan: object, _recall: object) -> str:
+        if mode == "expression_revoked":
+            allowed.remove(private)
+        return "合成表达参考"
+
+    monkeypatch.setattr(index, "search", search_and_revoke)
+    monkeypatch.setattr(heart._conversation, "_jargon_reference", jargon_reference)
+    monkeypatch.setattr(heart._conversation, "_expression_reference", expression_reference)
+    try:
+        old = store.add(private_message, sender_name="阿禾")
+        assert old is not None
+        store.mark_read([old.id])
+        source = PlatformSummarySource(store, index, timeline)
+        source.allows = lambda key: key in allowed
+        window = source.next_window(1)
+        assert window is not None
+        proposal = {"summary": fact, "entities": [], "relations": [], "facts": [{
+            "fact_id": "lens", "text": fact, "predicate": "器材", "value": "远晴镜头",
+            "source": {
+                "message_id": "private-origin", "sender_id": "sender", "excerpt": "远晴镜头",
+            },
+            "image_evidence": [],
+        }]}
+        delta = parse_delta(json.dumps(proposal), window)
+        assert index.commit_summary(window, delta, source.check_window)
+        ordinary_source = MemorySource("fixture", "main", "episodes", (1,))
+        assert index.publish([HistoricalMemory(ordinary_source, ordinary)]) == 1
+        heart.wake_up()
+        heart.submit(Perception(
+            "qq", "group-member", "还记得远晴镜头？" if automatic else "聊聊摄影器材。",
+            VISIBILITY, TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "target", "current"),
+        ))
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        names = [request.organ_id for request in requests]
+        if mode == "other_query_revoked":
+            assert names == ["planner"]
+        else:
+            expected = ["planner", "planner"]
+            if mode not in {"explicit_revoked", "expression_revoked"}:
+                expected.append("replyer")
+            assert names == expected
+            assert requests[1].tool_history and "不要向对方透露" in requests[1].system_context
+        if mode in {"other_query_revoked", "expression_revoked", "explicit_revoked"}:
+            [record] = timeline.query(TimelineQuery(event_type=EVENT_REPLY_REFERENCE))
+            assert planner_reference not in record.content
+            assert planner_reference not in json.dumps(record.metadata, ensure_ascii=False)
+    finally:
+        await heart.shut_down()
+        index.close()
+        timeline.close()
 
 
 def perception(key: ConversationKey, identifier: str, content: str) -> Perception:

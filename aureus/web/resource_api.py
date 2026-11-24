@@ -32,6 +32,9 @@ from aureus.memory import (
     LanguageStore,
     MemoryIndex,
     MemoryKind,
+    MemorySource,
+    SummaryScope,
+    SummaryVisibilityChangedError,
 )
 from aureus.memory.emoji import (
     MAX_EMOJI_BYTES,
@@ -221,6 +224,7 @@ def register_resource_routes(
     database: Path | None = None,
     clock: Clock | None = None,
     inbox: InboxStore | None = None,
+    can_show_summary: Callable[[SummaryScope], bool] | None = None,
     suggest_emoji_replacement: Callable[[OrganRequest], Awaitable[OrganResponse]] | None = None,
 ) -> None:
     """注册资源浏览和维护，使用工作线程里的独立数据库连接。"""
@@ -833,20 +837,19 @@ def register_resource_routes(
         if removed and kind != "all":
             raise HTTPException(422, "请在统一文字记忆目录查看已移除项。")
         if kind == "all":
-            rows, total, counts = (
-                await asyncio.to_thread(
-                    memory.browse_text_resources,
-                    q.strip(),
-                    category,
-                    status,
-                    recall,
-                    offset,
-                    limit,
-                    removed=removed,
+            try:
+                rows, total, counts = (
+                    await asyncio.to_thread(
+                        memory.browse_text_resources,
+                        q.strip(), category, status, recall, offset, limit,
+                        removed=removed, can_show_summary=can_show_summary,
+                    )
+                    if memory else ([], 0, {})
                 )
-                if memory
-                else ([], 0, {})
-            )
+            except SummaryVisibilityChangedError:
+                raise HTTPException(
+                    409, "资料的展示授权已变化，请刷新。", headers={"Cache-Control": "no-store"}
+                ) from None
             return {
                 "enabled": memory is not None,
                 "items": rows,
@@ -879,6 +882,25 @@ def register_resource_routes(
             "total": total,
             "next_offset": offset + limit if offset + limit < total else None,
         }
+
+    @app.get("/api/resources/memory/facts/detail")
+    async def browse_summary_fact(
+        _token: Annotated[str, Depends(require_ready)],
+        response: Response,
+        source: Annotated[str, Query(min_length=1, max_length=4096)],
+    ) -> dict[str, Any]:
+        row = None
+        if memory is not None and can_show_summary is not None:
+            try:
+                location = MemorySource.decode(source)
+            except (ValueError, TypeError, RecursionError):
+                location = None
+            if location is not None:
+                row = await asyncio.to_thread(memory.summary_resource, location, can_show_summary)
+        if row is None:
+            raise HTTPException(404, "未找到事实。", headers={"Cache-Control": "no-store"})
+        response.headers["Cache-Control"] = "no-store"
+        return asdict(row)
 
     @app.post("/api/resources/learning", status_code=201)
     async def add_learning(

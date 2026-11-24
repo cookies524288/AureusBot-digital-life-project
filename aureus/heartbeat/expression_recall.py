@@ -95,7 +95,13 @@ class ExpressionRecall:
     def _candidates(self, scope: str | None, avoid: tuple[str, ...]) -> list[LanguageEntry]:
         return distinct_expressions(self._language.expression_candidates(scope), avoid)
 
-    async def reference(self, plan: Plan | None, scope: str | None) -> str | None:
+    async def reference(
+        self,
+        plan: Plan | None,
+        scope: str | None,
+        *,
+        recheck: Callable[[], Awaitable[None]] | None = None,
+    ) -> str | None:
         """无可用向量结果时返回 None，调用方继续使用原有普通表达。"""
         space = self.space
         if space is None:
@@ -107,6 +113,8 @@ class ExpressionRecall:
             indexed = await asyncio.to_thread(self._index.indexed, space, entries) if query else []
             if len(indexed) < MIN_INDEXED_EXPRESSIONS or self.space != space:
                 return None
+            if recheck is not None:
+                await recheck()
             (vector,) = await self._embed(space, (query,))
             if not vector or self.space != space:
                 return None
@@ -126,6 +134,8 @@ class ExpressionRecall:
             eligible = [
                 entry for entry in ordered if current.get(entry.entry_key) == fingerprint(entry)
             ]
+            if recheck is not None:
+                await recheck()
             chosen = await self._select(query, eligible)
             if self._config.expression_selector_organ:
                 current = await self._current_fingerprints(scope, avoid)

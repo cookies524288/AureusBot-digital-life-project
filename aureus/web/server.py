@@ -42,6 +42,7 @@ from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.memory_summary_source import VISIBLE_SUMMARY_SCOPES, WEB_PRIVATE_SCOPE
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
 from aureus.memory import (
@@ -626,6 +627,16 @@ def create_app(
     register_memory_inspection_routes(
         app, require_inspection_access, resource_memory, channel.user_visibility
     )
+    def can_show_summary(scope: tuple[str, str]) -> bool:
+        if scope == WEB_PRIVATE_SCOPE:
+            return channel.user_visibility is VisibilityScope.USER_ONLY
+        route, visibility = scope
+        return (
+            allows_inbox_conversation is not None and inbox_store is not None
+            and visibility in VISIBLE_SUMMARY_SCOPES and route.startswith("[")
+            and allows_inbox_conversation(ConversationKey.from_scope_key(route))
+        )
+
     register_resource_routes(
         app,
         require_ready,
@@ -639,6 +650,7 @@ def create_app(
         database=resource_database,
         clock=clock,
         inbox=inbox_store,
+        can_show_summary=can_show_summary,
         suggest_emoji_replacement=suggest_emoji_replacement,
     )
 
