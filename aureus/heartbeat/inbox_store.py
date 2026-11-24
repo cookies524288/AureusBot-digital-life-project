@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
 );
 CREATE INDEX IF NOT EXISTS inbox_messages_by_conversation
 ON inbox_messages (conversation_id, id);
+CREATE TABLE IF NOT EXISTS inbox_message_sequence (
+    id INTEGER PRIMARY KEY CHECK (id = 1), high_water INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO inbox_message_sequence SELECT 1, COALESCE(MAX(id), 0) FROM inbox_messages;
+CREATE TRIGGER IF NOT EXISTS inbox_message_advance_sequence AFTER INSERT ON inbox_messages
+BEGIN
+    UPDATE inbox_message_sequence SET high_water = MAX(high_water, new.id) WHERE id = 1;
+END;
 """
 
 _KEY = (
@@ -83,6 +91,12 @@ class ConversationKey:
     def language_scope_key(self) -> str:
         """以完整路由区分平台、账号、群聊和私聊，不以名称或群号猜测。"""
         return json.dumps(self.parameters(), separators=(",", ":"))
+
+    @classmethod
+    def from_scope_key(cls, value: str) -> "ConversationKey":
+        """读回本系统保存的完整会话键，不用显示名配对。"""
+        platform, account_id, kind, recipient_id, temporary_group_id = json.loads(value)
+        return cls(platform, account_id, kind, recipient_id, temporary_group_id or None)
 
 
 @dataclass(frozen=True)
@@ -255,10 +269,12 @@ class InboxStore:
                 (*key.parameters(), conversation_name or fallback, conversation_name),
             ).fetchone()
             added = database.execute(
-                """INSERT INTO inbox_messages (conversation_id, message_id, sender_id, sender_name,
+                """INSERT INTO inbox_messages (id, conversation_id, message_id, sender_id,
+                sender_name,
                 content, visibility, trust, mentioned, quoted_message_id, source_timestamp,
                 source_message_id, timestamp, attachments, direction)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES ((SELECT high_water + 1 FROM inbox_message_sequence WHERE id=1),
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (conversation_id, message_id) DO NOTHING RETURNING id""",
                 (
                     conversation_id,
@@ -411,6 +427,51 @@ class InboxStore:
                 (messages[-1].id, *conversation.parameters()),
             )
             return messages
+
+    def summary_scopes(self) -> list[tuple[ConversationKey, VisibilityScope]]:
+        """列出已保存且有可处理可见性的会话范围，不返回任何消息正文。"""
+        with closing(open_connection(self._path)) as database:
+            rows = database.execute(f"""
+                SELECT c.*, m.visibility FROM inbox_messages m
+                JOIN inbox_conversations c ON c.id = m.conversation_id
+                WHERE {USER_VISIBLE_INBOX_MESSAGE} GROUP BY c.id, m.visibility ORDER BY min(m.id)
+            """).fetchall()
+        return [(_conversation(row), VisibilityScope(row["visibility"])) for row in rows]
+
+    def summary_window(
+        self,
+        conversation: ConversationKey,
+        visibility: VisibilityScope,
+        after_id: int,
+        limit: int,
+        *,
+        connection: Connection | None = None,
+    ) -> tuple[InboxMessage, ...]:
+        """读取同一会话和可见范围的正序窗口，可在记忆提交事务中重验。"""
+        if connection is None:
+            with closing(open_connection(self._path)) as database:
+                return self.summary_window(
+                    conversation, visibility, after_id, limit, connection=database
+                )
+        rows = connection.execute(
+            f"""{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE}
+                AND m.visibility=? AND m.id>?
+                ORDER BY m.id LIMIT ?""",
+            (*conversation.parameters(), visibility, after_id, limit),
+        )
+        return tuple(_message(row) for row in rows)
+
+    def summary_evidence(
+        self, connection: Connection, conversation: ConversationKey, visibility: VisibilityScope,
+        sequence: int, message_id: str,
+    ) -> InboxMessage | None:
+        """在同一个读写事务定位证据；已清理原件不回退到缓存正文。"""
+        row = connection.execute(
+            f"""{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE} AND m.visibility=?
+            AND m.id=? AND m.message_id=?""",
+            (*conversation.parameters(), visibility, sequence, message_id),
+        ).fetchone()
+        return _message(row) if row is not None else None
 
     def existing_message_ids(self, conversation: ConversationKey, ids: Iterable[str]) -> set[str]:
         """核对旧消息是否已有同一完整路由的规范原件，不读取正文。"""

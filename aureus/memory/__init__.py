@@ -48,6 +48,14 @@ from aureus.memory.language_import import (
     LanguageSnapshotConflictError,
 )
 from aureus.memory.language_online import JargonInference
+from aureus.memory.summary_protocol import (
+    MAX_MESSAGE_CHARS,
+    SummaryDelta,
+    SummaryMessage,
+    SummaryScope,
+    SummaryWindow,
+    parse_delta,
+)
 
 __all__ = [
     "BATCH_SIZE",
@@ -62,6 +70,7 @@ __all__ = [
     "MAX_EXAMPLE",
     "MAX_HIT_CHARS",
     "MAX_MEMORY_TEXT",
+    "MAX_MESSAGE_CHARS",
     "MAX_TEXT",
     "DiaryBook",
     "EmojiRecord",
@@ -97,5 +106,10 @@ __all__ = [
     "MemorySnapshotConflictError",
     "MemorySource",
     "MemoryStatus",
+    "SummaryDelta",
+    "SummaryMessage",
+    "SummaryScope",
+    "SummaryWindow",
     "VisibleExpressionCluster",
+    "parse_delta",
 ]

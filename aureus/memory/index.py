@@ -79,6 +79,16 @@ from aureus.memory.removal_operations import (
 )
 from aureus.memory.resources import browse_text_resources, set_resources_removed
 from aureus.memory.sparse import keyword_conditions, relevance_expression
+from aureus.memory.summary_protocol import PreviousFact, SummaryDelta, SummaryScope, SummaryWindow
+from aureus.memory.summary_store import (
+    EvidenceCheck,
+    WindowCheck,
+    open_summaries,
+    previous_summary,
+    save_summary,
+    search_summaries,
+    summary_cursor,
+)
 from aureus.memory.transfer import export_archive, import_archive
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord, VisibilityScope
 
@@ -229,6 +239,7 @@ class MemoryIndex:
         self._config = config or MemoryConfig()
         self._conn: sqlite3.Connection | None = None
         self.graph_display = MemoryGraphDisplay(db_path, self._clock)
+        self.summary_evidence: EvidenceCheck | None = None
 
     def open(self) -> None:
         """创建派生表；SQLite 不支持 trigram 时抛 sqlite3.Error。"""
@@ -244,6 +255,7 @@ class MemoryIndex:
             bundles.open_bundles(conn)
             open_removal_operations(conn)
             open_consolidation(conn)
+            open_summaries(conn)
             open_flow(conn)
         except BaseException:
             conn.close()
@@ -377,6 +389,27 @@ class MemoryIndex:
         """在后台连接中查是否累积满一批待整理的原件。"""
         with closing(open_connection(self._db_path)) as conn:
             return read_batch(conn, size)
+
+    def summary_reference(
+        self, scope: SummaryScope
+    ) -> tuple[int, tuple[str, ...], tuple[PreviousFact, ...]]:
+        """在同一只读快照获取会话游标与当前已采纳参考。"""
+        check = self.summary_evidence
+        with closing(open_connection(self._db_path)) as conn:
+            conn.execute("BEGIN")
+            cursor = summary_cursor(conn, scope)
+            summaries, facts = previous_summary(conn, scope, check) if check else ((), ())
+            return cursor, summaries, facts
+
+    def commit_summary(
+        self, window: SummaryWindow, delta: SummaryDelta, check_window: WindowCheck
+    ) -> bool:
+        """整批写入派生事实及来源；没有授权读取器时不推进游标。"""
+        check = self.summary_evidence
+        if check is None:
+            return False
+        with closing(open_connection(self._db_path)) as conn:
+            return save_summary(conn, window, delta, self._clock.now(), check_window, check)
 
     def browse_history(
         self,
@@ -653,6 +686,7 @@ class MemoryIndex:
         since: datetime | None = None,
         before: datetime | None = None,
         include_user_extractions: bool = True,
+        summary_scope: SummaryScope | None = None,
     ) -> list[MemoryHit]:
         """在同一次查询内召回历史与新经历，按稳定人物键和时间过滤。"""
         clauses, terms = effective_keyword_conditions(
@@ -738,6 +772,22 @@ class MemoryIndex:
                         now,
                         self._config.consolidation_half_life_days,
                         limit,
+                    )
+                )
+            if (
+                clauses and summary_scope is not None and person_keys is None
+                and self.summary_evidence is not None
+                and self._config.consolidation_enabled
+                and self._config.consolidation_extract_enabled
+            ):
+                hits.extend(
+                    MemoryHit(
+                        None, item.recorded_at, "会话事实", item.text[:MAX_HIT_CHARS], item.source,
+                        evidence=item.evidence, relevance=item.relevance,
+                    )
+                    for item in search_summaries(
+                        conn, summary_scope, keywords, self.summary_evidence, limit,
+                        since=since, before=before,
                     )
                 )
             history = search_history(
