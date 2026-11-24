@@ -41,7 +41,7 @@ from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
 from aureus.heartbeat.expression_recall import ExpressionRecall
-from aureus.heartbeat.inbox_attention import InboxSelection
+from aureus.heartbeat.inbox_attention import InboxResidence, InboxSelection
 from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
@@ -138,6 +138,7 @@ class _Heard:
     perception: Perception
     record: TimelineRecord
     is_user: bool
+    residence: InboxResidence | None = None
 
 
 @dataclass(frozen=True)
@@ -264,6 +265,7 @@ class _Thought:
     exploration: TimelineRecord | None = None
     planner_run: "_PlannerRun | None" = None
     round_trace: _RoundTrace | None = None
+    inbox_discard_reason: str | None = None
 
 
 @dataclass
