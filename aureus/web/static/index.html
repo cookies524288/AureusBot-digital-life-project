@@ -891,6 +891,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <nav id="inbox-conversations" class="card inbox-conversations" aria-label="收件箱会话"></nav>
 <div class="card">
 <h3 id="inbox-thread-name">选择会话</h3>
+<div id="inbox-retention" class="stack hidden"></div>
 <nav id="inbox-pagination" class="inbox-pagination hidden" aria-label="会话消息分页">
 <button id="inbox-newer" type="button" class="btn small" disabled>较新一页</button>
 <button id="inbox-more" type="button" class="btn small" disabled>较早一页</button>
@@ -1067,6 +1068,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <script src="/assets/resource-management.js"></script>
 <script src="/assets/memory-flow-transfer.js"></script>
 <script src="/assets/memory-bundles.js"></script>
+<script src="/assets/inbox-retention.js"></script>
 <script>
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
@@ -2103,6 +2105,7 @@ function renderInboxPager() {
 
 function clearInboxThread() {
   ++inbox.messageRequest;
+  clearInboxRetention();
   clearInboxOperations();
   inbox.selected = null;
   inbox.page = 1;
@@ -2123,7 +2126,8 @@ function selectInboxConversation(conversation, page = 1) {
     button.setAttribute('aria-pressed', String(button.dataset.conversation === selected));
   }
   $('inbox-thread-name').textContent = conversation.name;
-  return Promise.all([loadInboxMessages(page), loadInboxOperations()]);
+  return Promise.all([loadInboxMessages(page), loadInboxOperations(),
+    showInboxRetention(conversation.archive ? null : conversation.key)]);
 }
 
 function clearInboxOperations() {

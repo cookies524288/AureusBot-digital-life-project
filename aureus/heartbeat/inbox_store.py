@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
     message_id TEXT NOT NULL, sender_id TEXT NOT NULL, sender_name TEXT NOT NULL,
     content TEXT NOT NULL, visibility TEXT NOT NULL, trust TEXT NOT NULL,
     mentioned INTEGER NOT NULL, quoted_message_id TEXT, source_timestamp INTEGER,
-    source_message_id TEXT, timestamp TEXT NOT NULL,
+    source_message_id TEXT, timestamp TEXT NOT NULL, received_at TEXT,
     attachments TEXT NOT NULL DEFAULT '[]',
     components TEXT NOT NULL DEFAULT '[]',
     direction TEXT NOT NULL DEFAULT 'incoming',
@@ -48,6 +48,16 @@ CREATE TRIGGER IF NOT EXISTS inbox_message_advance_sequence AFTER INSERT ON inbo
 BEGIN
     UPDATE inbox_message_sequence SET high_water = MAX(high_water, new.id) WHERE id = 1;
 END;
+CREATE TABLE IF NOT EXISTS inbox_history_exclusions (
+    scope TEXT NOT NULL, source TEXT NOT NULL, source_key TEXT NOT NULL,
+    PRIMARY KEY (scope, source, source_key)
+);
+CREATE TABLE IF NOT EXISTS inbox_history_cleanup_audit (
+    proposal_id TEXT PRIMARY KEY, scope TEXT NOT NULL, visibility TEXT NOT NULL,
+    cutoff TEXT NOT NULL, read_water INTEGER NOT NULL, inbox_water INTEGER NOT NULL,
+    timeline_water INTEGER NOT NULL, originals INTEGER NOT NULL, timeline_only INTEGER NOT NULL,
+    image_vectors INTEGER NOT NULL, confirmed_at TEXT NOT NULL
+);
 """
 
 _KEY = (
@@ -259,6 +269,8 @@ class InboxStore:
                         "ALTER TABLE inbox_messages ADD COLUMN components "
                         "TEXT NOT NULL DEFAULT '[]'"
                     )
+                if "received_at" not in columns:
+                    database.execute("ALTER TABLE inbox_messages ADD COLUMN received_at TEXT")
                 if "is_read" in columns:
                     database.execute(
                         "ALTER TABLE inbox_conversations ADD COLUMN first_read_id INTEGER"
@@ -290,7 +302,8 @@ class InboxStore:
         key = ConversationKey.from_perception(perception)
         route = perception.route
         assert route is not None
-        timestamp = self._clock.now()
+        received_at = self._clock.now()
+        timestamp = received_at
         source_timestamp = perception.source_timestamp
         if source_timestamp is not None:
             try:
@@ -299,6 +312,12 @@ class InboxStore:
                 source_timestamp = None
         fallback = f"群 {key.recipient_id}" if key.kind == "group" else key.recipient_id
         with closing(open_connection(self._path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            if database.execute(
+                "SELECT 1 FROM inbox_history_exclusions WHERE scope=? AND source='platform' AND source_key=?",
+                (key.language_scope_key(), route.message_id),
+            ).fetchone() is not None:
+                return None
             conversation_id, _ = database.execute(
                 """INSERT INTO inbox_conversations
                 (platform, account_id, kind, recipient_id, temporary_group_id, name)
@@ -312,9 +331,9 @@ class InboxStore:
                 """INSERT INTO inbox_messages (id, conversation_id, message_id, sender_id,
                 sender_name,
                 content, visibility, trust, mentioned, quoted_message_id, source_timestamp,
-                source_message_id, timestamp, attachments, direction, components)
+                source_message_id, timestamp, received_at, attachments, direction, components)
                 VALUES ((SELECT high_water + 1 FROM inbox_message_sequence WHERE id=1),
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (conversation_id, message_id) DO NOTHING RETURNING id""",
                 (
                     conversation_id,
@@ -329,6 +348,7 @@ class InboxStore:
                     source_timestamp,
                     perception.source_message_id,
                     timestamp.isoformat(),
+                    received_at.isoformat(),
                     json.dumps(
                         [
                             (item.kind, item.file_id, item.is_emoji)
@@ -533,14 +553,31 @@ class InboxStore:
 
     def existing_message_ids(self, conversation: ConversationKey, ids: Iterable[str]) -> set[str]:
         """核对旧消息是否已有同一完整路由的规范原件，不读取正文。"""
+        encoded = json.dumps(tuple(ids))
         with closing(open_connection(self._path)) as database:
             rows = database.execute(
                 f"""SELECT m.message_id FROM inbox_messages m
                 JOIN inbox_conversations c ON c.id = m.conversation_id WHERE {_KEY}
-                AND m.message_id IN (SELECT value FROM json_each(?))""",
-                (*conversation.parameters(), json.dumps(tuple(ids))),
+                AND m.message_id IN (SELECT value FROM json_each(?))
+                UNION SELECT source_key FROM inbox_history_exclusions
+                WHERE scope = ? AND source = 'platform' AND source_key IN (SELECT value FROM json_each(?))""",
+                (*conversation.parameters(), encoded, conversation.language_scope_key(), encoded),
             ).fetchall()
-        return {row["message_id"] for row in rows}
+        return {row[0] for row in rows}
+
+    def excluded_timeline_ids(self, conversation: ConversationKey, ids: Iterable[int]) -> set[int]:
+        """读取已从该会话平台视图移除的旧时间线定位。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            return {int(row[0]) for row in database.execute(
+                """SELECT source_key FROM inbox_history_exclusions WHERE scope = ? AND source = 'timeline'
+                AND source_key IN (SELECT CAST(value AS TEXT) FROM json_each(?))""",
+                (conversation.language_scope_key(), json.dumps(tuple(ids))),
+            )}
+
+    @property
+    def database_path(self) -> Path:
+        """平台保留策略需要与原件、旧时间线及关联缓存使用同一事务。"""
+        return self._path
 
     def list_priority_unread(
         self,

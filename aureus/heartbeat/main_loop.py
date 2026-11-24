@@ -90,6 +90,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_attention import (
     SELECTION_TASK,
     InboxAttention,
@@ -99,7 +100,6 @@ from aureus.heartbeat.inbox_attention import (
 )
 from aureus.heartbeat.inbox_media import AttachmentReader, ImageIndexer
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
-from aureus.heartbeat.platform_history import PlatformHistory
 from aureus.heartbeat.initiative import InitiativeDecision, decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import Judgment, TowardMeKind
@@ -116,6 +116,7 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.platform_history import PlatformHistory
 from aureus.heartbeat.planner_tools import planner_tools
 from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD, delivery_callbacks
@@ -399,6 +400,10 @@ class Heartbeat:
             platform_history=(
                 PlatformHistory(inbox_store, timeline.platform_history) if inbox_store else None
             ),
+            history_retention=(
+                HistoryRetention(inbox_store, timeline.platform_history, clock, timezone)
+                if inbox_store is not None else None
+            ),
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._memory_consolidator = (
@@ -531,8 +536,14 @@ class Heartbeat:
             stay_in_conversation=self._platform_inbox is not None,
             quote_source=bool(self._quote_routes),
             platform_history=True,
+            platform_cleanup=True,
         )
         return tuple(tool.definition() for tool in planner_tools(options))
+
+    @property
+    def history_retention(self) -> HistoryRetention | None:
+        """网页只读待确认范围，并在额外认证后执行确定性清理。"""
+        return self._conversation.history_retention
 
     async def _call_organ(self, request: OrganRequest) -> OrganResponse:
         """在安全网关检查和记账之前选择实际承担该任务的器官。"""
@@ -1148,6 +1159,16 @@ class Heartbeat:
         if target_key is not None and inbox is not None and not inbox.allows(target_key):
             self._record_interrupted_round(thought, "会话已失去阅读权限，未投递。")
             return
+        trace, retention = thought.round_trace, self.history_retention
+        used_platform_history = trace is not None and trace.used_platform_history
+        if used_platform_history:
+            plan = outcome.plan
+            if plan is not None:
+                outcome = replace(outcome, plan=replace(plan, reason=""))
+        if trace is not None and retention is not None and not self._halt_status.halted:
+            preview, history = trace.cleanup_preview, self._conversation.platform_history
+            if preview is not None and history is not None and history.permits(preview.scope.key):
+                retention.publish(preview)
         person_id = _person_id_of(thought.replying_to[-1].record)
         if (
             self._platform_inbox is not None
@@ -1207,7 +1228,7 @@ class Heartbeat:
         }
         if len(segments) > 1:
             metadata["reply_segments"] = list(segments)
-        if outcome.plan is not None:
+        if outcome.plan is not None and not used_platform_history:
             metadata["plan"] = outcome.plan.to_metadata()
         if outcome.recall_keywords:
             metadata["recall_keywords"] = list(outcome.recall_keywords)
@@ -1478,9 +1499,11 @@ class Heartbeat:
         content = "这轮没有可用的规划建议。"
         if plan is not None:
             content = "建议回复" if plan.should_reply else "建议不回复"
-            if plan.should_reply and plan.intent:
+            trace = thought.round_trace
+            used_history = trace is not None and trace.used_platform_history
+            if plan.should_reply and plan.intent and not used_history:
                 content += f"：{plan.intent}"
-            if plan.reason:
+            if plan.reason and not used_history:
                 content += f"\n依据：{plan.reason}"
             if plan.length is not None and plan.should_reply:
                 content += f"\n建议篇幅：{plan.length.value}"

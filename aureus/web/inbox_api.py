@@ -31,6 +31,7 @@ def _conversation_key(
     recipient_id: Annotated[str, Query(min_length=1)],
     temporary_group_id: Annotated[str | None, Query(min_length=1)] = None,
 ) -> ConversationKey:
+    """解码网页当前所选会话，不代表该会话已经授权。"""
     return ConversationKey(platform, account_id, kind, recipient_id, temporary_group_id)
 
 
@@ -141,6 +142,14 @@ def register_inbox_routes(
         attachment = message.perception.attachments[position]
         if attachment.kind != "image" or not allows_conversation(key):
             raise unavailable
+
+        async def attachment_is_current() -> bool:
+            current = await asyncio.to_thread(store.get_visible_message, key, identifier)
+            return (
+                current is not None and position < len(current.perception.attachments)
+                and current.perception.attachments[position] == attachment and allows_conversation(key)
+            )
+
         if view == "description" and (not attachment.is_emoji or emojis is None):
             return JSONResponse({"description": None}, headers={"Cache-Control": "no-store"})
         media = await read_attachment(message.perception, attachment)
@@ -150,12 +159,14 @@ def register_inbox_routes(
             description = await asyncio.to_thread(
                 emojis.read_catalog_description, sha256(media[0]).hexdigest()
             )
-            if not allows_conversation(key):
+            if not await attachment_is_current():
                 raise unavailable
             return JSONResponse(
                 {"description": description, "source": "emoji_catalog" if description else None},
                 headers={"Cache-Control": "no-store"},
             )
+        if not await attachment_is_current():
+            raise unavailable
         return Response(media[0], media_type=media[1], headers={
             "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
             "Cross-Origin-Resource-Policy": "same-origin",

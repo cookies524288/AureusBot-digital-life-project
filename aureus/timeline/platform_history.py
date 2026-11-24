@@ -91,6 +91,39 @@ class LegacyPlatformHistory:
     def __init__(self, path: Path) -> None:
         self._path = path
 
+    def shares_database(self, path: Path) -> bool:
+        """清理预览和确认只能在平台原件所在的同一个数据库中进行。"""
+        return self._path.resolve() == path.resolve()
+
+    def high_water(self, connection: Connection) -> int:
+        """取得同一事务中的当前追加水位，不读取任何正文。"""
+        return int(connection.execute("SELECT COALESCE(MAX(id),0) FROM timeline").fetchone()[0])
+
+    def retention_candidates(
+        self, connection: Connection, route: LegacyRoute, visibility: VisibilityScope,
+        cutoff_epoch: float, high_water: int,
+    ) -> list[tuple[int, str | None]]:
+        """保留旧入站记录的定位；从不修改时间线或打开未归类历史。"""
+        if route[0] != "qq":
+            return []
+        scope = "has_route AND account = ? AND kind = ? AND recipient = ? AND temp IS ?"
+        rows = connection.execute(
+            f"""{_PLATFORM_ROWS} SELECT id, message_key FROM classified WHERE {scope}
+                AND (typeof(message_key) != 'text' OR message_key = '' OR id IN (
+                    SELECT MIN(id) FROM classified WHERE {scope} AND id <= ? GROUP BY message_key))
+                AND id <= ? AND actor_type IN ('user', 'person') AND visibility = ?
+                AND CASE WHEN typeof(details ->> '$.source_timestamp') = 'integer'
+                  AND datetime(details ->> '$.source_timestamp', 'unixepoch') IS NOT NULL
+                    THEN details ->> '$.source_timestamp'
+                    ELSE unixepoch(timestamp, 'subsec') END < ?
+                AND unixepoch(timestamp, 'subsec') < ? ORDER BY id""",
+            (*route[1:], *route[1:], high_water, high_water, visibility,
+             cutoff_epoch, cutoff_epoch),
+        )
+        return [
+            (row[0], row[1] if isinstance(row[1], str) and row[1] else None) for row in rows
+        ]
+
     def web_private_window(
         self, after_id: int, limit: int, *, connection: Connection | None = None
     ) -> tuple[TimelineRecord, ...]:

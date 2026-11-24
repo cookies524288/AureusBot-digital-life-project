@@ -156,6 +156,7 @@ def run_page_script(code: str) -> None:
             "memory-graph.js",
             "resource-management.js",
             "memory-flow-transfer.js",
+            "inbox-retention.js",
         )
     ]
     result = subprocess.run(
@@ -189,6 +190,7 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
             archives:[{archive:'imported', name:'迁入原件'}],
           });
           if (path.includes('view=description')) return reply(200, {source:'emoji_catalog', description:'合成描述'});
+          if (path.startsWith('/api/inbox/history-cleanup?')) return reply(200, {preview:null});
           if (path.startsWith('/api/inbox/uncategorized?')) return reply(200,
             {messages:[{source:'imported', content:'原件', attachments:[]}], next_before_id:null});
           assert.match(path, /\/api\/inbox\/messages\?platform=qq&account_id=14/);
@@ -238,6 +240,49 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
         assert.equal(list.children[0].className, 'inbox-message unknown');
         """
     )
+
+
+def test_inbox_cleanup_shows_current_scope_and_confirms_only_its_preview() -> None:
+    run_page_script(r"""
+      const first = {platform:'qq', account_id:'bot', kind:'group', recipient_id:'old', temporary_group_id:null};
+      const second = {...first, kind:'private', recipient_id:'new', temporary_group_id:'temp'};
+      const candidates = key => ({id:key.recipient_id, conversation:key, cutoff:'2026-11-24T00:00:00+08:00',
+        originals:3, timeline_only:1, image_vectors:2, read_water:44, inbox_water:47, timeline_water:59});
+      let finishOld, posted;
+      state.loggedIn = true;
+      fetch = async (path, options) => {
+        const query = new URLSearchParams(path.split('?')[1]);
+        if (path.startsWith('/api/inbox/messages?')) return reply(200, {messages:[], next_before_id:null});
+        assert.match(path, /^\/api\/inbox\/history-cleanup\?/);
+        if (options.method === 'POST') {
+          assert.equal(query.get('recipient_id'), 'new');
+          assert.equal(query.get('temporary_group_id'), 'temp');
+          posted = JSON.parse(options.body);
+          return reply(200, {completed:true});
+        }
+        if (query.get('recipient_id') === 'old') {
+          return new Promise(resolve => { finishOld = () => resolve(reply(200, {preview:candidates(first)})); });
+        }
+        return reply(200, {preview:candidates(second)});
+      };
+      const old = showInboxRetention(first);
+      await showInboxRetention(second);
+      finishOld();
+      await old;
+      inbox.selected = {key:second};
+      const panel = $('inbox-retention');
+      assert.match(panel.children[1].textContent, /bot.*new.*temp.*2026-11-24/);
+      assert.match(panel.children[2].textContent, /3 条.*2 项/);
+      assert.match(panel.children[3].textContent, /1 条旧时间线.*仍保留/);
+      const form = panel.children[5];
+      form.children[0].value = 'synthetic-password';
+      await form.listeners.submit[0]({preventDefault(){}});
+      assert.deepEqual(posted, {proposal_id:'new', password:'synthetic-password'});
+      assert.equal(form.children[0].value, '');
+      assert.match(panel.children.at(-1).textContent, /已按确认范围清理/);
+      clearInboxThread();
+      assert.equal(panel.children.length, 0);
+    """)
 
 
 def test_platform_config_has_mouse_keyboard_and_touch_equivalents() -> None:
