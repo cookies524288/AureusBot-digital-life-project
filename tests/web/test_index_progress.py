@@ -324,3 +324,59 @@ def test_editor_ignores_responses_after_close_organ_change_and_model_edit() -> N
     assert.equal(track.children.filter(cell => cell.className === 'filled').length, 8);
     assert.equal(panel.children[0].children.at(-1).textContent, '部分已建立');
     """)
+
+
+def test_disabled_rows_name_the_setting_that_turns_them_on() -> None:
+    run_page_script(r"""
+    const textOf = node => (node.textContent || '') + node.children.map(textOf).join('');
+    const row = (kind, state) => textOf(renderIndexProgress(
+      {kind, state, route:null, established:0, eligible:null}));
+    const name = key => CFG_FIELDS[key][0];
+    const group = key => CFG_SECTIONS.find(([sec]) => sec === key.split('.')[0])[1];
+    const vector = 'language.use_vector_expression';
+    const semantic = 'heartbeat.qq_emoji_semantic_enabled';
+    const expression = row('expression', 'disabled');
+    assert.equal(name(vector), '表达向量检索');
+    for (const part of [name(vector), group(vector), name('language.recall_enabled'),
+      name('language.reference_chars'), '保存后重启生效']) {
+      assert.ok(expression.includes(part), part);
+    }
+    const emoji = row('emoji_cache', 'disabled');
+    assert.equal(name(semantic), 'QQ 表情语义匹配');
+    for (const part of [name(semantic), group(semantic), name('qq.enabled'),
+      name('heartbeat.qq_emoji_visual_enabled'), '保存后重启生效']) {
+      assert.ok(emoji.includes(part), part);
+    }
+    const others = ['no_model', 'unavailable', 'on_demand', 'empty', 'missing', 'partial',
+      'complete'];
+    for (const kind of ['expression', 'emoji_cache']) {
+      for (const state of others) {
+        const text = row(kind, state);
+        assert.ok(!text.includes('保存后重启生效'), kind + state);
+        assert.ok(![name(vector), name(semantic)].some(part => text.includes(part)), kind + state);
+      }
+    }
+    for (const kind of ['images', 'memory_rerank']) {
+      assert.ok(!row(kind, 'disabled').includes('保存后重启生效'), kind);
+    }
+    """)
+
+
+def test_disabled_hint_link_closes_editor_and_locates_the_setting() -> None:
+    run_page_script(r"""
+    const findButton = node => node.tagName === 'BUTTON'
+      ? node : node.children.map(findButton).find(Boolean);
+    const key = 'language.use_vector_expression';
+    const shown = [], located = [];
+    showPage = (name, onShown) => { shown.push(name); onShown(); };
+    locateConfigField = entry => located.push(entry);
+    cf.searchEntries = [{key:'heartbeat.qq_emoji_semantic_enabled', sec:'heartbeat', id:'other'},
+      {key, sec:'language', id:'cf-field-' + key}];
+    $('editor-dialog').showModal();
+    const hint = renderIndexProgress({kind:'expression', state:'disabled', route:null,
+      established:0, eligible:null});
+    findButton(hint).click();
+    assert.equal($('editor-dialog').open, false);
+    assert.deepEqual(shown, ['config']);
+    assert.deepEqual(located.map(entry => entry.id), ['cf-field-' + key]);
+    """)
