@@ -192,8 +192,12 @@ def _publish_trusted(memory: MemoryIndex, *, include_extra: bool = False) -> Non
         MemoryGraphSource(LEFT, "entity", "active", name="合成左端"),
         MemoryGraphSource(RIGHT, "entity", "active", name="合成右端"),
         MemoryGraphSource(
-            EDGE, "relation", "active", predicate="合成关系",
-            subject_source=LEFT, object_source=RIGHT,
+            EDGE,
+            "relation",
+            "active",
+            predicate="合成关系",
+            subject_source=LEFT,
+            object_source=RIGHT,
             evidence=(MemoryGraphEvidence("合成证据", EVIDENCE, LINK),),
         ),
     ]
@@ -211,7 +215,8 @@ def _write_grants(
     client: TestClient, batch: str, *categories: str, password: str = GOOD
 ) -> Response:
     return client.put(
-        f"{GRANTS}/{batch}", headers=SAME_ORIGIN,
+        f"{GRANTS}/{batch}",
+        headers=SAME_ORIGIN,
         json={"password": password, "categories": categories},
     )
 
@@ -234,9 +239,16 @@ def test_formal_grants_require_trusted_publication_and_password(
         assert available == {"batch_id": batch_id, "instance": LEFT.instance, "categories": []}
         assert catalog.headers["cache-control"] == "no-store"
         assert client.get(GRAPH).json()["total"] == 0
-        assert client.put(f"{GRANTS}/{batch_id}", json={
-            "password": GOOD, "categories": ["entities"],
-        }).status_code == 403
+        assert (
+            client.put(
+                f"{GRANTS}/{batch_id}",
+                json={
+                    "password": GOOD,
+                    "categories": ["entities"],
+                },
+            ).status_code
+            == 403
+        )
         assert _write_grants(client, batch_id, LEFT.encode()).status_code == 422
         assert _write_grants(client, batch_id, "entities", password="wrong").status_code == 403
         assert client.get(GRAPH).json()["total"] == 0
@@ -304,7 +316,8 @@ def test_formal_batch_is_persistent_and_does_not_expand_or_accept_changed_source
 
 
 def test_formal_inflight_graph_cannot_survive_revoke_and_regrant(
-    graph: tuple[Rig, MemoryIndex], monkeypatch: pytest.MonkeyPatch,
+    graph: tuple[Rig, MemoryIndex],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rig, memory = graph
     set_password(rig)

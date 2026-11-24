@@ -144,14 +144,16 @@ def _dialogue(record_id: int, actor: ActorType, content: str) -> TimelineRecord:
 
 @pytest.mark.asyncio
 async def test_memory_summary_preview_and_fake_organ_share_narrative_protocol(
-    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch,
+    rig: ConfigRig,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     import litellm
 
     captured: list[dict[str, Any]] = []
     window = SummaryWindow(
-        ("synthetic", "group"), 0,
+        ("synthetic", "group"),
+        0,
         (SummaryMessage(1, "m1", "p1", "甲", "星舟项目演练定在海桐馆，已经确认。", True),),
     )
     narrative = "演练方案确定下来，星舟项目将在海桐馆开展活动。"
@@ -159,21 +161,44 @@ async def test_memory_summary_preview_and_fake_organ_share_narrative_protocol(
     def provider_reply(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "prompt-test.invalid"
         captured.append(json.loads(request.content))
-        suggestion = json.dumps({
-            "summary": narrative, "entities": ["星舟项目", "海桐馆"],
-            "relations": [{"subject": "星舟项目", "predicate": "演练地点", "object": "海桐馆"}],
-            "facts": [{
-                "fact_id": "f1", "text": "星舟项目计划前往海桐馆演练。",
-                "predicate": "演练地点", "value": "海桐馆", "shared": True,
-                "source": {"message_id": "m1", "sender_id": "p1", "excerpt": "星舟项目演练定在海桐馆"},
-                "image_evidence": [],
-            }],
-        })
-        return httpx.Response(200, json={
-            "id": "synthetic", "model": "sample-model", "object": "chat.completion", "created": 1,
-            "choices": [{"index": 0, "finish_reason": "stop",
-                         "message": {"role": "assistant", "content": suggestion}}],
-        })
+        suggestion = json.dumps(
+            {
+                "summary": narrative,
+                "entities": ["星舟项目", "海桐馆"],
+                "relations": [{"subject": "星舟项目", "predicate": "演练地点", "object": "海桐馆"}],
+                "facts": [
+                    {
+                        "fact_id": "f1",
+                        "text": "星舟项目计划前往海桐馆演练。",
+                        "predicate": "演练地点",
+                        "value": "海桐馆",
+                        "shared": True,
+                        "source": {
+                            "message_id": "m1",
+                            "sender_id": "p1",
+                            "excerpt": "星舟项目演练定在海桐馆",
+                        },
+                        "image_evidence": [],
+                    }
+                ],
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": "synthetic",
+                "model": "sample-model",
+                "object": "chat.completion",
+                "created": 1,
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": suggestion},
+                    }
+                ],
+            },
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(provider_reply)) as client:
         monkeypatch.setattr(litellm, "aclient_session", client)
@@ -182,16 +207,23 @@ async def test_memory_summary_preview_and_fake_organ_share_narrative_protocol(
         summary = next(item for item in preview if item["id"] == "memory_consolidation")
         assert not captured
         adapter = LLMOrgan(
-            "summarizer", mock_models().routes_for("summarizer"),
-            KeyResolver(rig.paths.home / "does-not-exist.env",
-                        environ={"AUREUS_KEY_PROMPT_HTTP_TEST": "sk-mock-only"}),
-            token_counter=lambda _messages: 12, prompts=rig.models.prompts,
+            "summarizer",
+            mock_models().routes_for("summarizer"),
+            KeyResolver(
+                rig.paths.home / "does-not-exist.env",
+                environ={"AUREUS_KEY_PROMPT_HTTP_TEST": "sk-mock-only"},
+            ),
+            token_counter=lambda _messages: 12,
+            prompts=rig.models.prompts,
         )
         result = await _extract(window, adapter.process, ModelPreference.CHEAPEST)
         assert result is not None and result.summary == narrative != result.facts[0].text
-        assert captured[0]["messages"] == _expanded_messages(summary["messages"], {
-            "〔合成会话窗口、历史摘要和图片目录 JSON〕": summary_material(window, ""),
-        })
+        assert captured[0]["messages"] == _expanded_messages(
+            summary["messages"],
+            {
+                "〔合成会话窗口、历史摘要和图片目录 JSON〕": summary_material(window, ""),
+            },
+        )
         litellm.in_memory_llm_clients_cache.flush_cache()
 
 
@@ -783,13 +815,24 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
             if len(captured) == 1:
                 name, arguments = "query_memory", {"keywords": ["木卫二"]}
             else:
-                name, arguments = "reply", {
-                    "addressed_to_me": "yes", "reply_reference": "聊聊观测计划", "length": "短",
-                }
-            message = {"role": "assistant", "tool_calls": [{
-                "id": f"synthetic-{len(captured)}", "type": "function",
-                "function": {"name": name, "arguments": json.dumps(arguments)},
-            }]}
+                name, arguments = (
+                    "reply",
+                    {
+                        "addressed_to_me": "yes",
+                        "reply_reference": "聊聊观测计划",
+                        "length": "短",
+                    },
+                )
+            message = {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": f"synthetic-{len(captured)}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": json.dumps(arguments)},
+                    }
+                ],
+            }
             finish = "tool_calls"
         return httpx.Response(
             200,
@@ -869,7 +912,12 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
 
             plan, continued, reply = captured
             assert [message["role"] for message in plan] == ["system", "user"]
-            assert [message["role"] for message in continued] == ["system", "user", "assistant", "tool"]
+            assert [message["role"] for message in continued] == [
+                "system",
+                "user",
+                "assistant",
+                "tool",
+            ]
             assert private_text in continued[-1]["content"]
             assert [message["role"] for message in reply] == [
                 "system",
@@ -1373,7 +1421,8 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             scene = next(scene for scene in previews if scene["id"] == "memory_consolidation")
             assert "夜间" in scene["note"]
             assert captured[-1]["messages"] == _expanded_messages(
-                scene["messages"], {"〔合成会话窗口、历史摘要和图片目录 JSON〕": summary_material(window, "")}
+                scene["messages"],
+                {"〔合成会话窗口、历史摘要和图片目录 JSON〕": summary_material(window, "")},
             )
             by_scene["memory_consolidation"] = captured[-1]["messages"][1]["content"]
             return by_scene

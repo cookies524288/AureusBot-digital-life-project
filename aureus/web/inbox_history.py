@@ -36,7 +36,8 @@ def inbox_message(message: InboxMessage, *, include_attachment_ids: bool = True)
         "components": [asdict(item) for item in perception.components],
         "attachments": [
             asdict(item)
-            if include_attachment_ids else {"kind": item.kind, "is_emoji": item.is_emoji}
+            if include_attachment_ids
+            else {"kind": item.kind, "is_emoji": item.is_emoji}
             for item in perception.attachments
         ],
         "timestamp": message.timestamp,
@@ -106,7 +107,8 @@ def timeline_page(
         )
         excluded = store.excluded_timeline_ids(key, (row.id for row in page))
         unique = [
-            row for row, value in zip(page, identifiers, strict=True)
+            row
+            for row, value in zip(page, identifiers, strict=True)
             if row.id not in excluded and (not isinstance(value, str) or value not in canonical)
         ]
         rows.extend(unique[skip : skip + remaining])

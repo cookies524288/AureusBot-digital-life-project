@@ -19,8 +19,8 @@ from aureus.heartbeat.events import (
     EVENT_RECALL_REPLY_DELIVERED,
     EVENT_REPLY_DELIVERED,
 )
-from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.heartbeat.inbox_store import ConversationKey
+from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 
@@ -34,7 +34,9 @@ class FakeHeartbeat:
     replying_web = False
 
     def is_replying_to(
-        self, *, conversation: ConversationKey | None = None,
+        self,
+        *,
+        conversation: ConversationKey | None = None,
         web_visibility: VisibilityScope | None = None,
     ) -> bool:
         if conversation is not None:
@@ -262,12 +264,17 @@ def test_reply_pages_show_only_confirmed_segments_and_never_infer_legacy_rounds(
     first = rig.timeline.append("message", "来源一", ActorType.USER)
     second = rig.timeline.append("message", "来源二", ActorType.USER)
     rig.timeline.append(
-        "message", "确认段\n未确认段", ActorType.ME,
+        "message",
+        "确认段\n未确认段",
+        ActorType.ME,
         metadata={"round_id": first.id, INTERNAL_REPLY_RECORD: True},
     )
     for round_id, text in ((first.id, "确认段"), (second.id, "另一轮"), (first.id, "后续确认段")):
         rig.timeline.append(
-            EVENT_REPLY_DELIVERED, text, ActorType.ME, metadata={"round_id": round_id},
+            EVENT_REPLY_DELIVERED,
+            text,
+            ActorType.ME,
+            metadata={"round_id": round_id},
         )
     for _ in range(4):
         rig.timeline.append("message", "入站消息", ActorType.USER)
