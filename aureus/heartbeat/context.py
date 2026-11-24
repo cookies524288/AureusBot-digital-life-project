@@ -189,10 +189,11 @@ _JUDGE_INSTRUCTION = _template(
     "只输出一个 JSON 对象，不要输出别的内容：\n"
     '{"others": [{"subject": "sender 或消息里提到的人、动物的称呼", '
     '"emotion": "anger 或 joy 或 hurt 或 surprise", '
-    '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数}], '
+    '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数, "source_record_id": 最新来信区的记录序号}], '
     '"toward_me": [{"kind": "offense 或 praise 或 rejection", '
     '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数}]}\n'
-    "others 写消息里别人的情绪，sender 指发消息的人；"
+    "others 写最新来信中有依据的真实情绪，sender 指该条记录的发信人；同一来源同一对象只写一次。"
+    "不要把引用、举例和历史当成新情绪，不要猜记录序号。"
     "toward_me 写这些消息是不是冲着你来的：offense 是羞辱、戏弄、嘲笑（比如因为你是 AI 而嘲笑），"
     "praise 是夸你，rejection 是拒绝或冷落你。"
     "intensity 是强弱，confidence 是你有几成把握。"
@@ -757,6 +758,10 @@ def build_judge_prompt(
     Raises:
         ValueError: 没有要回复的消息。
     """
-    parts = _dialogue_sections(history, new_messages, user_name, timezone)
+    labeled = new_messages if isinstance(new_messages, str) else "\n".join(
+        f"记录序号 {record.id} {_dialogue_line(record, user_name, timezone)}"
+        for record in new_messages
+    )
+    parts = _dialogue_sections(history, labeled, user_name, timezone)
     parts.append(join_prompt([_JUDGE_TASK.fill(), _JUDGE_INSTRUCTION.fill()], ""))
     return join_prompt(parts)

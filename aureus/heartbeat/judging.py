@@ -51,6 +51,7 @@ class OtherEmotion:
     # 强度和把握都是 0 到 1。
     intensity: float
     confidence: float
+    source_record_id: int | None = None
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -59,6 +60,7 @@ class OtherEmotion:
             "emotion": self.emotion.value,
             "intensity": self.intensity,
             "confidence": self.confidence,
+            **({"source_record_id": self.source_record_id} if self.source_record_id else {}),
         }
 
 
@@ -139,9 +141,18 @@ def _parse_other(item: object) -> OtherEmotion | None:
     emotion = _enum_value(OtherEmotionKind, item.get("emotion"))
     intensity = _unit_number(item.get("intensity"))
     confidence = _unit_number(item.get("confidence"))
-    if not subject or emotion is None or intensity is None or confidence is None:
+    source = item.get("source_record_id")
+    if (
+        not subject
+        or emotion is None
+        or intensity is None
+        or confidence is None
+        or (source is not None and (type(source) is not int or source <= 0))
+    ):
         return None
-    return OtherEmotion(subject, emotion, intensity, confidence)
+    if subject.casefold() == SENDER_SUBJECT:
+        subject = SENDER_SUBJECT
+    return OtherEmotion(subject, emotion, intensity, confidence, source)
 
 
 def _parse_toward_me(item: object) -> TowardMe | None:

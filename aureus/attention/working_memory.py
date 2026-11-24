@@ -297,6 +297,14 @@ class WorkingMemory:
             None,
         )
 
+    def retained_focus_ids(self) -> frozenset[int]:
+        """返回最近 retain 条原始经历的序号；已压缩的经历不再是焦点。"""
+        if not self.config.working_memory_enabled:
+            return frozenset()
+        return frozenset(
+            record.id for record in self._current_focus()[-self.config.working_memory_retain :]
+        )
+
     @staticmethod
     def _dialogue_scopes(owner: bool, route: str | None) -> tuple[str, ...]:
         return (

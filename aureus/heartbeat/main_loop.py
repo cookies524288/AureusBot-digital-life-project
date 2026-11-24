@@ -69,6 +69,7 @@ from aureus.heartbeat.cortisol import CortisolTiming
 from aureus.heartbeat.diary_runner import DiaryOutcome, DiaryTracker, write_diary
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.emoji_maintenance import EmojiMaintenance
+from aureus.heartbeat.empathy import EmpathyFocus
 from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
     EVENT_EMERGENCY_RESUME,
@@ -336,7 +337,15 @@ class Heartbeat:
         self._judge = judge
         self._hormones = hormones
         self._affinity = affinity
-        self._empathy = empathy
+        self._empathy_focus = EmpathyFocus(
+            timeline,
+            working_memory,
+            (
+                hormones.config
+                if hormones is not None and empathy is not None and empathy.enabled
+                else None
+            ),
+        )
         self._mood = mood
         self._agenda = agenda
         self._feedback = feedback
@@ -361,6 +370,7 @@ class Heartbeat:
             hormones=hormones,
             affinity=affinity,
             empathy=empathy,
+            empathy_focus=self._empathy_focus,
             agenda=agenda,
             memory=memory,
             emoji_store=emoji_store,
@@ -1263,10 +1273,11 @@ class Heartbeat:
         return describe_affinity(self._affinity.current(person_id), is_user=is_user)
 
     def _record_triggers(self, triggers: Sequence[HormoneTrigger]) -> None:
-        """激素触发写进状态和时间线（只有自己可见）；重启时靠这些记录还原浓度（D69 第 4、5 条）。"""
+        """普通触发写入基线；共情只留痕，由工作记忆焦点决定是否叠加。"""
         if self._hormones is None or not triggers:
             return
-        for trigger in triggers:
+        baseline = [trigger for trigger in triggers if not trigger.is_empathy]
+        for trigger in baseline:
             self._timeline.append(
                 event_type=EVENT_HORMONE_TRIGGERED,
                 content=f"{trigger.kind.value} 上涨 {trigger.rise:.2f}：{trigger.reason}",
@@ -1274,9 +1285,11 @@ class Heartbeat:
                 visibility=VisibilityScope.PRIVATE,
                 metadata=trigger.to_metadata(),
             )
-        self._hormones.add(triggers, self._clock.now())
-        if self._mood is not None:
-            self._mood.add_triggers(triggers, self._clock.now())
+        if baseline:
+            self._hormones.add(baseline, self._clock.now())
+            if self._mood is not None:
+                self._mood.add_triggers(baseline, self._clock.now())
+        self._empathy_focus.record(trigger for trigger in triggers if trigger.is_empathy)
 
     def _read_mood(
         self, person_id: int | None, *, viewer_is_user: bool, strict: bool = False
@@ -1285,6 +1298,12 @@ class Heartbeat:
 
         反馈表读不了时当作没有结果，不让心情这一步拖垮回复。
         """
+        read = self._prepare_mood(person_id, viewer_is_user=viewer_is_user, strict=strict)
+        return read(self._clock.now(), self._empathy_focus.active()) if read is not None else None
+
+    def _prepare_mood(
+        self, person_id: int | None, *, viewer_is_user: bool, strict: bool = False
+    ) -> Callable[[datetime, Sequence[HormoneTrigger]], MoodReading] | None:
         mood = self._mood
         if mood is None:
             return None
@@ -1309,7 +1328,7 @@ class Heartbeat:
             ]
         reading = self._reading
         stress = reading.stress.level if reading is not None and reading.stress.enabled else 0.0
-        return mood.read(
+        return mood.prepare_reading(
             now,
             outcomes,
             stress_level=stress,
@@ -1691,7 +1710,7 @@ class Heartbeat:
                 or bool(self._unanswered)
                 or bool(self._pending)
                 or (target is not None and self._reply_outbox.has_pending(target)),
-                cautious=self._mood.cautious if self._mood is not None else False,
+                cautious=mood.cautious if mood is not None else False,
                 has_channel=target is not None,
             )
             if decision.allowed and self._cortisol is not None and self._cortisol.should_defer(now):
@@ -1736,6 +1755,9 @@ class Heartbeat:
     def _maybe_start_exploration(self) -> None:
         """用户来信和主动联系之后才考虑探索，与它们共用一个任务槽（D79）。"""
         tracker, reading = self._exploration, self._reading
+        if not tracker.config.enabled:
+            return
+        mood = self._read_mood(None, viewer_is_user=True)
         started = tracker.prepare(
             self._clock.now(),
             tier=self._current_strategy().effective_tier,
@@ -1745,7 +1767,7 @@ class Heartbeat:
             or self._thought is not None
             or bool(self._unanswered)
             or bool(self._pending),
-            cautious=self._mood.cautious if self._mood is not None else False,
+            cautious=mood.cautious if mood is not None else False,
         )
         if started is None or tracker.search is None:
             return
@@ -2055,8 +2077,9 @@ class Heartbeat:
         if hormones is None:
             return None
         now = self._clock.now()
+        empathic = self._empathy_focus.active()
         return {
-            kind.value: hormones.level(kind, now)
+            kind.value: hormones.level(kind, now, extra=empathic)
             for kind in HormoneKind
             if kind_enabled(kind, hormones.config)
         }
@@ -2066,7 +2089,9 @@ class Heartbeat:
         hormones = self._hormones
         if hormones is None:
             return False
-        level = hormones.level(HormoneKind.SURPRISE, self._clock.now())
+        level = hormones.level(
+            HormoneKind.SURPRISE, self._clock.now(), extra=self._empathy_focus.active()
+        )
         return level >= hormones.config.surprise_at
 
     def seconds_until_next_beat(self) -> float:
@@ -2159,8 +2184,12 @@ class Heartbeat:
             affinity_for_context=lambda person_id: self._affinity_for_context(
                 person_id, is_user=target.trust is TrustLevel.VERIFIED_USER
             ),
-            read_mood=lambda person_id: self._read_mood(
-                person_id, viewer_is_user=target.trust is TrustLevel.VERIFIED_USER
+            read_mood=(
+                self._prepare_mood(
+                    person_id, viewer_is_user=target.trust is TrustLevel.VERIFIED_USER
+                )
+                if mood_state is None
+                else None
             ),
             agenda_for_context=self._agenda_hooks._agenda_for_context,
             inbox_attention=(
