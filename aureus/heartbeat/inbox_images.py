@@ -131,9 +131,12 @@ class InboxImageIndex:
     @staticmethod
     def retention_vectors(connection: Connection, ids: str, *, remove: bool = False) -> int:
         """统计或清理这些原件专有的向量；不触碰全局表情目录和其他原件。"""
-        if connection.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='inbox_image_vectors'"
-        ).fetchone() is None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='inbox_image_vectors'"
+            ).fetchone()
+            is None
+        ):
             return 0
         scope = "FROM inbox_image_vectors WHERE message_id IN (SELECT value FROM json_each(?))"
         if remove:

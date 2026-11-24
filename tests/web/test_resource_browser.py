@@ -617,7 +617,9 @@ def _run(browser: Browser, script: str) -> None:
 
 def test_inbox_components_render_in_order_and_treat_poke_hints_as_text(browser: Browser) -> None:
     browser.open("timeline", 390, 740)
-    _run(browser, """
+    _run(
+        browser,
+        """
       await waitFor(() => typeof renderInboxMessage === 'function', '收件箱脚本未就绪');
       const group = {account_id:'9000', kind:'group', recipient_id:'8000'};
       const bubble = message => renderInboxMessage(message).querySelector('.inbox-bubble');
@@ -640,13 +642,17 @@ def test_inbox_components_render_in_order_and_treat_poke_hints_as_text(browser: 
       const legacy = bubble({content:'旧正文', quoted_message_id:'11', mentioned:true});
       check(legacy.textContent.includes('原发件人：未知') && legacy.textContent.includes('@未知'),
         '旧记录不猜参与者');
-    """)
+    """,
+    )
 
 
 def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browser) -> None:
     browser.open("inbox", 390, 740)
-    _run(browser, """
-      await waitFor(() => typeof followConversationTyping === 'function' && state.loggedIn, '网页未就绪');
+    _run(
+        browser,
+        """
+      await waitFor(() => typeof followConversationTyping === 'function' && state.loggedIn,
+        '网页未就绪');
       closeSocket();
       const key = {platform:'qq', account_id:'bot', kind:'group', recipient_id:'A'};
       const first = {key, name:'同名群'};
@@ -667,7 +673,9 @@ def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browse
         if (path === '/api/inbox/conversations') return Promise.resolve({ok:true,data:{
           enabled:true, conversations:[first, second],
         }});
-        if (path.startsWith('/api/inbox/messages?')) return Promise.resolve({ok:true,data:{messages:[]}});
+        if (path.startsWith('/api/inbox/messages?')) {
+          return Promise.resolve({ok:true,data:{messages:[]}});
+        }
         return wrappedApi(path, ...args);
       };
       await showPage('inbox');
@@ -689,7 +697,8 @@ def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browse
       respond(latest(), true);
       await waitFor(() => bubble('inbox')?.textContent === '输入中', 'B 显示真实输入');
       check(bubble('inbox').getBoundingClientRect().left > 195, '窄屏贴平台机器人右侧');
-      check(getComputedStyle(bubble('inbox').lastChild).display === 'none', '减少动效时只留静态文字');
+      check(getComputedStyle(bubble('inbox').lastChild).display === 'none',
+        '减少动效时只留静态文字');
       check(visible(document.querySelector('#inbox-send')), '不影响发送按钮');
       await showPage('chat');
       check(!bubble('inbox') && !bubble('chat'), '切页立即清除桌面，不显示跨会话输入');
@@ -714,12 +723,15 @@ def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browse
       respond(latest(), false);
       closeSocket();
       check(!bubble('chat'), '重连不能恢复旧结果');
-    """)
+    """,
+    )
 
 
 def test_narrow_inbox_captions_are_independent_and_ignore_stale_requests(browser: Browser) -> None:
     browser.open("inbox", 390, 740)
-    _run(browser, """
+    _run(
+        browser,
+        """
       await waitFor(() => typeof renderInboxImage === 'function' && state.loggedIn, '页面未就绪');
       const key = {platform:'qq',account_id:'bot',kind:'group',recipient_id:'A'};
       const requests = [];
@@ -741,13 +753,15 @@ def test_narrow_inbox_captions_are_independent_and_ignore_stale_requests(browser
       const second = images[1].querySelector('button');
       first.click();
       second.click();
-      check(requests[0].path.includes('/images/0?') && requests[1].path.includes('/images/1?'), '位置独立');
+      check(requests[0].path.includes('/images/0?') && requests[1].path.includes('/images/1?'),
+        '位置独立');
       first.click();
       check(requests[0].signal.aborted && first.textContent === '查看描述', '第一张可独立返回');
       requests[0].resolve({ok:true,data:{description:'过期图注',source:'vlm'}});
       requests[1].resolve({ok:true,data:{description:'第二张描述',source:'vlm'}});
       await waitFor(() => images[1].textContent.includes('第二张描述'), '第二张显示真实来源');
-      check(images[1].textContent.includes('视觉模型') && !list.textContent.includes('过期图注'), '不串附件');
+      check(images[1].textContent.includes('视觉模型') && !list.textContent.includes('过期图注'),
+        '不串附件');
       first.click();
       requests[2].resolve({ok:true,data:{description:null,source:null}});
       await waitFor(() => images[0].textContent.includes('没有可核验'), '缺图注如实显示');
@@ -760,14 +774,17 @@ def test_narrow_inbox_captions_are_independent_and_ignore_stale_requests(browser
       await new Promise(resolve => setTimeout(resolve, 50));
       check(!list.textContent.includes('旧会话图注'), '切会话丢弃迟到结果');
       check(root().scrollWidth <= root().clientWidth, '窄屏没有横向溢出');
-    """)
+    """,
+    )
 
 
 def test_narrow_qq_desktop_confirms_and_keeps_operations_in_selected_conversation(
     browser: Browser,
 ) -> None:
     browser.open("inbox", 390, 740)
-    _run(browser, """
+    _run(
+        browser,
+        """
       await waitFor(() => typeof executeInboxOperation === 'function', '桌面脚本未就绪');
       const group = {platform:'qq',account_id:'1',kind:'group',recipient_id:'2'};
       const received = {source:'inbox',id:20,conversation:group,direction:'incoming',
@@ -825,11 +842,14 @@ def test_narrow_qq_desktop_confirms_and_keeps_operations_in_selected_conversatio
       check(posted[1].body instanceof File && posted[1].path.includes('name=sample.txt'),
         '上传选件的实际字节');
       check(desktopPage.textContent.includes('文件 fixture-file'), '只显示收到的文件回执');
-    """)
+    """,
+    )
 
 
 @pytest.mark.parametrize("motion", ["no-preference", "reduce"])
-def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser, motion: str) -> None:
+def test_page_entrance_keeps_current_and_disabled_button_styles(
+    browser: Browser, motion: str
+) -> None:
     browser.open("learning", 1280, 900)
     browser.command(
         "Emulation.setEmulatedMedia", features=[{"name": "prefers-reduced-motion", "value": motion}]
@@ -848,7 +868,8 @@ def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser
         if (this.matches('section.page')) {
           const key = this.id.slice(5);
           check(nav(key).getAttribute('aria-current') === 'page', '首帧前同步当前页');
-          if (key === 'memory') check(find('[data-memory-tab="images"]').getAttribute('aria-disabled') === 'true',
+          if (key === 'memory') check(
+            find('[data-memory-tab="images"]').getAttribute('aria-disabled') === 'true',
             '书签对应的页内标签先选中');
           entrances.push(key);
         }
@@ -864,31 +885,37 @@ def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser
         const older = showPage('images');
         const current = find('[data-memory-tab="images"]');
         const other = find('[data-memory-tab="query"]');
-        check(current.getAttribute('aria-disabled') === 'true' && other.getAttribute('aria-disabled') === 'false',
+        check(current.getAttribute('aria-disabled') === 'true' &&
+          other.getAttribute('aria-disabled') === 'false',
           '只锁当前页内标签');
         current.focus();
         const requestCount = requests.length;
         current.click();
         nav('memory').click();
-        check(requests.length === requestCount && document.activeElement === current, '当前按钮不可再次加载但仍可聚焦');
+        check(requests.length === requestCount && document.activeElement === current,
+          '当前按钮不可再次加载但仍可聚焦');
 
         nav('config').click();
         const newer = pageNavigation.loading;
         const saves = ['#cf-save', '#cf-reset', '#cf-restore-all'].map(find);
         check(saves.every(control => control.disabled), '设置不可用的按钮保持原生禁用');
-        const disabledStyle = control => [getComputedStyle(control).opacity, getComputedStyle(control).translate,
+        const disabledStyle = control => [
+          getComputedStyle(control).opacity, getComputedStyle(control).translate,
           getComputedStyle(control).boxShadow];
         const still = JSON.stringify(saves.map(disabledStyle));
         if (!reducedMotion.matches) await waitFor(() => staged.length, '设置内容开始入场');
-        check(JSON.stringify(saves.map(disabledStyle)) === still, '入场动画不覆盖禁用按钮位移、透明度或基座');
+        check(JSON.stringify(saves.map(disabledStyle)) === still,
+          '入场动画不覆盖禁用按钮位移、透明度或基座');
         nav('config').focus();
         requests.at(-1).resolve({ok:false, status:0});
         await newer;
         requests[0].resolve({ok:false, status:0});
         await older;
-        check(root().id === 'page-config' && nav('config').getAttribute('aria-current') === 'page' &&
+        check(root().id === 'page-config' &&
+          nav('config').getAttribute('aria-current') === 'page' &&
           document.activeElement === nav('config'), '迟到的响应不恢复旧页或焦点');
-        check(JSON.stringify(entrances) === JSON.stringify(reducedMotion.matches ? [] : ['memory','config']),
+        check(JSON.stringify(entrances) ===
+          JSON.stringify(reducedMotion.matches ? [] : ['memory','config']),
           '保留减少动态偏好');
       } finally { Element.prototype.animate = original; }
     """,
@@ -903,15 +930,18 @@ def test_learning_pagination_and_category_switch(browser: Browser, width: int, h
         r"""
       await waitFor(() => text('合成表达000'), '初始进入表达列表');
       const types = [...find('[aria-label="学习类型"]').querySelectorAll('button')];
-      check(types.map(node => node.textContent).join('|') === '表达方式|黑话|表情包', '学习只有三个上层分类');
-      check(find('[data-expression-view="clusters"]') && !types.includes(button('表达簇')), '表达簇只在表达内');
+      check(types.map(node => node.textContent).join('|') === '表达方式|黑话|表情包',
+        '学习只有三个上层分类');
+      check(find('[data-expression-view="clusters"]') && !types.includes(button('表达簇')),
+        '表达簇只在表达内');
       click('[data-learning-tab="jargon"]');
       await waitFor(() => text('合成黑话000') && !button('下一页')?.disabled &&
         !find('select[name="origin_conversation_key"]')?.disabled &&
         !find('select[name="authorized_conversation_key"]')?.disabled, '黑话首页、范围和分页按钮');
       await document.fonts.ready;
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      await waitFor(() => text('合成黑话000') && !button('下一页')?.disabled, '尺寸确定后的黑话首页');
+      await waitFor(() => text('合成黑话000') && !button('下一页')?.disabled,
+        '尺寸确定后的黑话首页');
       const expected = Math.ceil(320 / find('#learning-jargon-result').childElementCount);
       check(page() === `第 1 / ${expected} 页`, '总页数按当前视口容量计算');
       check(button('上一页').disabled && !button('下一页').disabled, '黑话首页的按钮状态');
@@ -933,7 +963,8 @@ def test_learning_pagination_and_category_switch(browser: Browser, width: int, h
       check(button('上一页').disabled && button('下一页').disabled, '末页禁止继续翻页');
       search.value = '未提交的表达草稿';
       press('表达簇');
-      check(find('[data-learning-tab="expression"]').getAttribute('aria-pressed') === 'true', '表达簇仍属于表达');
+      check(find('[data-learning-tab="expression"]').getAttribute('aria-pressed') === 'true',
+        '表达簇仍属于表达');
       press('表达列表');
       await waitFor(() => text('合成表达001') && !text('合成表达000'), '返回仍使用已提交的筛选');
       check(search.value === '未提交的表达草稿', '表达子页切换保留未提交草稿');
@@ -1221,7 +1252,9 @@ def test_expression_quality_jumps_pages_and_cancels_rescue(browser: Browser) -> 
         recorded_at:'2026-11-24T00:00:00Z', source_label:'同名群 · 群聊 10', actions:[]};
       window.fetch = (url, options) => {
         const request = new URL(url, location.href);
-        if (!request.pathname.startsWith('/api/resources/learning/quality')) return nativeFetch(url, options);
+        if (!request.pathname.startsWith('/api/resources/learning/quality')) {
+          return nativeFetch(url, options);
+        }
         if (options.method === 'POST') {
           calls.push(JSON.parse(options.body));
           return Promise.resolve(new Response(JSON.stringify({...row, version:'0'.repeat(64)})));
@@ -1233,11 +1266,13 @@ def test_expression_quality_jumps_pages_and_cancels_rescue(browser: Browser) -> 
       };
       try {
         press('质检记录');
-        await waitFor(() => text('模型拒绝 · 合成候选0') && page()?.startsWith('第 1 /'), '质检首页');
+        await waitFor(() => text('模型拒绝 · 合成候选0') && page()?.startsWith('第 1 /'),
+          '质检首页');
         const jump = find('#learning-panel-quality .resource-page-jump');
         jump.value = '3';
         jump.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
-        await waitFor(() => page()?.startsWith('第 3 /') && offset > 0 && text('合成候选' + offset), '输入页码直达');
+        await waitFor(() => page()?.startsWith('第 3 /') && offset > 0 && text('合成候选' + offset),
+          '输入页码直达');
         press('模型拒绝 · 合成候选' + offset + ' · ' + row.source_label);
         const dialog = document.querySelector('#editor-dialog');
         const dialogButton = label => [...dialog.querySelectorAll('button')]
@@ -1378,7 +1413,8 @@ def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Brow
       await document.fonts.ready;
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       await waitFor(() => find('#learning-emoji-result')?.dataset.size === 'small' &&
-        find('#learning-emoji-result')?.getAttribute('aria-busy') === 'false' && review(), '小号缩略图已载入');
+        find('#learning-emoji-result')?.getAttribute('aria-busy') === 'false' && review(),
+        '小号缩略图已载入');
       const frame = review().parentElement.getBoundingClientRect();
       const spot = review().getBoundingClientRect();
       check(spot.right <= frame.right && frame.right - spot.right <= 5 &&
@@ -1409,17 +1445,21 @@ def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Brow
         const path = new URL(url, location.href);
         if (path.pathname.endsWith('/review') && options.method === 'PATCH') {
           check(JSON.parse(options.body).verdict === 'rejected', '发送独立审批结论');
-          if (++writes === 1) return Promise.resolve(Response.json({detail:'合成审批失败'}, {status:503}));
+          if (++writes === 1) {
+            return Promise.resolve(Response.json({detail:'合成审批失败'}, {status:503}));
+          }
           return new Promise(resolve => { save = () => resolve(original(url, options)); });
         }
-        if (path.pathname === '/api/resources/media' && Number(path.searchParams.get('offset')) > 0) {
+        if (path.pathname === '/api/resources/media' &&
+          Number(path.searchParams.get('offset')) > 0) {
           return new Promise(resolve => { oldPage = resolve; });
         }
         return original(url, options);
       };
       try {
         reject().click();
-        await waitFor(() => dialog.innerText.includes('合成审批失败') && !reject().matches(':disabled'),
+        await waitFor(() => dialog.innerText.includes('合成审批失败') &&
+          !reject().matches(':disabled'),
           '失败保留审批操作，可重试');
         check(!document.querySelector('#toasts').textContent.includes('表情审批：已拒绝'),
           '失败不报告保存成功');
@@ -1458,8 +1498,11 @@ def test_emoji_material_preview_and_cancel_on_narrow_screen(browser: Browser) ->
         if (url === '/api/resources/emoji/thumbnail-cache') {
           return new Response(JSON.stringify({persistent:false, total:0}));
         }
-        if (!url.startsWith('/api/resources/emoji/materials/import?')) return original(url, options);
-        check(options.body instanceof File && await options.body.text() === '{"format":"fixture"}', '提交文件原字节');
+        if (!url.startsWith('/api/resources/emoji/materials/import?')) {
+          return original(url, options);
+        }
+        check(options.body instanceof File && await options.body.text() === '{"format":"fixture"}',
+          '提交文件原字节');
         check(options.headers['Content-Type'] === 'application/json', 'JSON 文件类型');
         if (new URL(url, location.origin).searchParams.has('confirmed')) writes++;
         return new Response(JSON.stringify({digest:'stamp', added:1, registered:0, skipped:0,
@@ -1477,11 +1520,13 @@ def test_emoji_material_preview_and_cancel_on_narrow_screen(browser: Browser) ->
       button('导入素材集').click();
       const input = dialog.querySelector('input[type=file]');
       const files = new DataTransfer();
-      files.items.add(new File(['{"format":"fixture"}'], 'fixture.json', {type:'application/json'}));
+      files.items.add(new File(['{"format":"fixture"}'], 'fixture.json',
+        {type:'application/json'}));
       input.files = files.files;
       input.dispatchEvent(new Event('change', {bubbles:true}));
       dialogButton('预检').click();
-      await waitFor(() => dialogButton('确认导入') && dialog.innerText.includes('测试 CC0'), '实际成员的许可');
+      await waitFor(() => dialogButton('确认导入') && dialog.innerText.includes('测试 CC0'),
+        '实际成员的许可');
       check(dialog.getBoundingClientRect().right <= innerWidth, '窄屏弹窗不横向溢出');
       dialogButton('取消').click();
       check(writes === 0 && !dialog.open, '取消不提交');
@@ -1944,7 +1989,8 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
       await waitFor(() => text('合成记忆000') && !button('下一页')?.disabled, '文字记忆首页');
       await document.fonts.ready;
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      await waitFor(() => text('合成记忆000') && !button('下一页')?.disabled, '尺寸确定后的文字记忆首页');
+      await waitFor(() => text('合成记忆000') && !button('下一页')?.disabled,
+        '尺寸确定后的文字记忆首页');
       const jump = find('.resource-page-jump');
       const list = find('#memory-result');
       const next = () => button('下一页');
@@ -1957,13 +2003,18 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
         const path = new URL(url, location.href);
         if (path.pathname !== '/api/resources/memory' || options.method !== 'GET')
           return original(url, options);
-        return new Promise(resolve => queue.push({params:path.searchParams, signal:options.signal, resolve}));
+        return new Promise(resolve => {
+          queue.push({params:path.searchParams, signal:options.signal, resolve});
+        });
       };
       const send = (index, title, total = 320) => queue[index].resolve(Response.json({
-        enabled:true, total, counts:{paragraphs:total}, items:title ? [{text:title, is_recallable:true}] : [],
+        enabled:true, total, counts:{paragraphs:total},
+        items:title ? [{text:title, is_recallable:true}] : [],
       }));
       const fail = (index, detail) => queue[index].resolve(Response.json({detail}, {status:503}));
-      const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const settle = () => new Promise(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
       const submitJump = value => {
         jump.value = String(value);
         jump.dispatchEvent(new Event('input', {bubbles:true}));
@@ -1974,7 +2025,8 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
         return Number(params.get('offset')) / Number(params.get('limit')) + 1;
       };
       try {
-        check(jump.getAttribute('aria-label')?.includes('跳转页码') && !jump.disabled, '有名称的可用跳页输入');
+        check(jump.getAttribute('aria-label')?.includes('跳转页码') && !jump.disabled,
+          '有名称的可用跳页输入');
         jump.focus();
         check(document.activeElement === jump, '可以键盘聚焦');
         submitJump(totalPages + 1);
@@ -1994,12 +2046,14 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
           '读取中直接跳到末页，立即应用边界');
         check(list.clientHeight === pageHeight, '读取中清除旧计数但保留列表高度');
         send(2, '最新末页');
-        await waitFor(() => text('最新末页') && page() === `第 ${totalPages} / ${totalPages} 页`, '末页完成');
+        await waitFor(() => text('最新末页') && page() === `第 ${totalPages} / ${totalPages} 页`,
+          '末页完成');
         send(0, '迟到的第二页');
         fail(1, '迟到的第三页错误');
         await settle();
         check(text('最新末页') && !text('迟到的第二页') && !text('读取失败') &&
-          !document.querySelector('#toasts').textContent.includes('迟到的第三页错误'), '迟到成功或失败都不污染新页');
+          !document.querySelector('#toasts').textContent.includes('迟到的第三页错误'),
+          '迟到成功或失败都不污染新页');
         check(!find('#memory-select-all').checked && find('#memory-correct').disabled,
           '新页不会继承批量选择');
 
@@ -2022,7 +2076,8 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
         await waitFor(() => queue[7], '资料缩减重新读取最后一个有效页');
         check(target(7) === 1, '资料缩减不留在越界页');
         send(7, '缩减后的唯一资料', 1);
-        await waitFor(() => page() === '第 1 / 1 页' && text('缩减后的唯一资料'), '新总数与有效页相符');
+        await waitFor(() => page() === '第 1 / 1 页' && text('缩减后的唯一资料'),
+          '新总数与有效页相符');
         check(previous().disabled && next().disabled && jump.disabled &&
           document.documentElement.scrollWidth === 390, '单页禁用导航且窄屏不溢出');
       } finally { window.fetch = original; }
@@ -2142,7 +2197,9 @@ def test_memory_inspection_shows_counts_and_limits(browser: Browser) -> None:
     )
 
 
-def test_memory_workbench_preserves_query_page_and_drafts_on_narrow_screen(browser: Browser) -> None:
+def test_memory_workbench_preserves_query_page_and_drafts_on_narrow_screen(
+    browser: Browser,
+) -> None:
     browser.open("memory", 390, 740)
     _run(
         browser,
@@ -2152,8 +2209,10 @@ def test_memory_workbench_preserves_query_page_and_drafts_on_narrow_screen(brows
         .map(node => node.textContent).join('|');
       check(names('记忆浏览') === '记忆查询|图片记忆|记忆流', '浏览导航顺序');
       check(names('记忆管理') === '导入导出|记忆检修|记忆移除', '管理导航顺序');
-      check(find('[data-memory-query="graph"]').closest('[aria-label="查询内容"]'), '关系图只在查询中');
-      check(!find('#memory-search select').querySelector('[value="messages"]'), '查询不提供原始消息类别');
+      check(find('[data-memory-query="graph"]').closest('[aria-label="查询内容"]'),
+        '关系图只在查询中');
+      check(!find('#memory-search select').querySelector('[value="messages"]'),
+        '查询不提供原始消息类别');
       check(!button('只读检修'), '查询不混放检修');
       const search = find('#memory-search [name="q"]');
       const requests = [];
@@ -2172,13 +2231,16 @@ def test_memory_workbench_preserves_query_page_and_drafts_on_narrow_screen(brows
       press('记忆移除');
       check(text('不永久删除原件') && text('操作记录') && !button('清空'), '明确可逆边界');
       press('选择文字记忆');
-      check(document.activeElement === search && search.value === '未提交的查询草稿', '快捷入口恢复焦点与草稿');
+      check(document.activeElement === search && search.value === '未提交的查询草稿',
+        '快捷入口恢复焦点与草稿');
       await waitFor(() => page().startsWith('第 2 /') && text('合成记忆'), '返回原来的列表页');
-      check(requests.at(-1).get('offset') === offset && requests.at(-1).get('q') === '', '不应用搜索草稿');
+      check(requests.at(-1).get('offset') === offset && requests.at(-1).get('q') === '',
+        '不应用搜索草稿');
       press('记忆检修');
       press('维护人物别名');
       await waitFor(() => text('合成人物000'), '别名入口通往真实人物记录');
-      check(document.activeElement === find('#memory-query-profiles input[type="search"]'), '焦点进入人物查询');
+      check(document.activeElement === find('#memory-query-profiles input[type="search"]'),
+        '焦点进入人物查询');
       check(root().scrollWidth <= innerWidth, '窄屏不横向溢出');
       press('记忆检修');
       click('a[href="#inbox"]');
@@ -2468,7 +2530,8 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
         name:`合成图谱实体${index}`, evidence:[]});
       const sameName = {...entity(2), name:entity(1).name};
       const link = (index, predicate, subject, object) => ({kind:'relation',
-        source:`["合成","memory","relations",[${index}]]`, subject, object, predicate, confidence:0.7, evidence:[]});
+        source:`["合成","memory","relations",[${index}]]`, subject, object, predicate,
+        confidence:0.7, evidence:[]});
       const relation = link(1, '观察', entity(0), entity(1));
       const parallel = link(2, '<b>帮助</b>', entity(0), entity(1));
       const loop = link(3, '复盘', entity(1), entity(1));
@@ -2477,7 +2540,9 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       const realFetch = window.fetch;
       window.fetch = (resource, options) => {
         const url = new URL(resource, location.origin);
-        if (![path, path + '/access', path + '/detail'].includes(url.pathname)) return realFetch(resource, options);
+        if (![path, path + '/access', path + '/detail'].includes(url.pathname)) {
+          return realFetch(resource, options);
+        }
         const params = url.searchParams;
         let result, status = 200;
         if (url.pathname.endsWith('/access')) {
@@ -2494,9 +2559,12 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
           result = {covered:granted, total,
             next_offset:offset + size < total ? offset + size : null,
             items:Array.from({length:Math.max(0, Math.min(size, total - offset))},
-              (_, index) => neighbor ? relation : records[offset + index] ?? entity(offset + index))};
+              (_, index) => neighbor ? relation : records[offset + index] ?? entity(offset + index)
+            )};
         }
-        const response = Response.json(result, {status, headers:{'X-Aureus-Graph-Revision':granted ? 'open' : 'closed'}});
+        const response = Response.json(result, {
+          status, headers:{'X-Aureus-Graph-Revision':granted ? 'open' : 'closed'},
+        });
         if (delay === url.pathname) {
           delay = '';
           return new Promise(resolve => { resume = () => resolve(response); });
@@ -2512,15 +2580,20 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       const graphNodes = [...canvas.querySelectorAll('.memory-graph-node')];
       const graphEdges = [...canvas.querySelectorAll('.memory-graph-edge')];
       check(graphNodes.length === size - 3 && graphEdges.length === 3, '保留孤点、自环和不同谓词');
-      const identities = graphNodes.filter(node => node.getAttribute('aria-label').includes('合成图谱实体1（'));
-      check(identities.length === 2 && identities.every(node => node.tabIndex === 0), '同名实体分别可定位');
-      check(new Set(graphEdges.map(edge => edge.querySelector('path').getAttribute('d'))).size === 3,
+      const identities = graphNodes.filter(node =>
+        node.getAttribute('aria-label').includes('合成图谱实体1（'));
+      check(identities.length === 2 && identities.every(node => node.tabIndex === 0),
+        '同名实体分别可定位');
+      check(new Set(graphEdges.map(edge =>
+        edge.querySelector('path').getAttribute('d'))).size === 3,
         '平行边和自环路径不同');
-      check(graphEdges.every(edge => edge.querySelector('path').hasAttribute('marker-end')), '每条边标出方向');
+      check(graphEdges.every(edge => edge.querySelector('path').hasAttribute('marker-end')),
+        '每条边标出方向');
       identities[0].focus();
       check(graphEdges.some(edge => edge.classList.contains('is-neighbor'))
         && graphNodes.some(node => node.classList.contains('is-muted')), '键盘定位会突出邻接');
-      const helping = graphEdges.find(edge => edge.getAttribute('aria-label').includes('<b>帮助</b>'));
+      const helping = graphEdges.find(edge =>
+        edge.getAttribute('aria-label').includes('<b>帮助</b>'));
       helping.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'}));
       await waitFor(() => document.querySelector('#editor-dialog').open, '键盘打开具体关系详情');
       check(document.querySelector('[data-graph-detail]').textContent.includes('<b>帮助</b>')
@@ -2532,7 +2605,8 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       press('复位');
       check(canvas.style.width === originalWidth, '可复位');
       press('隐藏关系图');
-      check(!canvas.getClientRects().length && panel.querySelector('.resource-record'), '不用图也能浏览');
+      check(!canvas.getClientRects().length && panel.querySelector('.resource-record'),
+        '不用图也能浏览');
       press('显示关系图');
       const height = panel.scrollHeight;
       delay = path;
@@ -2592,7 +2666,8 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       granted = false;
       window.dispatchEvent(new Event('focus'));
       await waitFor(() => text('当前没有获准的图谱资料'), '活动图谱遇到授权变化');
-      check(!canvas.childElementCount && !document.querySelector('#editor-dialog').open, '撤权清除当前画布和详情');
+      check(!canvas.childElementCount && !document.querySelector('#editor-dialog').open,
+        '撤权清除当前画布和详情');
     """,
     )
 
@@ -2631,7 +2706,9 @@ def test_memory_graph_grant_editor_and_late_response_at_390px(browser: Browser) 
         const headers = {'X-Aureus-Graph-Revision':String(generation)};
         const covered = categories.includes('entities');
         if (pathname === path) {
-          const result = {covered, items:covered ? [item] : [], total:Number(covered), next_offset:null};
+          const result = {
+            covered, items:covered ? [item] : [], total:Number(covered), next_offset:null,
+          };
           const response = Response.json(result, {headers});
           if (pausePage) return new Promise(resolve => { releasePage = () => resolve(response); });
           return Promise.resolve(response);

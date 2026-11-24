@@ -104,9 +104,7 @@ class SummaryVisibilityChangedError(RuntimeError):
 def authorized_summary_scopes(connection: Connection, allows: ScopeCheck) -> set[SummaryScope]:
     """从同一数据库快照复核目前管理或召回可见的完整来源范围。"""
     rows = connection.execute("SELECT DISTINCT route, visibility FROM memory_summary_deltas")
-    return {
-        scope for row in rows if allows(scope := _scope(row))
-    }
+    return {scope for row in rows if allows(scope := _scope(row))}
 
 
 _RESOURCE_ROWS = """SELECT fact.*, delta.route, delta.visibility, delta.recorded_at
@@ -137,7 +135,9 @@ def summary_detail(
 ) -> HistoricalMemory | None:
     """只返回对当前管理者可知的派生值，绝不返回平台证据正文。"""
     if (
-        len(source.key) != 1 or type(source.key[0]) is not int or not 0 < source.key[0] < 2**63
+        len(source.key) != 1
+        or type(source.key[0]) is not int
+        or not 0 < source.key[0] < 2**63
         or source != _summary_source(source.key[0])
     ):
         return None
@@ -313,8 +313,9 @@ def search_summaries(
         ):
             continue
         hits.append(
-            SummaryHit(_summary_source(row["id"]), timestamp, row["text"], _evidence(scope, row),
-                       relevance)
+            SummaryHit(
+                _summary_source(row["id"]), timestamp, row["text"], _evidence(scope, row), relevance
+            )
         )
     hits.sort(key=lambda hit: (hit.relevance, hit.recorded_at), reverse=True)
     return hits[:limit]

@@ -557,7 +557,9 @@ class ConversationFlow:
             summary = mood_summary if mood_summary is not None else mood_state or ""
             return (
                 context(include_behavior_style=True, hormone_state=full_text, mood_summary=summary),
-                context(include_behavior_style=False, hormone_state=replyer_text, mood_summary=summary),
+                context(
+                    include_behavior_style=False, hormone_state=replyer_text, mood_summary=summary
+                ),
             )
 
         judge_count = self._judge.context_messages if self._judge is not None else 0
@@ -597,7 +599,8 @@ class ConversationFlow:
             viewer_is_user=not contact,
             build_contexts=build_contexts,
             read_mood=read_mood,
-            empathy_detail_for_all=viewer_is_user and target.visibility is VisibilityScope.USER_ONLY,
+            empathy_detail_for_all=viewer_is_user
+            and target.visibility is VisibilityScope.USER_ONLY,
             with_interests=bool(interests_state),
             history_ids=history_ids,
             working_context=working_context,
@@ -608,10 +611,15 @@ class ConversationFlow:
             history_visibility=target.visibility,
             language_scope_key=route_key or local_language_scope(target),
             summary_scope=summary_scope_for(
-                target.channel, target.sender_id, target.trust, target.visibility, route_key,
+                target.channel,
+                target.sender_id,
+                target.trust,
+                target.visibility,
+                route_key,
             ),
             legacy_user_extractions=(
-                target.channel == "terminal" and viewer_is_user
+                target.channel == "terminal"
+                and viewer_is_user
                 and target.visibility is VisibilityScope.USER_ONLY
             ),
             emoji_history=(
@@ -657,6 +665,7 @@ class ConversationFlow:
             job: 回复要用的材料；每次都从 base_strategy 重新算，重复调用不会叠加。
             extra: 刚算出、还没正式记下的触发。后台任务不写状态（D41），回复却要带上这次的情绪，
                 所以先拿它们临时算，正式写入在收结果的那一拍。
+            now: 本次计算激素影响使用的时钟时间。
         """
         hormones = self._hormones
         empathic = self._empathy_focus.active(trigger for trigger in extra if trigger.is_empathy)
@@ -686,10 +695,13 @@ class ConversationFlow:
             length = current.lowered()
             strategy = replace(strategy, length_limit=length)
             length_note = f"低落使本轮回复长度上限调整为：{length.describe()}。"
+
         def hormone_context(*, plan_first: bool) -> str:
             if effects is None:
                 return ""
-            return "\n".join(filter(None, (effects.context_text(plan_first=plan_first), length_note)))
+            return "\n".join(
+                filter(None, (effects.context_text(plan_first=plan_first), length_note))
+            )
 
         mood = job.read_mood(now, effective_triggers) if job.read_mood is not None else None
         full_context, replyer_context = job.build_contexts(
@@ -1013,13 +1025,19 @@ class ConversationFlow:
             stay_in_conversation=stay_in_conversation,
             quote_source=quote_source,
             platform_history=(
-                platform_history and self.platform_history is not None
-                and self.platform_history.allows is not None and not self._config.roleplay_mode
+                platform_history
+                and self.platform_history is not None
+                and self.platform_history.allows is not None
+                and not self._config.roleplay_mode
             ),
             platform_cleanup=(
-                platform_cleanup and platform_history and self.history_retention is not None
-                and self.history_retention.available() and not self._config.roleplay_mode
-                and self.platform_history is not None and self.platform_history.allows is not None
+                platform_cleanup
+                and platform_history
+                and self.history_retention is not None
+                and self.history_retention.available()
+                and not self._config.roleplay_mode
+                and self.platform_history is not None
+                and self.platform_history.allows is not None
             ),
         )
 
@@ -1036,21 +1054,29 @@ class ConversationFlow:
 
         def still_authorized() -> bool:
             return (
-                history is not None and key is not None and history.permits(key)
+                history is not None
+                and key is not None
+                and history.permits(key)
                 and (job.planner_run is None or not job.planner_run.restart_requested)
             )
 
         can_read_history = (
-            job.history_visibility in (
-                VisibilityScope.USER_ONLY, VisibilityScope.GROUP, VisibilityScope.PUBLIC,
-            ) and still_authorized()
+            job.history_visibility
+            in (
+                VisibilityScope.USER_ONLY,
+                VisibilityScope.GROUP,
+                VisibilityScope.PUBLIC,
+            )
+            and still_authorized()
         )
         options = self.planner_tool_options(
             interests=job.with_interests,
             emoji=job.emoji_history is not None,
             inbox=job.inbox_attention,
             special_contact=job.person_id is not None and not job.viewer_is_user,
-            stay_in_conversation=any("inbox_message_id" in record.metadata for record in job.messages),
+            stay_in_conversation=any(
+                "inbox_message_id" in record.metadata for record in job.messages
+            ),
             quote_source=job.can_quote,
             platform_history=can_read_history,
             platform_cleanup=job.round_trace is not None and not review_reason,
@@ -1128,7 +1154,10 @@ class ConversationFlow:
             nonlocal pending
             assert self.history_retention is not None and key is not None
             pending = await asyncio.to_thread(
-                self.history_retention.preview, key, job.history_visibility, cutoff,
+                self.history_retention.preview,
+                key,
+                job.history_visibility,
+                cutoff,
             )
             if pending is None:
                 return '{"status":"invalid_cutoff","detail":"截止日期不能晚于当地今天。"}'
@@ -1136,7 +1165,10 @@ class ConversationFlow:
 
         try:
             result = await dispatch_planner_tools(
-                request, tools, call_planner, retrieve,
+                request,
+                tools,
+                call_planner,
+                retrieve,
                 actions=trace.actions if trace is not None else None,
                 read_history=read_history if options.platform_history else None,
                 preview_cleanup=preview_cleanup if options.platform_cleanup else None,
@@ -1197,7 +1229,9 @@ class ConversationFlow:
             return ""
         if self.expression_recall is not None:
             vector_reference = await self.expression_recall.reference(
-                plan, job.language_scope_key, recheck=lambda: self._require_current_recall(job, recall)
+                plan,
+                job.language_scope_key,
+                recheck=lambda: self._require_current_recall(job, recall),
             )
             if vector_reference is not None:
                 return vector_reference

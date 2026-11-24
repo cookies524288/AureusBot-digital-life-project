@@ -160,7 +160,9 @@ def test_toml_single_key_revert_uses_current_developer_default(rig: ConfigRig) -
 
 def test_each_biochemical_restore_is_rejected_but_switches_are_editable(rig: ConfigRig) -> None:
     path = rig.paths.runtime_config_file
-    before = b"[hormones]\nanger_half_life_seconds = 123.0 # keep\n[mood]\nhalf_life_seconds = 3600.0\n"
+    before = (
+        b"[hormones]\nanger_half_life_seconds = 123.0 # keep\n[mood]\nhalf_life_seconds = 3600.0\n"
+    )
     path.write_bytes(before)
     protected = rig.client.get("/api/config").json()["biochemical_sources"]
     for field in protected:

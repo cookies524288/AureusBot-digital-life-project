@@ -319,7 +319,7 @@ async def test_text_roles_use_configured_routes_across_reload(tmp_path: Path) ->
     paths.ensure_directories()
     paths.identity_file.write_text(IDENTITY, encoding="utf-8")
     paths.runtime_config_file.write_text(
-        '[memory]\nconsolidation_enabled = true\n', encoding="utf-8"
+        "[memory]\nconsolidation_enabled = true\n", encoding="utf-8"
     )
     with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
         models = core.models

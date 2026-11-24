@@ -13,7 +13,10 @@ class EmpathyFocus:
     """只读取焦点内共情；时间线记录原因，不当作持久刺激。"""
 
     def __init__(
-        self, timeline: TimelineDatabase, memory: WorkingMemory | None, config: HormonesConfig | None
+        self,
+        timeline: TimelineDatabase,
+        memory: WorkingMemory | None,
+        config: HormonesConfig | None,
     ) -> None:
         self._timeline = timeline
         self._memory = memory

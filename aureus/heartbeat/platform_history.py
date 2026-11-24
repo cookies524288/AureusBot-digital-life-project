@@ -49,11 +49,15 @@ class _HistoryRow:
 
 
 def _encode(rows: list[dict[str, object]], before: HistoryBoundary | None) -> str:
-    return json.dumps({
-        "status": "ok" if rows else "no_results",
-        "messages": rows,
-        "next_before": asdict(before) if before else None,
-    }, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        {
+            "status": "ok" if rows else "no_results",
+            "messages": rows,
+            "next_before": asdict(before) if before else None,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def _result(rows: list[_HistoryRow], limit: int, more: HistoryBoundary | None) -> str:
@@ -61,8 +65,11 @@ def _result(rows: list[_HistoryRow], limit: int, more: HistoryBoundary | None) -
     for index, row in enumerate(rows[:limit]):
         before = HistoryBoundary(row.source, row.id) if index + 1 < len(rows) or more else None
         detail = row.detail()
-        detail["content"] = (row.content[:MAX_RECALL_CHARS] + "…"
-                             if len(row.content) > MAX_RECALL_CHARS else row.content)
+        detail["content"] = (
+            row.content[:MAX_RECALL_CHARS] + "…"
+            if len(row.content) > MAX_RECALL_CHARS
+            else row.content
+        )
         result = _encode([*messages, detail], before)
         if len(result) > MAX_RECALL_CHARS:
             if messages:
@@ -105,35 +112,57 @@ class PlatformHistory:
         before = query.before
         if before is None or before.source == "inbox":
             for message in self.store.list_read_history(
-                key, visibility, before_id=before.id if before else None,
-                keyword=query.keyword, limit=limit + 1,
+                key,
+                visibility,
+                before_id=before.id if before else None,
+                keyword=query.keyword,
+                limit=limit + 1,
             ):
                 perception = message.perception
-                rows.append(_HistoryRow(
-                    "inbox", message.id, message.timestamp, perception.sender_id or None,
-                    message.sender_name or None, message.direction,
-                    perception.route.message_id if perception.route else None, perception.content,
-                ))
+                rows.append(
+                    _HistoryRow(
+                        "inbox",
+                        message.id,
+                        message.timestamp,
+                        perception.sender_id or None,
+                        message.sender_name or None,
+                        message.direction,
+                        perception.route.message_id if perception.route else None,
+                        perception.content,
+                    )
+                )
         if len(rows) > limit:
             return _result(rows, limit, None)
         legacy_before = before.id if before and before.source == "timeline" else None
         old = self.legacy.page(
             (key.platform, key.account_id, key.kind, key.recipient_id, key.temporary_group_id),
-            before_id=legacy_before, limit=_LEGACY_SCAN_SIZE, visibility=visibility,
-            keyword=query.keyword, received_only=True,
+            before_id=legacy_before,
+            limit=_LEGACY_SCAN_SIZE,
+            visibility=visibility,
+            keyword=query.keyword,
+            received_only=True,
         )
         identifiers = [item.metadata.get("message_id") for item in old]
-        canonical = self.store.existing_message_ids(key, (
-            value for value in identifiers if isinstance(value, str) and value
-        ))
+        canonical = self.store.existing_message_ids(
+            key, (value for value in identifiers if isinstance(value, str) and value)
+        )
         excluded = self.store.excluded_timeline_ids(key, (record.id for record in old))
         for record, identifier in zip(old, identifiers, strict=True):
             platform_id = identifier if isinstance(identifier, str) and identifier else None
             if platform_id in canonical or record.id in excluded:
                 continue
             name = record.metadata.get("sender_name")
-            rows.append(_HistoryRow("timeline", record.id, record.timestamp, record.actor_id,
-                                    name if isinstance(name, str) else None, "incoming",
-                                    platform_id, record.content))
+            rows.append(
+                _HistoryRow(
+                    "timeline",
+                    record.id,
+                    record.timestamp,
+                    record.actor_id,
+                    name if isinstance(name, str) else None,
+                    "incoming",
+                    platform_id,
+                    record.content,
+                )
+            )
         more = HistoryBoundary("timeline", old[-1].id) if len(old) == _LEGACY_SCAN_SIZE else None
         return _result(rows, limit, more)

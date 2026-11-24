@@ -33,14 +33,17 @@ def test_settings_catalog_covers_the_received_schema(config_response: dict[str, 
           if (!node.$ref) { expectedFields.push(sec); continue; }
           const definition = cf.schema.$defs[node.$ref.split('/').pop()];
           expectedSections.push(sec);
-          for (const field of Object.keys(definition.properties)) expectedFields.push(`${sec}.${field}`);
+          for (const field of Object.keys(definition.properties)) {
+            expectedFields.push(`${sec}.${field}`);
+          }
         }
         const sections = cfSectionList();
         const entries = configSearchEntries(sections);
         assert.deepEqual(sections.map(([sec]) => sec).sort(), expectedSections.sort());
         assert.deepEqual(entries.map(({key}) => key).sort(),
           [...expectedFields.filter(key => !excluded.has(key)), 'aureus-font'].sort());
-        assert.deepEqual(Object.keys(CFG_FIELDS).sort(), entries.map(({key}) => key).filter(key => key !== 'aureus-font').sort());
+        assert.deepEqual(Object.keys(CFG_FIELDS).sort(),
+          entries.map(({key}) => key).filter(key => key !== 'aureus-font').sort());
         function checkHelp(term, name) {
           assert.equal(term.className, 'setting-term');
           assert.equal(term.attributes.tabindex, 0);
@@ -86,9 +89,11 @@ def test_biochemical_rows_show_values_defaults_sources_and_toml_recovery(
         for (const section of cfSectionList()) {
           const card = buildConfigSection(...section);
           const [sec] = section;
-          const protectedFields = Object.keys(cf.biochemicalSources).filter(key => key.startsWith(sec + '.'));
+          const protectedFields = Object.keys(cf.biochemicalSources)
+            .filter(key => key.startsWith(sec + '.'));
           if (protectedFields.length) {
-            assert.ok(card.children.some(node => node.textContent.includes(`[${sec}] 节只删除对应的键值行`)));
+            assert.ok(card.children.some(node =>
+              node.textContent.includes(`[${sec}] 节只删除对应的键值行`)));
           }
           for (const key of protectedFields) {
             const field = key.split('.')[1];
@@ -99,7 +104,8 @@ def test_biochemical_rows_show_values_defaults_sources_and_toml_recovery(
             assert.equal(value.tagName, 'DIV');
             assert.equal(value.children[0].textContent, String(response.config[sec][field]));
             assert.equal(value.children[1].textContent,
-              `开发默认值 ${cfSectionProperties(sec)[field].default} · 来源：${cf.biochemicalSources[key]}`);
+              `开发默认值 ${cfSectionProperties(sec)[field].default}` +
+              ` · 来源：${cf.biochemicalSources[key]}`);
           }
         }
         assert.equal($('cf-field-hormones.anger_enabled').tagName, 'INPUT');

@@ -18,6 +18,7 @@ from aureus.common import ManualClock
 from aureus.memory import HistoricalMemory, MemoryEvidence, MemoryIndex, MemorySource
 from aureus.memory.bundle_format import (
     BUNDLE_FORMAT,
+    ContentLevel,
     MemoryBundle,
     MemoryBundleError,
     bundle_digest,
@@ -283,7 +284,12 @@ def test_fixed_source_bidirectional_v1_and_v2(tmp_path: Path) -> None:
             snapshot=("synthetic", "fixed-test"),
         )
         [scope] = index.list_bundle_sources()
-        for level, has_images in (("knowledge", False), ("full", False), ("full", True)):
+        combinations: tuple[tuple[ContentLevel, bool], ...] = (
+            ("knowledge", False),
+            ("full", False),
+            ("full", True),
+        )
+        for level, has_images in combinations:
             upstream = asyncio.run(
                 fixed._export_bundle(
                     {

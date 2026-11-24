@@ -71,7 +71,10 @@ class ReplyOutbox:
     """在心跳中投递到期的分段，等待期间只保存已记录的回复。"""
 
     def __init__(
-        self, clock: Clock, config: HeartbeatConfig, send: _Send,
+        self,
+        clock: Clock,
+        config: HeartbeatConfig,
+        send: _Send,
         record_discard: Callable[[TimelineRecord, int | None], None],
     ) -> None:
         self._clock = clock

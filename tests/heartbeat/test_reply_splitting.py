@@ -285,7 +285,9 @@ async def test_other_conversation_can_send_while_first_conversation_types(
     second_round = second_plan.metadata["round_id"]
     assert first_round != second_round
     assert [(record.content, record.metadata["round_id"]) for record in delivered] == [
-        ("第一群", first_round), ("第二群", second_round), ("等待的内容", first_round),
+        ("第一群", first_round),
+        ("第二群", second_round),
+        ("等待的内容", first_round),
     ]
 
 

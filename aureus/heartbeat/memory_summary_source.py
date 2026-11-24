@@ -23,7 +23,9 @@ def summary_scope_for(
 ) -> SummaryScope | None:
     """平台召回需要真实的目标路由；网页私聊要求固定的经验证账号。"""
     if (
-        route_key is not None and channel == "qq" and visibility in VISIBLE_SUMMARY_SCOPES
+        route_key is not None
+        and channel == "qq"
+        and visibility in VISIBLE_SUMMARY_SCOPES
         and trust in (TrustLevel.VERIFIED_USER, TrustLevel.VERIFIED_CONTACT)
     ):
         return route_key, visibility
@@ -116,8 +118,10 @@ class PlatformSummarySource:
         if scope == WEB_PRIVATE_SCOPE:
             return self.timeline is not None and self.web_enabled is not None and self.web_enabled()
         if (
-            self.allows is None or self.store is None
-            or not scope[0].startswith("[") or scope[1] not in VISIBLE_SUMMARY_SCOPES
+            self.allows is None
+            or self.store is None
+            or not scope[0].startswith("[")
+            or scope[1] not in VISIBLE_SUMMARY_SCOPES
         ):
             return False
         return self.allows(ConversationKey.from_scope_key(scope[0]))

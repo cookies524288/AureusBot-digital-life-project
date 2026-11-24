@@ -273,7 +273,8 @@ async def test_review_reason_returns_only_to_planner_then_sends_rewrite(
 
 
 async def test_round_keeps_reference_but_no_sent_text_when_channel_refuses(
-    made: list[Rig], tmp_path: Path,
+    made: list[Rig],
+    tmp_path: Path,
 ) -> None:
     def refuse(message: OutgoingMessage) -> None:
         assert message.kind is MessageKind.REPLY

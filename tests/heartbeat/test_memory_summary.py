@@ -226,14 +226,25 @@ def test_authorized_cross_scope_recall_keeps_platform_text_private(rig: Rig) -> 
     private = ConversationKey("qq", "100", "private", "200")
     rig.source.allows = lambda candidate: candidate in (rig.key, private)
     for identifier, content in (("m1", "我住在晴桂巷。"), ("m2", "确认住在晴桂巷。")):
-        rig.add(identifier, content, kind="private", recipient="200",
-                visibility=VisibilityScope.USER_ONLY)
+        rig.add(
+            identifier,
+            content,
+            kind="private",
+            recipient="200",
+            visibility=VisibilityScope.USER_ONLY,
+        )
     window = rig.window()
     assert window.scope == (private.language_scope_key(), VisibilityScope.USER_ONLY)
-    assert summary_scope_for(
-        "qq", "200", TrustLevel.VERIFIED_CONTACT, VisibilityScope.PRIVATE,
-        private.language_scope_key(),
-    ) is None
+    assert (
+        summary_scope_for(
+            "qq",
+            "200",
+            TrustLevel.VERIFIED_CONTACT,
+            VisibilityScope.PRIVATE,
+            private.language_scope_key(),
+        )
+        is None
+    )
     delta = parse_delta(_answer("晴桂巷", "我住在晴桂巷。"), window)
     assert rig.index.commit_summary(window, delta, rig.source.check_window)
     rig.index.summary_scope_allowed = rig.source.allows_scope
@@ -248,7 +259,9 @@ def test_authorized_cross_scope_recall_keeps_platform_text_private(rig: Rig) -> 
 
     app = FastAPI()
     visible = True
-    register_resource_routes(app, require_ready, None, rig.index, can_show_summary=lambda scope: visible)
+    register_resource_routes(
+        app, require_ready, None, rig.index, can_show_summary=lambda scope: visible
+    )
     endpoint = "/api/resources/memory"
     detail = endpoint + "/facts/detail"
     location = {"source": hits[0].source.encode()}

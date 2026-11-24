@@ -11,8 +11,8 @@ from aureus.common import Clock
 from aureus.core import CognitiveState
 from aureus.heartbeat import EVENT_REPLY_REFERENCE, recent_dialogue
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
-from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.heartbeat.inbox_store import ConversationKey
+from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord, VisibilityScope
 from aureus.web.recall_feedback_api import feedback_available
 
@@ -23,10 +23,13 @@ MAX_LIMIT = 300
 
 
 def _timeline_item(
-    record: TimelineRecord, timeline: TimelineDatabase, recall_feedback_enabled: bool,
+    record: TimelineRecord,
+    timeline: TimelineDatabase,
+    recall_feedback_enabled: bool,
 ) -> dict[str, Any]:
     metadata = {
-        key: value for key, value in record.metadata.items()
+        key: value
+        for key, value in record.metadata.items()
         if key not in {"round_id", "recall_feedback_refs"}
     }
     item: dict[str, Any] = {
@@ -94,7 +97,9 @@ class HeartbeatView(Protocol):
         ...
 
     def is_replying_to(
-        self, *, conversation: ConversationKey | None = None,
+        self,
+        *,
+        conversation: ConversationKey | None = None,
         web_visibility: VisibilityScope | None = None,
     ) -> bool:
         """指定会话是否有进行中的回复。"""
@@ -151,8 +156,7 @@ def register_timeline_routes(
         return {
             "summary": heartbeat.working_memory_summaries(),
             "records": [
-                _timeline_item(record, timeline, recall_feedback_enabled)
-                for record in records
+                _timeline_item(record, timeline, recall_feedback_enabled) for record in records
             ],
             "next_before_id": records[0].id if len(records) == bounded_limit else None,
             "context": {

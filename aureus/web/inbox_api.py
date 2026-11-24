@@ -57,8 +57,13 @@ def register_inbox_routes(
         key: Annotated[ConversationKey, Depends(_conversation_key)],
     ) -> JSONResponse:
         return JSONResponse(
-            {"typing": store is not None and allows_conversation is not None
-             and allows_conversation(key) and is_replying is not None and is_replying(key)},
+            {
+                "typing": store is not None
+                and allows_conversation is not None
+                and allows_conversation(key)
+                and is_replying is not None
+                and is_replying(key)
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -90,7 +95,8 @@ def register_inbox_routes(
         if imported is not None and await asyncio.to_thread(imported.page, before_id=None, limit=1):
             archives.append({"archive": "imported", "name": "迁入消息 · 未归类"})
         conversations = [
-            row for key, row in candidates.items()
+            row
+            for key, row in candidates.items()
             if allows_conversation is not None and allows_conversation(key)
         ]
         catalog: dict[str, Any] = {"enabled": enabled, "conversations": conversations}
@@ -115,8 +121,12 @@ def register_inbox_routes(
         offset = ((page or 1) - 1) * limit
         if before_source == "inbox":
             rows = await asyncio.to_thread(
-                store.list_messages, key, before_id=before_id, limit=limit + 1,
-                offset=offset, visible_to_user=True,
+                store.list_messages,
+                key,
+                before_id=before_id,
+                limit=limit + 1,
+                offset=offset,
+                visible_to_user=True,
             )
             messages.extend(inbox_message(row, include_attachment_ids=page is None) for row in rows)
         remaining = limit + 1 - len(messages)
@@ -128,8 +138,12 @@ def register_inbox_routes(
                 size = await asyncio.to_thread(store.count_visible_messages, key)
                 skip = max(0, offset - size)
             old = await asyncio.to_thread(
-                timeline_page, store, history, key,
-                before_id=before_id if before_source == "timeline" else None, limit=remaining,
+                timeline_page,
+                store,
+                history,
+                key,
+                before_id=before_id if before_source == "timeline" else None,
+                limit=remaining,
                 skip=skip,
             )
             messages.extend(map(timeline_message, old))
@@ -145,7 +159,9 @@ def register_inbox_routes(
     ) -> Response:
         def authorized() -> bool:
             return (
-                is_active is not None and is_active(token) and allows_conversation is not None
+                is_active is not None
+                and is_active(token)
+                and allows_conversation is not None
                 and allows_conversation(key)
             )
 
@@ -166,7 +182,10 @@ def register_inbox_routes(
             if current != image or not authorized():
                 raise unavailable
             return JSONResponse(
-                {"description": description, "source": note.source if description and note else None},
+                {
+                    "description": description,
+                    "source": note.source if description and note else None,
+                },
                 headers={"Cache-Control": "no-store"},
             )
         if read_attachment is None:
@@ -177,36 +196,51 @@ def register_inbox_routes(
         current = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
         if current is None or current[:2] != image[:2] or not authorized():
             raise unavailable
-        return Response(media[0], media_type=media[1], headers={
-            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-            "Cross-Origin-Resource-Policy": "same-origin",
-        })
+        return Response(
+            media[0],
+            media_type=media[1],
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Cross-Origin-Resource-Policy": "same-origin",
+            },
+        )
 
     @app.get("/api/inbox/messages/{identifier}/avatar")
     async def read_avatar(
-        request: Request, token: Annotated[str, Depends(require_ready)],
+        request: Request,
+        token: Annotated[str, Depends(require_ready)],
         key: Annotated[ConversationKey, Depends(_conversation_key)],
         identifier: Annotated[int, Path(gt=0, le=2**63 - 1)],
     ) -> Response:
         def authorized() -> bool:
             return (
-                allows_conversation is not None and allows_conversation(key)
-                and is_active is not None and is_active(token)
+                allows_conversation is not None
+                and allows_conversation(key)
+                and is_active is not None
+                and is_active(token)
             )
 
         unavailable = HTTPException(404, "这条消息没有可读取的 QQ 头像。")
         if (
             request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
-            or avatars is None or store is None or not authorized()
+            or avatars is None
+            or store is None
+            or not authorized()
         ):
             raise unavailable
         message = await asyncio.to_thread(store.get_visible_message, key, identifier)
         if message is None or (avatar := await avatars.read(message, authorized)) is None:
             raise unavailable
-        return Response(avatar[0], media_type=avatar[1], headers={
-            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-            "Cross-Origin-Resource-Policy": "same-origin",
-        })
+        return Response(
+            avatar[0],
+            media_type=avatar[1],
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Cross-Origin-Resource-Policy": "same-origin",
+            },
+        )
 
     @app.get("/api/inbox/uncategorized")
     async def list_uncategorized(
@@ -222,8 +256,12 @@ def register_inbox_routes(
         offset = ((page or 1) - 1) * limit
         if source == "timeline":
             rows = await asyncio.to_thread(
-                history.page, None, before_id=before_id, limit=limit + 1,
-                archive_account_id=archive_account_id, offset=offset,
+                history.page,
+                None,
+                before_id=before_id,
+                limit=limit + 1,
+                archive_account_id=archive_account_id,
+                offset=offset,
             )
             messages.extend(map(timeline_message, rows))
         elif imported is not None:
@@ -237,7 +275,8 @@ def register_inbox_routes(
 def _response(messages: list[dict[str, Any]], limit: int) -> dict[str, Any]:
     boundary = messages[limit - 1] if len(messages) > limit else None
     response: dict[str, Any] = {
-        "messages": messages[:limit], "next_before_id": boundary["id"] if boundary else None
+        "messages": messages[:limit],
+        "next_before_id": boundary["id"] if boundary else None,
     }
     if boundary and boundary["source"] == "timeline":
         response["next_before_source"] = "timeline"

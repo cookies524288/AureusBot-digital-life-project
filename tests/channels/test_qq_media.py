@@ -249,9 +249,17 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
                 connected.put_nowait(remote)
                 continue
             if action == "get_group_info":
-                await remote.send(json.dumps({**envelope, "data": {
-                    "group_id": GROUP, "group_name": "测试群",
-                }}))
+                await remote.send(
+                    json.dumps(
+                        {
+                            **envelope,
+                            "data": {
+                                "group_id": GROUP,
+                                "group_name": "测试群",
+                            },
+                        }
+                    )
+                )
                 continue
             requests.append(request)
             if action == "get_record":
@@ -314,9 +322,17 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
             on_inbox_message=received.put_nowait,
         ) as channel:
             remote = await connected.get()
-            await remote.send(json.dumps(event(
-                45, 2100, "", group=GROUP, message=[segment("image", "ok.png")],
-            )))
+            await remote.send(
+                json.dumps(
+                    event(
+                        45,
+                        2100,
+                        "",
+                        group=GROUP,
+                        message=[segment("image", "ok.png")],
+                    )
+                )
+            )
             await remote.send(
                 json.dumps(
                     event(
@@ -355,7 +371,9 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
                     visibility=source.visibility,
                     metadata={"inbox_message_id": original.id},
                 )
-                for index, (source, original) in enumerate(zip(sources, (pure, mixed), strict=True), 1)
+                for index, (source, original) in enumerate(
+                    zip(sources, (pure, mixed), strict=True), 1
+                )
             ]
             flow = InboxMedia(recognize, inbox_store=reopened)
             flow.read = channel.read_inbox_attachment

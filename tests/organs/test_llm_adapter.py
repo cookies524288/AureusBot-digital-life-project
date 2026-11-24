@@ -220,9 +220,7 @@ STOP_TOOL = ToolDefinition("stop", "结束本轮", {"type": "object", "propertie
 
 
 def make_planner(completion: FakeCompletion, keys: KeyResolver) -> LLMOrgan:
-    return LLMOrgan(
-        "planner", make_config().routes_for("replyer"), keys, completion, fixed_counter
-    )
+    return LLMOrgan("planner", make_config().routes_for("replyer"), keys, completion, fixed_counter)
 
 
 def make_tool_fragment(
@@ -288,7 +286,8 @@ async def test_planner_transports_tools_and_continues_with_a_correlated_tool_res
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("name", "arguments"), [("read", "{"), ("read", "[]"), ("read", '{"query": NaN}'), ("unknown", "{}")]
+    ("name", "arguments"),
+    [("read", "{"), ("read", "[]"), ("read", '{"query": NaN}'), ("unknown", "{}")],
 )
 async def test_malformed_tool_call_disables_the_entire_batch_and_keeps_usage(
     keys: KeyResolver, name: str, arguments: str
@@ -313,9 +312,7 @@ async def test_request_without_tools_does_not_forward_schema_or_expose_tool_call
     keys: KeyResolver,
 ) -> None:
     raw = make_response("照常回答")
-    raw.choices[0].message.tool_calls = [
-        make_tool_fragment("{}", call_id="call_stop", name="stop")
-    ]
+    raw.choices[0].message.tool_calls = [make_tool_fragment("{}", call_id="call_stop", name="stop")]
     completion = FakeCompletion(raw)
     response = await make_organ(completion, keys).process(ask())
     assert "tools" not in completion.calls[0]

@@ -174,14 +174,17 @@ def run_page_script(code: str) -> None:
 def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() -> None:
     run_page_script(
         r"""
-        const route = {platform:'qq', account_id:'14', kind:'group', recipient_id:'62', temporary_group_id:null};
+        const route = {
+          platform:'qq', account_id:'14', kind:'group', recipient_id:'62', temporary_group_id:null,
+        };
         const pending = new Map();
         const stamp = '2026-11-24T01:23:00Z';
         const messages = page => ({messages:[{source:'inbox', id:page + 10, conversation:route,
           direction:'outgoing', content:'发件 ' + page, timestamp:stamp,
           attachments:[{kind:'image', file_id:'https://invalid.test/private'},
             {kind:'image', file_id:'C:/private.png', is_emoji:true}]},
-          {source:'inbox', id:page + 1, conversation:route, direction:'incoming', content:'来件 ' + page}],
+          {source:'inbox', id:page + 1, conversation:route,
+            direction:'incoming', content:'来件 ' + page}],
           next_before_id:page < 3 ? 1 : null});
         state.loggedIn = true;
         fetch = async path => {
@@ -189,14 +192,18 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
             enabled:true, conversations:[{key:route, name:'同名测试群', unread_count:120}],
             archives:[{archive:'imported', name:'迁入原件'}],
           });
-          if (path.includes('view=description')) return reply(200, {source:'emoji_catalog', description:'合成描述'});
+          if (path.includes('view=description')) {
+            return reply(200, {source:'emoji_catalog', description:'合成描述'});
+          }
           if (path.startsWith('/api/inbox/history-cleanup?')) return reply(200, {preview:null});
           if (path.startsWith('/api/inbox/uncategorized?')) return reply(200,
             {messages:[{source:'imported', content:'原件', attachments:[]}], next_before_id:null});
           assert.match(path, /\/api\/inbox\/messages\?platform=qq&account_id=14/);
           assert.ok(!path.includes('before_id'));
           const page = Number(new URLSearchParams(path.split('?')[1]).get('page'));
-          return new Promise(resolve => pending.set(page, () => resolve(reply(200, messages(page)))));
+          return new Promise(resolve => {
+            pending.set(page, () => resolve(reply(200, messages(page))));
+          });
         };
         const click = id => $(id).listeners.click[0]({preventDefault(){}});
         await loadInbox();
@@ -225,8 +232,10 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
         assert.equal(outgoing.children[1].children[0].children[1].textContent, fmtTime(stamp));
         const [body, first, second] = outgoing.children[1].children[1].children;
         assert.equal(body.textContent, '发件 3');
-        assert.match(first.children[0].children[0].attributes.src, /^\/api\/inbox\/messages\/13\/images\/0\?/);
-        assert.match(second.children[0].children[0].attributes.src, /^\/api\/inbox\/messages\/13\/images\/1\?/);
+        assert.match(first.children[0].children[0].attributes.src,
+          /^\/api\/inbox\/messages\/13\/images\/0\?/);
+        assert.match(second.children[0].children[0].attributes.src,
+          /^\/api\/inbox\/messages\/13\/images\/1\?/);
         await first.children[2].listeners.click[0]();
         assert.match(first.children[1].textContent, /没有保存/);
         assert.equal(second.children[1].classList.contains('hidden'), true);
@@ -244,15 +253,22 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
 
 def test_inbox_cleanup_shows_current_scope_and_confirms_only_its_preview() -> None:
     run_page_script(r"""
-      const first = {platform:'qq', account_id:'bot', kind:'group', recipient_id:'old', temporary_group_id:null};
+      const first = {
+        platform:'qq', account_id:'bot', kind:'group', recipient_id:'old', temporary_group_id:null,
+      };
       const second = {...first, kind:'private', recipient_id:'new', temporary_group_id:'temp'};
-      const candidates = key => ({id:key.recipient_id, conversation:key, cutoff:'2026-11-24T00:00:00+08:00',
-        originals:3, timeline_only:1, image_vectors:2, read_water:44, inbox_water:47, timeline_water:59});
+      const candidates = key => ({
+        id:key.recipient_id, conversation:key, cutoff:'2026-11-24T00:00:00+08:00',
+        originals:3, timeline_only:1, image_vectors:2, read_water:44, inbox_water:47,
+        timeline_water:59,
+      });
       let finishOld, posted;
       state.loggedIn = true;
       fetch = async (path, options) => {
         const query = new URLSearchParams(path.split('?')[1]);
-        if (path.startsWith('/api/inbox/messages?')) return reply(200, {messages:[], next_before_id:null});
+        if (path.startsWith('/api/inbox/messages?')) {
+          return reply(200, {messages:[], next_before_id:null});
+        }
         assert.match(path, /^\/api\/inbox\/history-cleanup\?/);
         if (options.method === 'POST') {
           assert.equal(query.get('recipient_id'), 'new');
@@ -261,7 +277,9 @@ def test_inbox_cleanup_shows_current_scope_and_confirms_only_its_preview() -> No
           return reply(200, {completed:true});
         }
         if (query.get('recipient_id') === 'old') {
-          return new Promise(resolve => { finishOld = () => resolve(reply(200, {preview:candidates(first)})); });
+          return new Promise(resolve => {
+            finishOld = () => resolve(reply(200, {preview:candidates(first)}));
+          });
         }
         return reply(200, {preview:candidates(second)});
       };
@@ -342,7 +360,8 @@ def test_planner_tool_menu_follows_binding_and_discards_closed_requests() -> Non
           }};
         };
         assert.equal(await loadModelsConfig(), true);
-        const toolButton = () => $('editor-body').children[0].children.find(node => node.textContent === '工具列表');
+        const toolButton = () => $('editor-body').children[0].children
+          .find(node => node.textContent === '工具列表');
         openOrganEditor('planner');
         assert.equal(toolButton(), undefined);
         openOrganEditor('custom-planner');

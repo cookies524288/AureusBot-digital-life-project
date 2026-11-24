@@ -75,9 +75,7 @@ async def test_periodic_emoji_maintenance_refreshes_real_candidates(paths: Aureu
         assert store is not None
         image = b"GIF89a synthetic media"
         entry = store.collect(image, description="表情", register=True)
-        cancelled = store.collect(
-            b"GIF89a manual cancellation", description="取消", register=True
-        )
+        cancelled = store.collect(b"GIF89a manual cancellation", description="取消", register=True)
         assert entry.digest is not None and cancelled.digest is not None
         assert store.update_catalog(cancelled.digest, is_registered=False)
         attachment = paths.memory_dir / "attachments" / entry.digest
@@ -87,7 +85,9 @@ async def test_periodic_emoji_maintenance_refreshes_real_candidates(paths: Aureu
             clock.advance(timedelta(minutes=10))
             core.heartbeat.beat()
             await next(
-                task for task in asyncio.all_tasks() if task.get_name() == "aureus-emoji-maintenance"
+                task
+                for task in asyncio.all_tasks()
+                if task.get_name() == "aureus-emoji-maintenance"
             )
 
         core.heartbeat.wake_up()

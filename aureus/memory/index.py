@@ -755,7 +755,7 @@ class MemoryIndex:
                    WHERE NOT coalesce(edit.is_removed, 0)
                      AND EXISTS (SELECT 1 FROM timeline event
                                  WHERE event.id = memory_index.record_id
-                                   AND NOT ({is_message_event('event.event_type')}))
+                                   AND NOT ({is_message_event("event.event_type")}))
                      AND (? = '' OR coalesce(edit.is_enabled, 1) = (? = 'enabled'))
                      AND (? = '' OR instr(lower(edit.edited_content), lower(?)) > 0
                                    OR instr(lower(content), lower(?)) > 0
@@ -910,29 +910,48 @@ class MemoryIndex:
                     )
                 )
             if (
-                clauses and summary_scope is not None and person_keys is None
+                clauses
+                and summary_scope is not None
+                and person_keys is None
                 and self.summary_evidence is not None
                 and self._config.consolidation_enabled
                 and self._config.consolidation_extract_enabled
             ):
-                if self.summary_scope_allowed is not None and self.summary_scope_allowed(summary_scope):
+                if self.summary_scope_allowed is not None and self.summary_scope_allowed(
+                    summary_scope
+                ):
                     facts = search_authorized_summaries(
-                        conn, keywords, self.summary_evidence, self.summary_scope_allowed, limit,
-                        since=since, before=before,
+                        conn,
+                        keywords,
+                        self.summary_evidence,
+                        self.summary_scope_allowed,
+                        limit,
+                        since=since,
+                        before=before,
                     )
                     if not self.summary_scope_allowed(summary_scope):
                         facts = []
                 elif self.summary_scope_allowed is None:
                     facts = search_summaries(
-                        conn, summary_scope, keywords, self.summary_evidence, limit,
-                        since=since, before=before,
+                        conn,
+                        summary_scope,
+                        keywords,
+                        self.summary_evidence,
+                        limit,
+                        since=since,
+                        before=before,
                     )
                 else:
                     facts = []
                 hits.extend(
                     MemoryHit(
-                        None, item.recorded_at, "会话事实", item.text[:MAX_HIT_CHARS], item.source,
-                        evidence=item.evidence, relevance=item.relevance,
+                        None,
+                        item.recorded_at,
+                        "会话事实",
+                        item.text[:MAX_HIT_CHARS],
+                        item.source,
+                        evidence=item.evidence,
+                        relevance=item.relevance,
                     )
                     for item in facts
                 )

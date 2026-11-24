@@ -147,10 +147,14 @@ def read_graph_access(connection: sqlite3.Connection, now: datetime) -> GraphAcc
             ORDER BY member.source_key""",
         (now.timestamp(), now.timestamp()),
     )
-    return GraphAccess(generation, tuple(
-        MemorySource.decode(key) for key, signature, content in rows
-        if signature == _signature(content)
-    ))
+    return GraphAccess(
+        generation,
+        tuple(
+            MemorySource.decode(key)
+            for key, signature, content in rows
+            if signature == _signature(content)
+        ),
+    )
 
 
 class MemoryGraphDisplay:
@@ -164,9 +168,11 @@ class MemoryGraphDisplay:
         """列出服务端真实登记的批次，不从图或搜索结果推测批次。"""
         with closing(open_connection(self._database, read_only=True)) as connection:
             return [
-                GraphBatch(row["batch_id"], row["instance"], tuple(
-                    category for category in GRAPH_CATEGORIES if row[category]
-                ))
+                GraphBatch(
+                    row["batch_id"],
+                    row["instance"],
+                    tuple(category for category in GRAPH_CATEGORIES if row[category]),
+                )
                 for row in connection.execute("""
                     SELECT batch.* FROM memory_graph_batches batch
                     JOIN memory_history_snapshots snapshot USING (instance, fingerprint)
@@ -178,19 +184,25 @@ class MemoryGraphDisplay:
         """替换指定发布快照的展示类别；空类别撤权，不修改图资料。"""
         with closing(open_connection(self._database)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("""
+            row = connection.execute(
+                """
                 SELECT batch.* FROM memory_graph_batches batch
                 JOIN memory_history_snapshots snapshot USING (instance, fingerprint)
                 WHERE batch_id = ?
-            """, (batch_id,)).fetchone()
+            """,
+                (batch_id,),
+            ).fetchone()
             if row is None:
                 return False
             selected = tuple(category in categories for category in GRAPH_CATEGORIES)
             if selected != tuple(bool(row[category]) for category in GRAPH_CATEGORIES):
-                connection.execute("""
+                connection.execute(
+                    """
                     UPDATE memory_graph_batches SET entities = ?, relations = ?, evidence = ?
                     WHERE batch_id = ?
-                """, (*selected, batch_id))
+                """,
+                    (*selected, batch_id),
+                )
                 _note_change(connection)
             return True
 

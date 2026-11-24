@@ -165,7 +165,8 @@ def test_monitor_visibility_tags_do_not_change_timeline_or_overview_labels() -> 
           id:index + 1, actor:'system', event_type:'judgment', visibility,
           content:'合成记录 ' + visibility, time:'2026-11-24T10:00:00Z',
         }));
-        const badge = card => card.children[0].children.find(node => node.className === 'tag')?.textContent;
+        const badge = card => card.children[0].children
+          .find(node => node.className === 'tag')?.textContent;
         api = async path => ({ok:true, data:path === '/api/overview' ? {} : {records}});
         state.loggedIn = true;
         state.page = 'monitor';

@@ -124,6 +124,8 @@ def _record(
                 "aliases": _aliases(values.get("aliases_json")),
                 "occurred_at": values.get("updated_at"),
             }
+        case HistoricalKind.LOCAL_ALIAS_OVERRIDE:
+            raise MigrationError("invalid_staged_people_record")
     return record.model_copy(update=updates)
 
 

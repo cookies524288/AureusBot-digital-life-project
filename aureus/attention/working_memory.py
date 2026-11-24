@@ -269,7 +269,8 @@ class WorkingMemory:
             return ()
         scopes = self._dialogue_scopes(owner, route)
         return [
-            record for record in self._current_focus()
+            record
+            for record in self._current_focus()
             if record.id not in exclude and _record_scope(record) in scopes
         ][-remaining:]
 

@@ -237,7 +237,9 @@ async def test_emoji_progress_only_counts_valid_cached_descriptions_in_the_same_
         calls.append(request)
         assert request.organ_id == "text_embedding"
         return OrganResponse(
-            "text_embedding", "", metadata={"embedding_space": "test-space"},
+            "text_embedding",
+            "",
+            metadata={"embedding_space": "test-space"},
             embeddings=((1.0, 0.0),) * len(request.embedding_inputs),
         )
 
@@ -247,9 +249,12 @@ async def test_emoji_progress_only_counts_valid_cached_descriptions_in_the_same_
     spaces = ((1, "new-space"), (2, "test-space"))
     assert await selector.cache_coverage(spaces) == [(1, 0, 1), (2, 0, 1)]
     assert not calls
-    assert await selector.select(
-        EmojiIntent("开心", False), (), "用户", ModelPreference.PREFERRED, has_embedding=True
-    ) is not None
+    assert (
+        await selector.select(
+            EmojiIntent("开心", False), (), "用户", ModelPreference.PREFERRED, has_embedding=True
+        )
+        is not None
+    )
     store.collect(synthetic_emoji("blue"), description="难过", register=True)
     assert await selector.cache_coverage(spaces) == [(1, 0, 2), (2, 1, 2)]
     assert len(calls) == 2

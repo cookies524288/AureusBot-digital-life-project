@@ -65,9 +65,13 @@ def test_typing_endpoints_return_only_authorized_selected_scope(tmp_path: Path) 
         assert res.json() == {"typing": True}
         assert res.headers["Cache-Control"] == "no-store"
         assert rig.client.get("/api/chat/typing").json() == {"typing": False}
-        assert rig.client.get("/api/inbox/typing", params={
-            **GROUP, "account_id": "same-name-other-account",
-        }).json() == {"typing": False}
+        assert rig.client.get(
+            "/api/inbox/typing",
+            params={
+                **GROUP,
+                "account_id": "same-name-other-account",
+            },
+        ).json() == {"typing": False}
         allowed.clear()
         assert rig.client.get("/api/inbox/typing", params=GROUP).json() == {"typing": False}
         rig.heartbeat.replying_conversation = None
@@ -194,29 +198,45 @@ def test_legacy_history_pages_across_live_boundary_without_guessing(tmp_path: Pa
             ("16", "外部账号缺失路由", {"channel": "qq", "account_id": "7"}),
         ):
             rig.timeline.append(
-                "message", body, ActorType.PERSON, "3", VisibilityScope.GROUP,
+                "message",
+                body,
+                ActorType.PERSON,
+                "3",
+                VisibilityScope.GROUP,
                 metadata={"sender_name": "同一昵称", "message_id": number, **metadata},
             )
         store.add(
             Perception(
-                "qq", "3", "规范入箱", VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT,
+                "qq",
+                "3",
+                "规范入箱",
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_CONTACT,
                 route=MessageRoute("1", "group", "2", "12"),
             )
         )
         page = rig.client.get(MESSAGES, params={**GROUP, "limit": 2}).json()
         assert [(row["source"], row["content"]) for row in page["messages"]] == [
-            ("inbox", "规范入箱"), ("timeline", "旧二"),
+            ("inbox", "规范入箱"),
+            ("timeline", "旧二"),
         ]
-        following = rig.client.get(MESSAGES, params={
-            **GROUP, "limit": 2, "before_id": page["next_before_id"],
-            "before_source": page["next_before_source"],
-        }).json()
+        following = rig.client.get(
+            MESSAGES,
+            params={
+                **GROUP,
+                "limit": 2,
+                "before_id": page["next_before_id"],
+                "before_source": page["next_before_source"],
+            },
+        ).json()
         assert [row["content"] for row in following["messages"]] == ["旧一"]
         assert following["next_before_id"] is None
         by_number = rig.client.get(MESSAGES, params={**GROUP, "limit": 2, "page": 2}).json()
         assert by_number == following
         assert rig.client.get(MESSAGES, params={**GROUP, "page": 0}).status_code == 422
-        assert rig.client.get(MESSAGES, params={**GROUP, "page": 2, "before_id": 1}).status_code == 422
+        assert (
+            rig.client.get(MESSAGES, params={**GROUP, "page": 2, "before_id": 1}).status_code == 422
+        )
         catalog = rig.client.get(CONVERSATIONS).json()
         assert [row["key"]["recipient_id"] for row in catalog["conversations"]] == ["2", "5"]
         assert catalog["archives"][0]["archive"] == "timeline"
@@ -241,12 +261,20 @@ def test_legacy_private_routes_require_explicit_temporary_group(tmp_path: Path) 
             ("缺账号", {"channel": "qq", "message_type": "private", "recipient_id": "3"}),
         ):
             rig.timeline.append(
-                "message", body, ActorType.PERSON, "3", VisibilityScope.USER_ONLY, metadata=metadata,
+                "message",
+                body,
+                ActorType.PERSON,
+                "3",
+                VisibilityScope.USER_ONLY,
+                metadata=metadata,
             )
         catalog = rig.client.get(CONVERSATIONS).json()["conversations"]
         assert [row["key"]["temporary_group_id"] for row in catalog] == ["2", None]
         private = {"platform": "qq", "account_id": "1", "kind": "private", "recipient_id": "3"}
-        for params, body in ((private, "普通私聊"), ({**private, "temporary_group_id": "2"}, "临时私聊")):
+        for params, body in (
+            (private, "普通私聊"),
+            ({**private, "temporary_group_id": "2"}, "临时私聊"),
+        ):
             page = rig.client.get(MESSAGES, params=params).json()
             assert [row["content"] for row in page["messages"]] == [body]
         archive = rig.client.get(UNCATEGORIZED, params={"source": "timeline"}).json()
@@ -261,26 +289,46 @@ def test_imported_archive_pages_raw_messages_without_assigning_routes(tmp_path: 
     index.open()
     try:
         rig.log_in()
-        index.publish([
-            HistoricalMemory(MemorySource("old", "main", "mai_messages", (1,)), "旧来信", "同名"),
-            HistoricalMemory(MemorySource("old", "main", "messages", (2,)), "迁入正文", "同名"),
-            HistoricalMemory(MemorySource("old", "memory", "fact_claims", (3,)), "非消息事实"),
-            HistoricalMemory(MemorySource("old", "main", "messages", (4,)), "已停用", status="inactive"),
-        ])
+        index.publish(
+            [
+                HistoricalMemory(
+                    MemorySource("old", "main", "mai_messages", (1,)), "旧来信", "同名"
+                ),
+                HistoricalMemory(MemorySource("old", "main", "messages", (2,)), "迁入正文", "同名"),
+                HistoricalMemory(MemorySource("old", "memory", "fact_claims", (3,)), "非消息事实"),
+                HistoricalMemory(
+                    MemorySource("old", "main", "messages", (4,)), "已停用", status="inactive"
+                ),
+            ]
+        )
         assert rig.client.get(CONVERSATIONS).json()["archives"][0]["archive"] == "imported"
         first = rig.client.get(UNCATEGORIZED, params={"source": "imported", "limit": 1}).json()
-        second = rig.client.get(UNCATEGORIZED, params={
-            "source": "imported", "limit": 1, "before_id": first["next_before_id"],
-        }).json()
+        second = rig.client.get(
+            UNCATEGORIZED,
+            params={
+                "source": "imported",
+                "limit": 1,
+                "before_id": first["next_before_id"],
+            },
+        ).json()
         assert [first["messages"][0]["content"], second["messages"][0]["content"]] == [
-            "迁入正文", "旧来信",
+            "迁入正文",
+            "旧来信",
         ]
         assert first["messages"][0]["platform_message_id"] is None
         assert first["messages"][0]["visibility"] is None
         assert second["next_before_id"] is None
-        assert rig.client.get(UNCATEGORIZED, params={
-            "source": "imported", "limit": 1, "page": 2,
-        }).json() == second
+        assert (
+            rig.client.get(
+                UNCATEGORIZED,
+                params={
+                    "source": "imported",
+                    "limit": 1,
+                    "page": 2,
+                },
+            ).json()
+            == second
+        )
         assert rig.client.get(MESSAGES, params=GROUP).json()["messages"] == []
     finally:
         index.close()
@@ -306,17 +354,36 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
             allowed.clear()
         return photo, "image/svg+xml" if reference.file_id == "bad-type" else "image/png"
 
-    rig = ConfigRig(tmp_path, inbox_store=store, allows_inbox_conversation=allowed.__contains__,
-                    read_inbox_attachment=read, emoji_store=emojis)
+    rig = ConfigRig(
+        tmp_path,
+        inbox_store=store,
+        allows_inbox_conversation=allowed.__contains__,
+        read_inbox_attachment=read,
+        emoji_store=emojis,
+    )
     components = (
-        MediaReference("record", "voice"), MediaReference("image", "photo"),
-        MediaReference("image", "emoji", True), MediaReference("image", "bad-type"),
+        MediaReference("record", "voice"),
+        MediaReference("image", "photo"),
+        MediaReference("image", "emoji", True),
+        MediaReference("image", "bad-type"),
         MediaReference("image", "revoked"),
     )
     try:
-        for platform_id, visibility in (("visible", VisibilityScope.GROUP), ("hidden", VisibilityScope.PRIVATE)):
-            store.add(Perception("qq", "3", "原件", visibility, TrustLevel.VERIFIED_CONTACT,
-                                 route=MessageRoute("1", "group", "2", platform_id), attachments=components))
+        for platform_id, visibility in (
+            ("visible", VisibilityScope.GROUP),
+            ("hidden", VisibilityScope.PRIVATE),
+        ):
+            store.add(
+                Perception(
+                    "qq",
+                    "3",
+                    "原件",
+                    visibility,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("1", "group", "2", platform_id),
+                    attachments=components,
+                )
+            )
         visible = store.list_messages(route, visible_to_user=True)[0]
         hidden = store.list_messages(route)[0]
         endpoint = f"{MESSAGES}/{visible.id}/images"
@@ -328,12 +395,16 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
         assert cursor["messages"][0]["attachments"][2]["file_id"] == "emoji"
         invalid_scope = {**GROUP, "account_id": "7"}
         for path, scope in (
-            (f"{endpoint}/0", GROUP), (f"{endpoint}/99", GROUP), (f"{endpoint}/1", invalid_scope),
+            (f"{endpoint}/0", GROUP),
+            (f"{endpoint}/99", GROUP),
+            (f"{endpoint}/1", invalid_scope),
             (f"{MESSAGES}/{hidden.id}/images/1", GROUP),
         ):
             assert rig.client.get(path, params=scope).status_code == 404
         assert not reads
-        ordinary_description = rig.client.get(f"{endpoint}/1", params={**GROUP, "view": "description"})
+        ordinary_description = rig.client.get(
+            f"{endpoint}/1", params={**GROUP, "view": "description"}
+        )
         assert ordinary_description.json()["description"] is None
         assert not reads
         result = rig.client.get(f"{endpoint}/1", params=GROUP)
@@ -341,7 +412,9 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
         assert result.headers["Content-Type"] == "image/png"
         assert result.headers["Cache-Control"] == "no-store"
         assert result.headers["Cross-Origin-Resource-Policy"] == "same-origin"
-        store.save_image_note(visible.id, visible.perception, 2, InboxImageNote("emoji_catalog", digest))
+        store.save_image_note(
+            visible.id, visible.perception, 2, InboxImageNote("emoji_catalog", digest)
+        )
         description = rig.client.get(f"{endpoint}/2", params={**GROUP, "view": "description"})
         assert description.json() == {"source": "emoji_catalog", "description": "编造描述"}
         emojis.set_removed([f"asset:{digest}"], True)
@@ -363,11 +436,18 @@ def test_captions_follow_attachment_positions_and_complete_conversations(tmp_pat
     attachments = (MediaReference("image", "a.png"), MediaReference("image", "b.png"))
     originals = []
     for key in (first_key, other_key):
-        original = store.add(Perception(
-            "qq", "sender", "原件", VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT,
-            route=MessageRoute(key.account_id, key.kind, key.recipient_id, "same-platform-id"),
-            attachments=attachments,
-        ), conversation_name="同名群")
+        original = store.add(
+            Perception(
+                "qq",
+                "sender",
+                "原件",
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute(key.account_id, key.kind, key.recipient_id, "same-platform-id"),
+                attachments=attachments,
+            ),
+            conversation_name="同名群",
+        )
         assert original is not None
         originals.append(original)
     first, other = originals
@@ -375,15 +455,23 @@ def test_captions_follow_attachment_positions_and_complete_conversations(tmp_pat
     store.save_image_note(first.id, first.perception, 1, InboxImageNote("vlm", "乙"))
     store.save_image_note(other.id, first.perception, 0, InboxImageNote("vlm", "错会话"))
     store.save_image_note(other.id, other.perception, 0, InboxImageNote("vlm", "另一群的甲"))
-    rig = ConfigRig(tmp_path, inbox_store=InboxStore(path, ManualClock(NOW)),
-                    allows_inbox_conversation=allowed.__contains__)
+    rig = ConfigRig(
+        tmp_path,
+        inbox_store=InboxStore(path, ManualClock(NOW)),
+        allows_inbox_conversation=allowed.__contains__,
+    )
     try:
         rig.log_in()
 
         def caption(identifier: int, position: int, recipient_id: str) -> tuple[int, dict]:
-            response = rig.client.get(f"{MESSAGES}/{identifier}/images/{position}", params={
-                **GROUP, "recipient_id": recipient_id, "view": "description",
-            })
+            response = rig.client.get(
+                f"{MESSAGES}/{identifier}/images/{position}",
+                params={
+                    **GROUP,
+                    "recipient_id": recipient_id,
+                    "view": "description",
+                },
+            )
             return response.status_code, response.json()
 
         assert caption(first.id, 0, "2") == (200, {"description": "甲", "source": "vlm"})
@@ -394,7 +482,10 @@ def test_captions_follow_attachment_positions_and_complete_conversations(tmp_pat
         with closing(open_connection(path)) as connection, connection:
             connection.execute(
                 "UPDATE inbox_messages SET attachments = ? WHERE id = ?",
-                (json.dumps([["image", "replacement.png", False], ["image", "b.png", False]]), first.id),
+                (
+                    json.dumps([["image", "replacement.png", False], ["image", "b.png", False]]),
+                    first.id,
+                ),
             )
         store.save_image_note(first.id, first.perception, 0, InboxImageNote("vlm", "迟到的甲"))
         assert caption(first.id, 0, "2")[1]["description"] is None
@@ -412,12 +503,17 @@ def test_captions_follow_attachment_positions_and_complete_conversations(tmp_pat
 
 
 def test_caption_rechecks_permission_after_original_is_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
     key = ConversationKey(**GROUP)
     source = Perception(
-        "qq", "sender", "原件", VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT,
+        "qq",
+        "sender",
+        "原件",
+        VisibilityScope.GROUP,
+        TrustLevel.VERIFIED_CONTACT,
         route=MessageRoute("1", "group", "2", "55"),
         attachments=(MediaReference("image", "a.png"),),
     )
@@ -428,7 +524,9 @@ def test_caption_rechecks_permission_after_original_is_read(
     get_image = store.get_visible_image
 
     def read_then_revoke(
-        conversation: ConversationKey, identifier: int, position: int,
+        conversation: ConversationKey,
+        identifier: int,
+        position: int,
     ) -> tuple[Perception, MediaReference, InboxImageNote | None] | None:
         result = get_image(conversation, identifier, position)
         allowed.clear()
