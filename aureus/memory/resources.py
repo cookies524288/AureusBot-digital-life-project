@@ -173,7 +173,9 @@ def _text_resource(
                 "SELECT is_frozen, is_protected FROM memory_lifecycle_relations WHERE source_key=?",
                 (row["source_key"],),
             ).fetchone()
-            resource.update(is_frozen=bool(flags and flags[0]), is_protected=bool(flags and flags[1]))
+            resource.update(
+                is_frozen=bool(flags and flags[0]), is_protected=bool(flags and flags[1])
+            )
     elif row["kind"] == "summary":
         detail = (
             summary_detail(connection, MemorySource.decode(row["source_key"]), *summary_access)

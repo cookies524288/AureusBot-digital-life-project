@@ -392,6 +392,7 @@ def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> Non
     assert rig.index.commit_summary(window, delta, rig.source.check_window)
     [hit] = rig.index.search(["晴桂巷"], (), 5, summary_scope=rig.scope)
     assert hit.source is not None
+    fact_source = hit.source
     rig.index.summary_scope_allowed = rig.source.allows_scope
     app = FastAPI()
     visible = True
@@ -404,14 +405,22 @@ def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> Non
         return visible and scope == rig.scope
 
     register_resource_routes(app, ready, None, rig.index, can_show_summary=can_show)
-    register_memory_lifecycle_routes(app, ready, rig.index, lambda _: True, lambda _: active, can_show)
+    register_memory_lifecycle_routes(
+        app, ready, rig.index, lambda _: True, lambda _: active, can_show
+    )
     endpoint = "/api/resources/memory/maintenance"
     catalog = "/api/resources/memory"
     with TestClient(app) as client:
+
         def preview(action: str, text: str | None = None) -> str:
-            response = client.post(endpoint + "/preview", json={
-                "source": hit.source.encode(), "action": action, "text": text,
-            })
+            response = client.post(
+                endpoint + "/preview",
+                json={
+                    "source": fact_source.encode(),
+                    "action": action,
+                    "text": text,
+                },
+            )
             assert response.status_code == 200, response.text
             return response.json()["plan_id"]
 
@@ -435,9 +444,17 @@ def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> Non
         for path in (detail_path, endpoint + "/history"):
             denied = client.get(path, params=location)
             assert denied.status_code == 404 and "total" not in denied.json()
-        assert client.post(endpoint + "/preview", json=location | {
-            "action": "correct", "text": "未获准的修订",
-        }).status_code == 404
+        assert (
+            client.post(
+                endpoint + "/preview",
+                json=location
+                | {
+                    "action": "correct",
+                    "text": "未获准的修订",
+                },
+            ).status_code
+            == 404
+        )
         visible = True
         assert client.post(f"{endpoint}/{corrected}/apply").status_code == 200
         assert client.post(f"{endpoint}/{corrected}/apply").status_code == 409
@@ -549,10 +566,19 @@ def test_lifecycle_history_follows_application_order_not_preview_order(rig: Rig)
 def test_relation_maintenance_cannot_be_bypassed_by_old_endpoints(rig: Rig) -> None:
     first = MemorySource("first", "formal", "relations", (7,))
     second = MemorySource("second", "formal", "relations", (7,))
-    assert rig.index.publish([
-        HistoricalMemory(first, "阿明却是河岸向导", actor_label="阿明", person_key="first:7"),
-        HistoricalMemory(second, "阿明却是远山向导", actor_label="阿明", person_key="second:7"),
-    ]) == 2
+    assert (
+        rig.index.publish(
+            [
+                HistoricalMemory(
+                    first, "阿明却是河岸向导", actor_label="阿明", person_key="first:7"
+                ),
+                HistoricalMemory(
+                    second, "阿明却是远山向导", actor_label="阿明", person_key="second:7"
+                ),
+            ]
+        )
+        == 2
+    )
     items, total, _counts = rig.index.browse_text_resources("", "relations", "", "", 0, 10)
     assert total == 2
     ids = {item["source"]["instance"]: item["entry_id"] for item in items}
@@ -562,7 +588,8 @@ def test_relation_maintenance_cannot_be_bypassed_by_old_endpoints(rig: Rig) -> N
     for action in ("freeze", "protect"):
         plan = rig.index.preview_lifecycle(first, action, None, None, lambda: True)
         assert plan is not None
-        assert rig.index.apply_lifecycle(plan["plan_id"], None, lambda: True, undo=False)
+        relation_plan = str(plan["plan_id"])
+        assert rig.index.apply_lifecycle(relation_plan, None, lambda: True, undo=False)
         assert not rig.index.update_resource("history", ids["first"], "晚到覆盖", None)
         assert not rig.index.set_resources_removed([("history", ids["first"])], True)
         independent = rig.index.preview_lifecycle(second, "disable", None, None, lambda: True)
@@ -570,8 +597,9 @@ def test_relation_maintenance_cannot_be_bypassed_by_old_endpoints(rig: Rig) -> N
         identifier = str(independent["plan_id"])
         assert rig.index.apply_lifecycle(identifier, None, lambda: True, undo=False)
         assert rig.index.apply_lifecycle(identifier, None, lambda: True, undo=True)
-        assert rig.index.apply_lifecycle(plan["plan_id"], None, lambda: True, undo=True)
-    assert rig.index.get_history(first).text == "阿明却是河岸向导"
+        assert rig.index.apply_lifecycle(relation_plan, None, lambda: True, undo=True)
+    restored = rig.index.get_history(first)
+    assert restored is not None and restored.text == "阿明却是河岸向导"
 
 
 @pytest.mark.parametrize("table", ("fact_claims", "episodes"))

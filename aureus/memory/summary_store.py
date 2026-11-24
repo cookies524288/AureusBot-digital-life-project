@@ -167,7 +167,8 @@ def summary_detail(
 
 def _facts(connection: Connection, scope: SummaryScope, limit: int = -1) -> Cursor:
     return connection.execute(
-        _RESOURCE_ROWS + """ WHERE delta.route=? AND delta.visibility=?
+        _RESOURCE_ROWS
+        + """ WHERE delta.route=? AND delta.visibility=?
         AND fact.superseded_by IS NULL ORDER BY fact.id DESC LIMIT ?""",
         (*scope, limit),
     )
@@ -198,7 +199,9 @@ def previous_summary(
     facts = [
         PreviousFact(row["id"], row["text"], row["sender_id"], row["predicate"], row["value"])
         for row in _facts(connection, scope, _REFERENCE_LIMIT)
-        if row["is_enabled"] and not row["is_removed"] and row["edited_content"] is None
+        if row["is_enabled"]
+        and not row["is_removed"]
+        and row["edited_content"] is None
         and _source_exists(connection, scope, row, check)
     ]
     return tuple(summaries), tuple(facts)

@@ -85,7 +85,7 @@ def write_edit(
     target = (
         f"""SELECT 1 FROM memory_history history
         LEFT JOIN memory_lifecycle_relations flags USING (source_key)
-        WHERE id = ? AND NOT ({is_message_source('source_key')})
+        WHERE id = ? AND NOT ({is_message_source("source_key")})
           AND json_extract(source_key, '$[2]') != 'relations'
           AND NOT coalesce(flags.is_frozen, 0) AND NOT coalesce(flags.is_protected, 0)"""
         if kind == "history"

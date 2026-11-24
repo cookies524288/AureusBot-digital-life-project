@@ -15,7 +15,15 @@ from aureus.memory.summary_store import EvidenceCheck, ScopeCheck, summary_detai
 
 type SummaryAccess = tuple[ScopeCheck, EvidenceCheck]
 type LifecycleAction = Literal[
-    "correct", "enable", "disable", "freeze", "unfreeze", "protect", "unprotect", "remove", "restore"
+    "correct",
+    "enable",
+    "disable",
+    "freeze",
+    "unfreeze",
+    "protect",
+    "unprotect",
+    "remove",
+    "restore",
 ]
 
 _PREVIEW_TTL = timedelta(minutes=15)
@@ -130,8 +138,17 @@ def _target(
            ORDER BY applied_at DESC, rowid DESC LIMIT 1""",
         (source.encode(),),
     ).fetchone()
-    version = sha256(_json([list(original), list(edit) if edit else None, asdict(state),
-                            list(latest) if latest else None, current]).encode()).hexdigest()
+    version = sha256(
+        _json(
+            [
+                list(original),
+                list(edit) if edit else None,
+                asdict(state),
+                list(latest) if latest else None,
+                current,
+            ]
+        ).encode()
+    ).hexdigest()
     text = original["text"] if kind == "summary" else original["content"]
     return LifecycleTarget(kind, entry_id, state, version, text, current)
 
@@ -175,8 +192,13 @@ def _view(plan: object, source: MemorySource, state: LifecycleState) -> dict[str
 
 
 def preview_change(
-    connection: Connection, source: MemorySource, action: LifecycleAction, text: str | None,
-    now: datetime, access: SummaryAccess | None, session_active: Callable[[], bool],
+    connection: Connection,
+    source: MemorySource,
+    action: LifecycleAction,
+    text: str | None,
+    now: datetime,
+    access: SummaryAccess | None,
+    session_active: Callable[[], bool],
 ) -> dict[str, object] | None:
     """预览当前及拟议影响，记住版本，不写覆盖。"""
     with connection:
@@ -194,20 +216,34 @@ def preview_change(
             """INSERT INTO memory_lifecycle_plans
                (id, source_key, action, created_at, expected, previous, proposed)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (identifier, source.encode(), action, now.isoformat(), target.version,
-             _json(asdict(target.state)), _json(asdict(proposed))),
+            (
+                identifier,
+                source.encode(),
+                action,
+                now.isoformat(),
+                target.version,
+                _json(asdict(target.state)),
+                _json(asdict(proposed)),
+            ),
         )
         return _view(identifier, source, proposed) | {
-            "before": asdict(target.state), "expires_at": now + _PREVIEW_TTL,
-            "action": action, "original_version": target.version,
+            "before": asdict(target.state),
+            "expires_at": now + _PREVIEW_TTL,
+            "action": action,
+            "original_version": target.version,
             "before_text": target.state.edited_content or target.text,
             "after_text": proposed.edited_content or target.text,
         }
 
 
 def operation_history(
-    connection: Connection, source: MemorySource, now: datetime, access: SummaryAccess | None,
-    session_active: Callable[[], bool], offset: int, limit: int,
+    connection: Connection,
+    source: MemorySource,
+    now: datetime,
+    access: SummaryAccess | None,
+    session_active: Callable[[], bool],
+    offset: int,
+    limit: int,
 ) -> tuple[list[LifecycleOperation], int] | None:
     """按单项原件查审计，复验可见性后才返回计数。"""
     with connection:
@@ -225,9 +261,15 @@ def operation_history(
         if current is None or not session_active():
             return None
         return [
-            LifecycleOperation(row["id"], row["action"], row["applied_at"], row["undone_at"],
-                               current.is_current and row["undone_at"] is None
-                               and row["applied_version"] == current.version)
+            LifecycleOperation(
+                row["id"],
+                row["action"],
+                row["applied_at"],
+                row["undone_at"],
+                current.is_current
+                and row["undone_at"] is None
+                and row["applied_version"] == current.version,
+            )
             for row in rows
         ], total
 
@@ -252,8 +294,13 @@ def _write(
 
 
 def change_plan(
-    connection: Connection, identifier: str, now: datetime, access: SummaryAccess | None,
-    session_active: Callable[[], bool], *, undo: bool,
+    connection: Connection,
+    identifier: str,
+    now: datetime,
+    access: SummaryAccess | None,
+    session_active: Callable[[], bool],
+    *,
+    undo: bool,
 ) -> dict[str, object] | None:
     """确认或撤销时，同一写事务复核会话、原件、状态及应用版本。"""
     with connection:
@@ -280,7 +327,8 @@ def change_plan(
         _write(connection, source, target, state)
         timestamp = "undone_at" if undo else "applied_at"
         connection.execute(
-            f"UPDATE memory_lifecycle_plans SET {timestamp}=? WHERE id=?", (now.isoformat(), identifier)
+            f"UPDATE memory_lifecycle_plans SET {timestamp}=? WHERE id=?",
+            (now.isoformat(), identifier),
         )
         current = _target(connection, source, now, access)
         if current is None or not current.is_current or not session_active():

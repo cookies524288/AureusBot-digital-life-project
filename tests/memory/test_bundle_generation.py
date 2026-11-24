@@ -243,23 +243,47 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
         assert changed["counts"]["fact_claims"] == 0
         assert changed["counts"]["person_profile_snapshots"] == 0
         with pytest.raises(MemoryBundleConflictError):
-            index.generate_bundle([selected.source_id], "full", people, output=BytesIO(),
-                                  expected_digest=preview["preview_digest"])
+            index.generate_bundle(
+                [selected.source_id],
+                "full",
+                people,
+                output=BytesIO(),
+                expected_digest=preview["preview_digest"],
+            )
         assert index.apply_lifecycle(correction, None, lambda: True, undo=True)
-        assert index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"] == 1
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"]
+            == 1
+        )
         maintain("remove")
-        assert index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"] == 0
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"]
+            == 0
+        )
         maintain("restore")
-        assert index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"] == 1
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"]
+            == 1
+        )
 
         profile = ProfileSource("selected", HistoricalKind.PROFILE_SNAPSHOT, "2")
         plan = people.preview_profile(profile, ProfileEdit(summary="本机修订"), lambda: True)
         assert plan is not None
         identifier = str(plan["plan_id"])
         assert people.change_profile(identifier, lambda: True, undo=False)
-        assert index.generate_bundle([selected.source_id], "full", people)["counts"]["person_profile_snapshots"] == 0
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"][
+                "person_profile_snapshots"
+            ]
+            == 0
+        )
         assert people.change_profile(identifier, lambda: True, undo=True)
-        assert index.generate_bundle([selected.source_id], "full", people)["counts"]["person_profile_snapshots"] == 1
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"][
+                "person_profile_snapshots"
+            ]
+            == 1
+        )
 
         minimal = index.generate_bundle([selected.source_id], "knowledge", people)
         assert minimal["components"] == ["knowledge.json"]
