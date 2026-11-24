@@ -1808,8 +1808,7 @@ class Heartbeat:
             or self._thought is not None
             or self._unanswered
             or self._pending
-            or resolve_task_organ(WORKING_MEMORY_ORGAN, WORKING_MEMORY_TASK, self._available_organs)
-            not in self._available_organs
+            or WORKING_MEMORY_ORGAN not in self._available_organs
             or not self._permissions.check(ACTION_CALL_ORGAN).allowed
         ):
             return

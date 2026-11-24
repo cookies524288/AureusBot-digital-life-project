@@ -43,7 +43,8 @@ class _StreamingOrgans:
 
     async def call(self, request: OrganRequest) -> OrganResponse:
         task = request.context.get("task")
-        if request.organ_id == "summarizer":
+        if task == "working_memory_summary":
+            assert request.organ_id == "utils"
             source = json.loads(request.prompt)["经历"][0]["content"]
             return OrganResponse(request.organ_id, f"滚动小结：{source}")
         if task == "plan":
@@ -120,7 +121,7 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
     )
     sent: list[OutgoingMessage] = []
     heart.attach_channel("qq", sent.append)
-    heart.update_available_organs(frozenset({"summarizer", "planner", "replyer"}))
+    heart.update_available_organs(frozenset({"utils", "planner", "replyer"}))
     heart.wake_up()
 
     def receive(number: str, sender: str, name: str, text: str) -> None:

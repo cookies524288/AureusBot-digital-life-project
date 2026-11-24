@@ -27,6 +27,7 @@ def _append(timeline: TimelineDatabase, text: str) -> None:
 
 
 async def _summary(request: OrganRequest) -> OrganResponse:
+    assert request.organ_id == "utils"
     content = json.loads(request.prompt)["经历"][0]["content"]
     return OrganResponse(request.organ_id, f"摘要：{content}")
 
@@ -103,7 +104,9 @@ async def test_scope_isolation_and_failed_batch_retry(tmp_path: Path) -> None:
     _append(timeline, "保留的焦点")
 
     async def invalid(request: OrganRequest) -> OrganResponse:
-        return OrganResponse(request.organ_id, "")
+        if json.loads(request.prompt)["经历"][0]["content"] == "用户的私事":
+            return OrganResponse(request.organ_id, " \n ")
+        return await _summary(request)
 
     try:
         batch = memory.prepare(clock.now(), ModelPreference.PREFERRED)
@@ -124,6 +127,52 @@ async def test_scope_isolation_and_failed_batch_retry(tmp_path: Path) -> None:
         timeline.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["", "摘" * 501, None], ids=["empty", "too-long", "failed"])
+async def test_legacy_summary_is_preserved_until_success(tmp_path: Path, invalid: str | None) -> None:
+    clock = ManualClock(NOW)
+    timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
+    timeline.open()
+    old = "旧" * 1200
+    prior = timeline.append(
+        "working_memory_checkpoint",
+        "已有摘要",
+        ActorType.ME,
+        metadata={"through": 0, "summaries": {"用户私聊": old}},
+    )
+    memory = WorkingMemory(
+        timeline, HeartbeatConfig(working_memory_capacity=2, working_memory_retain=1)
+    )
+    memory.restore()
+    _append(timeline, "本轮新约定")
+    _append(timeline, "保留的焦点")
+
+    async def invalid_result(request: OrganRequest) -> OrganResponse:
+        if invalid is None:
+            raise RuntimeError("模拟器官失败")
+        return OrganResponse(request.organ_id, invalid)
+
+    async def at_limit(request: OrganRequest) -> OrganResponse:
+        return OrganResponse(request.organ_id, f" {'新' * 500}\n")
+
+    try:
+        batch = memory.prepare(clock.now(), ModelPreference.PREFERRED)
+        assert batch is not None
+        assert json.loads(batch.requests[0][1].prompt)["旧摘要"] == old
+        memory.finish(await summarize(batch, invalid_result), clock.now())
+        assert memory.summaries() == {"用户私聊": old}
+        assert old in memory.context(owner=True, route=None, exclude=())
+        query = TimelineQuery(event_type="working_memory_checkpoint", latest=True, limit=1)
+        assert timeline.query(query)[0].id == prior.id
+        clock.advance(timedelta(minutes=5))
+        assert memory.prepare(clock.now(), ModelPreference.PREFERRED) == batch
+        memory.finish(await summarize(batch, at_limit), clock.now())
+        assert memory.summaries() == {"用户私聊": "新" * 500}
+        assert timeline.query(query)[0].metadata["through"] == batch.through
+    finally:
+        timeline.close()
+
+
 class _Organs:
     def __init__(self) -> None:
         self.requests: list[OrganRequest] = []
@@ -132,7 +181,8 @@ class _Organs:
 
     async def call(self, request: OrganRequest) -> OrganResponse:
         self.requests.append(request)
-        if request.organ_id == "summarizer":
+        if request.context.get("task") == "working_memory_summary":
+            assert request.organ_id == "utils"
             self.started.set()
             await self.release.wait()
             return await _summary(request)
@@ -218,6 +268,10 @@ async def test_actual_planner_and_replyer_get_saved_summary(
             _append(timeline, text)
         _append(timeline, "保留焦点的对话")
         boundary_id = timeline.get_latest_id()
+        heart.beat()
+        await asyncio.sleep(0)
+        assert not organs.requests
+        heart.update_available_organs(frozenset({"utils", "summarizer", "planner", "replyer"}))
         heart.beat()
         await asyncio.wait_for(organs.started.wait(), 1)
         heart.beat()

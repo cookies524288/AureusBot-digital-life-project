@@ -33,7 +33,9 @@ ORGAN_DEFINITIONS = {
     ),
     "summarizer": OrganDefinition("提交待整理的材料", "返回整理结果"),
     "memory": OrganDefinition("提取有原文依据的事实与偏好", "返回候选记忆"),
-    "utils": OrganDefinition("在专职器官未配置时整理材料", "返回摘要或整理建议"),
+    "utils": OrganDefinition(
+        "压缩工作记忆，在专职器官未配置时整理材料", "返回摘要或整理建议"
+    ),
     "fast_model": OrganDefinition("建议回复切点，也可代替判断器官", "返回切点或判断建议"),
     "emoji": OrganDefinition("按 QQ 对话和情绪挑选表情", "返回单个候选编号"),
     "vlm": OrganDefinition("理解 QQ 来信中的图片", "返回图片描述"),
@@ -53,7 +55,6 @@ _FALLBACK_ORGANS = {
     "jargon_inference_with_context": "utils",
     "jargon_inference_content_only": "utils",
     "jargon_compare_inference": "utils",
-    "working_memory_summary": "utils",
 }
 
 
@@ -83,7 +84,7 @@ def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict
         "persona_review": runtime.persona_growth.organ,
         "language_learning": runtime.language.organ,
         "memory_consolidation": "summarizer",
-        "working_memory_summary": "summarizer",
+        "working_memory_summary": "utils",
         "image_description": "vlm",
     }
     if runtime.heartbeat.split_reply_enabled:
@@ -115,7 +116,6 @@ def organ_connections(
                         "diary",
                         "persona_review",
                         "language_learning",
-                        "working_memory_summary",
                     )
                 )
             ),
