@@ -1,6 +1,6 @@
 # 路线图 3.14 补充：批量上传逐图描述
 
-状态：实现中
+状态：待评审
 
 设计：在[上传表情时可选登记](emoji-register-on-upload.md)上增补学习页操作，不改变表情库写入规则。
 
@@ -22,9 +22,9 @@
 
 ## 自检清单
 
-- [ ] 窄屏分页、逐图草稿、共享缺省、跨页缺项拦截；逐项请求内容正确，取消零上传。
-- [ ] 合成图批量结果分页展示且有总计；重复项不覆盖描述或登记/禁用/移除状态，失败不阻断其余文件，单张不受影响。
-- [ ] 先红后绿，记录专项与静态检查。
+- [x] `test_emoji_batch_upload_paginates_per_image_descriptions` 验证 390 像素分页、重名草稿、共享缺省、跨页缺项拦截和逐图请求；`test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence` 验证取消零上传、混合结果、外层筛选和统计。
+- [x] 新用例用合成图检查结果分页、成功与失败汇总、失败不阻断后续文件；`test_emoji_upload_registers_only_valid_new_assets` 验证重复项不覆盖描述、登记、禁用或移除状态；`test_emoji_single_upload_can_register_on_narrow_screen` 验证单张上传不变。
+- [x] 新用例在旧版因缺少分页失败；实现后网页浏览器和接口上传专项共 8 项通过。JavaScript 语法检查、改动测试文件的 Ruff lint／格式与 `git diff --check` 通过。按逐步发布约定未跑全量检查。
 
 ## 不做
 
