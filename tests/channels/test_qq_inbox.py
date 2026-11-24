@@ -127,7 +127,9 @@ async def test_qq_history_only_accepts_platform_deliveries(tmp_path: Path) -> No
     reopened = InboxStore(path, clock)
     history = reopened.list_messages(inbound.conversation)
     assert [(row.direction, row.perception.content) for row in history] == [
-        ("incoming", "迟到"), ("outgoing", "真正发送"), ("incoming", "群消息")
+        ("incoming", "迟到"),
+        ("outgoing", "真正发送"),
+        ("incoming", "群消息"),
     ]
     assert history[1].perception.sender_id == str(ACCOUNT)
     assert history[1].perception.route == MessageRoute(str(ACCOUNT), "group", str(GROUP), "6000")

@@ -137,10 +137,15 @@ def decode_poke_notice(payload: dict[str, Any], receiving_account: str) -> Perce
         TrustLevel.UNVERIFIED,
         route=MessageRoute(receiving_account, kind, recipient, f"poke:{uuid4().hex}"),
         source_timestamp=timestamp if type(timestamp) is int else None,
-        components=(MessageComponent(
-            "poke", 0, target_account_id=target,
-            action=_notice_text(payload.get("action")), suffix=_notice_text(payload.get("suffix")),
-        ),),
+        components=(
+            MessageComponent(
+                "poke",
+                0,
+                target_account_id=target,
+                action=_notice_text(payload.get("action")),
+                suffix=_notice_text(payload.get("suffix")),
+            ),
+        ),
     )
 
 
@@ -177,9 +182,11 @@ def read_message_segments(
                 elif target is not None:
                     mentioned |= target == receiving_account
                     parts.append(f"@{target} ")
-                components.append(MessageComponent(
-                    "at", position, target_account_id=target, all_members=all_members
-                ))
+                components.append(
+                    MessageComponent(
+                        "at", position, target_account_id=target, all_members=all_members
+                    )
+                )
             case "reply":
                 target_message = message_id(data.get("id"))
                 quoted = quoted or target_message
@@ -200,9 +207,11 @@ def read_message_segments(
                 components.append(MessageComponent(kind, position, attachment_index=index))
             case "poke":
                 poke_type = data.get("type")
-                components.append(MessageComponent(
-                    "poke", position, poke_type=poke_type if type(poke_type) is int else None
-                ))
+                components.append(
+                    MessageComponent(
+                        "poke", position, poke_type=poke_type if type(poke_type) is int else None
+                    )
+                )
             case _:
                 components.append(MessageComponent("unknown", position))
     return "".join(parts).strip(), mentioned, quoted, tuple(attachments), tuple(components)

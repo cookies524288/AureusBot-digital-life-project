@@ -171,7 +171,9 @@ class TerminalChannel:
         try:
             released = self._heartbeat.resume()
         except OSError as error:
-            self._write_line(f"解除失败：删不掉急停标记（{error}），{self._heartbeat.bot_pronoun}还在急停中。")
+            self._write_line(
+                f"解除失败：删不掉急停标记（{error}），{self._heartbeat.bot_pronoun}还在急停中。"
+            )
             return
         self._write_line("已解除急停。" if released else "本来就没有急停。")
 
