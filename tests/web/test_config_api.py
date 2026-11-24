@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 
 from aureus.common import RuntimeConfig
-from aureus.common.config import CortisolConfig, load_runtime_config
-from aureus.web.config_files import BiochemicalWriteError, ConfigService
+from aureus.common.config import CortisolConfig, HormonesConfig, load_runtime_config
+from aureus.web.config_files import HIDDEN_CONFIG, BiochemicalWriteError, ConfigService
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import GOOD
 
@@ -57,9 +57,11 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
     assert data["exists"] is False
     defaults = RuntimeConfig().model_dump(mode="json")
     schema = RuntimeConfig.model_json_schema()
-    for field in ("advance_biomodel", "planning_enabled", "roleplay_mode"):
-        del defaults["heartbeat"][field]
-        del schema["$defs"]["HeartbeatConfig"]["properties"][field]
+    for key in HIDDEN_CONFIG:
+        section, _, field = key.partition(".")
+        definition = schema["properties"][section]["$ref"].rsplit("/", 1)[-1]
+        defaults[section].pop(field, None)
+        schema["$defs"][definition]["properties"].pop(field, None)
     assert data["config"] == defaults
     assert data["schema"] == schema
     assert "$defs" in data["schema"]
@@ -76,7 +78,19 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
         "qq.action_timeout_seconds",
         "qq.reconnect_seconds",
         *(f"cortisol.{name}" for name in CortisolConfig.model_fields),
+        *(
+            f"hormones.{name}"
+            for name in HormonesConfig.model_fields
+            if name != "enabled" and not name.endswith("_enabled")
+        ),
+        "mood.half_life_seconds",
     ]
+    assert set(data["biochemical_sources"]) == {
+        key for key in data["readonly"] if key.partition(".")[0] in {"cortisol", "hormones", "mood"}
+    }
+    assert "人体研究" in data["biochemical_sources"]["cortisol.half_life_seconds"]
+    assert "工程设定" in data["biochemical_sources"]["hormones.anger_half_life_seconds"]
+    assert "工程设定" in data["biochemical_sources"]["mood.half_life_seconds"]
     assert data["password_sections"] == ["safety", "web"]
 
 
@@ -90,13 +104,26 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
         {"cortisol.rise_seconds": 900.0},
         {"cortisol.rise_seconds": None},
         {"log_level": "DEBUG", "cortisol": {"enabled": False, "rise_seconds": 1000.0}},
+        {"hormones": {"anger_half_life_seconds": 123.0}},
+        {"hormones": {"max_retaliations": 3, "enabled": False}},
+        {"hormones": False},
+        {"hormones.anger_half_life_seconds": 123.0},
+        {"hormones.anger_half_life_seconds.invalid": False},
+        {"mood": {"half_life_seconds": 3600.0}},
+        {"mood": {"half_life_seconds": 3600.0, "enabled": False}},
+        {"mood": False},
+        {"mood.half_life_seconds": 3600.0, "log_level": "DEBUG"},
     ],
 )
 def test_biochemical_write_targets_are_rejected_atomically(
     rig: ConfigRig, changes: dict[str, Any]
 ) -> None:
     path = rig.paths.runtime_config_file
-    before = b"[cortisol]\nenabled = true\nrise_seconds = 900.0\n"
+    before = (
+        b"[cortisol]\nenabled = true\nrise_seconds = 900.0\n"
+        b"[hormones]\nanger_half_life_seconds = 123.0\n"
+        b"[mood]\nhalf_life_seconds = 3600.0\n"
+    )
     path.write_bytes(before)
     response = rig.client.put("/api/config", json={"changes": changes})
     assert response.status_code == 403
@@ -129,6 +156,31 @@ def test_toml_single_key_revert_uses_current_developer_default(rig: ConfigRig) -
     )
     assert keep in path.read_bytes() and b"rise_seconds" not in path.read_bytes()
     assert load_runtime_config(rig.paths).cortisol == reloaded
+
+
+def test_each_biochemical_restore_is_rejected_but_switches_are_editable(rig: ConfigRig) -> None:
+    path = rig.paths.runtime_config_file
+    before = b"[hormones]\nanger_half_life_seconds = 123.0 # keep\n[mood]\nhalf_life_seconds = 3600.0\n"
+    path.write_bytes(before)
+    protected = rig.client.get("/api/config").json()["biochemical_sources"]
+    for field in protected:
+        response = rig.client.post("/api/config/restore-default", json={"field": field})
+        assert response.status_code == 403, field
+        with pytest.raises(BiochemicalWriteError):
+            rig.service.restore_runtime(field)
+        assert path.read_bytes() == before
+    assert not rig.service.restart_required
+    changes = {"hormones": {"anger_enabled": False}, "mood": {"enabled": False}}
+    response = rig.client.put("/api/config", json={"changes": changes})
+    assert response.status_code == 200
+    running = load_runtime_config(rig.paths)
+    assert not running.hormones.anger_enabled and not running.mood.enabled
+    assert running.hormones.anger_half_life_seconds == 123.0
+    assert running.mood.half_life_seconds == 3600.0
+    for field in ("hormones.anger_enabled", "mood.enabled"):
+        response = rig.client.post("/api/config/restore-default", json={"field": field})
+        assert response.status_code == 200 and response.json()["value"] is True
+    assert b"anger_half_life_seconds = 123.0 # keep" in path.read_bytes()
 
 
 @pytest.mark.parametrize(

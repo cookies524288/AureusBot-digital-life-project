@@ -13,11 +13,11 @@ from tomlkit.toml_document import TOMLDocument
 from aureus.common import (
     AureusPaths,
     ConfigError,
+    HormonesConfig,
     RuntimeConfig,
     apply_toml_edit,
     validate_runtime_config,
 )
-from aureus.common.config import CortisolConfig
 from aureus.common.logging_setup import hide_secrets
 from aureus.common.vault import SecretVault, VaultError
 from aureus.organs import (
@@ -35,6 +35,21 @@ from aureus.organs.topology import organ_connections
 
 logger = logging.getLogger(__name__)
 
+BIOCHEMICAL_SOURCES = {
+    "cortisol.enabled": "部署开关",
+    "cortisol.rise_seconds": "工程设定（参考应激研究的时间尺度）",
+    "cortisol.half_life_seconds": "人体研究参考（内源性血浆皮质醇）",
+    "cortisol.baseline_span": "工程设定（归一化的昼夜幅度）",
+    "cortisol.failure_peak": "工程设定（归一化的失败增量）",
+    "cortisol.defer_at": "工程设定（离线行为校准）",
+    **{
+        f"hormones.{name}": "工程设定（软件情绪，不是激素清除测量）"
+        for name, field in HormonesConfig.model_fields.items()
+        if field.annotation is not bool
+    },
+    "mood.half_life_seconds": "工程设定（较慢的心情整合）",
+}
+_BIOCHEMICAL_SECTIONS = {name.partition(".")[0] for name in BIOCHEMICAL_SOURCES}
 READONLY_CONFIG = (
     # 改错会关闭网页或改变开放范围，只能直接编辑文件（D84、2.12b）。
     "config_version",
@@ -48,7 +63,7 @@ READONLY_CONFIG = (
     "qq.token_key",
     "qq.action_timeout_seconds",
     "qq.reconnect_seconds",
-    *(f"cortisol.{field}" for field in CortisolConfig.model_fields),
+    *BIOCHEMICAL_SOURCES,
 )
 PASSWORD_SECTIONS = ("safety", "web")
 HIDDEN_CONFIG = frozenset(
@@ -75,9 +90,21 @@ class BiochemicalWriteError(ConfigError):
     """网页保存及恢复入口遇到生化配置时使用同一拒写规则（D89、D91）。"""
 
 
-def check_biochemical_write(targets: Iterable[str]) -> None:
-    """拒绝整节和节内任何写入目标，包括恢复时要删除的键。"""
-    if any(target.partition(".")[0] == "cortisol" for target in targets):
+def check_biochemical_write(targets: Iterable[str] | dict[str, Any]) -> None:
+    """在裁掉同值或写文件之前，检查整表、嵌套或点路径的原始目标。"""
+    names = runtime_field_names(targets) if isinstance(targets, dict) else targets
+    whole_cortisol = isinstance(targets, dict) and "cortisol" in targets
+
+    def protected(name: str) -> bool:
+        section, _, fields = name.partition(".")
+        field = fields.partition(".")[0]
+        return (
+            name in _BIOCHEMICAL_SECTIONS
+            or section == "cortisol"
+            or f"{section}.{field}" in BIOCHEMICAL_SOURCES
+        )
+
+    if whole_cortisol or any(protected(name) for name in names):
         raise BiochemicalWriteError("生化参数只能在 config/aureus.toml 中修改或逐项恢复。")
 
 
@@ -372,6 +399,7 @@ class ConfigService:
             "config": _visible_runtime_values(config),
             "schema": schema,
             "readonly": list(READONLY_CONFIG),
+            "biochemical_sources": BIOCHEMICAL_SOURCES,
             "no_default": sorted(NO_DEFAULT_CONFIG),
             "password_sections": list(PASSWORD_SECTIONS),
         }
