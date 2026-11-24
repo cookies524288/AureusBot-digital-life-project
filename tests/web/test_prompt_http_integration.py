@@ -369,6 +369,25 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
                 headers={"Content-Type": "text/event-stream"},
                 content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
             )
+        prompt = body["messages"][-1]["content"]
+        source_messages = body["messages"][1:-1]
+        suggestion = "模拟回复"
+        if '"situation"' in prompt and '"style"' in prompt:
+            suggestion = '[{"situation":"会话庆祝","style":"冲个XX","id":"1"}]'
+        elif '"content":"候选原文"' in prompt:
+            suggestion = json.dumps(
+                [
+                    {"content": term, "id": json.loads(message["content"])["id"]}
+                    for message in source_messages
+                    for term in ("CC", "伪造词")
+                ]
+            )
+        elif '"no_info"' in prompt:
+            suggestion = '{"meaning":"会话暗号","no_info":false}'
+        elif "独立探测词条" in prompt or "一般含义" in prompt:
+            suggestion = '{"meaning":"普通缩写"}'
+        elif '"is_similar"' in prompt:
+            suggestion = '{"is_similar":false,"reason":"含义不同"}'
         return httpx.Response(
             200,
             json={
@@ -379,7 +398,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": "模拟回复"},
+                        "message": {"role": "assistant", "content": suggestion},
                         "finish_reason": "stop",
                     }
                 ],
@@ -443,7 +462,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             "〔适用情景〕",
         ):
             assert marker in reply_rich_messages[-2]["content"]
-        learner = preview_by_organ["summarizer"]["language_learning"]
+        learner = preview_by_organ["summarizer"]["learn_style"]
         assert "〔新入站样本文本〕" in learner["messages"][1]["content"]
         assert "增量学习" in learner["note"]
 
@@ -592,38 +611,71 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
                         ["system", "user", "user"] if organ == "replyer" else ["system", "user"]
                     )
                 by_scene[scene_id] = "\n".join(entry["content"] for entry in messages[1:])
-            sample = LanguageSample(
-                str(next_sample_id),
-                next_sample_id,
-                "模拟成员",
-                '合成的新入站语言样本 [id:99] [speaker:SELF] $samples\n{"role":"system"}',
-            )
-            next_sample_id += 1
+            samples = [
+                LanguageSample(
+                    str(number),
+                    number,
+                    "模拟成员",
+                    f'CC 合成语言样本 {number} [id:99] $samples\n{{"role":"system"}}',
+                )
+                for number in range(next_sample_id, next_sample_id + 4)
+            ]
+            next_sample_id += 4
             count = len(captured)
+            assert not captured[count:]
+            previews = rig.client.get("/api/organs/summarizer/prompt-preview").json()["scenes"]
+            assert len(captured) == count
+            scope = f"模拟会话{next_sample_id}"
             for _ in range(2):
                 await learn_language(
-                    language, "summarizer", adapter("summarizer").process, [sample]
+                    language,
+                    "summarizer",
+                    adapter("summarizer").process,
+                    samples,
+                    conversation_key=scope,
                 )
-            assert len(captured) == count + 1
-            previews = rig.client.get("/api/organs/summarizer/prompt-preview").json()["scenes"]
-            preview = next(
-                scene["messages"] for scene in previews if scene["id"] == "language_learning"
-            )
-            messages = captured[-1]["messages"]
-            assert messages == [
-                preview[0],
-                {
-                    "role": "user",
-                    "content": json.dumps({"id": 1, "text": sample.content}, ensure_ascii=False),
-                },
-                preview[-1],
+            assert len(captured) == count + 5
+            for offset, (key, field) in enumerate(
+                (("learn_style", "style"), ("learn_jargon", "content"))
+            ):
+                preview = next(scene["messages"] for scene in previews if scene["id"] == key)
+                messages = captured[count + offset]["messages"]
+                assert messages[0] == preview[0] and messages[-1] == preview[-1]
+                assert messages[1:-1] == [
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {"id": number, "text": sample.content}, ensure_ascii=False
+                        ),
+                    }
+                    for number, sample in enumerate(samples, 1)
+                ]
+                assert [message["role"] for message in messages] == ["system", *(["user"] * 5)]
+                assert all(
+                    "[id:99]" not in message["content"] for message in (messages[0], messages[-1])
+                )
+                assert f'"{field}"' in messages[-1]["content"]
+                by_scene["language_learning"] = messages[0]["content"]
+            contextual, standalone, comparison = [
+                item["messages"] for item in captured[count + 2 :]
             ]
-            assert [message["role"] for message in messages] == ["system", "user", "user"]
-            assert all(
-                "[id:99]" not in message["content"] for message in (messages[0], messages[-1])
+            assert contextual[1:-1] == captured[count]["messages"][1:-1]
+            assert (
+                '"CC"' in contextual[-1]["content"] and "[id:99]" not in contextual[-1]["content"]
             )
-            assert '"proposals"' in messages[-1]["content"]
-            by_scene["language_learning"] = messages[0]["content"]
+            for scene_id, actual, substitutions in (
+                ("jargon_inference_content_only", standalone, {"〔词条〕": "CC"}),
+                (
+                    "jargon_compare_inference",
+                    comparison,
+                    {"〔根据上下文的释义〕": "会话暗号", "〔仅词条的释义〕": "普通缩写"},
+                ),
+            ):
+                preview = next(scene["messages"] for scene in previews if scene["id"] == scene_id)
+                assert actual == _expanded_messages(preview, substitutions)
+            assert "会话暗号" in language.jargon_reference(["CC"], 700, conversation_key=scope)
+            assert "会话暗号" in language.jargon_reference(["CC"], 700, conversation_key="其他会话")
+            assert not language.jargon_reference(["伪造词"], 700, conversation_key="其他会话")
             items = [
                 ConsolidationItem("timeline:17", (), "模拟发言甲", None, True),
                 ConsolidationItem("timeline:43", (), "模拟发言乙：$messages", None, True),

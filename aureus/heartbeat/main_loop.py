@@ -1611,10 +1611,14 @@ class Heartbeat:
             or not self._permissions.check(ACTION_CALL_ORGAN).allowed
         ):
             return
-        samples = language_runner.take_language_batch(self._language_samples, BATCH_SIZE)
+        scope, samples = language_runner.take_language_batch(self._language_samples, BATCH_SIZE)
         task = asyncio.create_task(
             language_runner.learn_language(
-                self._language, self._language_config.organ, self._call_organ, samples
+                self._language,
+                self._language_config.organ,
+                self._call_organ,
+                samples,
+                conversation_key=scope,
             ),
             name=language_runner.TASK_NAME,
         )

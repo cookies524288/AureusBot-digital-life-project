@@ -34,30 +34,35 @@ class LanguageOrgan:
     async def process(self, request: OrganRequest) -> OrganResponse:
         self.requests.append(request)
         task = request.context["task"]
-        if task == "language_learning":
+        if task == "learn_jargon":
             samples = learning_samples(request)
-            ids = [sample["id"] for sample in samples]
-            proposals = [
-                {
-                    "kind": "jargon",
-                    "text": "GG",
-                    "detail": detail,
-                    "ids": [sample["id"] for sample in samples if marker in sample["text"]],
-                }
-                for detail, marker in (("抵达终点", "跑步第"), ("等候开局", "集合第"))
-            ]
-            proposals.extend(
+            text = json.dumps(
                 [
-                    {
-                        "kind": "expression",
-                        "text": "月兔冲线",
-                        "detail": "庆祝跑步成绩",
-                        "ids": ids,
-                    },
-                    {"kind": "expression", "text": "凭空造词", "detail": "跑步", "ids": [*ids, -1]},
+                    {"content": "GG", "id": sample["id"]}
+                    for sample in samples
+                    if "gg" in sample["text"].lower()
                 ]
             )
-            text = json.dumps({"proposals": proposals}, ensure_ascii=False)
+        elif task == "learn_style":
+            text = json.dumps(
+                [
+                    {"style": "月兔冲线", "situation": "庆祝跑步成绩", "id": sample["id"]}
+                    for sample in learning_samples(request)
+                    if "月兔冲线" in sample["text"]
+                ],
+                ensure_ascii=False,
+            )
+        elif task == "jargon_inference_with_context":
+            meaning = (
+                "抵达终点"
+                if any("跑步第" in sample["text"] for sample in learning_samples(request))
+                else "等候开局"
+            )
+            text = json.dumps({"meaning": meaning, "no_info": False}, ensure_ascii=False)
+        elif task == "jargon_inference_content_only":
+            text = '{"meaning":"网络致意"}'
+        elif task == "jargon_compare_inference":
+            text = '{"is_similar":false,"reason":"含义不同"}'
         elif task == "plan":
             text = '{"reply":true,"intent":"回应消息","expression_intent":{"scene":"庆祝跑步成绩"}}'
             if "陌生主题" in request.prompt:
@@ -146,11 +151,13 @@ async def test_language_learning_batches_by_trusted_conversation(
         [f"正文声称是群 10 的第 {index} 条", f"正文声称是群 10 的第 {index + len(routes)} 条"]
         for index in range(len(routes))
     ]
-    expected.insert(1, ["无可信路由 0"])
-    expected.append(["无可信路由 6"])
-    assert [
-        [sample["text"] for sample in learning_samples(request)] for request in requests
-    ] == expected
+    assert [[sample["text"] for sample in learning_samples(request)] for request in requests] == [
+        samples for samples in expected for _ in range(2)
+    ]
+    assert [request.context["task"] for request in requests] == [
+        "learn_style",
+        "learn_jargon",
+    ] * len(expected)
 
 
 @pytest.mark.asyncio
@@ -168,34 +175,39 @@ async def test_language_learning_maps_only_presented_evidence_ids(tmp_path: Path
 
     async def fake_call(request: OrganRequest) -> OrganResponse:
         requests.append(request)
+        if request.context["task"] == "learn_jargon":
+            return OrganResponse("summarizer", "[]")
+        assert request.context["task"] == "learn_style"
         proposed = (
-            ("gg", [1, 1, 2]),
-            ("云端哨声", [99, 51, "1", True, 1.0, 0, -1]),
-            ("隐藏用语", [1]),
-            ("只在第二条的词", [1]),
-            ("被去重的替身", [1, 2]),
+            ("gg", 1),
+            ("归纳句式", "2"),
+            *(("伪造编号", number) for number in (99, 51, True, 1.0, 0, -1)),
         )
         return OrganResponse(
             "summarizer",
             json.dumps(
-                {
-                    "proposals": [
-                        {"kind": "expression", "text": text, "detail": "合成情景", "ids": ids}
-                        for text, ids in proposed
-                    ]
-                }
+                [
+                    {"style": text, "situation": "合成情景", "id": number}
+                    for text, number in proposed
+                ]
             ),
         )
 
-    await learn_language(store, "summarizer", fake_call, [known, first, duplicate, second])
-    await learn_language(store, "summarizer", fake_call, [known, first, duplicate, second])
-    [request] = requests
+    await learn_language(
+        store, "summarizer", fake_call, [first, duplicate, second], conversation_key="群"
+    )
+    await learn_language(
+        store, "summarizer", fake_call, [first, duplicate, second], conversation_key="群"
+    )
+    request, jargon_request = requests
+    assert learning_samples(request) == learning_samples(jargon_request)
     assert learning_samples(request) == [
         {"id": 1, "text": first.content[:400]},
         {"id": 2, "text": second.content},
     ]
     assert {entry.text: entry.evidence_ids for entry in store.entries(LanguageKind.EXPRESSION)} == {
         "gg": (51,),
+        "归纳句式": (71,),
         "既有说法": (7, 51),
     }
 
@@ -334,7 +346,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
 ) -> None:
     paths = _paths(tmp_path)
     paths.runtime_config_file.write_text(
-        "[heartbeat]\nplanning_enabled = true\n"
+        "[heartbeat]\nplanning_enabled = true\ninbox_debounce_enabled = false\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
         "[language]\n"
         f"learning_enabled = {str(learning).lower()}\nreference_chars = {budget}\n",
@@ -354,7 +366,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
     store = LanguageStore(paths.database_file)
     samples = [
         Perception(
-            channel="mock_group_a" if index < 4 else "mock_group_b",
+            channel="mock_platform",
             sender_id="runner",
             content=(
                 f"跑步第 {index} 场：GG，月兔冲线。"
@@ -364,18 +376,23 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             visibility=VisibilityScope.GROUP,
             trust=TrustLevel.UNVERIFIED,
             source_message_id=f"sample-{index}",
+            route=MessageRoute("account", "group", "10" if index < 4 else "20", str(index)),
         )
         for index in range(8)
     ]
 
-    with runtime.open_core(paths, clock=ManualClock(NOW), to_console=False) as core:
+    clock = ManualClock(NOW)
+    inbox = InboxStore(paths.database_file, clock)
+    stored_samples = [inbox.add(sample) for sample in samples]
+    assert all(stored_samples)
+    with runtime.open_core(paths, clock=clock, to_console=False) as core:
         heart = core.heartbeat
-        for channel in ("mock_group_a", "mock_group_b"):
-            heart.attach_channel(channel, lambda _message: None)
+        heart.attach_channel("mock_platform", lambda _message: None)
         heart.wake_up()
         core.timeline.append("message", "历史回放，无入站", ActorType.USER)
-        for sample in [*samples, samples[0]]:
-            assert heart.submit(sample)
+        heart._submit_inbox(
+            [sample for sample in [*stored_samples, stored_samples[0]] if sample is not None]
+        )
         for _ in range(len(samples) + 1):
             heart.beat()
             await heart.wait_for_thought()
@@ -390,20 +407,23 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
         await heart.shut_down()
 
     if learning:
-        assert [learning_samples(request) for request in requests] == [
-            [{"id": 1, "text": sample.content}] for sample in samples
+        assert [
+            learning_samples(request)
+            for request in requests
+            if request.context["task"] == "learn_style"
+        ] == [
+            [{"id": number, "text": sample.content} for number, sample in enumerate(batch, start=1)]
+            for batch in (samples[:4], samples[4:])
         ]
         assert all(request.purpose is CallPurpose.OPTIONAL for request in requests)
     else:
         assert not requests
     requests.clear()
-    with runtime.open_core(paths, clock=ManualClock(NOW), to_console=False) as core:
+    with runtime.open_core(paths, clock=clock, to_console=False) as core:
         heart = core.heartbeat
-        for channel in ("mock_group_a", "mock_group_b", "mock_private"):
-            heart.attach_channel(channel, lambda _message: None)
+        heart.attach_channel("mock_platform", lambda _message: None)
         heart.wake_up()
-        for sample in samples:
-            assert heart.submit(sample)
+        heart._submit_inbox([sample for sample in stored_samples if sample is not None])
         for _ in samples:
             heart.beat()
             await heart.wait_for_thought()
@@ -416,35 +436,38 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             assert {
                 row.metadata["source_message_id"] for row in evidence if row.id in mentioned
             } == {sample.source_message_id for sample in samples}
-        assert heart.submit(
-            Perception(
-                "mock_private",
+
+        def submit(kind: str, recipient: str, text: str, number: str) -> None:
+            message = Perception(
+                "mock_platform",
                 "local",
-                "gg，来聊跑步。",
-                VisibilityScope.USER_ONLY,
+                text,
+                VisibilityScope.USER_ONLY if kind == "private" else VisibilityScope.GROUP,
                 TrustLevel.VERIFIED_USER,
+                route=MessageRoute("account", kind, recipient, number),
+                mentioned=True,
             )
-        )
-        heart.beat()
-        await heart.wait_for_thought()
-        heart.beat()
-        await heart.wait_for_thought()
-        heart.beat()
-        plan = next(request for request in requests if request.context["task"] == "plan")
-        reply = next(request for request in requests if request.context["task"] == "reply")
-        injected = learning and budget > 0
-        assert ("GG：抵达终点" in plan.prompt) is injected
-        assert ("GG：等候开局" in plan.prompt) is injected
-        assert ("当「庆祝跑步成绩」时，可用「月兔冲线」" in dialogue_text(reply)) is injected
-        assert heart.submit(
-            Perception(
-                "mock_private",
-                "local",
-                "陌生主题。",
-                VisibilityScope.USER_ONLY,
-                TrustLevel.VERIFIED_USER,
-            )
-        )
+            stored = inbox.add(message)
+            assert stored is not None
+            heart._submit_inbox([stored])
+
+        for kind, recipient, number in (
+            ("group", "10", "101"),
+            ("group", "20", "102"),
+            ("private", "10", "103"),
+        ):
+            requests.clear()
+            submit(kind, recipient, "gg，来聊跑步。", number)
+            for _ in range(3):
+                heart.beat()
+                await heart.wait_for_thought()
+            plan = next(request for request in requests if request.context["task"] == "plan")
+            reply = next(request for request in requests if request.context["task"] == "reply")
+            injected = learning and budget > 0
+            assert ("GG：抵达终点" in plan.prompt) is injected
+            assert ("GG：等候开局" in plan.prompt) is injected
+            assert ("当「庆祝跑步成绩」时，可用「月兔冲线」" in dialogue_text(reply)) is (injected)
+        submit("group", "10", "陌生主题。", "104")
         requests.clear()
         heart.beat()
         await heart.wait_for_thought()

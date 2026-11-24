@@ -48,6 +48,11 @@ _FALLBACK_ORGANS = {
     "diary": "utils",
     "persona_review": "utils",
     "language_learning": "utils",
+    "learn_style": "utils",
+    "learn_jargon": "utils",
+    "jargon_inference_with_context": "utils",
+    "jargon_inference_content_only": "utils",
+    "jargon_compare_inference": "utils",
     "working_memory_summary": "utils",
 }
 

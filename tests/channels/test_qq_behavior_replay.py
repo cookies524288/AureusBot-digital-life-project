@@ -497,7 +497,11 @@ async def test_group_replay_language_learned_in_private_survives_restart(
             VisibilityScope.GROUP
         ] * 4
         ids = [row.id for row in inbound]
-        assert [learning_samples(request) for request in replay.learning_requests] == [
+        assert [
+            learning_samples(request)
+            for request in replay.learning_requests
+            if request.context["task"] == "learn_style"
+        ] == [
             [{"id": number, "text": row.content} for number, row in enumerate(batch, 1)]
             for batch in (inbound[:4], inbound[4:])
         ]
@@ -525,6 +529,8 @@ async def test_group_replay_language_learned_in_private_survives_restart(
         text = dialogue_text(reply)
         assert "当「庆祝跑步成绩」时，可用「月兔冲线」" in text
         assert "GG：抵达终点" not in text
+        assert inbound[0].content not in text and inbound[0].content not in plan.prompt
+        assert "不泄露来源消息" in text
         replay.planner.plan = {"reply": True, "intent": "问好"}
         await replay.receive(event(410, 2300, "陌生主题。", group=GROUP))
         await replay.step()

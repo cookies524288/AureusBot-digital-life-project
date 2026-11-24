@@ -32,6 +32,7 @@ from aureus.memory.language_import import (
     ImportedLanguageRow,
     LanguageSnapshotConflictError,
 )
+from aureus.memory.language_online import JargonInference
 
 __all__ = [
     "BATCH_SIZE",
@@ -48,6 +49,7 @@ __all__ = [
     "EmojiStore",
     "HistoricalMemory",
     "ImportedLanguageRow",
+    "JargonInference",
     "LanguageContent",
     "LanguageKind",
     "LanguageProposal",
