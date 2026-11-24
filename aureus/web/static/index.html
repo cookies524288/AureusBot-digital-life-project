@@ -85,7 +85,7 @@ nav.side:hover .nav-label,nav.side:has(:focus-visible) .nav-label{opacity:1;tran
 nav.side:hover .nav-group::before,nav.side:has(:focus-visible) .nav-group::before{top:0}
 nav.side:hover .nav-group::after,nav.side:has(:focus-visible) .nav-group::after{opacity:1}
 .nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border:0;border-radius:var(--radius-sm);background:none;color:var(--text-2);text-align:left;cursor:pointer;transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
-.nav-item:hover{background:var(--surface-2);color:var(--text)}
+.nav-item:where(:not([aria-disabled=true])):hover{background:var(--surface-2);color:var(--text)}
 .nav-item.active{background:var(--accent-soft);color:var(--accent-strong);font-weight:600}
 nav.side .nav-item{position:relative;flex:none;gap:12px;height:40px;padding:0 10px;white-space:nowrap}
 nav.side .nav-item::before{content:'';position:absolute;left:-8px;top:50%;width:3px;height:18px;margin-top:-9px;border-radius:0 3px 3px 0;background:var(--accent);transform:scaleY(0);transition:transform var(--dur) var(--ease)}
@@ -136,17 +136,20 @@ section.page{padding:18px 16px 24px}
 }
 /* ---------- 组件 ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);cursor:pointer;white-space:nowrap;transition:background var(--dur-fast),border-color var(--dur-fast),opacity var(--dur-fast),transform var(--dur-fast) var(--ease),box-shadow var(--dur)}
-.btn:hover{background:var(--surface-2)}
-.btn:active:not(:disabled){transform:scale(.97)}
-.btn.primary:not(:disabled):hover{box-shadow:0 4px 12px rgba(181,137,0,.28)}
+.btn:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--surface-2)}
+.btn:not(:disabled,[aria-disabled=true]):active{transform:scale(.97)}
+.btn.primary:not(:disabled,[aria-disabled=true]):hover{box-shadow:0 4px 12px rgba(181,137,0,.28)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
-.btn.primary:hover{background:var(--accent-strong);border-color:var(--accent-strong)}
+.btn.primary:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--accent-strong);border-color:var(--accent-strong)}
 .btn.danger{color:var(--danger);border-color:var(--danger)}
-.btn.danger:hover{background:var(--danger-soft)}
+.btn.danger:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--danger-soft)}
 .btn.small{padding:4px 10px;font-size:13px}
 .btn.ghost{border-color:transparent;background:none}
-.btn.ghost:hover{background:var(--surface-2)}
+.btn.ghost:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--surface-2)}
+.nav-item[aria-disabled=true],.provider-row[aria-disabled=true],.btn[aria-disabled=true],.btn:disabled{transition:none}
+.nav-item[aria-disabled=true],.provider-row[aria-disabled=true],.btn[aria-disabled=true]{cursor:default}
+nav.side .nav-item[aria-disabled=true]::before{transition:none}
 .btn:focus-visible,.nav-item:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -404,7 +407,7 @@ nav.side .nav-label{text-align:center}
 .provider-list{display:flex;flex-direction:column;gap:5px;border:1px solid var(--border);border-radius:var(--radius);padding:7px;background:var(--surface)}
 .provider-row{border:0;border-radius:var(--radius-sm);padding:10px;color:var(--text-2);background:transparent;cursor:pointer;text-align:center;overflow-wrap:anywhere}
 .provider-row.active{color:var(--accent-strong);background:var(--accent-soft);font-weight:600}
-.provider-row:hover{background:var(--surface-2)}
+.provider-row:not([aria-disabled=true]):hover{background:var(--surface-2)}
 .model-main{min-width:0;display:flex;flex-direction:column;gap:14px}
 .model-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .model-toolbar input{flex:1;min-width:150px}
@@ -1134,7 +1137,7 @@ function fmtTime(iso, full) {
 }
 
 // ---------- 页面切换 ----------
-const PAGES = {};   // 页面名 -> {load, leave}，各页在下面登记
+const PAGES = {};   // 页面名 -> {prepare, load, leave}。prepare 同步选中子页并返回加载函数。
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const PAGE_ENTRANCE_SPEED = 1.3;
 // 普通文字按所在元素入场。表格行、消息和按钮等复合控件作为整体，避免内部文字重复播放。
@@ -1196,7 +1199,8 @@ function startPageEntrance(page) {
     }
   }, {root:page});
   function watch(node) {
-    if (!node || node === page || !page.contains(node) || watched.has(node) || !node.getClientRects().length) return;
+    if (!node || node === page || !page.contains(node) || watched.has(node) ||
+      node.closest('button, input, select, textarea') || !node.getClientRects().length) return;
     watched.add(node);
     visible.observe(node);
   }
@@ -1252,16 +1256,24 @@ async function showPage(name, onShown) {
   state.page = name;
   const navigation = pageNavigation = {};
   for (const sec of document.querySelectorAll('section.page')) sec.classList.toggle('active', sec === page);
-  for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.classList.toggle('active', btn.dataset.page === name);
+  for (const btn of document.querySelectorAll('.nav-item[data-page]')) {
+    const current = btn.dataset.page === name;
+    btn.classList.toggle('active', current);
+    btn.setAttribute('aria-current', current ? 'page' : 'false');
+    btn.setAttribute('aria-disabled', String(current));
+  }
+  const load = PAGES[name].prepare?.(images ? 'images' : undefined) ?? PAGES[name].load;
   const entrance = startPageEntrance(page);
-  navigation.loading = images ? showMemoryTab('images') : PAGES[name].load?.();
+  navigation.loading = load?.();
   await navigation.loading;
   if (pageNavigation !== navigation) return;
   // 补上本次导航异步读到的内容，后续状态更新无需入场。
   if (entrance && pageEntrance === entrance) entrance.scan();
   onShown?.();
 }
-for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.addEventListener('click', () => showPage(btn.dataset.page));
+for (const btn of document.querySelectorAll('.nav-item[data-page]')) btn.addEventListener('click', () => {
+  if (btn.getAttribute('aria-disabled') !== 'true') showPage(btn.dataset.page);
+});
 window.addEventListener('hashchange', () => { if (state.loggedIn) showPage(location.hash.slice(1)); });
 
 // ---------- 主题：默认亮色（不看系统设置），点一下在亮色和深色之间切；只记在这台浏览器里 ----------
@@ -2500,13 +2512,14 @@ function renderModels() {
   sidebar.textContent = '';
   if (mdl.provider && !cfg.providers.some(provider => provider.name === mdl.provider)) mdl.provider = '';
   const providerButton = (name, label, count) => el('button', { class: 'provider-row' + (mdl.provider === name ? ' active' : ''),
-    text: label + ' · ' + count, 'aria-pressed': mdl.provider === name, onclick: event => {
+    text: label + ' · ' + count, 'aria-pressed': mdl.provider === name, 'aria-disabled': String(mdl.provider === name), onclick: event => {
       if (mdl.provider === name) return;
       mdl.provider = name;
       for (const button of sidebar.children) {
         const active = button === event.currentTarget;
         button.classList.toggle('active', active);
         button.setAttribute('aria-pressed', String(active));
+        button.setAttribute('aria-disabled', String(active));
       }
       renderProviderModels();
     } });
@@ -3662,7 +3675,11 @@ async function loadConfigPage(force) {
   }
   const buttons = [...tabs.querySelectorAll('.nav-item')];
   function selectSection(button) {
-    for (const tab of buttons) tab.classList.toggle('active', tab === button);
+    for (const tab of buttons) {
+      tab.classList.toggle('active', tab === button);
+      tab.setAttribute('aria-current', tab === button ? 'true' : 'false');
+      tab.setAttribute('aria-disabled', String(tab === button));
+    }
     cf.tab = button.dataset.sec;
     refreshQQLinkVisibility();
     renderConfigSection(cf.tab);

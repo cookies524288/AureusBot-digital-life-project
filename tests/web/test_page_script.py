@@ -77,7 +77,7 @@ function element(tag = 'div') {
     },
     removeAttribute(key) { delete this.attributes[key]; },
     addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
-    removeEventListener() {}, focus() {},
+    removeEventListener() {}, focus() {}, setCustomValidity() {},
     remove() {
       if (this.parentElement) {
         const siblings = this.parentElement.children;
@@ -96,7 +96,7 @@ const reply = (status, data) => ({
   json: async () => data, headers: { get: () => null },
 });
 const context = vm.createContext({
-  assert, timers, sockets, reply, URLSearchParams,
+  assert, timers, sockets, reply, URLSearchParams, AbortController,
   document: {
     getElementById(id) {
       if (!nodes.has(id)) nodes.set(id, element());
