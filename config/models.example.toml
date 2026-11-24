@@ -67,3 +67,7 @@ models = ["example-chat"]
 # 总结器官用于小探索（D79），也用来写日记（D80）；按需启用。
 # [organs.summarizer]
 # models = ["example-chat"]
+
+# 工作记忆滚动压缩只使用 utils（D103）；未配置可用模型时保留已有摘要。
+# [organs.utils]
+# models = ["example-chat"]

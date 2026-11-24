@@ -71,7 +71,7 @@ _CONDITIONAL = {
     "reply_segments": "启用分段且有快速模型时，在回复再审通过后请求切点。",
     "language_learning": "启用增量学习且收到未处理的新样本时调用。",
     "memory_consolidation": "夜间空闲且整理达到批量门槛，启用提取、有可用器官和可提取发言时调用。",
-    "working_memory_summary": "工作记忆达到容量时按来源分区整理；预览只显示一份模拟分区。",
+    "working_memory_summary": "工作记忆达到容量时由 utils 按来源分区压缩；预览只显示一份模拟分区。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
     "judge": "仅在判断器官启用且档位允许时调用，有历史才附对话。",
