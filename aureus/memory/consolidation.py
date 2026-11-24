@@ -14,7 +14,12 @@ from hashlib import sha256
 from itertools import chain, groupby
 from typing import Literal
 
-from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE, is_message_excerpt, is_message_source
+from aureus.memory.message_boundary import (
+    MESSAGE_EVENT_TYPE,
+    is_message_event,
+    is_message_excerpt,
+    is_message_source,
+)
 
 type CandidateKind = Literal["experience", "fact", "preference"]
 
@@ -117,7 +122,7 @@ def read_batch(conn: sqlite3.Connection, size: int) -> ConsolidationBatch | None
                CASE WHEN json_valid(t.metadata)
                     THEN json_extract(t.metadata, '$.conversation_id') END AS conversation
         FROM memory_index m JOIN timeline t ON t.id = m.record_id
-        WHERE m.rowid > ? AND t.event_type != '{MESSAGE_EVENT_TYPE}' ORDER BY m.rowid LIMIT ?
+        WHERE m.rowid > ? AND NOT ({is_message_event('t.event_type')}) ORDER BY m.rowid LIMIT ?
         """,
         (start[1], size),
     ).fetchall()
@@ -201,8 +206,8 @@ def _source_is_memory(conn: sqlite3.Connection, reference: str) -> bool:
     if prefix == "timeline" and separator:
         return (
             conn.execute(
-                "SELECT 1 FROM timeline WHERE id = ? AND event_type != ?",
-                (identifier, MESSAGE_EVENT_TYPE),
+                f"SELECT 1 FROM timeline WHERE id = ? AND NOT ({is_message_event('event_type')})",
+                (identifier,),
             ).fetchone()
             is not None
         )
@@ -259,8 +264,9 @@ def read_candidates(
         WHERE (t.id IS NOT NULL AND coalesce(live_edit.is_enabled, 1)
                AND NOT coalesce(live_edit.is_removed, 0)
                AND live_edit.edited_content IS NULL
-               AND (t.event_type != '{MESSAGE_EVENT_TYPE}' OR (
-                   c.kind IN ('fact', 'preference') AND t.visibility = 'user_only'
+               AND (NOT ({is_message_event('t.event_type')}) OR (
+                   t.event_type = '{MESSAGE_EVENT_TYPE}'
+                   AND c.kind IN ('fact', 'preference') AND t.visibility = 'user_only'
                    AND t.actor_type = 'user' AND NOT is_message_excerpt(c.content, t.content))))
            OR (h.status = 'active' AND NOT ({is_message_source("h.source_key")})
                AND coalesce(history_edit.is_enabled, 1)

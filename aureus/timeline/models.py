@@ -85,3 +85,6 @@ class TimelineQuery(BaseModel):
     metadata: dict[str, str | int | float | bool | None] = Field(
         default_factory=dict, description="metadata 的顶层标量精确匹配，所有条件都要满足"
     )
+    without_metadata: tuple[str, ...] = Field(
+        default=(), description="不返回带有任一指定顶层键的记录"
+    )

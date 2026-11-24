@@ -54,7 +54,12 @@ from aureus.memory.history import (
     search_history,
 )
 from aureus.memory.inspection import LiveMemoryInspection, inspect_live_memory
-from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE, is_message_excerpt
+from aureus.memory.message_boundary import (
+    MESSAGE_EVENT_TYPE,
+    MESSAGE_EVENT_TYPES,
+    is_message_event,
+    is_message_excerpt,
+)
 from aureus.memory.removal_operations import (
     MemoryRemovalOperation,
     browse_removal_operations,
@@ -250,7 +255,7 @@ class MemoryIndex:
             return 0
         with conn:
             for record in records:
-                if record.event_type == MESSAGE_EVENT_TYPE:
+                if record.event_type in MESSAGE_EVENT_TYPES:
                     continue
                 entry = describe(record)
                 if entry is not None:
@@ -554,7 +559,7 @@ class MemoryIndex:
                    WHERE NOT coalesce(edit.is_removed, 0)
                      AND EXISTS (SELECT 1 FROM timeline event
                                  WHERE event.id = memory_index.record_id
-                                   AND event.event_type != '{MESSAGE_EVENT_TYPE}')
+                                   AND NOT ({is_message_event('event.event_type')}))
                      AND (? = '' OR coalesce(edit.is_enabled, 1) = (? = 'enabled'))
                      AND (? = '' OR instr(lower(edit.edited_content), lower(?)) > 0
                                    OR instr(lower(content), lower(?)) > 0
@@ -669,7 +674,7 @@ class MemoryIndex:
                     + "ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid WHERE "
                     + "EXISTS (SELECT 1 FROM timeline event "
                     + "WHERE event.id = memory_index.record_id "
-                    + f"AND event.event_type != '{MESSAGE_EVENT_TYPE}') AND "
+                    + f"AND NOT ({is_message_event('event.event_type')})) AND "
                     + " AND ".join(where)
                     + " ORDER BY relevance DESC, recorded_at DESC, sparse_score, "
                     + "CAST(record_id AS INTEGER) DESC LIMIT ?",

@@ -245,6 +245,30 @@ def test_initial_chat_history_merges_live_reply_by_record_id() -> None:
     )
 
 
+def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bubbles() -> None:
+    run_page_script(
+        r"""
+        state.loggedIn = true;
+        openSocket();
+        api = async () => ({ok:true, data:[]});
+        await loadChatHistory();
+        const time = '2026-11-22T12:00:00Z';
+        sockets.at(-1).onmessage({data:JSON.stringify({type:'reply', id:40, delivery_key:'40:1',
+          time, sender:'小绿', channel:'web', content:'首段'})});
+        api = async path => {
+          assert.equal(path, '/api/history?replies_only=true');
+          return {ok:true, data:[
+            {id:41, delivery_key:'40:1', time, who:'me', channel:'web', content:'首段'},
+            {id:42, delivery_key:'40:2', time, who:'me', channel:'web', content:'第二段'},
+          ]};
+        };
+        await recoverChatReplies(sockets.at(-1));
+        const messages = Array.from($('chat-log').children).filter(node => node.className === 'msg me');
+        assert.deepEqual(messages.map(node => node.children[0].textContent), ['首段', '第二段']);
+        """
+    )
+
+
 @pytest.mark.parametrize("send_count", [1, 2])
 def test_chat_sends_only_after_initial_history_is_merged(send_count: int) -> None:
     run_page_script(

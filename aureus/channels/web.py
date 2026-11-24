@@ -73,11 +73,15 @@ class WebChannel:
 
         某个网页出错只记日志，不影响别的网页，更不影响心跳（任何通道出问题都不影响核心）。
         """
+        accepted = False
         for subscriber in list(self._subscribers.values()):
             try:
                 subscriber(message)
+                accepted = True
             except Exception:
                 logger.exception("网页通道有一个订阅者没能收下消息")
+        if not accepted and message.report_delivery_failure is not None:
+            message.report_delivery_failure("没有网页连接接收这段回复，未投递。")
 
     def send_from_user(self, text: str) -> bool:
         """网页上登录的用户说了一句话，交给心跳。要在事件循环里调用。

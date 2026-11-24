@@ -33,8 +33,10 @@ from aureus.channels import WebChannel
 from aureus.common import Clock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
+from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
 from aureus.memory import EmojiStore, ExpressionClusterStore, LanguageStore, MemoryIndex
 from aureus.memory.imported_messages import ImportedPlatformHistory
@@ -171,6 +173,11 @@ async def _push(
                         "content": message.content,
                         "channel": message.channel,
                         **({"id": message.timeline_id} if message.timeline_id is not None else {}),
+                        **(
+                            {"delivery_key": f"{message.timeline_id}:{message.reply_segment}"}
+                            if message.timeline_id is not None and message.reply_segment is not None
+                            else {}
+                        ),
                         **({"time": message.timestamp.isoformat()} if message.timestamp else {}),
                     }
                 )
@@ -416,16 +423,20 @@ def create_app(
 
     @app.get("/api/history")
     async def history(
-        _token: Annotated[str, Depends(require_ready)], limit: int = DEFAULT_HISTORY_LIMIT
+        _token: Annotated[str, Depends(require_ready)],
+        limit: int = DEFAULT_HISTORY_LIMIT,
+        replies_only: bool = False,
     ) -> list[dict[str, Any]]:
         """最新一批与用户本人的私聊，每条标明来自哪个通道（D84）"""
         bounded = min(max(limit, 1), MAX_HISTORY_LIMIT)
         records = timeline.query(
             TimelineQuery(
-                event_type=EVENT_MESSAGE,
+                event_types=(EVENT_REPLY_DELIVERED,)
+                if replies_only else (EVENT_MESSAGE, EVENT_REPLY_DELIVERED),
                 latest=True,
                 limit=bounded,
                 visibility=VisibilityScope.USER_ONLY,
+                without_metadata=(INTERNAL_REPLY_RECORD,),
             )
         )
         return [
@@ -435,6 +446,12 @@ def create_app(
                 "who": record.actor_type.value,
                 "channel": str(record.metadata.get("channel", "")),
                 "content": record.content,
+                **(
+                    {"delivery_key": f"{record.metadata['reply_id']}:{record.metadata['segment']}"}
+                    if record.event_type == EVENT_REPLY_DELIVERED
+                    and "reply_id" in record.metadata and "segment" in record.metadata
+                    else {}
+                ),
             }
             for record in records
         ]

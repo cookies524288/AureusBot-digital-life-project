@@ -8,7 +8,7 @@ from typing import Any
 
 from aureus.memory.edits import MemoryKind
 from aureus.memory.history import decode_history_row
-from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE, is_message_source
+from aureus.memory.message_boundary import is_message_event, is_message_source
 from aureus.memory.removal_operations import append_removal_operation
 
 PICTURE_ARCHIVE = """
@@ -54,7 +54,7 @@ WITH catalog AS (
     FROM memory_index live
     JOIN timeline event ON event.id = live.record_id
     LEFT JOIN memory_edits edit ON edit.kind = 'live' AND edit.entry_id = live.rowid
-    WHERE event.event_type != '{MESSAGE_EVENT_TYPE}'
+    WHERE NOT ({is_message_event('event.event_type')})
 )
 """
 _MATCHING = (

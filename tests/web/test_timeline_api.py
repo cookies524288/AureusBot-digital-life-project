@@ -14,7 +14,12 @@ from aureus.channels import WebChannel
 from aureus.common import ManualClock, WebConfig
 from aureus.core import CognitiveState
 from aureus.heartbeat import EVENT_REPLY_REFERENCE, Perception, recent_dialogue
-from aureus.heartbeat.events import EVENT_RECALL_FEEDBACK, EVENT_RECALL_REPLY_DELIVERED
+from aureus.heartbeat.events import (
+    EVENT_RECALL_FEEDBACK,
+    EVENT_RECALL_REPLY_DELIVERED,
+    EVENT_REPLY_DELIVERED,
+)
+from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 
@@ -238,6 +243,34 @@ def test_timeline_filters_time_and_paginates_in_ascending_order(rig: Rig) -> Non
     assert [record["id"] for record in second["records"]] == [2]
     assert second["next_before_id"] is None
     assert rig.client.get("/api/timeline?hours=26").json()["records"][0]["id"] == 1
+
+
+def test_reply_pages_show_only_confirmed_segments_and_never_infer_legacy_rounds(rig: Rig) -> None:
+    legacy = rig.timeline.append("message", "未标投递的历史回复", ActorType.ME)
+    first = rig.timeline.append("message", "来源一", ActorType.USER)
+    second = rig.timeline.append("message", "来源二", ActorType.USER)
+    rig.timeline.append(
+        "message", "确认段\n未确认段", ActorType.ME,
+        metadata={"round_id": first.id, INTERNAL_REPLY_RECORD: True},
+    )
+    for round_id, text in ((first.id, "确认段"), (second.id, "另一轮"), (first.id, "后续确认段")):
+        rig.timeline.append(
+            EVENT_REPLY_DELIVERED, text, ActorType.ME, metadata={"round_id": round_id},
+        )
+    for _ in range(4):
+        rig.timeline.append("message", "入站消息", ActorType.USER)
+
+    path = "/api/timeline?types=reply_delivered&limit=2"
+    assert rig.client.get(path).status_code == 401
+    rig.log_in()
+    latest = rig.client.get(path).json()
+    previous = rig.client.get(f"{path}&before_id={latest['next_before_id']}").json()
+    combined = previous["records"] + latest["records"]
+    assert [record["round_id"] for record in combined] == [first.id, second.id, first.id]
+    assert [record["content"] for record in combined] == ["确认段", "另一轮", "后续确认段"]
+    all_records = rig.client.get("/api/timeline").json()["records"]
+    assert all("未确认段" not in record["content"] for record in all_records)
+    assert "round_id" not in next(record for record in all_records if record["id"] == legacy.id)
 
 
 def test_power_requires_ready_and_same_origin_and_keeps_web_available(rig: Rig) -> None:

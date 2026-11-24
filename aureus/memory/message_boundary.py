@@ -1,6 +1,7 @@
 """按原件来源区分平台消息和长期记忆，不用称呼或正文判断归属。"""
 
 MESSAGE_EVENT_TYPE = "message"
+MESSAGE_EVENT_TYPES = (MESSAGE_EVENT_TYPE, "reply_delivered")
 MESSAGE_SOURCE_TABLES = ("mai_messages", "messages")
 
 
@@ -8,6 +9,12 @@ def is_message_source(source_key: str) -> str:
     """返回识别迁入消息的 SQL 条件；列名由调用方固定。"""
     tables = ", ".join(f"'{table}'" for table in MESSAGE_SOURCE_TABLES)
     return f"json_extract({source_key}, '$[2]') IN ({tables})"
+
+
+def is_message_event(event_type: str) -> str:
+    """返回识别本地对话原件及逐段投递的 SQL 条件；列名由调用方固定。"""
+    events = ", ".join(f"'{event}'" for event in MESSAGE_EVENT_TYPES)
+    return f"{event_type} IN ({events})"
 
 
 def is_message_excerpt(candidate: str, original: str) -> bool:

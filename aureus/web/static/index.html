@@ -298,6 +298,9 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .tl-item::before{content:'';position:absolute;left:-20px;top:16px;width:10px;height:10px;border-radius:50%;background:var(--surface);border:2px solid var(--text-2)}
 .tl-item.in-context::before{border-color:var(--accent);background:var(--accent)}
 .tl-item:hover{background:var(--surface-2)}
+.tl-round{border:1px solid var(--border);border-radius:var(--radius-sm);margin:8px 0}
+.tl-round-title{margin:0;padding:8px 12px 0;font-size:12px;color:var(--text-2)}
+.tl-actions{margin:6px 0;padding-left:20px;white-space:pre-wrap;overflow-wrap:anywhere}
 .tl-top{display:flex;gap:4px 10px;align-items:baseline;flex-wrap:wrap}
 .tl-event{color:var(--text);font-size:15px;font-weight:700;overflow-wrap:anywhere}
 .tl-meta{display:flex;min-width:0;gap:3px 9px;align-items:baseline;flex-wrap:wrap;color:var(--text-2);font-size:12px;overflow-wrap:anywhere}
@@ -1477,9 +1480,8 @@ const showMemoryTab = installResourcePages({$, api, el, fail, fmtTime, openEdito
 // 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
 const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
 let socket = null, socketWanted = false, lastDay = '';
-// 首次载入前保留现场气泡；历史已有的记录也可能稍后才通过 WebSocket 到达。
-let pendingChat = [];
-const renderedHistoryIds = new Set();
+const chatEntries = [];
+const renderedChatKeys = new Set();
 
 function setConn(text, kind) {
   setLiveText($('conn-text'), text);
@@ -1500,15 +1502,25 @@ function chatMessage({kind, sender, channel, content, time, notice, id}) {
   return {node, when, id};
 }
 
+function registerChatMessage(message) {
+  const key = message.delivery_key ?? message.id;
+  if (key != null) {
+    if (renderedChatKeys.has(key)) return null;
+    renderedChatKeys.add(key);
+  }
+  const entry = chatMessage(message);
+  chatEntries.push(entry);
+  return entry;
+}
+
 function addMessage(message) {
-  if (renderedHistoryIds.has(message.id)) return;
+  const entry = registerChatMessage(message);
+  if (!entry) return;
   const log = $('chat-log');
   const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   const empty = $('chat-empty');
   if (empty) empty.remove();
-  const entry = chatMessage(message);
   const {when, node} = entry;
-  pendingChat?.push(entry);
   const day = when.toDateString();
   if (day !== lastDay) {
     lastDay = day;
@@ -1520,22 +1532,16 @@ function addMessage(message) {
 
 function mergeChatHistory(items) {
   const log = $('chat-log');
-  const liveIds = new Set(pendingChat.map(entry => entry.id));
-  const history = [];
   for (const item of items) {
-    if (liveIds.has(item.id)) continue;
-    renderedHistoryIds.add(item.id);
-    history.push(chatMessage({...item, kind:item.who, sender:WHO_NAME[item.who] || item.who}));
+    registerChatMessage({...item, kind:item.who, sender:WHO_NAME[item.who] || item.who});
   }
-  const entries = [...history, ...pendingChat].sort((a, b) =>
-    a.when - b.when || (a.id != null && b.id != null ? a.id - b.id : 0));
-  pendingChat = null;
+  chatEntries.sort((a, b) => a.when - b.when || (a.id != null && b.id != null ? a.id - b.id : 0));
   for (const child of Array.from(log.children)) {
-    if (child.className === 'chat-day') child.remove();
+    if (child.className === 'chat-day' || child.id === 'chat-empty') child.remove();
   }
   lastDay = '';
   let position = 0;
-  for (const {when, node} of entries) {
+  for (const {when, node} of chatEntries) {
     const day = when.toDateString();
     if (day !== lastDay) {
       log.insertBefore(chatDay(when), log.children[position++] || null);
@@ -1544,7 +1550,7 @@ function mergeChatHistory(items) {
     const next = log.children[position++];
     if (next !== node) log.insertBefore(node, next || null);
   }
-  if (!entries.length) log.append(el('div', {class:'empty', id:'chat-empty', text:'还没有对话，说点什么吧。'}));
+  if (!chatEntries.length) log.append(el('div', {class:'empty', id:'chat-empty', text:'还没有对话，说点什么吧。'}));
   if (!selectionTouches(log)) log.scrollTop = log.scrollHeight;
 }
 
@@ -1561,14 +1567,27 @@ function loadChatHistory() {
 }
 PAGES.chat = { load: loadChatHistory };
 
-function openSocket() {
+async function recoverChatReplies(ws) {
+  const loaded = state.loaded;
+  if (!loaded.chat) return;
+  await loaded.chat;
+  if (state.loaded !== loaded || socket !== ws) return;
+  const res = await api('/api/history?replies_only=true');
+  if (res.ok && state.loaded === loaded && socket === ws) mergeChatHistory(res.data);
+}
+
+function openSocket(reconnecting = false) {
   socketWanted = true;
   if (socket) return;
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(scheme + '://' + location.host + '/ws');
   socket = ws;
   setConn('连接中', '');
-  ws.onopen = () => setConn('已连接', 'ok');
+  ws.onopen = () => {
+    if (socket !== ws) return;
+    setConn('已连接', 'ok');
+    if (reconnecting) void recoverChatReplies(ws);
+  };
   ws.onmessage = ev => {
     if (socket !== ws) return;
     let m;
@@ -1588,9 +1607,9 @@ function closeSocket() {
   const old = socket;
   socket = null;
   if (old) old.close();
-  pendingChat = [];
+  chatEntries.length = 0;
   $('chat-send').disabled = true;
-  renderedHistoryIds.clear();
+  renderedChatKeys.clear();
   lastDay = '';
   $('chat-log').replaceChildren();
 }
@@ -1600,7 +1619,7 @@ function reconnectLater() {
     if (!socketWanted || !state.loggedIn || socket) return;
     const res = await api('/api/status');
     if (!socketWanted || !state.loggedIn || socket) return;
-    if (res.ok) openSocket();
+    if (res.ok) openSocket(true);
     else if (res.status === 0) reconnectLater();
   }, 3000);
 }
@@ -1633,15 +1652,16 @@ $('chat-text').addEventListener('input', ev => {
 // ---------- 时间线：读 /api/timeline（2.12b 的接口） ----------
 const TL_FILTERS = [
   ['全部', ''],
-  ['对话', 'message'],
-  ['回复参考', 'reply_reference'],
+  ['回复', 'reply_delivered'],
+  ['规划', 'reply_reference,planning_interrupted,reply_declined,reply_delivery_failed'],
   ['日记与人设', 'diary_written,diary_failed,persona_changed,persona_unchanged,persona_review_failed'],
   ['行动与日程', 'agenda_added,agenda_due,agenda_closed,initiative_considered,initiative_result,exploration_started,exploration_result,interest_changed'],
   ['系统与安全', 'woke_up,shut_down,emergency_stop,emergency_resume,self_check,organ_call_abandoned,organ_call_rejected,organ_call_failed,cognitive_state'],
 ];
 const EVENT_NAMES = {
   message: '对话', woke_up: '醒来', shut_down: '关机', cognitive_state: '状态变化', organ_call_abandoned: '调用放弃',
-  emergency_stop: '急停', emergency_resume: '恢复', self_check: '自检', reply_declined: '没有回复', reply_reference: '回复参考',
+  emergency_stop: '急停', emergency_resume: '恢复', self_check: '自检', reply_declined: '没有回复', reply_reference: '规划',
+  planning_interrupted: '规划中断', reply_delivered: '回复 · 已投递', reply_delivery_failed: '回复 · 未确认投递',
   identity_changed: '设定被改', judgment: '判断', hormone_triggered: '激素', agenda_added: '新增承诺',
   agenda_due: '承诺到期', agenda_closed: '承诺了结', initiative_considered: '考虑主动联系', initiative_result: '主动联系结果',
   interest_changed: '兴趣变化', exploration_started: '开始探索', exploration_result: '探索结果',
@@ -1656,7 +1676,7 @@ const DETAIL_NAMES = {
   channel:'来源通道', account_id:'接收账号', recipient_id:'会话号码', message_type:'会话类型',
   temporary_group_id:'临时会话所属群', in_reply_to:'对应来信序号', organ_id:'器官',
   plan:'规划建议', reply:'是否建议回复', intent:'回应意图', length:'篇幅', reason:'依据',
-  strategy:'回复配置', hormones:'激素影响', reply_segments:'实际发送的文字分段', recall:'召回关键词',
+  strategy:'回复配置', hormones:'激素影响', reply_segments:'记录的文字分段', recall:'召回关键词',
   recall_keywords:'召回关键词', recall_record_ids:'召回记录序号', recall_source_keys:'召回来源',
   model_preference:'模型偏好', message_limit:'对话上限', length_limit:'篇幅上限',
   plan_first:'先规划', to_user:'发给维护者', judgment:'判断结果', probability:'概率',
@@ -1732,37 +1752,74 @@ function recallFeedback(replyId) {
   return details;
 }
 
-function timelineItem(rec, inContext) {
+const PLANNER_ACTION_NAMES = {
+  reply: '选择回复（不是发送）', stop: '结束规划', query_memory: '查询记忆',
+  inbox_attention: '收件箱关注', planner: '规划器', replyer: '回复器', review: '二次审视', unknown_tool: '未知工具',
+};
+const PLANNER_ACTION_STATES = {requested:'已请求', rejected:'已拒绝', not_run:'未执行', failed:'失败', completed:'完成'};
+
+function timelineItem(rec, inContext, feedbackId = rec.recall_feedback_reply_id || (rec.recall_feedback_available ? rec.id : null)) {
   const actor = { user: '你', me: '它', person: '对方', system: '系统' }[rec.actor] || rec.actor;
+  const event = rec.event_type === 'message' && rec.actor === 'me' ? '历史回复 · 未标投递' : EVENT_NAMES[rec.event_type] || rec.event_type;
   const top = el('div', { class: 'tl-top' },
-    el('strong', { class: 'tl-event', text: EVENT_NAMES[rec.event_type] || rec.event_type }),
+    el('strong', { class: 'tl-event', text: event }),
     VISIBILITY_NAMES[rec.visibility] ? el('span', { class: 'tag', text: VISIBILITY_NAMES[rec.visibility] }) : null,
     el('div', { class: 'tl-meta' },
       el('time', { datetime: rec.time, text: fmtTime(rec.time, true) }),
       el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
       rec.channel ? el('span', { text: CHANNEL_NAMES[rec.channel] || rec.channel }) : null,
       el('span', { class: 'mono', text: '#' + rec.id })));
-  const content = el('div', { class: 'tl-content clamp', text: rec.content || '（没有正文）' });
+  const {actions, ...metadata} = rec.metadata || {};
+  const text = rec.event_type === 'reply_reference' && Array.isArray(actions) ? '本轮行动记录' : rec.content;
+  const content = el('div', { class: 'tl-content clamp', text: text || '（没有正文）' });
   content.addEventListener('click', () => content.classList.toggle('clamp'));
-  const keys = Object.keys(rec.metadata || {});
-  const meta = keys.length ? el('details', { class: 'muted tl-details' }, el('summary', { text: '详细信息（' + keys.length + ' 项）' }), timelineDetails(rec.metadata)) : null;
-  return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, meta,
-    rec.recall_feedback_available ? recallFeedback(rec.id) : null);
+  const actionList = Array.isArray(actions) && actions.length ? el('ol', {class:'tl-actions'},
+    actions.map(({action, status, reason, reference}) => el('li', {},
+      el('strong', {text: `${PLANNER_ACTION_NAMES[action] || '行动'} · ${PLANNER_ACTION_STATES[status] || '未知状态'}`}),
+      reason ? el('div', {text:`依据或结果：${reason}`}) : null,
+      reference ? el('div', {text:`回复参考（不是已发正文）：${reference}`}) : null))) : null;
+  const keys = Object.keys(metadata);
+  const meta = keys.length ? el('details', { class: 'muted tl-details' }, el('summary', { text: '详细信息（' + keys.length + ' 项）' }), timelineDetails(metadata)) : null;
+  return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, actionList, meta,
+    feedbackId ? recallFeedback(feedbackId) : null);
 }
 
-// 分隔线画在「当前上下文」最后一条之后：序号不小于 boundary_id 的在上面，更早的在下面（D84 第 4 条）。
 function renderTimeline() {
   const list = $('tl-list');
   list.textContent = '';
   const boundary = tl.context ? tl.context.boundary_id : null;
   const items = tl.records.slice().reverse();
   if (!items.length) { list.append(el('div', { class: 'empty', text: '这个时间范围里没有记录。' })); return; }
-  let drawn = boundary === null;
-  if (boundary !== null && items[0].id < boundary) { list.append(tlDivider()); drawn = true; }
-  for (const rec of items) {
-    if (!drawn && rec.id < boundary) { list.append(tlDivider()); drawn = true; }
-    list.append(timelineItem(rec, boundary !== null && rec.id >= boundary));
+  const titled = new Set(), feedback = new Set();
+  function appendBand(records, inContext) {
+    const groups = new Map();
+    function renderRecord(record) {
+      const id = record.recall_feedback_reply_id || (record.recall_feedback_available ? record.id : null);
+      const showFeedback = id && !feedback.has(id);
+      if (showFeedback) feedback.add(id);
+      return timelineItem(record, inContext, showFeedback ? id : null);
+    }
+    for (const record of records) {
+      if (record.round_id && !groups.has(record.round_id)) groups.set(record.round_id, []);
+      groups.get(record.round_id)?.push(record);
+    }
+    for (const record of records) {
+      if (!record.round_id) { list.append(renderRecord(record)); continue; }
+      const members = groups.get(record.round_id);
+      if (!members) continue;
+      groups.delete(record.round_id);
+      const title = `对话轮次 #${record.round_id}`;
+      list.append(el('section', {class:'tl-round', 'aria-label':title},
+        titled.has(record.round_id) ? null : el('h3', {class:'tl-round-title', text:title}),
+        ...members.reverse().map(renderRecord)));
+      titled.add(record.round_id);
+    }
   }
+  if (boundary === null) { appendBand(items, false); return; }
+  appendBand(items.filter(record => record.id >= boundary), true);
+  const history = items.filter(record => record.id < boundary);
+  if (history.length) list.append(tlDivider());
+  appendBand(history, false);
 }
 function tlDivider() {
   const limit = tl.context ? tl.context.message_limit : '';
@@ -1824,7 +1881,7 @@ async function loadTimeline(more, switching = false) {
     return row;
   }));
   if (!entries.length) summary.textContent = '暂无滚动摘要。';
-  tl.records = more ? res.data.records.concat(tl.records) : res.data.records;
+  tl.records = more ? [...new Map(res.data.records.concat(tl.records).map(record => [record.id, record])).values()] : res.data.records;
   tl.next = res.data.next_before_id;
   tl.context = res.data.context;
   timelineQuery = base;

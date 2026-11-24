@@ -12,6 +12,7 @@ from aureus.attention import WorkingMemory
 from aureus.common import HeartbeatConfig, ManualClock
 from aureus.heartbeat import (
     EVENT_MESSAGE,
+    EVENT_REPLY_REFERENCE,
     Heartbeat,
     MessageKind,
     MessageRoute,
@@ -19,6 +20,7 @@ from aureus.heartbeat import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.safety import ACTION_REPLY_TO_USER, EmergencyStop, PermissionChecker, PermissionDecision
@@ -168,6 +170,10 @@ async def test_the_timeline_keeps_the_whole_reply_as_one_record(
     assert mine[0].metadata["reply_segments"] == PIECES
     assert [message.timeline_id for message in rig.sent] == [mine[0].id] * len(PIECES)
     assert all(message.timestamp == mine[0].timestamp for message in rig.sent)
+    delivered = rig.timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED))
+    assert [record.content for record in delivered] == PIECES
+    assert [record.metadata["segment"] for record in delivered] == [1, 2, 3]
+    assert {record.metadata["round_id"] for record in delivered} == {records[0].id}
 
 
 async def test_switching_splitting_off_sends_the_whole_reply(
@@ -272,6 +278,15 @@ async def test_other_conversation_can_send_while_first_conversation_types(
     await rig.say("二", route=MessageRoute("bot", "group", "two", "second"))
     assert rig.replies() == ["第一群", "第二群"]
     assert "等待的内容" not in rig.organs.plans[1].prompt
+    first_plan, second_plan = rig.timeline.query(TimelineQuery(event_type=EVENT_REPLY_REFERENCE))
+    rig.advance(10)
+    delivered = rig.timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED))
+    first_round = first_plan.metadata["round_id"]
+    second_round = second_plan.metadata["round_id"]
+    assert first_round != second_round
+    assert [(record.content, record.metadata["round_id"]) for record in delivered] == [
+        ("第一群", first_round), ("第二群", second_round), ("等待的内容", first_round),
+    ]
 
 
 @pytest.mark.parametrize("stop", ["permission", "emergency", "maintenance", "exit", "request_stop"])
