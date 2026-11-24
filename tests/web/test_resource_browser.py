@@ -1205,6 +1205,64 @@ def test_memory_batch_remove_and_restore(browser: Browser) -> None:
     )
 
 
+def test_memory_operations_show_states_and_paginate_at_390px(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000'), '文字记忆初始查询');
+      let mode = 'empty', pageSize = 0;
+      const realFetch = window.fetch;
+      window.fetch = (resource, options) => {
+        const url = new URL(resource, location.origin);
+        if (url.pathname !== '/api/resources/memory/operations') {
+          return realFetch(resource, options);
+        }
+        const offset = Number(url.searchParams.get('offset'));
+        const limit = Number(url.searchParams.get('limit'));
+        if (mode === 'error') {
+          return Promise.resolve(Response.json({detail:'暂时无法读取'}, {status:503}));
+        }
+        const total = mode === 'records' ? limit * 2 + 1 : 0;
+        pageSize = limit;
+        const length = Math.min(limit, Math.max(0, total - offset));
+        const items = Array.from({length}, (_, index) => ({
+          kind:(offset + index) % 2 ? 'remove' : 'restore', changed:offset + index + 1,
+          occurred_at:'2026-11-23T00:00:00Z',
+        }));
+        return Promise.resolve(Response.json({enabled:mode !== 'disabled', total, items,
+          next_offset:offset + limit < total ? offset + limit : null}));
+      };
+      press('操作记录');
+      await waitFor(() => text('没有可见的移除或恢复记录') && page() === '第 0 / 0 页', '空态');
+      press('记忆查询');
+      mode = 'disabled';
+      press('操作记录');
+      await waitFor(() => text('此功能当前关闭'), '关闭状态');
+      press('记忆查询');
+      mode = 'error';
+      press('操作记录');
+      await waitFor(() => text('读取失败') && button('重试'), '读取失败不伪装成空态');
+      mode = 'records';
+      press('重试');
+      await waitFor(() => page() === '第 1 / 3 页' && text('恢复 1 条') && text('移除 2 条'),
+        '展示操作和总页数');
+      const time = find('#memory-operations-result time');
+      check(time.dateTime === '2026-11-23T00:00:00Z' && time.textContent.includes('2026年'),
+        '显示实际时间');
+      check(root().scrollWidth <= innerWidth && innerWidth === 390, '窄屏不横向溢出');
+      press('下一页');
+      await waitFor(() => page() === '第 2 / 3 页', '第二页');
+      press('下一页');
+      await waitFor(() => page() === '第 3 / 3 页' && text(`恢复 ${pageSize * 2 + 1} 条`),
+        '末页实际条数');
+      check(button('下一页').disabled && !button('上一页').disabled, '末页按钮状态');
+      press('上一页');
+      await waitFor(() => page() === '第 2 / 3 页', '返回上一页');
+    """,
+    )
+
+
 def test_image_prompt_preview_displays_text_then_attachment(browser: Browser) -> None:
     browser.open("timeline", 390, 740)
     _run(

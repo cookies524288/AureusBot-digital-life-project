@@ -42,6 +42,11 @@ from aureus.memory.history import (
     search_history,
 )
 from aureus.memory.inspection import LiveMemoryInspection, inspect_live_memory
+from aureus.memory.removal_operations import (
+    MemoryRemovalOperation,
+    browse_removal_operations,
+    open_removal_operations,
+)
 from aureus.memory.resources import browse_text_resources, set_resources_removed
 from aureus.memory.sparse import keyword_conditions, relevance_expression
 from aureus.memory.transfer import export_archive, import_archive
@@ -146,6 +151,7 @@ class MemoryIndex:
             open_history(conn)
             _open_live_index(conn)
             open_edits(conn)
+            open_removal_operations(conn)
             open_consolidation(conn)
             open_flow(conn)
         except BaseException:
@@ -313,7 +319,21 @@ class MemoryIndex:
     ) -> bool:
         """原子移除或恢复所选文字记忆，不修改正文覆盖或原召回状态。"""
         with closing(open_connection(self._db_path)) as conn:
-            return set_resources_removed(conn, targets, removed, self._clock.now())
+            return set_resources_removed(
+                conn,
+                targets,
+                removed,
+                self._clock.now(),
+                record_operation=self._config.removal_operations_enabled,
+            )
+
+    def browse_removal_operations(
+        self, visibility: VisibilityScope, offset: int, limit: int
+    ) -> tuple[list[MemoryRemovalOperation], int] | None:
+        """查询可见的操作摘要；关闭记录时不读库。"""
+        if not self._config.removal_operations_enabled:
+            return None
+        return browse_removal_operations(self._db_path, visibility, offset, limit)
 
     def publish_events(self, events: Iterable[MemoryEvent], snapshot: tuple[str, str]) -> int:
         """从相同迁入快照追加缺失的事件，保留原记忆。"""

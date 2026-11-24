@@ -1,6 +1,6 @@
 # 路线图 3.11 补充：长期记忆移除与恢复记录
 
-状态：待实现
+状态：待评审
 设计：D99（可逆移除）、D77（自检和复审）。
 
 ## 先读
@@ -15,7 +15,7 @@
 
 ## 接口与行为
 
-- `memory_edits` 是当前覆盖，不是审计；记忆流也没有这项事实。不从旧状态、导入或时间线补造历史。新操作在原 `BEGIN IMMEDIATE` 内追加一条真实事实，保存所改条目键、动作和记忆时钟时间；当前状态比对未全匹配时整批拒绝，重投不会重复记成功。记录写入报错时和移除标记一起回滚。
+- `memory_edits` 是当前覆盖，不是审计；记忆流也没有这项事实。不从旧状态、导入或时间线补造历史。新操作在原 `BEGIN IMMEDIATE` 内追加一条真实事实，保存经索引与原件双向定位的本地时间线键、动作和记忆时钟时间；当前状态比对未全匹配时整批拒绝，重投不会重复记成功。记录写入报错时和移除标记一起回滚。
 - `GET /api/resources/memory/operations` 由已登录、已改默认密码的维护者读取；采用 `offset`、`limit` 和现有 `items`、`total`、`next_offset`、`enabled` 约定。读取不续期、不写库，不因库读取失败返回假空列表。以当前网页通道范围及本地时间线原件的范围判定每个成员，先过滤再统计和分页；不信派生索引标签、迁入来源键或客户端声明。没有可确认可见成员的批次不显示；混合批次仅显示可见成员数。对外不返回目标键、正文、来源、全批数量或跨范围顺序号。
 - 条目定位沿用 `kind` 和 `entry_id`，其中本地索引的行号与原时间线编号须一致；导入原件仍可按原路径维护，因没有等价的原件可见范围，操作记录不统计它们。网页不新增修改权限或其它状态流。
 - `memory.removal_operations_enabled` 默认开启；关闭时停止新增记录和读取，仍可正常执行批量移除/恢复，不清除已有记录。操作日志是从部署启用时起的附加维护事实，不随文字包转移。
@@ -33,11 +33,15 @@
 
 ## 自检清单
 
-- [ ] 快照分页先过滤原件、按倒序稳定，时间仅取时钟；请求不能扩大权限，正文和外域总量不出接口。
-- [ ] 合成真实库验证取消不发写请求、重复或失效重投不记成功、记录失败回滚；撤销不触及停用、原件、证据、时间线或有效期；旧覆盖不回填。
-- [ ] 已登录且改默认密码才能查看，区别空、关闭和失败；关闭不影响批量维护。
-- [ ] 390 px Chrome 验证类型、时间、数量、总页数、翻页、空态和失败重试；回归原批量操作与记忆包。
-- [ ] 对照记录真实范围；未操作正式进程、库、分支、真实模型或远程。
+- [x] `test_memory_operations_show_only_visible_changes_before_paging`：过滤后计数和分页，同一时刻按写入顺序倒序；索引标签仿冒和请求参数不扩大权限，返回仅类型、时钟时间和可见成员数。
+- [x] `test_memory_batch_remove_and_restore` 检查取消不发写请求；`test_memory_operations_show_only_visible_changes_before_paging` 检查重投、失效或跨网页来源请求不留成功记录、旧覆盖不回填；`test_memory_operation_failure_rolls_back_and_switch_keeps_maintenance` 注入 SQLite 写失败并核对整库无变动，成功路径保留原件、证据、时间线和停用。`test_batch_removal_suppresses_real_recall_without_changing_original_states` 覆盖实际召回和原状态。
+- [x] HTTP 两项覆盖未登录、默认密码、过期会话、空、关闭和缺库；关闭记账不妨碍原批量恢复。
+- [x] `test_memory_operations_show_states_and_paginate_at_390px` 覆盖类型、时间、数量、总页数、翻页、关闭、空态和失败重试；浏览器整文件与检修、文字包、资源接口、召回回归合计 70 项通过，另有新 HTTP 专项 2 项通过。
+- [x] 更新对照；Ruff 检查、格式、Pyright（0 错误）、`node --check`、架构检查（8 项）与 `git diff --check` 通过。未重跑全仓检查，未操作正式进程、库、分支、真实模型或远程。
+
+## 交付环境
+
+基线 `7c41b98`，独立分支 `codex/memory-operations`。使用正式工作树已有 Python 环境、开发树 `PYTHONPATH`。合成夹具位于 `E:/Temp/aureus-memory-operations-7c41b98-dev/pytest`、`pytest-http` 和 `pytest-regression`；Chrome 临时资料也位于该临时根目录，浏览器测试结束后按夹具正常回收。
 
 ## 不做
 

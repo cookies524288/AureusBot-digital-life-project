@@ -8,6 +8,7 @@ from typing import Any
 
 from aureus.memory.edits import MemoryKind
 from aureus.memory.history import decode_history_row
+from aureus.memory.removal_operations import append_removal_operation
 
 PICTURE_ARCHIVE = """
     SELECT 'archive', history.id, history.recorded_at, history.content, history.source_key,
@@ -35,7 +36,7 @@ WITH catalog AS (
                THEN 'messages'
            END AS category,
            history.status, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled,
-           coalesce(edit.is_removed, 0) AS is_removed,
+           coalesce(edit.is_removed, 0) AS is_removed, NULL AS original_id,
            (history.status = 'active'
             AND (history.valid_from IS NULL OR history.valid_from <= :now)
             AND (history.valid_to IS NULL OR history.valid_to > :now)
@@ -47,7 +48,7 @@ WITH catalog AS (
            unixepoch(live.recorded_at, 'subsec'), NULL,
            CASE event.event_type WHEN 'message' THEN 'messages' ELSE 'experiences' END,
            'active', edit.edited_content, coalesce(edit.is_enabled, 1),
-           coalesce(edit.is_removed, 0),
+           coalesce(edit.is_removed, 0), CASE WHEN live.rowid = event.id THEN event.id END,
            (coalesce(edit.is_enabled, 1) AND NOT coalesce(edit.is_removed, 0))
     FROM memory_index live
     JOIN timeline event ON event.id = live.record_id
@@ -144,6 +145,8 @@ def set_resources_removed(
     targets: Sequence[tuple[MemoryKind, int]],
     removed: bool,
     now: datetime,
+    *,
+    record_operation: bool,
 ) -> bool:
     """仅更改找到且仍在预期列表中的条目；选中内容已变化则整批不写。"""
     if not targets or len(set(targets)) != len(targets):
@@ -157,15 +160,19 @@ def set_resources_removed(
         connection.execute("BEGIN IMMEDIATE")
         matched = connection.execute(
             _TEXT_CATALOG
-            + "SELECT count(*) FROM catalog WHERE category IS NOT NULL "
+            + "SELECT original_id FROM catalog WHERE category IS NOT NULL "
             + f"AND is_removed = :prior AND (kind, entry_id) IN (VALUES {pairs})",
             params,
-        ).fetchone()[0]
-        if matched != len(targets):
+        ).fetchall()
+        if len(matched) != len(targets):
             return False
         connection.executemany(
             """INSERT INTO memory_edits(kind, entry_id, is_removed) VALUES (?, ?, ?)
                ON CONFLICT(kind, entry_id) DO UPDATE SET is_removed = excluded.is_removed""",
             [(kind, entry_id, removed) for kind, entry_id in targets],
         )
+        if record_operation:
+            append_removal_operation(
+                connection, removed, now, [row[0] for row in matched if row[0] is not None]
+            )
     return True

@@ -598,6 +598,7 @@ class MemoryConfig(BaseModel):
     recall_enabled: bool = True
     heuristic_recall_enabled: bool = False
     recall_feedback_enabled: bool = True
+    removal_operations_enabled: bool = True
     max_results: int = Field(default=5, ge=1, le=20)
     index_batch: int = Field(default=200, ge=1, le=5000)
     consolidation_enabled: bool = False
