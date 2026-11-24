@@ -1414,6 +1414,95 @@ def test_memory_pagination_details_and_button_states(browser: Browser) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("route", "endpoint", "label"),
+    [("memory", "/api/resources/memory", "记忆"), ("learning", "/api/resources/media", "表情")],
+)
+def test_resource_pagination_clears_failed_reload_and_retries_same_page(
+    browser: Browser, route: str, endpoint: str, label: str
+) -> None:
+    browser.open(route, 390, 740)
+    args = json.dumps({"route": route, "endpoint": endpoint, "prefix": f"合成{label}"})
+    _run(
+        browser,
+        "const {route, endpoint, prefix} = " + args + ";"
+        """
+      const next = () => button('下一页');
+      const input = () => find('input[type=search]');
+      const go = name => document.querySelector(`.nav-item[data-page="${name}"]`).click();
+      const applied = prefix + '0';
+      const draft = '合成草稿尚未提交';
+      if (route === 'learning') {
+        await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页已打开');
+        click('[data-learning-tab="emoji"]');
+      }
+      await waitFor(() => innerWidth === 390 && innerHeight === 740 && next()?.disabled === false,
+        '窄屏列表加载');
+      input().value = applied;
+      input().form.requestSubmit();
+      await waitFor(() => text(prefix + '000') && next()?.disabled === false, '已提交筛选');
+      press('下一页');
+      await waitFor(() => page()?.startsWith('第 2 /') && next()?.disabled === false,
+        '非末尾第二页');
+      input().value = draft;
+      const original = window.fetch;
+      const pending = [];
+      window.fetch = (url, options) => {
+        const parsed = new URL(url, location.href);
+        if (parsed.pathname !== endpoint) return original(url, options);
+        return new Promise(resolve => pending.push({params:parsed.searchParams,
+          respond:response => resolve(response ?? original(url, options))}));
+      };
+      const reload = async index => {
+        go(route === 'memory' ? 'learning' : 'memory');
+        go(route);
+        await waitFor(() => pending[index], '返回后重新查询');
+        check(page() === '读取中…' && next().disabled && button('上一页').disabled,
+          '等待时禁用分页');
+        const request = pending[index];
+        check(request.params.get('q') === applied && Number(request.params.get('offset')) > 0,
+          '返回读取已提交筛选的第二页');
+        request.respond(Response.json({detail:'合成列表错误'}, {status:503}));
+        await waitFor(() => button('重试') && text('读取失败'), '明确显示读取失败和重试');
+        const pager = root().querySelector('.resource-pagination');
+        check(!page() && [...pager.querySelectorAll('button')].every(control => control.disabled),
+          '失败后不得展示旧总页数或启用翻页');
+        check(!text(prefix) && !text('没有符合条件的记录') && input().value === draft,
+          '失败不装作空结果，也不改草稿');
+        press('重试');
+        await waitFor(() => pending[index + 1], '重试发出同一页读取');
+        const retry = pending[index + 1];
+        check(retry.params.toString() === request.params.toString(), '重试沿用页码及已提交筛选');
+        return retry;
+      };
+      try {
+        const retry = await reload(0);
+        retry.respond();
+        const expected = Math.ceil(100 / Number(retry.params.get('limit')));
+        await waitFor(() => page() === `第 2 / ${expected} 页` && text(prefix) &&
+          !button('上一页').disabled && !next().disabled, '重试后恢复第二页及正确总数');
+        check(input().value === draft, '重试成功不改草稿');
+
+        const late = await reload(2);
+        input().value = prefix + '002';
+        input().form.requestSubmit();
+        await waitFor(() => pending[4], '新筛选提交后重新读取');
+        check(pending[4].params.get('offset') === '0', '新筛选从第一页查询');
+        input().value = '另一段合成草稿';
+        pending[4].respond();
+        await waitFor(() => page() === '第 1 / 1 页' && text(prefix + '002'), '新筛选的一条结果');
+        late.respond(Response.json({enabled:true,total:320,items:[{
+          entry_id:'old-page', text:'迟到的旧页', media_kind:'emoji', is_registered:true,
+        }],next_offset:100}));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        check(page() === '第 1 / 1 页' && text(prefix + '002') && !text('迟到的旧页') &&
+          input().value === '另一段合成草稿',
+          '晚到的旧页不改变当前页、资料或草稿');
+      } finally { window.fetch = original; }
+    """,
+    )
+
+
 def test_memory_inspection_shows_counts_and_limits(browser: Browser) -> None:
     browser.open("memory", 390, 740)
     _run(
