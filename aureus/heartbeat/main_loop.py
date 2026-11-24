@@ -45,7 +45,7 @@ from aureus.common import (
     PersonaGrowthConfig,
 )
 from aureus.common.config import CortisolConfig
-from aureus.common.web_identity import WEB_CHANNEL_NAME
+from aureus.common.web_identity import WEB_CHANNEL_NAME, WEB_USER_ID
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat import exploration_runner, interest_changes, language_runner
@@ -782,6 +782,33 @@ class Heartbeat:
     def is_thinking(self) -> bool:
         """是否有进行中的想法（结果还没被处理）。"""
         return self._thought is not None
+
+    def is_replying_to(
+        self, *, conversation: ConversationKey | None = None,
+        web_visibility: VisibilityScope | None = None,
+    ) -> bool:
+        """只向指定平台原件会话或认证网页私聊报告正在进行的回复。"""
+        thought = self._thought
+        if (
+            thought is None or not thought.replying_to or thought.task.done()
+            or thought.task.cancelling() or thought.inbox_discard_reason is not None
+            or self._stop_requested or self._halt_status.halted
+        ):
+            return False
+        heard = thought.replying_to[-1]
+        target = heard.perception
+        if conversation is not None:
+            inbox = self._platform_inbox
+            return (
+                target.visibility is not VisibilityScope.PRIVATE
+                and _platform_key(heard) == conversation
+                and (heard.residence is None or (inbox is not None and inbox.permits(heard.residence)))
+            )
+        return (
+            target.channel == WEB_CHANNEL_NAME and target.sender_id == WEB_USER_ID
+            and target.trust is TrustLevel.VERIFIED_USER and target.route is None
+            and web_visibility is VisibilityScope.USER_ONLY and target.visibility is web_visibility
+        )
 
     # ---------- 生命周期 ----------
 

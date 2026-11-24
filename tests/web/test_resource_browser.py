@@ -643,6 +643,80 @@ def test_inbox_components_render_in_order_and_treat_poke_hints_as_text(browser: 
     """)
 
 
+def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browser) -> None:
+    browser.open("inbox", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof followConversationTyping === 'function' && state.loggedIn, '网页未就绪');
+      closeSocket();
+      const key = {platform:'qq', account_id:'bot', kind:'group', recipient_id:'A'};
+      const first = {key, name:'同名群'};
+      const second = {key:{...key,recipient_id:'B'}, name:'同名群'};
+      const requests = [];
+      window.api = async (path, method, body, headers, signal) => {
+        if (path.includes('/typing')) {
+          return new Promise(resolve => requests.push({path, signal, resolve}));
+        }
+        if (path.includes('/operations')) return {ok:true,data:{enabled:true}};
+        return {ok:true,data:[]};
+      };
+      await showPage('chat');
+      inbox.view = 'qq';
+      inbox.conversations = [first, second];
+      const wrappedApi = window.api;
+      window.api = (path, ...args) => {
+        if (path === '/api/inbox/conversations') return Promise.resolve({ok:true,data:{
+          enabled:true, conversations:[first, second],
+        }});
+        if (path.startsWith('/api/inbox/messages?')) return Promise.resolve({ok:true,data:{messages:[]}});
+        return wrappedApi(path, ...args);
+      };
+      await showPage('inbox');
+      const latest = () => requests.at(-1);
+      const respond = (request, typing) => request.resolve({ok:true,data:{typing}});
+      const bubble = id => document.querySelector(`#${id}-typing .typing-status`);
+      await waitFor(() => latest()?.path.includes('recipient_id=A'), '无 WS 时桌面仍请求认证接口');
+      const stale = latest();
+      const conversations = document.querySelectorAll('#inbox-conversations button');
+      conversations[1].click();
+      await waitFor(() => latest()?.path.includes('recipient_id=B'), '后续请求只取 B');
+      check(stale.signal.aborted, '离开 A 立即取消旧请求');
+      respond(stale, true);
+      respond(latest(), false);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      check(!bubble('inbox'), '迟到的 A 不得让 B 显示气泡');
+      const count = requests.length;
+      await waitFor(() => requests.length > count, 'B 继续按需轮询');
+      respond(latest(), true);
+      await waitFor(() => bubble('inbox')?.textContent === '输入中', 'B 显示真实输入');
+      check(bubble('inbox').getBoundingClientRect().left > 195, '窄屏贴平台机器人右侧');
+      check(getComputedStyle(bubble('inbox').lastChild).display === 'none', '减少动效时只留静态文字');
+      check(visible(document.querySelector('#inbox-send')), '不影响发送按钮');
+      await showPage('chat');
+      check(!bubble('inbox') && !bubble('chat'), '切页立即清除桌面，不显示跨会话输入');
+      window.WebSocket = class {
+        static OPEN = 1;
+        readyState = 1;
+        close() {}
+      };
+      openSocket();
+      const connection = socket;
+      connection.onopen();
+      await waitFor(() => latest()?.path === '/api/chat/typing', '连上后查询当前私聊');
+      respond(latest(), true);
+      await waitFor(() => bubble('chat')?.textContent === '输入中', '网页私聊显示气泡');
+      check(bubble('chat').getBoundingClientRect().left < 50, '网页气泡贴 bot 左侧');
+      check(!document.querySelector('#chat-log .typing-status'), '不计入聊天消息');
+      connection.onclose();
+      check(!bubble('chat'), '断开立刻清除网页输入');
+      openSocket();
+      socket.onopen();
+      await waitFor(() => latest()?.path === '/api/chat/typing', '重连重新查询');
+      respond(latest(), false);
+      closeSocket();
+      check(!bubble('chat'), '重连不能恢复旧结果');
+    """)
+
+
 def test_narrow_qq_desktop_confirms_and_keeps_operations_in_selected_conversation(
     browser: Browser,
 ) -> None:

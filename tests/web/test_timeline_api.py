@@ -20,6 +20,7 @@ from aureus.heartbeat.events import (
     EVENT_REPLY_DELIVERED,
 )
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
+from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 
@@ -29,6 +30,17 @@ FAST_HASHER = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
 
 
 class FakeHeartbeat:
+    replying_conversation: ConversationKey | None = None
+    replying_web = False
+
+    def is_replying_to(
+        self, *, conversation: ConversationKey | None = None,
+        web_visibility: VisibilityScope | None = None,
+    ) -> bool:
+        if conversation is not None:
+            return conversation == self.replying_conversation
+        return self.replying_web and web_visibility is VisibilityScope.USER_ONLY
+
     def __init__(self) -> None:
         self.cognitive_state: CognitiveState | None = None
         self.is_thinking = False
