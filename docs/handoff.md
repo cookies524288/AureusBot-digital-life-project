@@ -6,7 +6,7 @@
 
 - [设置、切页和身份](tasks/3.15-management.md)：切页首帧 `85c92ce`、设置搜索与中文说明 `d7c9f19`、私聊实发分段/补读 `680e255` 及身份称谓 `145317e` 已合入。
 - [增量总结](tasks/3.15-memory.md)：返工版 `ad2c612` 随 `f0dc456` 合入，QQ 和网页私聊分别建窗与提交。组合专项 24 项通过，未用真实模型。
-- [长期记忆与学习](tasks/3.15-resource-console.md)：分区工作台与连续翻页修复 `aacba11` 已合入；按[质检](tasks/3.15-expression-quality.md)、[事实/画像生命周期](tasks/3.15-resource-lifecycle.md)和[包互通](tasks/3.15-bundles.md)续做。**只暂缓关系图的新 UI 设计**；`070cf17`、`e8c0641` 保留且默认无授权，关系数据管理和后端权限照常。
+- [长期记忆与学习](tasks/3.15-resource-console.md)：分区与翻页 `aacba11`、[独立质检和人工挽回](tasks/3.15-expression-quality.md) `583b28b` / `63de7bc`、[选源包生成、预检和可逆安装](tasks/3.15-bundles.md) `4907bff` 均已合入。下一步是表达向量的有界运维、[派生事实与画像检修](tasks/3.15-resource-lifecycle.md)、[黑话和表情维护](tasks/3.15-learning-maintenance.md)。**只暂缓关系图的新 UI 设计**；默认不授权展示，关系资料和后台权限照常。
 - [平台收件箱](tasks/3.15-platform.md)：HTTP 500 修复 `7c1ab29`、按批阅读 `131f668`、会话桌面 `c70b09f`、结构化组件 `c832de0` 已合入。另已合入[查阅与清理旧历史](tasks/3.15-history-actions.md) `2e5fbbd`/`acd4ce9`、文字/引用/@/戳 `01ed1ee`、附件 `51d410b`、头像 `4421157`。[两端输入提示和普通图片的已有描述](tasks/3.15-live-conversation.md)分别随 `d8549e7`、`2f744f5` 合入；图注跟随平台原件清理，网页不补调模型。
 - [判断与生化参数](tasks/3.15-feedback.md)：同轮状态输入 `365569b`、网页与 API 只读保护 `2407e0a` 已合入。[公开交付](tasks/3.15-release.md)的最终隔离全量和远程推送尚未完成。
 
