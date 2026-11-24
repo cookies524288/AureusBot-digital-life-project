@@ -1021,7 +1021,7 @@ def test_emoji_integrity_preview_runs_only_on_click_on_narrow_screen(browser: Br
       finish(new Response(JSON.stringify({checked:42, unavailable:1, examples:['合成缺图']})));
       const dialog = document.querySelector('#editor-dialog');
       await waitFor(() => dialog.open && dialog.innerText.includes('合成缺图'), '显示预览结果');
-      for (const expected of ['检查 42 条', '原图不可用 1 条', '不修改', '无下次运行']) {
+      for (const expected of ['检查 42 条', '原图不可用 1 条', '不修改', '只维护发送候选']) {
         check(dialog.innerText.includes(expected), `应说明：${expected}`);
       }
       check(dialog.getBoundingClientRect().right <= innerWidth, '窄屏弹窗不横向溢出');

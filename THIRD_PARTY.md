@@ -21,6 +21,10 @@
 | `aureus/common/language_prompts.py` 的 `learn_style` 输出要求 | MaiBot 1.3.15 的 [learn_style.prompt](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/prompts/zh-CN/learn_style.prompt) | GPL-3.0 | 原样取输出要求首行，明确不要输出重复内容；保留本地示例、证据编号规则和空结果协议，不复制群聊假设或上游固定示例。 |
 | `aureus/heartbeat/language_runner.py` 的在线表达过滤 | MaiBot 1.3.15 的 [expression_learner.py](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/src/learners/expression_learner.py#L639) 和 [expression_style_utils.py](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/src/learners/expression_style_utils.py) | GPL-3.0 | 移植「使用」前缀清洗、风格与机器人名字或昵称完全相等及完整来源含 `SELF` 的过滤；保留本地「使用：」、编号映射、证据、去重和召回边界。未接入模型自评、插件、日志或上游存储。 |
 
+## 表情周期维护行为参考
+
+`aureus/heartbeat/emoji_maintenance.py` 与 `aureus/memory/emoji.py` 参考 MaiBot 1.3.15 的 [`periodic_emoji_maintenance` 和 `check_emoji_file_integrity`](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/src/emoji_system/emoji_manager.py#L1106)（GPL-3.0）。沿用等待 10 分钟后重查发送候选的机制；本地重新实现，不删除条目或原件，不扫描并登记陌生文件。
+
 ## 许可证核对记录
 
 - MaiBot：2026-11-18 读了仓库根目录的 `LICENSE`，是 GNU GPL 第 3 版。GPL-3.0 第 13 条允许把它覆盖的作品和 AGPL-3.0 的作品合并成一个整体，本项目整体采用 AGPL-3.0（D12），所以可以移植。
