@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import unquote
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -201,13 +202,24 @@ def register_resource_routes(
     ) -> dict[str, str | bool]:
         if request.headers.get("content-type", "").split(";", 1)[0] != "application/octet-stream":
             raise HTTPException(415, "请选择图片后再上传。")
+        encoded_description = request.headers.get("X-Emoji-Registration-Description")
+        try:
+            description = (
+                unquote(encoded_description, errors="strict")
+                if encoded_description is not None
+                else None
+            )
+        except UnicodeDecodeError:
+            raise HTTPException(422, "无法读取表情描述。") from None
         data = bytearray()
         async for chunk in request.stream():
             if len(data) + len(chunk) > MAX_EMOJI_BYTES:
                 raise HTTPException(413, "图片不能超过 5 MB。")
             data.extend(chunk)
         try:
-            digest, created = await asyncio.to_thread(store.upload, bytes(data))
+            digest, created = await asyncio.to_thread(
+                store.upload, bytes(data), registration_description=description
+            )
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         except OSError:

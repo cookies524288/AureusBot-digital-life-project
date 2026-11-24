@@ -919,9 +919,9 @@ function el(tag, props, ...kids) {
 }
 
 // 所有接口都走这里。返回 {ok, status, data, retryAfter}；网络断了 status 是 0。
-async function api(path, method, body) {
+async function api(path, method, body, headers = {}) {
   const session = state.loaded;
-  const opt = { method: method || 'GET', headers: {}, credentials: 'same-origin' };
+  const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin' };
   if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/octet-stream'; opt.body = body;
   } else if (path.startsWith('/api/resources/learning/package/') && method === 'POST' && body instanceof Blob) {

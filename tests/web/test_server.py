@@ -17,6 +17,7 @@ from io import BytesIO
 from pathlib import Path
 from threading import get_ident
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -290,6 +291,56 @@ def test_emoji_sequential_upload_keeps_existing_metadata_after_bad_file(tmp_path
                 "banned": 1,
                 "removed": 0,
             }
+    finally:
+        rig.close()
+
+
+def test_emoji_upload_registers_only_valid_new_assets(tmp_path: Path) -> None:
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, ManualClock(START))
+    store.open()
+    images: list[bytes] = []
+    for color in ("blue", "green", "orange"):
+        with BytesIO() as stream:
+            Image.new("RGB", (8, 8), color).save(stream, format="PNG")
+            images.append(stream.getvalue())
+    old, new, invalid = images
+    digest, _ = store.upload(old)
+    assert store.update_catalog(digest, description="旧说明", is_banned=True)
+    assert store.set_removed([f"asset:{digest}"], True)
+    rig = Rig(tmp_path, resource_emojis=store)
+    try:
+        with rig.client() as client:
+            set_password(rig)
+            assert login(client, GOOD).status_code == 200
+            endpoint = "/api/resources/emoji"
+            key = "X-Emoji-Registration-Description"
+            headers = {"Origin": "http://testserver", "Content-Type": "application/octet-stream"}
+            registration = {**headers, key: quote(" 表情描述 🐰 ")}
+            for description in ("", "%20", "x" * 501, "%FF"):
+                invalid_headers = {**headers, key: description}
+                denied = client.post(endpoint, content=invalid, headers=invalid_headers)
+                assert denied.status_code == 422
+            assert store.read_media(sha256(invalid).hexdigest()) is None
+            assert client.post(endpoint, content=b"bad", headers=registration).status_code == 422
+            duplicate = client.post(endpoint, content=old, headers=registration)
+            assert duplicate.json() == {"digest": digest, "created": False}
+            registered = client.post(endpoint, content=new, headers=registration)
+            assert registered.json() == {"digest": sha256(new).hexdigest(), "created": True}
+            assert client.post(endpoint, content=invalid, headers=headers).json()["created"] is True
+            retry = client.post(endpoint, content=invalid, headers=registration)
+            assert retry.json()["created"] is False
+            [existing], removed_count = store.browse_page("", 0, 10, removed=True)
+            assert removed_count == 1
+            assert (existing.description, existing.is_registered, existing.is_banned) == (
+                "旧说明",
+                False,
+                True,
+            )
+            [unregistered], _ = store.browse_page("", 0, 10, "unregistered")
+            assert (unregistered.description, unregistered.is_registered) == ("", False)
+            [candidate] = store.candidates()
+            assert candidate.description == "表情描述 🐰"
+            assert store.read_sendable(candidate.digest or "") == new
     finally:
         rig.close()
 
