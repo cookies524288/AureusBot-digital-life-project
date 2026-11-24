@@ -18,7 +18,7 @@
 
 - `tests/web/test_resource_browser.py::test_memory_batch_remove_and_restore`：失败，异常为上述 `TypeError`；
 - `tests/web/test_resource_browser.py` 整文件：`17 passed, 1 failed`，同一异常；
-- 失败只在初始 `const dialog = ...` 早于首个 `waitFor` 时触发；相邻通过用例均在页面动作或加载完成后查询弹窗。
+- 初次单独运行目标用例曾通过，说明失败受导航时序影响而非稳定必现；失败发生在初始 `const dialog = ...` 早于首个 `waitFor` 时，相邻通过用例均在页面动作或加载完成后查询弹窗。
 
 修复只调整测试夹具时序：把 `#editor-dialog` 和按钮查询移到首次 `waitFor(() => text('合成记忆000'), ...)` 之后。取消不写、跨页清选、末页选中范围、页数收缩、恢复页数及原停用状态等原有业务断言全部保留；未修改资源页生产代码或批量接口。
 
@@ -28,6 +28,8 @@
 - `tests/web/test_resource_browser.py`：修复后 `18 passed`；覆盖实际 Chrome、窄屏尺寸和合成 API；
 - `tests/web/test_memory_transfer_api.py tests/web/test_learning_package.py::test_language_batch_restores_prior_recall_state`：`5 passed`；
 - `git diff --check`：通过；未运行全仓检查，符合本任务只跑定向回归的范围。
+
+旧实现阶段首次单跑目标用例通过，随后整文件运行复现间歇失败；因此将其判定为由导航时序触发的测试夹具竞态，而不是稳定页面行为故障。修复后目标用例、整文件和相关接口回归均通过。
 
 修改文件：`tests/web/test_resource_browser.py`。提交：`3be293f`（修正测试时序）；任务书与交接记录另行提交。
 
