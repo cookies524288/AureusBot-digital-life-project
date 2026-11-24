@@ -14,6 +14,7 @@ from typing import Protocol
 
 from aureus.common import Clock, SafetyConfig
 from aureus.organs import (
+    LOCAL_EXPRESSION_EMBEDDING,
     CallAttempt,
     CallPurpose,
     OrganBus,
@@ -183,7 +184,7 @@ class SafetyGateway:
             ) from error
 
         limit = self._config.monthly_token_limit
-        if limit is not None and used >= limit:
+        if organ_id != LOCAL_EXPRESSION_EMBEDDING and limit is not None and used >= limit:
             raise BudgetExceededError(organ_id, f"本月已用 {used} token，达到上限 {limit}")
 
         self._check_energy(request)

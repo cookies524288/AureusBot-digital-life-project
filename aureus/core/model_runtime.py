@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from aureus.organs import (
+    LOCAL_EXPRESSION_EMBEDDING,
     FakePlanner,
     FakeReplyer,
     KeyResolver,
@@ -13,7 +14,11 @@ from aureus.organs import (
     OrganBus,
     PromptStore,
 )
-from aureus.organs.llm_adapter import EmbeddingOrgan, conversational_routes
+from aureus.organs.llm_adapter import (
+    EmbeddingOrgan,
+    conversational_routes,
+    local_expression_endpoint,
+)
 
 EMBEDDING_ORGANS = {"text_embedding": "embedding", "image_embedding": "image_embedding"}
 
@@ -44,6 +49,7 @@ class ModelRuntime:
         self.prompts = prompts
         # 来源是启动参数 --fake；热重载不能把假器官切换成真实调用。
         self._fake_organs = fake_organs
+        self.local_expression_space: str | None = None
         self._fake_reply_organ = fake_reply_organ if fake_organs else None
         self._fake_plan_organ = fake_plan_organ if fake_organs else None
         # 来源是实际应用的模型路线，只影响可选总结任务是否可以启动。空模型就是关闭。
@@ -65,6 +71,8 @@ class ModelRuntime:
         organs: list[Organ] = []
         available: set[str] = set()
         for name in config.organs:
+            if name == LOCAL_EXPRESSION_EMBEDDING:
+                continue
             routes = config.routes_for(name)
             kind = EMBEDDING_ORGANS.get(name)
             if kind is not None:
@@ -72,6 +80,19 @@ class ModelRuntime:
                 if embedding_routes and not self._fake_organs:
                     organs.append(EmbeddingOrgan(name, embedding_routes, self._resolver))
                     available.add(name)
+                    if name == "text_embedding":
+                        local = next(
+                            (
+                                route
+                                for route in embedding_routes
+                                if local_expression_endpoint(route)
+                            ),
+                            None,
+                        )
+                        if local is not None:
+                            organs.append(
+                                EmbeddingOrgan(LOCAL_EXPRESSION_EMBEDDING, (local,), self._resolver)
+                            )
                 continue
             supported = conversational_routes(name, routes)
             if supported:
@@ -100,6 +121,15 @@ class ModelRuntime:
     def apply(self, prepared: PreparedModels) -> None:
         """在事件循环中切换；进行中的旧调用继续完成，不重建网关或账本。"""
         self.bus.replace_all(prepared.organs)
+        self.local_expression_space = next(
+            (
+                organ.local_expression_space
+                for organ in prepared.organs
+                if isinstance(organ, EmbeddingOrgan)
+                and organ.organ_id == LOCAL_EXPRESSION_EMBEDDING
+            ),
+            None,
+        )
         self.available_organs = prepared.available
         if self.on_reload is not None:
             self.on_reload(prepared.available)

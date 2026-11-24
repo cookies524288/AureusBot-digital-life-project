@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
 from hashlib import sha256
 from io import BytesIO
+from ipaddress import ip_address
 from math import isfinite
 from types import SimpleNamespace
 from typing import Any, Self
@@ -29,6 +30,7 @@ from aureus.common.config import ConfigError
 from aureus.common.prompt_text import PromptTemplate, render_prompt
 from aureus.organs.api_keys import KeyResolver
 from aureus.organs.interface import (
+    LOCAL_EXPRESSION_EMBEDDING,
     CallAttempt,
     ModelPreference,
     OrganCallCancelled,
@@ -459,11 +461,28 @@ class EmbeddingOrgan:
         self._resolver = resolver
         self._transport = transport
 
+    @property
+    def local_expression_space(self) -> str | None:
+        """发送前就能确定的表达空间；仅接受单一免费回环路线。"""
+        if self.organ_id != LOCAL_EXPRESSION_EMBEDDING or len(self._routes) != 1:
+            return None
+        route = self._routes[0]
+        endpoint = local_expression_endpoint(route)
+        if endpoint is None:
+            return None
+        identity = (route.provider.name, endpoint, route.model.name, route.model.identifier)
+        return sha256(json.dumps(identity).encode()).hexdigest()
+
     async def process(self, request: OrganRequest) -> OrganResponse:
         """按器官路线计算一批向量，保持输入顺序。"""
         inputs = request.embedding_inputs
         if not inputs:
             raise OrganCallError(self.organ_id, ["没有嵌入材料"])
+        local_space = self.local_expression_space
+        if self.organ_id == LOCAL_EXPRESSION_EMBEDDING and (
+            local_space is None or request.embedding_space != local_space
+        ):
+            raise OrganCallError(self.organ_id, ["本地表达嵌入路线已变更或不可用"])
         attempts: list[CallAttempt] = []
         failures: list[str] = []
         for route in order_routes(self._routes, request.model_preference):
@@ -514,12 +533,14 @@ class EmbeddingOrgan:
                     estimated=not usage.known,
                     succeeded=failure is None,
                     failure_reason=failure,
-                    cost=0.0 if usage == TokenUsage() else compute_cost(route.model, usage),
+                    cost=0.0
+                    if local_space or usage == TokenUsage()
+                    else compute_cost(route.model, usage),
                 )
             )
             if failure is None:
                 identity = (route.provider.name, route.provider.base_url, route.model.identifier)
-                space = sha256(json.dumps(identity).encode()).hexdigest()
+                space = local_space or sha256(json.dumps(identity).encode()).hexdigest()
                 return OrganResponse(
                     self.organ_id,
                     "",
@@ -533,6 +554,16 @@ class EmbeddingOrgan:
     async def _send(
         self, route: ModelRoute, inputs: tuple[str | bytes, ...], params: dict[str, Any]
     ) -> Any:
+        if self.organ_id == LOCAL_EXPRESSION_EMBEDDING:
+            base = local_expression_endpoint(route)
+            if base is None:
+                raise _RouteFailureError("表达嵌入需要本机回环地址")
+            return await self._post_embeddings(
+                base,
+                {"model": route.model.identifier, "input": list(inputs)},
+                params,
+                local=True,
+            )
         if route.model.kind == "embedding":
             protocol = route.provider.protocol
             if protocol == "openai_responses":
@@ -544,7 +575,6 @@ class EmbeddingOrgan:
                 **params,
             )
         base = (route.provider.base_url or "https://api.jina.ai/v1").rstrip("/")
-        headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
         payload = {
             "model": route.model.identifier,
             "embedding_type": "float",
@@ -554,8 +584,14 @@ class EmbeddingOrgan:
                 if isinstance(value, bytes)
             ],
         }
+        return await self._post_embeddings(base, payload, params)
+
+    async def _post_embeddings(
+        self, base: str, payload: dict[str, Any], params: dict[str, Any], *, local: bool = False
+    ) -> Any:
+        headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
         async with httpx.AsyncClient(
-            timeout=params["timeout"], transport=self._transport
+            timeout=params["timeout"], transport=self._transport, trust_env=not local
         ) as client:
             response = await client.post(base + "/embeddings", headers=headers, json=payload)
             response.raise_for_status()
@@ -568,6 +604,33 @@ class EmbeddingOrgan:
                 completion_tokens=0,
             ),
         )
+
+
+def local_expression_endpoint(route: ModelRoute) -> str | None:
+    """只接受明确的免费 OpenAI 兼容回环端点；不用代理、跳转或 DNS（D101）。"""
+    provider, model = route.provider, route.model
+    if (
+        model.kind != "embedding"
+        or provider.protocol not in ("openai", "openai_responses")
+        or not provider.base_url
+        or any((model.price_in, model.price_out, model.price_cache_in))
+    ):
+        return None
+    try:
+        url = httpx.URL(provider.base_url)
+        host = "127.0.0.1" if url.host == "localhost" else url.host
+        if (
+            url.scheme not in ("http", "https")
+            or url.userinfo
+            or url.query
+            or url.fragment
+            or not ip_address(host).is_loopback
+            or "%" in host
+        ):
+            return None
+    except (ValueError, httpx.InvalidURL):
+        return None
+    return str(url.copy_with(host=host)).rstrip("/")
 
 
 def _read_embedding_batch(data: Any, size: int) -> tuple[tuple[float, ...], ...]:

@@ -10,6 +10,7 @@ from aureus.memory.emoji import (
     EmojiStore,
 )
 from aureus.memory.expression_clusters import ExpressionClusterStore, VisibleExpressionCluster
+from aureus.memory.expression_index import ExpressionVectorIndex
 from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphNode, MemoryGraphSource
 from aureus.memory.graph_query import MemoryGraphPage, MemoryGraphRelationDetail
@@ -59,6 +60,7 @@ __all__ = [
     "EmojiRecord",
     "EmojiStore",
     "ExpressionClusterStore",
+    "ExpressionVectorIndex",
     "HistoricalMemory",
     "ImportedLanguageRow",
     "JargonInference",

@@ -51,7 +51,7 @@ from aureus.heartbeat.inbox_store import InboxStore
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
-from aureus.memory import DiaryBook, EmojiStore, LanguageStore, MemoryIndex
+from aureus.memory import DiaryBook, EmojiStore, ExpressionVectorIndex, LanguageStore, MemoryIndex
 from aureus.mood import Mood
 from aureus.organs import (
     FakePlanner,
@@ -305,6 +305,18 @@ def open_core(
             except sqlite3.Error:
                 language = None
                 logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
+        expression_index = None
+        if (
+            language is not None
+            and not roleplay
+            and runtime.language.recall_enabled
+            and runtime.language.reference_chars
+            and runtime.language.use_vector_expression
+        ):
+            try:
+                expression_index = ExpressionVectorIndex(paths.database_file)
+            except sqlite3.Error:
+                logger.exception("表达向量索引打不开，本次运行使用普通表达候选")
         inbox_store = InboxStore(paths.database_file, the_clock) if runtime.qq.enabled else None
         emoji_store = EmojiStore(paths.database_file, paths.memory_dir, the_clock)
         emoji_store.open()
@@ -347,6 +359,7 @@ def open_core(
             memory_config=runtime.memory,
             language=language,
             language_config=runtime.language,
+            expression_index=expression_index,
             diary=DiaryBook(paths.diary_dir),
             diary_config=runtime.diary,
             has_diary_organ=runtime.diary.organ in models.available_organs,
@@ -355,8 +368,14 @@ def open_core(
             inbox_store=inbox_store,
             emoji_store=emoji_store,
         )
-        models.on_reload = heartbeat.update_available_organs
-        heartbeat.update_available_organs(models.available_organs)
+
+        def update_organs(available: frozenset[str]) -> None:
+            heartbeat.update_available_organs(
+                available, expression_space=models.local_expression_space
+            )
+
+        models.on_reload = update_organs
+        update_organs(models.available_organs)
         qq = None
         qq_link = None
         inbox_images = None

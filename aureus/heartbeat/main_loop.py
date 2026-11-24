@@ -120,6 +120,7 @@ from aureus.memory import (
     BATCH_SIZE,
     DiaryBook,
     EmojiStore,
+    ExpressionVectorIndex,
     LanguageStore,
     MemoryIndex,
 )
@@ -235,6 +236,7 @@ class Heartbeat:
         memory_config: MemoryConfig | None = None,
         language: LanguageStore | None = None,
         language_config: LanguageConfig | None = None,
+        expression_index: ExpressionVectorIndex | None = None,
         diary: DiaryBook | None = None,
         diary_config: DiaryConfig | None = None,
         has_diary_organ: bool = True,
@@ -287,6 +289,7 @@ class Heartbeat:
             memory_config: 记忆索引和召回的开关及上限（D80）。
             language: 统一的习得语言库（D89）。
             language_config: 语言召回、增量学习和参考字数配置。
+            expression_index: 启用表达向量时的派生索引。
             diary: 日记文件写入接口；不给就不写日记（D80）。
             diary_config: 日记器官、写作时刻和长度限制（D80）。
             has_diary_organ: 总结器官是否已注册；缺少时只记一次日志（D68、D80）。
@@ -364,6 +367,7 @@ class Heartbeat:
             memory_config=memory_config,
             language=language,
             language_config=self._language_config,
+            expression_index=expression_index,
             people=people,
             people_config=people_config,
             working_memory=working_memory,
@@ -442,10 +446,14 @@ class Heartbeat:
 
     # ---------- 给通道用的接口 ----------
 
-    def update_available_organs(self, available: frozenset[str]) -> None:
+    def update_available_organs(
+        self, available: frozenset[str], *, expression_space: str | None = None
+    ) -> None:
         """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
         self._available_organs = available
         self._conversation.has_text_embedding = "text_embedding" in available
+        if self._conversation.expression_recall is not None:
+            self._conversation.expression_recall.space = expression_space
         self._conversation.has_fast_model = "fast_model" in available
         self._conversation.inbox_media.available = available
         for task, tracker in (
@@ -939,6 +947,8 @@ class Heartbeat:
             except Exception:
                 logger.exception("关闭记录没能写进时间线")
         finally:
+            if self._conversation.expression_recall is not None:
+                await self._conversation.expression_recall.close()
             self._phase = _Phase.STOPPED
         logger.info("心跳已关闭：%s", reason)
 
