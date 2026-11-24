@@ -1,12 +1,13 @@
-import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 
 import { EmojiThumbnail } from '@/components/emoji-thumbnail'
-import { MOBILE_GLASS_CLASS } from '@/components/layout/mobile-glass'
 import { getEmojiThumbnailUrl } from '@/lib/emoji-api'
 import { cn } from '@/lib/utils'
 import type { Emoji } from '@/types/emoji'
+import { DataPagination } from '@/components/ui/data-pagination'
+import { EmojiApproval } from './EmojiApproval'
 
 /** 长按多久进入多选 */
 const LONG_PRESS_MS = 450
@@ -97,8 +98,8 @@ export function MobileEmojiGrid({
         {emojiList.map((emoji) => {
           const selected = selectedIds.has(emoji.id)
           return (
+            <div key={emoji.id} className="relative aspect-square">
             <button
-              key={emoji.id}
               type="button"
               data-mobile-emoji-tile="true"
               data-selected={selected ? 'true' : 'false'}
@@ -110,7 +111,7 @@ export function MobileEmojiGrid({
               onPointerCancel={cancelPress}
               onContextMenu={(event) => event.preventDefault()}
               onClick={() => handleClick(emoji)}
-              className="bg-muted relative aspect-square overflow-hidden select-none [-webkit-touch-callout:none]"
+              className="bg-muted relative aspect-square w-full overflow-hidden select-none [-webkit-touch-callout:none]"
             >
               <EmojiThumbnail src={getEmojiThumbnailUrl(emoji.id)} alt="" />
               {emoji.status !== 'adopted' && (
@@ -135,35 +136,13 @@ export function MobileEmojiGrid({
                 </>
               )}
             </button>
+            {!selecting && <EmojiApproval emoji={emoji} />}
+            </div>
           )
         })}
       </div>
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between">
-          <button
-            type="button"
-            aria-label="上一页"
-            disabled={page <= 1}
-            onClick={() => onPageChange(page - 1)}
-            className={cn('flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-40', MOBILE_GLASS_CLASS)}
-          >
-            <ChevronLeft className="h-5 w-5" strokeWidth={1.7} />
-          </button>
-          <span className="text-muted-foreground text-sm tabular-nums">
-            {page} / {totalPages}
-          </span>
-          <button
-            type="button"
-            aria-label="下一页"
-            disabled={page >= totalPages}
-            onClick={() => onPageChange(page + 1)}
-            className={cn('flex h-11 w-11 items-center justify-center rounded-full disabled:opacity-40', MOBILE_GLASS_CLASS)}
-          >
-            <ChevronRight className="h-5 w-5" strokeWidth={1.7} />
-          </button>
-        </div>
-      )}
+      {totalPages > 1 && <DataPagination total={total} page={page} pageSize={pageSize} onPageChange={onPageChange} />}
     </div>
   )
 }

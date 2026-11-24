@@ -106,7 +106,9 @@ export function createApiClient(clientOptions: ApiClientOptions): ApiClient {
 
     // 拼接完整 URL：base + path + query
     const base = await resolveBaseUrl()
-    let url = `${base}${path}`
+    const target = new URL(`${base}${path}`, location.origin)
+    if (target.origin !== location.origin) throw new ApiError('学习工作台只允许同源请求。')
+    let url = target.pathname + target.search
     if (query) {
       const params = buildSearchParams(query)
       const queryString = params.toString()
@@ -127,7 +129,8 @@ export function createApiClient(clientOptions: ApiClientOptions): ApiClient {
         method,
         headers: requestHeaders,
         body: isFormData ? body : body === undefined ? undefined : JSON.stringify(body),
-        credentials: auth === 'cookie' ? 'include' : undefined,
+        credentials: auth === 'cookie' ? 'same-origin' : 'omit',
+        redirect: 'error',
         signal,
         cache,
       })

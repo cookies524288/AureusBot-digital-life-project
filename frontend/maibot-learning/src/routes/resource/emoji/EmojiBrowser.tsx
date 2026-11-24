@@ -281,7 +281,6 @@ export function EmojiBrowser({
             pageSizeOptions={pageSizeOptions}
             onPageChange={onPageChange}
             onPageSizeChange={onPageSizeChange}
-            disabled={listProps.loading || !!error}
           />
         </PageFrame>
       </DataBrowserLayout>

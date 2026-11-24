@@ -170,15 +170,7 @@ function DataPagination({
             <ChevronLeft />
           </Button>
           {getPageItems(currentPage, Math.max(1, totalPages)).map((item, index) =>
-            item === 'gap' ? (
-              <PageJump
-                key={`gap-${index}`}
-                page={currentPage}
-                pages={totalPages}
-                disabled={unavailable}
-                onPageChange={onPageChange}
-              />
-            ) : (
+            item === 'gap' ? <span key={`gap-${index}`} aria-hidden="true">…</span> : (
               <Button
                 key={item}
                 type="button"
@@ -205,6 +197,8 @@ function DataPagination({
           >
             <ChevronRight />
           </Button>
+          {totalPages > 1 && <PageJump page={currentPage} pages={totalPages}
+            disabled={unavailable} onPageChange={onPageChange} />}
         </div>
       </div>
     </nav>

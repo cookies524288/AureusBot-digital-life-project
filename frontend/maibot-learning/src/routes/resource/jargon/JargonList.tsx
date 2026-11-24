@@ -334,7 +334,6 @@ export function JargonList({
         pageSize={pageSize}
         onPageChange={onPageChange}
         onPageSizeChange={onPageSizeChange}
-        disabled={loading}
         className="shrink-0"
       />
     </PageFrame>

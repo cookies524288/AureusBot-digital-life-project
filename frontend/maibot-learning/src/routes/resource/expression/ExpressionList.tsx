@@ -377,7 +377,6 @@ export function ExpressionList({
         pageSize={pageSize}
         onPageChange={onPageChange}
         onPageSizeChange={onPageSizeChange}
-        disabled={loading}
         className="shrink-0"
       />
     </PageFrame>

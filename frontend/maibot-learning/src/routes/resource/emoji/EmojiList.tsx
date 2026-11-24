@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Ban, CheckCircle2, Edit, Trash2 } from 'lucide-react'
+import { EmojiApproval } from './EmojiApproval'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -104,7 +105,7 @@ export function EmojiList({
               />
             </div>
             {/* 操作始终可见，按钮独立于图片和多选框，不会误触详情或选择。 */}
-            <div className="absolute inset-x-1 bottom-1 flex items-end justify-between gap-1">
+            <div className="absolute inset-x-1 bottom-8 flex items-end justify-between gap-1">
               <div
                 role="toolbar"
                 aria-label="表情包操作"
@@ -158,6 +159,7 @@ export function EmojiList({
                 ×{emoji.usage_count}
               </span>
             </div>
+            <EmojiApproval emoji={emoji} />
           </Card>
           <p
             className="text-muted-foreground mt-1.5 line-clamp-2 min-h-8 text-xs leading-4 break-all"

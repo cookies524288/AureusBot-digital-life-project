@@ -1,4 +1,5 @@
 export type EmojiStatus = 'known' | 'unknown' | 'adopted' | 'discarded'
+export type EmojiVerdict = 'approved' | 'rejected'
 
 /**
  * 表情包相关类型定义
@@ -17,6 +18,7 @@ export interface Emoji {
   is_registered: boolean
   is_banned: boolean
   status: EmojiStatus
+  review: 'unreviewed' | EmojiVerdict
   emotion: string | null
   record_time: number
   register_time: number | null

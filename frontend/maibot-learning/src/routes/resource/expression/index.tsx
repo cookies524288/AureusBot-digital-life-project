@@ -121,9 +121,7 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
   const [isMoreActionsOpen, setIsMoreActionsOpen] = useState(false)
   // 手机上默认进入卡片审核，与设计稿一致；桌面端默认列表
   const isMobileViewport = useMediaQuery('(max-width: 1023.98px)')
-  const [activeView, setActiveView] = useState<'list' | 'logs' | 'quick' | 'clusters'>(() =>
-    window.matchMedia('(max-width: 1023.98px)').matches ? 'quick' : 'list'
-  )
+  const [activeView, setActiveView] = useState<'list' | 'logs' | 'quick' | 'clusters'>('list')
 
   // 兄弟读：聊天流 / 共享组 / 统计 / 审核统计统一以 'expression' 前缀分层，
   // list.invalidate() 失效 ['expression'] 前缀时一并刷新（读失败局部呈现，不弹全局 toast）
@@ -133,6 +131,7 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
     domain: 'expression',
     getId: (expression) => expression.id,
     initialFilters: INITIAL_FILTERS,
+    preserveSelectionOnParamsChange: true,
     searchDebounceMs: 0,
     queryFn: async ({ page, pageSize, search, filters }) => {
       // 按共享组浏览时取该组的 chat_ids（全局组传 undefined，让后端返回全部）
@@ -347,6 +346,7 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-3 pb-4 sm:p-4">
+      <p className="text-muted-foreground mb-2 shrink-0 text-xs">表达与有释义的黑话无需人工批准即可用于回复；精选和质检记录不改变此规则。</p>
       {activeView !== 'list' && (
         <div className="mb-4 flex shrink-0 justify-end gap-2 sm:mb-3">
           {/* 手机上由页头的「列表模式」返回，这里不再重复 */}

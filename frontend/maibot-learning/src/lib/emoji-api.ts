@@ -17,6 +17,12 @@ import type {
 
 const API_BASE = '/api/webui/emoji'
 
+export function reviewEmoji(id: number, verdict: 'approved' | 'rejected') {
+  return backendApi.patch<EmojiDetailResponse>(`${API_BASE}/${id}/review`, {
+    body: { verdict }, errorMessage: '表情审批失败',
+  })
+}
+
 /**
  * 获取表情包列表
  */

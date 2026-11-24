@@ -19,9 +19,7 @@ _HEADERS = {
 }
 
 
-def register_learning_assets(
-    app: FastAPI, require_ready: Callable[..., Awaitable[str]]
-) -> None:
+def register_learning_assets(app: FastAPI, require_ready: Callable[..., Awaitable[str]]) -> None:
     """沿用 Aureus 登录，只提供构建目录内的同源文件。"""
 
     @app.get("/learning-workbench/{asset:path}", include_in_schema=False)
