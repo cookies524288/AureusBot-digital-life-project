@@ -21,6 +21,7 @@ from aureus.memory.history import MemorySource
 _DIGEST = re.compile(r"[a-f0-9]{64}")
 MAX_EMOJI_BYTES = 5 * 1024 * 1024
 MAX_EMOJI_DESCRIPTION = 500
+MAX_EMOJI_RECOGNITION_TAGS = 5
 MAX_EMOJI_TAGS = 20
 MAX_EMOJI_TAG = 40
 _MAX_FRAME_PIXELS = 4_000_000
@@ -186,7 +187,8 @@ class EmojiStore:
                        description = CASE WHEN description = '' THEN excluded.description
                                           ELSE description END,
                        tags = CASE WHEN tags = '[]' THEN excluded.tags ELSE tags END
-                   RETURNING *, NULL AS source""",
+                   RETURNING *, NULL AS source, EXISTS (SELECT 1 FROM emoji_removed
+                       WHERE entry_key = 'asset:' || ?) AS is_removed""",
                 (
                     digest,
                     description,
@@ -194,9 +196,28 @@ class EmojiStore:
                     register and bool(description),
                     self._clock.now().timestamp(),
                     int(not register),
+                    digest,
                 ),
             ).fetchone()
-        return self._record(row)
+        return replace(self._record(row), is_removed=bool(row["is_removed"]))
+
+    def register_recognition(self, digest: str, tags: tuple[str, ...]) -> bool:
+        """只登记仍未维护的已收集条目，不重复计数或覆盖人工操作。"""
+        if not 0 < len(tags) <= MAX_EMOJI_RECOGNITION_TAGS or any(
+            not tag.strip() or len(tag) > MAX_EMOJI_TAG for tag in tags
+        ):
+            raise ValueError("表情标签数量或长度不可用。")
+        description = "，".join(tags)
+        with closing(open_connection(self._database_file)) as connection, connection:
+            return bool(
+                connection.execute(
+                    """UPDATE emoji_assets SET description = ?, tags = ?, is_registered = 1
+                       WHERE digest = ? AND NOT is_registered AND NOT is_banned
+                         AND description = '' AND tags = '[]' AND NOT EXISTS (
+                             SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)""",
+                    (description, json.dumps(tags, ensure_ascii=False), digest),
+                ).rowcount
+            )
 
     def import_records(self, records: Iterable[ImportedEmoji]) -> tuple[int, int]:
         """按来源增量登记，返回新增来源和内容地址数。"""

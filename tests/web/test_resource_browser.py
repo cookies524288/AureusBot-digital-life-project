@@ -153,7 +153,22 @@ class ResourceFixture(SimpleHTTPRequestHandler):
                                     ],
                                 },
                             ],
-                        }
+                        },
+                        {
+                            "id": "emoji_gif",
+                            "label": "GIF QQ 表情识别",
+                            "note": "预览不读取或发送图片。",
+                            "messages": [
+                                {"role": "system", "content": "合成系统提示"},
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": "输入类型：GIF\n返回表情标签"},
+                                        {"type": "image", "label": "〔GIF 表情拼图〕"},
+                                    ],
+                                },
+                            ],
+                        },
                     ]
                 }
             )
@@ -1284,6 +1299,15 @@ def test_image_prompt_preview_displays_text_then_attachment(browser: Browser) ->
       check(imagePart.textContent === '〔来信图片〕' && visible(imagePart), '次序之后显示图片占位');
       check(!dialog.querySelector('img') && !dialog.innerText.includes('[object Object]'),
         '不加载图片，也不把图文数组显示为对象字符串');
+      const select = dialog.querySelector('select');
+      check(select.options[1].textContent === 'GIF QQ 表情识别', '表情和普通图片场景分开');
+      select.value = 'emoji_gif';
+      select.dispatchEvent(new Event('change'));
+      const emojiUser = dialog.querySelectorAll('#prompt-preview-body section')[1];
+      check(emojiUser.querySelector('pre').textContent === '输入类型：GIF\n返回表情标签',
+        '切换后显示表情指令');
+      check(emojiUser.querySelector('p').textContent === '〔GIF 表情拼图〕', '显示专用拼图占位');
+      check(!dialog.querySelector('img'), '表情拼图仍为纯文字占位');
     """,
     )
 
