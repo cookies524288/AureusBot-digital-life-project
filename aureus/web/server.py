@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
+from aureus.channels.qq_desktop import QQDesktop
 from aureus.common import Clock, WebConfig
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
@@ -66,6 +67,7 @@ from .config_api import register_config_routes
 from .config_files import ConfigService
 from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
 from .inbox_api import register_inbox_routes
+from .inbox_operations import register_inbox_operations
 from .language_package_api import register_language_package_routes
 from .memory_graph_api import (
     GraphGrants,
@@ -253,6 +255,8 @@ def create_app(
     allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
     inbox_archive_account_id: str | None = None,
     read_inbox_attachment: AttachmentReader | None = None,
+    qq_desktop: QQDesktop | None = None,
+    allows_qq_delivery: Callable[[], bool] | None = None,
     resource_language: LanguageStore | None = None,
     resource_memory: MemoryIndex | None = None,
     resource_images: InboxImageIndex | None = None,
@@ -535,6 +539,10 @@ def create_app(
         inbox_archive_account_id,
         read_inbox_attachment,
         resource_emojis,
+    )
+    register_inbox_operations(
+        app, require_ready, sessions.is_active, _same_http_origin,
+        inbox_store, qq_desktop, clock, allows_qq_delivery,
     )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock

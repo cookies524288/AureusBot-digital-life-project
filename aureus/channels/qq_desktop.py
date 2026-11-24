@@ -1,0 +1,164 @@
+"""通过已核对账号的连接，执行桌面明确选择的 SnowLuma 操作。"""
+
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
+from websockets.asyncio.client import ClientConnection
+from websockets.exceptions import WebSocketException
+
+from aureus.heartbeat import MessageKind, MessageRoute, OutgoingMessage, VisibilityScope
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage
+
+from .onebot import account_id, encode_message, message_id
+from .onebot_transport import OneBotError, OneBotTransport, OneBotUnsupported
+
+
+@dataclass(frozen=True)
+class DesktopError(Exception):
+    """可以显示给维护者的错误；不透传连接端的内容。"""
+
+    status: int
+    detail: str
+
+
+class QQDesktop:
+    """不接受调用方自选的 OneBot action、消息 ID 或成员 ID。"""
+
+    def __init__(
+        self,
+        transport: OneBotTransport,
+        allows: Callable[[ConversationKey], bool],
+        save_delivered: Callable[[OutgoingMessage, MessageRoute, object, object], Awaitable[None]],
+    ) -> None:
+        self._transport = transport
+        self._allows = allows
+        self._save_delivered = save_delivered
+
+    def check_scope(self, key: ConversationKey) -> None:
+        """核对普通私聊或群聊仍在当前部署允许的范围。"""
+        if (
+            key.temporary_group_id is not None or key.kind not in {"private", "group"}
+            or account_id(key.recipient_id) is None or not self._allows(key)
+        ):
+            raise DesktopError(403, "此会话不在当前 QQ 操作范围内；临时私聊不支持桌面外发。")
+
+    def ready(self, key: ConversationKey) -> ClientConnection:
+        """取得与当前收发账号核对通过的连接。"""
+        self.check_scope(key)
+        socket = self._transport.socket
+        if socket is None:
+            raise DesktopError(503, "QQ 尚未连接，没有发送。")
+        return socket
+
+    def _recheck(
+        self, socket: ClientConnection, key: ConversationKey, authorize: Callable[[], None]
+    ) -> None:
+        authorize()
+        if self.ready(key) is not socket:
+            raise DesktopError(503, "QQ 连接已切换，没有发送。")
+
+    async def send_text(
+        self, key: ConversationKey, text: str, quote: InboxMessage | None,
+        mention: InboxMessage | None, authorize: Callable[[], None],
+    ) -> str:
+        """发送文字和可选的单条显式引用、单个已核定群成员提及。"""
+        socket = self.ready(key)
+        authorize()
+        quote_id = await self._quote(socket, key, quote) if quote is not None else None
+        target = await self._member(socket, key, mention) if mention is not None else None
+        route = MessageRoute(key.account_id, key.kind, key.recipient_id, quote_id or "")
+        outgoing = OutgoingMessage(
+            key.platform, key.recipient_id, text, MessageKind.REPLY, key.account_id,
+            route=route, quote_source=quote_id is not None, visibility=_visibility(key),
+        )
+        params = encode_message(outgoing, route)
+        if target is not None:
+            params["message"].insert(
+                int(quote_id is not None), {"type": "at", "data": {"qq": target}}
+            )
+        self._recheck(socket, key, authorize)
+        receipt = await self._call(socket, "send_msg", params, "发送文字")
+        identifier = message_id(receipt.get("message_id"))
+        if identifier is None:
+            raise DesktopError(502, "QQ 接受了请求，但没有返回有效消息编号；请勿直接重试。")
+        await self._save_delivered(outgoing, route, identifier, params["message"])
+        return identifier
+
+    async def send_poke(
+        self, key: ConversationKey, member: InboxMessage | None, authorize: Callable[[], None]
+    ) -> None:
+        """发送戳一戳。成功响应无消息 ID，个性化文案只由实际通知提供。"""
+        socket = self.ready(key)
+        authorize()
+        if key.kind == "group":
+            target = await self._member(socket, key, member)
+            params = {"group_id": key.recipient_id, "user_id": target}
+        elif member is None and key.account_id != key.recipient_id:
+            params = {"user_id": key.recipient_id}
+        else:
+            raise DesktopError(422, "普通私聊只能戳当前对方。")
+        self._recheck(socket, key, authorize)
+        await self._call(socket, "send_poke", params, "戳一戳")
+
+    async def _member(
+        self, socket: ClientConnection, key: ConversationKey, message: InboxMessage | None
+    ) -> str:
+        target = account_id(message.perception.sender_id) if message is not None else None
+        if (
+            key.kind != "group" or message is None or message.conversation != key
+            or message.direction not in {"incoming", "archived"}
+            or target is None or target == key.account_id
+        ):
+            raise DesktopError(422, "只能从当前群聊的消息中选择成员。")
+        data = await self._call(
+            socket, "get_group_member_info",
+            {"group_id": key.recipient_id, "user_id": target, "no_cache": True},
+            "核对群成员", preflight=True,
+        )
+        if (
+            account_id(data.get("group_id")) != key.recipient_id
+            or account_id(data.get("user_id")) != target
+        ):
+            raise DesktopError(409, "QQ 没有确认对方仍是当前群成员，没有发送。")
+        return target
+
+    async def _quote(
+        self, socket: ClientConnection, key: ConversationKey, item: InboxMessage
+    ) -> str:
+        route = item.perception.route
+        identifier = message_id(route.message_id) if route else None
+        if item.conversation != key or identifier is None or item.direction == "notice":
+            raise DesktopError(422, "只能引用当前会话内有平台编号的消息。")
+        data = await self._call(
+            socket, "get_msg", {"message_id": identifier}, "核对引用原文", preflight=True
+        )
+        sender = account_id(data.get("user_id"))
+        if key.kind == "group":
+            matches = account_id(data.get("group_id")) == key.recipient_id
+        else:
+            peer = account_id(data.get("target_id")) if sender == key.account_id else sender
+            matches = data.get("sub_type") == "friend" and peer == key.recipient_id
+        if (
+            not matches or data.get("message_type") != key.kind
+            or sender != item.perception.sender_id
+            or message_id(data.get("message_id")) != identifier
+        ):
+            raise DesktopError(409, "QQ 未确认这条原文属于当前会话，没有发送。")
+        return identifier
+
+    async def _call(
+        self, socket: ClientConnection, action: str, params: dict[str, Any], label: str,
+        *, preflight: bool = False,
+    ) -> dict[str, object]:
+        try:
+            return await self._transport.call(socket, action, params)
+        except OneBotUnsupported:
+            raise DesktopError(501, f"当前 QQ 连接不支持{label}。") from None
+        except (OSError, TimeoutError, WebSocketException, OneBotError):
+            detail = "没有发送。" if preflight else "未确认是否成功，请先检查 QQ，不要直接重试。"
+            raise DesktopError(502, f"QQ 未能完成{label}，{detail}") from None
+
+
+def _visibility(key: ConversationKey) -> VisibilityScope:
+    return VisibilityScope.GROUP if key.kind == "group" else VisibilityScope.USER_ONLY
