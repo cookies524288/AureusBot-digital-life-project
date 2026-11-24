@@ -47,6 +47,7 @@ from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
 from aureus.heartbeat.language_runner import speaker_key
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome
+from aureus.heartbeat.memory_summary_source import summary_scope_for
 from aureus.heartbeat.people_context import format_people_context
 from aureus.heartbeat.perception import (
     Perception,
@@ -179,6 +180,8 @@ class _ReplyJob:
     planner_run: "_PlannerRun | None" = None
     emoji_history: Sequence[TimelineRecord] | None = None
     language_scope_key: str | None = None
+    summary_scope: tuple[str, str] | None = None
+    legacy_user_extractions: bool = False
     can_quote: bool = False
     round_trace: "_RoundTrace | None" = None
 
@@ -535,6 +538,9 @@ class ConversationFlow:
             else ()
         )
         history_ids = (*experience_ids, *(record.id for record in [*history, *messages]))
+        route_key = (
+            ConversationKey.from_perception(target).language_scope_key() if target.route else None
+        )
         job = _ReplyJob(
             strategy=strategy,
             history=history,
@@ -556,10 +562,13 @@ class ConversationFlow:
             people_history=people_history,
             inbox_attention=inbox_attention,
             can_quote=can_quote,
-            language_scope_key=(
-                ConversationKey.from_perception(target).language_scope_key()
-                if target.route
-                else None
+            language_scope_key=route_key,
+            summary_scope=summary_scope_for(
+                target.channel, target.sender_id, target.trust, target.visibility, route_key,
+            ),
+            legacy_user_extractions=(
+                target.channel == "terminal" and viewer_is_user
+                and target.visibility is VisibilityScope.USER_ONLY
             ),
             emoji_history=(
                 [
@@ -1055,9 +1064,8 @@ class ConversationFlow:
                 job.history_ids,
                 limit * 3 if self.has_text_embedding else limit,
                 person_key=person_keys,
-                include_user_extractions=(
-                    job.viewer_is_user and job.messages[-1].visibility is VisibilityScope.USER_ONLY
-                ),
+                include_user_extractions=job.legacy_user_extractions,
+                summary_scope=job.summary_scope,
             )
             if self.has_text_embedding and len(hits) > 1:
                 hits = await self._rerank_memory(words, hits)
