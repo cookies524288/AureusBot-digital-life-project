@@ -1,5 +1,6 @@
 """通过已核对账号的连接，执行桌面明确选择的 SnowLuma 操作。"""
 
+from base64 import b64encode
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -101,6 +102,26 @@ class QQDesktop:
         self._recheck(socket, key, authorize)
         await self._call(socket, "send_poke", params, "戳一戳")
 
+    async def upload_file(
+        self, key: ConversationKey, name: str, content: bytes, authorize: Callable[[], None]
+    ) -> str:
+        """仅使用调用方已验证的字节；群与私聊的回执都是文件 ID，而非消息 ID。"""
+        socket = self.ready(key)
+        if key.kind == "group":
+            action, recipient = "upload_group_file", "group_id"
+        else:
+            action, recipient = "upload_private_file", "user_id"
+        params = {
+            recipient: key.recipient_id, "name": name,
+            "file": "base64://" + b64encode(content).decode("ascii"),
+        }
+        self._recheck(socket, key, authorize)
+        receipt = await self._call(socket, action, params, "上传文件")
+        identifier = receipt.get("file_id")
+        if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 512:
+            raise DesktopError(502, "QQ 未返回有效文件编号，请先检查会话或群文件，不要直接重试。")
+        return identifier
+
     async def _member(
         self, socket: ClientConnection, key: ConversationKey, message: InboxMessage | None
     ) -> str:
@@ -119,6 +140,7 @@ class QQDesktop:
         if (
             account_id(data.get("group_id")) != key.recipient_id
             or account_id(data.get("user_id")) != target
+            or not isinstance(data.get("nickname"), str) or not data["nickname"].strip()
         ):
             raise DesktopError(409, "QQ 没有确认对方仍是当前群成员，没有发送。")
         return target

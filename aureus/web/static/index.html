@@ -510,6 +510,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-pagination input{width:6rem}
 .inbox-compose{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:grid;gap:8px}
 .inbox-compose textarea{width:100%;min-height:70px;resize:vertical}
+.inbox-compose input[type=file]{max-width:100%;min-width:0}
 .inbox-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .inbox-layout:not([data-can-operate="true"]) .inbox-row-actions{display:none}
 .resource-page .stack{gap:10px}
@@ -875,6 +876,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <label for="inbox-text">发送 QQ 文字</label><textarea id="inbox-text" rows="3" maxlength="2000" required></textarea>
 <div id="inbox-send-anchors" class="inbox-actions"></div>
 <div class="inbox-actions"><button id="inbox-send" type="submit" class="btn primary">发送文字</button><button id="inbox-direct-poke" type="button" class="btn hidden">戳一戳对方</button></div>
+</form>
+<form id="inbox-send-file" class="stack hidden">
+<label for="inbox-file">选择图片或 UTF‑8 文本（最多 700 KiB）</label>
+<div class="inbox-actions"><input id="inbox-file" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.txt" required><button id="inbox-upload" type="submit" class="btn">上传文件</button></div>
 </form></section>
 </div>
 </div></div></section>
@@ -1062,7 +1067,9 @@ function el(tag, props, ...kids) {
 async function api(path, method, body, headers = {}, signal) {
   const session = state.loaded;
   const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin', signal };
-  if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
+  if (path.startsWith('/api/inbox/operations/file?') && method === 'POST' && body instanceof Blob) {
+    opt.body = body;
+  } else if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/octet-stream'; opt.body = body;
   } else if (path.startsWith('/api/resources/learning/package/') && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/json'; opt.body = body;
@@ -2062,8 +2069,10 @@ function clearInboxOperations() {
   inbox.canOperate = false;
   inbox.quote = inbox.mention = null;
   $('inbox-text').value = '';
+  $('inbox-file').value = '';
   $('inbox-operations').classList.add('hidden');
   $('inbox-send-text').classList.add('hidden');
+  $('inbox-send-file').classList.add('hidden');
   inboxStatus('inbox-operation-status', '');
   renderInboxOperationControls();
 }
@@ -2072,6 +2081,7 @@ function renderInboxOperationControls() {
   $('inbox-layout').dataset.canOperate = String(inbox.canOperate);
   $('inbox-send').disabled = inbox.operating || !inbox.canOperate;
   $('inbox-direct-poke').disabled = inbox.operating || !inbox.canOperate;
+  $('inbox-upload').disabled = inbox.operating || !inbox.canOperate;
   $('inbox-send-anchors').replaceChildren(...['quote', 'mention'].flatMap(kind => {
     const message = inbox[kind];
     if (!message) return [];
@@ -2090,6 +2100,7 @@ async function loadInboxOperations() {
   inbox.canOperate = res.ok && res.data.enabled === true;
   $('inbox-operations').classList.remove('hidden');
   $('inbox-send-text').classList.toggle('hidden', !inbox.canOperate);
+  $('inbox-send-file').classList.toggle('hidden', !inbox.canOperate);
   $('inbox-direct-poke').classList.toggle('hidden', selection.key.kind !== 'private');
   if (!inbox.canOperate) inboxStatus('inbox-operation-status', res.ok ? res.data.reason : errorText(res));
   renderInboxOperationControls();
@@ -2106,7 +2117,15 @@ async function executeInboxOperation(kind, target, body, completed) {
     if (!await confirmAction(`${target}？目的地：${selected.name}（QQ ${selected.key.recipient_id}）`)
         || !stillSelected()) return;
     inboxStatus('inbox-operation-status', '等待 QQ 回执…');
-    const result = await api(`/api/inbox/operations/${kind}?${inboxScope(selected.key)}`, 'POST', {confirmed:true, ...body});
+    const query = inboxScope(selected.key);
+    let payload = {confirmed:true, ...body}, headers = {};
+    if (kind === 'file') {
+      query.set('confirmed', 'yes');
+      query.set('name', body.file.name);
+      payload = body.file;
+      headers = {'Content-Type':body.type};
+    }
+    const result = await api(`/api/inbox/operations/${kind}?${query}`, 'POST', payload, headers);
     if (!stillSelected()) return;
     if (result.ok) await completed(result.data);
     else inboxStatus('inbox-operation-status', result.status ? errorText(result) : '没有收到回执；请先检查 QQ，不要直接重试。');
@@ -2135,6 +2154,20 @@ $('inbox-send-text').addEventListener('submit', event => {
   });
 });
 $('inbox-direct-poke').addEventListener('click', () => pokeInboxMember());
+$('inbox-send-file').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = $('inbox-file'), file = input.files[0];
+  if (!file) return;
+  const type = {txt:'text/plain',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp'}[file.name.split('.').pop()?.toLowerCase()];
+  if (!type || !file.size || file.size > 700 * 1024) {
+    inboxStatus('inbox-operation-status', '请选择 700 KiB 以内的 PNG、JPEG、GIF、WebP 或 TXT 文件。');
+    return;
+  }
+  executeInboxOperation('file', `上传「${file.name}」`, {file, type}, data => {
+    if (input.files[0] === file) input.value = '';
+    inboxStatus('inbox-operation-status', `QQ 已确认上传 · 文件 ${data.file_id}`);
+  });
+});
 
 function renderInboxView() {
   const isDesktop = !inbox.view;

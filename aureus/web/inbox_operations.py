@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels.qq_desktop import DesktopError, QQDesktop
@@ -13,6 +13,7 @@ from aureus.common import Clock
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 
 from .inbox_api import _conversation_key
+from .inbox_upload import read_upload
 
 MAX_TEXT_LENGTH = 2000
 MIN_OPERATION_INTERVAL = timedelta(seconds=1)
@@ -143,3 +144,16 @@ def register_inbox_operations(
 
         await execute(request, token, key, operation)
         return {"accepted": True}
+
+    @app.post("/api/inbox/operations/file")
+    async def upload_file(
+        request: Request, token: Annotated[str, Depends(require_ready)],
+        key: Annotated[ConversationKey, Depends(_conversation_key)],
+        name: Annotated[str, Query(min_length=1, max_length=120)],
+        confirmed: Annotated[Literal["yes"], Query()],
+    ) -> dict[str, str]:
+        async def operation(connection: QQDesktop, check: Callable[[], None]) -> str:
+            data = await read_upload(request, name)
+            return await connection.upload_file(key, name, data, check)
+
+        return {"file_id": await execute(request, token, key, operation)}

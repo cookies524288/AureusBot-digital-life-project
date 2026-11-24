@@ -48,10 +48,11 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     reply = {"group_name": "测试群"}
                 case "get_msg":
                     reply = {
-                        "message_id": -10, "message_type": "group", "group_id": GROUP, "user_id": PEER,
+                        "message_id": -10, "message_type": "group",
+                        "group_id": GROUP, "user_id": PEER,
                     }
                 case "get_group_member_info":
-                    reply = {"group_id": GROUP, "user_id": PEER}
+                    reply = {"group_id": GROUP, "user_id": PEER, "nickname": "合成成员"}
                     if revoke_on_member:
                         allowed = False
                 case "send_msg":
@@ -59,6 +60,10 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                         reply = {"message_id": -55}
                 case "send_poke" if "group_id" in call["params"]:
                     status, retcode = "failed", 1404
+                case "upload_group_file":
+                    reply = {"file_id": "/fixture-group-file"}
+                case "upload_private_file":
+                    reply = {"file_id": "fixture-private-file"}
             await socket.send(json.dumps({
                 "echo": call["echo"], "status": status, "retcode": retcode, "data": reply,
             }))
@@ -134,6 +139,31 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     assert (await submit("poke", {**poke, "member": anchor})).status_code == 501
                     assert (await submit("poke", poke, scope=private)).json() == {"accepted": True}
                     assert (await submit("text", text, scope=private)).status_code == 502
+                    async def upload(
+                        scope: dict[str, str], name: str, data: bytes, mime: str = "text/plain",
+                    ) -> httpx.Response:
+                        response = await client.post(
+                            f"{BASE}/file", params={**scope, "name": name, "confirmed": "yes"},
+                            headers={**ORIGIN, "Content-Type": mime}, content=data,
+                        )
+                        rig.clock.advance(timedelta(seconds=1))
+                        return response
+
+                    assert (await upload(SCOPE, "C:/private.txt", b"x")).status_code == 422
+                    assert (await upload(SCOPE, "ok.png", b"x", "image/png")).status_code == 415
+                    oversized = b"x" * (700 * 1024 + 1)
+                    assert (await upload(SCOPE, "ok.txt", oversized)).status_code == 413
+                    assert (await upload(SCOPE, "合成.txt", b"data")).json() == {
+                        "file_id": "/fixture-group-file",
+                    }
+                    assert (await upload(private, "test.txt", b"data")).json() == {
+                        "file_id": "fixture-private-file",
+                    }
+                    uploads = [call["params"] for call in calls if call["action"].startswith("upload_")]
+                    assert uploads == [
+                        {"group_id": str(GROUP), "name": "合成.txt", "file": "base64://ZGF0YQ=="},
+                        {"user_id": str(PEER), "name": "test.txt", "file": "base64://ZGF0YQ=="},
+                    ]
                     revoke_on_member = True
                     assert (await submit("text", {**text, "mention": anchor})).status_code == 403
                     assert [call["action"] for call in calls].count("send_msg") == 2
