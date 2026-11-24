@@ -107,7 +107,7 @@ async def test_private_fact_reaches_group_planner_and_replyer(
 
     async def jargon_reference(_job: object) -> str:
         if mode == "before_first_call":
-            allowed.remove(private)
+            allowed.discard(private)
         return "合成黑话参考"
 
     async def expression_reference(_job: object, _plan: object, _recall: object) -> str:
