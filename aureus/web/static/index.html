@@ -509,10 +509,15 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-pagination input{width:6rem}
 .resource-page .stack{gap:10px}
 .resource-page>.page-body,.resource-panel{flex:1;min-width:0}
+.resource-navigation,.resource-actions{gap:6px}
+.resource-navigation .row{gap:6px}
+.resource-navigation>.row+.row{border-inline-start:1px solid var(--stitch);padding-inline-start:8px}
+@media(max-width:640px){.resource-navigation>.row+.row{border-inline-start:0;padding-inline-start:0;flex-basis:100%}}
 .resource-filters input[type=search]{flex:1 1 180px;min-width:0}
 .resource-filters select{width:auto;max-width:100%}
 .resource-filters select[name=conversation_key]{width:min(100%,15rem);min-width:0}
 .resource-filters label{font-size:13px}
+.resource-counts{min-height:1.5em;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .resource-list{display:grid;gap:6px;--resource-row:42px;flex:1;align-content:start;contain:size;min-height:var(--resource-row)}
 .resource-record{display:flex;align-items:center;min-width:0;gap:8px;height:var(--resource-row)}
 .resource-record .btn{height:100%;flex:1;justify-content:flex-start;min-width:0}
@@ -779,60 +784,81 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-learning" class="page wide resource-page">
   <div class="page-head"><h2>学习</h2></div>
   <div class="page-body stack">
-    <div class="row" role="group" aria-label="学习类型">
-      <button class="btn small primary" data-learning-tab="jargon" aria-pressed="true">黑话</button>
-      <button class="btn small" data-learning-tab="expression" aria-pressed="false">表达方式</button>
-      <button class="btn small" data-learning-tab="clusters" aria-pressed="false">表达簇</button>
-      <button class="btn small" data-learning-tab="emoji" aria-pressed="false">表情包</button>
+    <div class="row resource-navigation" role="group" aria-label="学习类型">
+      <button class="btn small primary" type="button" data-learning-tab="expression" aria-pressed="true" aria-disabled="true" aria-controls="learning-panel-expression">表达方式</button>
+      <button class="btn small" type="button" data-learning-tab="jargon" aria-pressed="false" aria-controls="learning-panel-jargon">黑话</button>
+      <button class="btn small" type="button" data-learning-tab="emoji" aria-pressed="false" aria-controls="learning-panel-emoji">表情包</button>
     </div>
-    <div id="learning-panel-jargon" class="stack resource-panel"></div>
-    <div id="learning-panel-expression" class="stack resource-panel hidden"></div>
-    <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
+    <div id="learning-panel-expression" class="stack resource-panel">
+      <div class="row resource-navigation" role="group" aria-label="表达浏览">
+        <button class="btn small primary" type="button" data-expression-view="list" aria-pressed="true" aria-disabled="true" aria-controls="learning-expression-list">表达列表</button>
+        <button class="btn small" type="button" data-expression-view="clusters" aria-pressed="false" aria-controls="learning-panel-clusters">表达簇</button>
+      </div>
+      <div id="learning-expression-list" class="stack resource-panel"></div>
+      <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
+    </div>
+    <div id="learning-panel-jargon" class="stack resource-panel hidden"></div>
     <div id="learning-panel-emoji" class="stack resource-panel hidden"></div>
   </div>
 </section>
 <section id="page-memory" class="page wide resource-page">
   <div class="page-head"><h2>长期记忆</h2></div>
   <div class="page-body stack">
-    <div class="row" role="group" aria-label="长期记忆功能" style="flex-wrap:wrap">
-      <button class="btn small primary" data-memory-tab="query" aria-pressed="true">记忆查询</button>
-      <button class="btn small" data-memory-tab="graph" aria-pressed="false">关系图</button>
-      <button class="btn small" data-memory-tab="images" aria-pressed="false">图片记忆</button>
-      <button class="btn small" data-memory-tab="flow" aria-pressed="false">记忆流</button>
-      <button class="btn small" data-memory-tab="operations" aria-pressed="false">操作记录</button>
-      <button class="btn small" data-memory-tab="transfer" aria-pressed="false">导入导出</button>
+    <div class="row resource-navigation" role="group" aria-label="长期记忆工作台">
+      <div class="row" role="group" aria-label="记忆浏览">
+        <button class="btn small primary" type="button" data-memory-tab="query" aria-pressed="true" aria-disabled="true" aria-controls="memory-panel-query">记忆查询</button>
+        <button class="btn small" type="button" data-memory-tab="images" aria-pressed="false" aria-controls="memory-panel-images">图片记忆</button>
+        <button class="btn small" type="button" data-memory-tab="flow" aria-pressed="false" aria-controls="memory-panel-flow">记忆流</button>
+      </div>
+      <div class="row" role="group" aria-label="记忆管理">
+        <button class="btn small" type="button" data-memory-tab="transfer" aria-pressed="false" aria-controls="memory-panel-transfer">导入导出</button>
+        <button class="btn small" type="button" data-memory-tab="inspection" aria-pressed="false" aria-controls="memory-panel-inspection">记忆检修</button>
+        <button class="btn small" type="button" data-memory-tab="operations" aria-pressed="false" aria-controls="memory-panel-operations">记忆移除</button>
+      </div>
     </div>
     <div id="memory-panel-query" class="stack resource-panel">
-      <div class="row" role="group" aria-label="查询内容">
-        <button class="btn small primary" data-memory-query="text" aria-pressed="true">文字记录</button>
-        <button class="btn small" data-memory-query="profiles" aria-pressed="false">人物画像</button>
+      <div class="row resource-navigation" role="group" aria-label="查询内容">
+        <button class="btn small primary" type="button" data-memory-query="text" aria-pressed="true" aria-disabled="true" aria-controls="memory-query-text">文字记录</button>
+        <button class="btn small" type="button" data-memory-query="profiles" aria-pressed="false" aria-controls="memory-query-profiles">人物画像</button>
+        <button class="btn small" type="button" data-memory-query="graph" aria-pressed="false" aria-controls="memory-panel-graph">关系图</button>
       </div>
       <div id="memory-query-text" class="stack resource-panel">
         <form id="memory-search" class="row resource-filters">
           <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索正文或来源 ID" maxlength="200">
           <select name="type" aria-label="记忆类型">
-            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="messages">消息</option><option value="experiences">其他经历</option>
+            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="experiences">其他经历</option>
           </select>
           <label id="memory-show-disabled"><input name="disabled" type="checkbox"> 显示停用</label>
           <label><input name="removed" type="checkbox"> 查看已移除</label>
           <button class="btn small primary">查询</button><button id="memory-refresh" type="button" class="btn small">刷新</button>
         </form>
-        <div id="memory-selection" class="row">
+        <div id="memory-selection" class="row resource-actions" role="group" aria-label="所选文字记忆">
           <label><input id="memory-select-all" type="checkbox" disabled> 全选本页</label>
           <button id="memory-correct" class="btn small" disabled>修正所选</button>
           <button id="memory-toggle-removed" type="button" class="btn small" disabled>移除所选</button>
-          <button id="memory-inspection" type="button" class="btn small">只读检修</button>
-          <span id="memory-counts" class="muted" aria-live="polite" style="margin-left:auto"></span>
         </div>
+        <p id="memory-counts" class="muted resource-counts" aria-live="polite"></p>
       </div>
       <div id="memory-query-profiles" class="stack resource-panel hidden"></div>
+      <div id="memory-panel-graph" class="stack resource-panel hidden"></div>
     </div>
     <div id="memory-panel-images" class="stack resource-panel hidden">
       <div id="memory-pictures" class="stack resource-panel"></div>
     </div>
-    <div id="memory-panel-graph" class="stack resource-panel hidden"></div>
     <div id="memory-panel-flow" class="stack resource-panel hidden"></div>
+    <div id="memory-panel-inspection" class="stack resource-panel hidden">
+      <p class="muted">核对本地文字索引；内容、召回状态和人物别名在对应记录上维护。</p>
+      <div class="row resource-actions" role="group" aria-label="检修操作">
+        <button id="memory-inspection" type="button" class="btn small">只读检修</button>
+        <button id="memory-inspect-text" type="button" class="btn small">维护文字记录</button>
+        <button id="memory-inspect-profiles" type="button" class="btn small">维护人物别名</button>
+      </div>
+      <p class="muted">如需查看原始聊天，请前往 <a href="#inbox">平台会话</a>。</p>
+    </div>
     <div id="memory-panel-operations" class="stack resource-panel hidden">
+      <p class="muted">在文字查询中选中本页记录后移除，或查看已移除记录并恢复。不永久删除原件。</p>
+      <div class="row"><button id="memory-removal-query" type="button" class="btn small">选择文字记忆</button></div>
+      <h3>操作记录</h3>
       <p class="muted">仅显示启用后成功移除或恢复的、在当前可见范围内的本地文字记忆。不含迁入记录或旧历史。</p>
     </div>
     <div id="memory-panel-transfer" class="stack hidden"></div>

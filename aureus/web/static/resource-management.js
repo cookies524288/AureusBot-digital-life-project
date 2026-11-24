@@ -143,12 +143,12 @@ function createResourcePager({el, panel, id, grid = false, ...options}) {
 
 function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAGES}) {
   const labels = {paragraphs:'段落', relations:'关系', fact_claims:'事实',
-    episodes:'情景记忆', messages:'消息', experiences:'其他经历', mai_messages:'消息'};
+    episodes:'情景记忆', experiences:'其他经历'};
   const learningLabels = {jargon:'黑话', expression:'表达方式'};
   const reviewLabels = {pending:'待审', approved:'通过', rejected:'拒绝'};
   const reviewEndpoint = '/api/resources/learning/reviews';
   const scopeEndpoint = '/api/resources/learning/scope';
-  let learningKind = 'jargon', memoryTab = 'query', queryKind = 'text';
+  let learningKind = 'expression', expressionView = 'list', memoryTab = 'query', queryKind = 'text';
   let activeLearning, activeMemory;
   const selected = new Map();
 
@@ -166,10 +166,13 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function action(label, onclick) {
     return el('button', {class:'btn small', type:'button', text:label, onclick});
   }
+  function actions(label, ...buttons) {
+    return el('div', {class:'row resource-actions', role:'group', 'aria-label':label}, ...buttons);
+  }
   function field(label, value) {
     return value == null || value === '' ? null : el('p', {}, el('strong', {text:label + '：'}), String(readable(value)));
   }
-  const terms = {...labels, active:'有效', inactive:'已停用', conflicted:'有冲突', superseded:'已替代',
+  const terms = {...labels, messages:'消息', mai_messages:'消息', active:'有效', inactive:'已停用', conflicted:'有冲突', superseded:'已替代',
     retracted:'已撤回', deleted:'已删除', missing:'缺失', image_assets:'图片资产', message:'消息',
     attachment_archived:'归档附件', media_type:'媒体类型', source_key:'原记录编号', reference:'引用',
     evidence:'证据', name:'名称', id:'编号', kind:'类别', status:'状态', profile:'人物画像'};
@@ -217,7 +220,10 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }});
     form.addEventListener('submit', event => { event.preventDefault(); apply(); });
     form.addEventListener('change', event => { if (event.target.name !== 'q') apply(); });
-    return Object.assign(pager, {apply});
+    return Object.assign(pager, {apply, resetApplied(overrides) {
+      params = {...params, ...overrides};
+      return pager.reset();
+    }});
   }
   function textControl(label, value, max, required = false) {
     const input = el('textarea', {maxlength:max, rows:max > 2000 ? 6 : 2, required});
@@ -413,7 +419,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
   }
   function learningView(kind) {
-    const panel = $('learning-panel-' + kind);
+    const panel = $(kind === 'expression' ? 'learning-expression-list' : 'learning-panel-jargon');
     const disabled = el('label', {}, el('input', {name:'disabled', type:'checkbox'}), ' 显示停用和待映射');
     const removed = el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除');
     const reviewFilter = kind === 'expression' ? el('select', {name:'review', 'aria-label':'审核状态'}, ...reviewOptions('全部')) : null;
@@ -437,7 +443,6 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       toolbar.elements.review.value = 'pending';
       toolbar.elements.disabled.checked = true;
       toolbar.elements.removed.checked = false;
-      toolbar.elements.q.value = '';
       return pager.apply();
     });
     const reviewBatch = reviewFilter && action('审核所选', () => {
@@ -449,9 +454,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       count => { if (reviewBatch) reviewBatch.disabled = !count; });
     const tools = [add, upload, download, ...(queue ? [queue] : [])];
     for (const tool of tools) tool.disabled = true;
-    toolbar.append(...tools, batch.remove, batch.restore);
-    if (reviewBatch) toolbar.append(reviewBatch);
-    panel.append(toolbar, scopeHint);
+    panel.append(toolbar, scopeHint, actions(kind === 'expression' ? '表达操作' : '黑话操作', ...tools),
+      actions('所选资料', reviewBatch, batch.remove, batch.restore));
     function render(item) {
       const title = item.text + (item.is_removed ? ' · 已移除' : item.pending_scope ? ' · 待映射' : item.is_enabled ? '' : ' · 已停用')
         + (item.review_status ? ' · ' + reviewLabels[item.review_status] : '');
@@ -486,6 +490,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     function loadScopes() {
       const generation = ++scopeGeneration;
       const filters = [[origin, '/api/resources/learning/origins', '来源'], [authorized, scopeEndpoint, '授权']];
+      const hadScope = origin.value || authorized.value;
       const statuses = new Map(filters.map(([control, , label]) => [control, `正在确认${label}会话。`]));
       const all = () => el('option', {value:'', text:'全部资料'});
       const updateHint = () => { scopeHint.textContent = [...statuses.values()].join('') + scopeDescription; };
@@ -495,7 +500,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         control.replaceChildren(all());
       }
       updateHint();
-      pager.apply();
+      if (hadScope) pager.resetApplied({origin_conversation_key:'', authorized_conversation_key:''});
       async function load(control, endpoint, label) {
         const response = await api(endpoint);
         if (generation !== scopeGeneration) return;
@@ -814,9 +819,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       if (integrity) integrity.disabled = !enabled || checkingIntegrity;
     }
     syncEmojiActions(false);
-    if (emoji) form.append(upload, batchUpload, integrity);
-    if (batch) form.append(batch.remove, batch.restore);
     panel.append(form);
+    if (emoji) panel.append(actions('表情操作', upload, batchUpload, integrity));
+    if (batch) panel.append(actions('所选表情', batch.remove, batch.restore));
     if (counts) panel.append(counts);
     const pager = searchable({panel, grid:true, id:kind === 'emoji' ? 'learning-emoji' : 'archived-images',
       render:item => renderMedia(item, pager.read, batch, openReview),
@@ -916,12 +921,12 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     selected.clear();
     selection.checked = selection.indeterminate = false;
     selection.disabled = correct.disabled = toggleRemoved.disabled = true;
+    counts.textContent = '';
   }, loaded:data => {
     if (data.counts) counts.textContent = Object.entries(data.counts).filter(([kind]) => kind in labels)
       .map(([kind, count]) => labels[kind] + ' ' + count).join('　');
     syncSelection();
   }}, $('memory-search'), '/api/resources/memory', fields => {
-    counts.textContent = '';
     removedView = fields.removed.checked;
     fields.disabled.disabled = removedView;
     toggleRemoved.textContent = removedView ? '恢复所选' : '移除所选';
@@ -1391,9 +1396,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     learningKind = kind;
     activate('data-learning-tab', kind);
     switchPanel({jargon:'learning-panel-jargon', expression:'learning-panel-expression',
-      clusters:'learning-panel-clusters', emoji:'learning-panel-emoji'}, kind);
-    activeLearning = learning[kind];
-    return () => activeLearning.show();
+      emoji:'learning-panel-emoji'}, kind);
+    if (kind === 'expression') {
+      activate('data-expression-view', expressionView);
+      switchPanel({list:'learning-expression-list', clusters:'learning-panel-clusters'}, expressionView);
+    }
+    const view = kind === 'expression' && expressionView === 'clusters' ? learning.clusters : learning[kind];
+    activeLearning = view;
+    return () => view.show();
   }
   function prepareMemory(tab = memoryTab) {
     activeMemory?.hide();
@@ -1401,17 +1411,17 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     memoryTab = tab;
     activate('data-memory-tab', tab);
     switchPanel({query:'memory-panel-query', images:'memory-panel-images', flow:'memory-panel-flow',
-      operations:'memory-panel-operations', transfer:'memory-panel-transfer', graph:'memory-panel-graph'}, tab);
+      operations:'memory-panel-operations', transfer:'memory-panel-transfer', inspection:'memory-panel-inspection'}, tab);
     if (tab === 'query') {
       activate('data-memory-query', queryKind);
-      switchPanel({text:'memory-query-text', profiles:'memory-query-profiles'}, queryKind);
-      activeMemory = queryKind === 'text' ? memory : profiles;
+      switchPanel({text:'memory-query-text', profiles:'memory-query-profiles', graph:'memory-panel-graph'}, queryKind);
+      activeMemory = {text:memory, profiles, graph}[queryKind];
     } else if (tab === 'images') activeMemory = pictures;
     else if (tab === 'flow') activeMemory = window.getMemoryFlow?.();
     else if (tab === 'operations') activeMemory = operations;
-    else if (tab === 'graph') activeMemory = graph;
-    else return () => window.loadMemoryTransfer?.();
-    return () => activeMemory?.show();
+    else if (tab === 'transfer') return () => window.loadMemoryTransfer?.();
+    const view = activeMemory;
+    return () => view?.show();
   }
   const showMemoryTab = tab => prepareMemory(tab)();
   function bindTabs(attribute, select) {
@@ -1420,11 +1430,23 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
   }
   bindTabs('data-learning-tab', button => prepareLearning(button.dataset.learningTab)());
-  bindTabs('data-memory-tab', button => showMemoryTab(button.dataset.memoryTab));
-  bindTabs('data-memory-query', button => {
-    queryKind = button.dataset.memoryQuery;
-    return showMemoryTab('query');
+  bindTabs('data-expression-view', button => {
+    expressionView = button.dataset.expressionView;
+    return prepareLearning('expression')();
   });
+  bindTabs('data-memory-tab', button => showMemoryTab(button.dataset.memoryTab));
+  function showQuery(kind) {
+    queryKind = kind;
+    return showMemoryTab('query');
+  }
+  function jumpToQuery(kind, form) {
+    showQuery(kind);
+    form.elements.q.focus();
+  }
+  bindTabs('data-memory-query', button => showQuery(button.dataset.memoryQuery));
+  $('memory-inspect-text').addEventListener('click', () => jumpToQuery('text', $('memory-search')));
+  $('memory-inspect-profiles').addEventListener('click', () => jumpToQuery('profiles', profileForm));
+  $('memory-removal-query').addEventListener('click', () => jumpToQuery('text', $('memory-search')));
   PAGES.learning = {prepare:prepareLearning, leave:() => activeLearning?.hide()};
   PAGES.memory = {prepare:prepareMemory, leave:() => activeMemory?.hide()};
   return showMemoryTab;
