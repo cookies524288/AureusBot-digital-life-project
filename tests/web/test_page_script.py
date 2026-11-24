@@ -80,6 +80,7 @@ function element(tag = 'div') {
     addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
     removeEventListener() {},
     focus() { context.document.activeElement = this; },
+    setCustomValidity() {},
     click() { for (const callback of this.listeners.click || []) callback(); },
     closest(selector) {
       for (let node = this; node; node = node.parentElement) {
@@ -106,7 +107,7 @@ const reply = (status, data) => ({
   json: async () => data, headers: { get: () => null },
 });
 const context = vm.createContext({
-  assert, timers, sockets, reply, URLSearchParams,
+  assert, timers, sockets, reply, URLSearchParams, AbortController,
   document: {
     getElementById(id) {
       if (!nodes.has(id)) nodes.set(id, element());
@@ -244,9 +245,9 @@ def test_platform_config_has_mouse_keyboard_and_touch_equivalents() -> None:
         let prevented = 0, tabs = 0;
         const nav = [];
         showPage = async (name, ready) => { nav.push(name); ready(); };
-        document.querySelector = selector => {
-          assert.equal(selector, '#cf-tabs [data-sec="qq"]');
-          return {click(){ tabs++; }, focus(){}};
+        focusConfigSection = section => {
+          assert.equal(section, 'qq');
+          tabs++;
         };
         const event = {preventDefault(){ prevented++; }};
         $('inbox-open-qq').listeners.contextmenu[0](event);

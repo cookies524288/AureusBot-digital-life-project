@@ -94,6 +94,10 @@ def test_settings_search_uses_real_controls_and_preserves_drafts(
         query('界面字体');
         assert.equal(cf.results.length, 1);
         assert.equal(document.activeElement, search);
+        assert.equal(cf.tabs.get('').button.attributes['aria-disabled'], 'true');
+        cf.tabs.get('').button.click();
+        assert.equal(search.value, '界面字体');
+        assert.equal(document.activeElement, search);
         key('Enter', search, true);
         assert.equal(document.activeElement, search);
         key('ArrowDown');
@@ -118,6 +122,8 @@ def test_settings_search_uses_real_controls_and_preserves_drafts(
         assert.equal(document.activeElement, address);
         assert.equal(cf.tab, 'exploration');
         assert.equal(cf.tabs.get('exploration').button.attributes['aria-current'], 'true');
+        assert.equal(cf.tabs.get('exploration').button.attributes['aria-disabled'], 'true');
+        assert.equal(cf.tabs.get('').button.attributes['aria-disabled'], 'false');
         address.value = 'https://search.example.invalid/search';
         address.listeners.input[0]();
         query('WEB.SESSION_DAYS');
@@ -170,6 +176,50 @@ def test_settings_search_uses_real_controls_and_preserves_drafts(
         assert.equal(cf.tab, 'web');
         assert.equal(cf.invalid.has('web.session_days'), true);
         assert.equal(cf.changes['exploration.search_endpoint'], address.value);
+        assert.deepEqual(requests, ['/api/config']);
+        """
+    )
+
+
+def test_platform_config_shortcut_selects_readonly_section_with_existing_drafts(
+    config_response: dict[str, Any],
+) -> None:
+    """从加了草稿的设置页返回平台，用右键跳进原有的 QQ 设置节。"""
+    run_page_script(
+        "const response = " + json.dumps(config_response) + ";"
+        r"""
+        const requests = [];
+        api = async request => { requests.push(request); return {ok:true, data:response}; };
+        await loadConfigPage();
+        cf.tabs.get('web').button.click();
+        const days = $('cf-field-web.session_days');
+        days.value = '3.5';
+        days.validity = {valid:false, badInput:false};
+        days.listeners.input[0]();
+        const search = $('cf-search');
+        search.value = '界面字体';
+        search.listeners.input[0]();
+
+        state.page = 'inbox';
+        let opened, prevented = false;
+        const navigate = showPage;
+        showPage = (...args) => opened = navigate(...args);
+        $('inbox-open-qq').listeners.contextmenu[0]({preventDefault() { prevented = true; }});
+        await opened;
+        const tab = cf.tabs.get('qq').button;
+        assert.equal(prevented, true);
+        assert.equal(state.page, 'config');
+        assert.equal(cf.tab, 'qq');
+        assert.equal(search.value, '');
+        assert.equal(document.activeElement, tab);
+        assert.equal(tab.attributes['aria-current'], 'true');
+        assert.equal(tab.attributes['aria-disabled'], 'true');
+        assert.equal($('cf-field-qq.enabled').classList.contains('setting-term'), true);
+        cf.tabs.get('web').button.click();
+        assert.equal(tab.attributes['aria-disabled'], 'false');
+        assert.equal($('cf-field-web.session_days'), days);
+        assert.equal(days.value, '3.5');
+        assert.equal(cf.invalid.has('web.session_days'), true);
         assert.deepEqual(requests, ['/api/config']);
         """
     )

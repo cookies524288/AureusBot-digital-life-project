@@ -157,6 +157,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       const active = button.getAttribute(attribute) === value;
       button.classList.toggle('primary', active);
       button.setAttribute('aria-pressed', active);
+      button.setAttribute('aria-disabled', active);
     }
   }
   function switchPanel(ids, value) {
@@ -1270,16 +1271,16 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     };
   }
   const graph = graphView($('memory-panel-graph'));
-  function showLearning(kind) {
+  function prepareLearning(kind = learningKind) {
     activeLearning?.hide();
     learningKind = kind;
     activate('data-learning-tab', kind);
     switchPanel({jargon:'learning-panel-jargon', expression:'learning-panel-expression',
       clusters:'learning-panel-clusters', emoji:'learning-panel-emoji'}, kind);
     activeLearning = learning[kind];
-    return activeLearning.show();
+    return () => activeLearning.show();
   }
-  function showMemoryTab(tab) {
+  function prepareMemory(tab = memoryTab) {
     activeMemory?.hide();
     activeMemory = null;
     memoryTab = tab;
@@ -1294,16 +1295,22 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     else if (tab === 'flow') activeMemory = window.getMemoryFlow?.();
     else if (tab === 'operations') activeMemory = operations;
     else if (tab === 'graph') activeMemory = graph;
-    else window.loadMemoryTransfer?.();
-    return activeMemory?.show();
+    else return () => window.loadMemoryTransfer?.();
+    return () => activeMemory?.show();
   }
-  for (const button of document.querySelectorAll('[data-learning-tab]')) button.addEventListener('click', () => showLearning(button.dataset.learningTab));
-  for (const button of document.querySelectorAll('[data-memory-tab]')) button.addEventListener('click', () => showMemoryTab(button.dataset.memoryTab));
-  for (const button of document.querySelectorAll('[data-memory-query]')) button.addEventListener('click', () => {
+  const showMemoryTab = tab => prepareMemory(tab)();
+  function bindTabs(attribute, select) {
+    for (const button of document.querySelectorAll('[' + attribute + ']')) button.addEventListener('click', () => {
+      if (button.getAttribute('aria-disabled') !== 'true') select(button);
+    });
+  }
+  bindTabs('data-learning-tab', button => prepareLearning(button.dataset.learningTab)());
+  bindTabs('data-memory-tab', button => showMemoryTab(button.dataset.memoryTab));
+  bindTabs('data-memory-query', button => {
     queryKind = button.dataset.memoryQuery;
     return showMemoryTab('query');
   });
-  PAGES.learning = {load:() => showLearning(learningKind), leave:() => activeLearning?.hide()};
-  PAGES.memory = {load:() => showMemoryTab(memoryTab), leave:() => activeMemory?.hide()};
+  PAGES.learning = {prepare:prepareLearning, leave:() => activeLearning?.hide()};
+  PAGES.memory = {prepare:prepareMemory, leave:() => activeMemory?.hide()};
   return showMemoryTab;
 }

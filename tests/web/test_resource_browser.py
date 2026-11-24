@@ -614,6 +614,73 @@ def _run(browser: Browser, script: str) -> None:
     )
 
 
+@pytest.mark.parametrize("motion", ["no-preference", "reduce"])
+def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser, motion: str) -> None:
+    browser.open("learning", 1280, 900)
+    browser.command(
+        "Emulation.setEmulatedMedia", features=[{"name": "prefers-reduced-motion", "value": motion}]
+    )
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成黑话000'), '学习页就绪');
+      const nav = name => document.querySelector(`[data-page="${name}"]`);
+      const requests = [];
+      api = path => new Promise(resolve => requests.push({path, resolve}));
+      const original = Element.prototype.animate;
+      const entrances = [];
+      const staged = [];
+      Element.prototype.animate = function(frames, timing) {
+        if (this.matches('section.page')) {
+          const key = this.id.slice(5);
+          check(nav(key).getAttribute('aria-current') === 'page', '首帧前同步当前页');
+          if (key === 'memory') check(find('[data-memory-tab="images"]').getAttribute('aria-disabled') === 'true',
+            '书签对应的页内标签先选中');
+          entrances.push(key);
+        }
+        const animation = original.call(this, frames, timing);
+        if (this.closest('#page-config') && !this.matches('section.page')) {
+          animation.pause();
+          animation.currentTime = 0;
+          staged.push(this);
+        }
+        return animation;
+      };
+      try {
+        const older = showPage('images');
+        const current = find('[data-memory-tab="images"]');
+        const other = find('[data-memory-tab="query"]');
+        check(current.getAttribute('aria-disabled') === 'true' && other.getAttribute('aria-disabled') === 'false',
+          '只锁当前页内标签');
+        current.focus();
+        const requestCount = requests.length;
+        current.click();
+        nav('memory').click();
+        check(requests.length === requestCount && document.activeElement === current, '当前按钮不可再次加载但仍可聚焦');
+
+        nav('config').click();
+        const newer = pageNavigation.loading;
+        const saves = ['#cf-save', '#cf-reset', '#cf-restore-all'].map(find);
+        check(saves.every(control => control.disabled), '设置不可用的按钮保持原生禁用');
+        const disabledStyle = control => [getComputedStyle(control).opacity, getComputedStyle(control).translate,
+          getComputedStyle(control).boxShadow];
+        const still = JSON.stringify(saves.map(disabledStyle));
+        if (!reducedMotion.matches) await waitFor(() => staged.length, '设置内容开始入场');
+        check(JSON.stringify(saves.map(disabledStyle)) === still, '入场动画不覆盖禁用按钮位移、透明度或基座');
+        nav('config').focus();
+        requests.at(-1).resolve({ok:false, status:0});
+        await newer;
+        requests[0].resolve({ok:false, status:0});
+        await older;
+        check(root().id === 'page-config' && nav('config').getAttribute('aria-current') === 'page' &&
+          document.activeElement === nav('config'), '迟到的响应不恢复旧页或焦点');
+        check(JSON.stringify(entrances) === JSON.stringify(reducedMotion.matches ? [] : ['memory','config']),
+          '保留减少动态偏好');
+      } finally { Element.prototype.animate = original; }
+    """,
+    )
+
+
 @pytest.mark.parametrize(("width", "height"), [(1280, 900), (390, 740)])
 def test_learning_pagination_and_category_switch(browser: Browser, width: int, height: int) -> None:
     browser.open("learning", width, height)
