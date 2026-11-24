@@ -1,6 +1,6 @@
 # 路线图 3.4 / 3.11 后续：表达聚类快照持久化
 
-状态：待实现
+状态：待评审
 
 设计：沿用 [D100](../10-decisions.md) 和[表达向量聚类计算](expression-vector-clusters.md)的发送及召回边界。
 
@@ -35,11 +35,19 @@
 
 ## 自检清单
 
-- [ ] 新存储对象打开同一库能读取原快照，缺失空间返回 `None`，未知版本拒绝加载。
-- [ ] 两空间可同时保存含 0 号簇的不同快照；替换其中一份后另一份不变，且旧快照成员不残留。
-- [ ] SQLite 触发器在替换已开始后拒绝一条新成员，重开可读取完整旧快照。
-- [ ] 直接查询表结构与行，只含约定字段；加载后实时改写的表达仍被指纹过滤。
-- [ ] 持久化、聚类及语言专项，改动文件 Ruff、Pyright、架构检查和差异检查通过。当前独立分支不重复运行已有失败记录的全量基线。
+- [x] 新存储对象打开同一库能读取原快照，缺失空间返回 `None`，未知版本拒绝加载：`test_snapshot_reopens_with_exact_cluster_and_member_order`、`test_snapshot_rejects_unknown_format_version` 通过。
+- [x] 两空间可同时保存含 0 号簇的不同快照；替换其中一份后另一份不变，且旧快照成员不残留：`test_snapshot_replacement_is_isolated_by_embedding_space` 通过，直接查询确认最终只有两份快照、两条成员。
+- [x] SQLite 触发器在替换已开始后拒绝一条新成员，重开可读取完整旧快照：`test_snapshot_write_failure_rolls_back_removal_and_partial_insert` 通过；触发器先确认旧成员已删除、首个新成员已插入，再拒绝第二条，回滚后旧快照编号与成员均恢复。
+- [x] 直接查询表结构与行，只含约定字段；加载后实时改写的表达仍被指纹过滤：`test_snapshot_contains_only_derived_references_and_rechecks_live_content` 通过；`test_loaded_snapshot_does_not_override_package_scope` 另验证会话绑定及撤销仍实时生效。
+- [x] 持久化、聚类及语言专项共 33 项通过；两份改动 Python 文件 Ruff 格式/规范、Pyright（0 错误）通过，架构 8 条规则通过，`git diff --check` 通过。本次未跑全量，不能宣称现有全量基线通过。
+
+## 交付记录（2026-11-24）
+
+- 独立工作树 `E:/WorkShopE/Projects/Aureus-expression-snapshots-dev`，分支 `codex/expression-snapshots`，基线 `c90b987`。
+- 任务书 `3d323db`；实现与六项持久化测试 `348ec1d`。
+- 专项命令使用主树 `.venv/Scripts/python.exe` 执行 `-m pytest -q -p no:cacheprovider --basetemp E:/Temp/aureus-expression-snapshots-f76f904794c140668006246a826539ff/pytest tests/memory/test_expression_cluster_snapshots.py tests/memory/test_expression_clusters.py tests/memory/test_language.py tests/test_language_runtime.py`：33 项通过，19.83 秒。
+- `PYTHONPATH` 指向独立工作树；`AUREUS_HOME` 指向该合成夹具根下的 `never-production-home`，不接正式实例。夹具保留待复审，未自动清理任何其他目录。前一次静态检查因 SQL 行长报错时尚未运行测试；已拆行修正后通过。
+- 未改 `main_loop.py`、生产装配或配置；无新增依赖。没有读取正式数据、调用真实模型或 QQ，没有合并、重启、推送。
 
 ## 子步骤
 
