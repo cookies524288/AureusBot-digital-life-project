@@ -169,6 +169,7 @@ class _ReplyJob:
     planner_run: "_PlannerRun | None" = None
     emoji_history: Sequence[TimelineRecord] | None = None
     language_scope_key: str | None = None
+    can_quote: bool = False
 
 
 @dataclass(frozen=True)
@@ -419,6 +420,7 @@ class ConversationFlow:
         mood_state: str | None = None,
         agenda_state: str | None = None,
         inbox_attention: bool = False,
+        can_quote: bool = False,
     ) -> _ReplyJob:
         """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
         batch_ids = {record.id for record in messages}
@@ -521,6 +523,7 @@ class ConversationFlow:
             working_context=working_context,
             people_history=people_history,
             inbox_attention=inbox_attention,
+            can_quote=can_quote,
             language_scope_key=(
                 ConversationKey.from_perception(target).language_scope_key()
                 if target.route
@@ -812,7 +815,7 @@ class ConversationFlow:
             special_contact=job.person_id is not None and not job.viewer_is_user,
             stay_in_conversation=any("inbox_message_id" in record.metadata for record in job.messages),
         )
-        tools = planner_tools(options)
+        tools = planner_tools(replace(options, quote_source=job.can_quote))
         heuristic_recall = (
             format_recall(*automatic, self._timezone, heuristic=True)
             if automatic is not None

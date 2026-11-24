@@ -97,6 +97,7 @@ from aureus.heartbeat.memory_consolidation import (
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome, MemoryConsolidator
 from aureus.heartbeat.perception import (
     MessageKind,
+    MessageRoute,
     MessageSink,
     OutgoingMessage,
     Perception,
@@ -416,6 +417,7 @@ class Heartbeat:
             else None
         )
         self._sinks: dict[str, MessageSink] = {}
+        self._quote_routes: dict[str, Callable[[MessageRoute], bool]] = {}
         self._reply_outbox = ReplyOutbox(clock, config, self._send_reply_part)
         self._interests = None if config.roleplay_mode else interests
         self._findings = findings
@@ -480,8 +482,10 @@ class Heartbeat:
             request = replace(request, organ_id=organ)
         return await self._organs.call(request)
 
-    def attach_channel(self, name: str, sink: MessageSink) -> None:
-        """接上一个通道：发往这个通道的消息交给 sink。
+    def attach_channel(
+        self, name: str, sink: MessageSink, *, can_quote: Callable[[MessageRoute], bool] | None = None
+    ) -> None:
+        """接上消息通道，并可提供按目的路由检查引用能力的接口。
 
         Raises:
             ValueError: 同名的通道已经接上了。
@@ -489,6 +493,12 @@ class Heartbeat:
         if name in self._sinks:
             raise ValueError(f"通道 {name} 已经接上了")
         self._sinks[name] = sink
+        if can_quote is not None:
+            self._quote_routes[name] = can_quote
+
+    def _can_quote_reply(self, target: Perception) -> bool:
+        can_quote = self._quote_routes.get(target.channel)
+        return target.route is not None and can_quote is not None and can_quote(target.route)
 
     def submit(self, perception: Perception) -> bool:
         """通道交来一条感知。心跳会立即跳一拍来处理它。
@@ -1113,7 +1123,14 @@ class Heartbeat:
         def after_delivery() -> None:
             self._after_reply_delivery(thought, outcome.plan, person_id, reply_record)
 
-        self._deliver_reply(target, reply_record, segments, after_delivery, emoji=outcome.emoji)
+        self._deliver_reply(
+            target,
+            reply_record,
+            segments,
+            after_delivery,
+            emoji=outcome.emoji,
+            quote_source=outcome.plan is not None and outcome.plan.quote_source,
+        )
 
     def allows_emoji_delivery(self) -> bool:
         """通道实际发送表情前再次核对暂停、停机和回复权限。"""
@@ -1128,7 +1145,7 @@ class Heartbeat:
         target: Perception,
         part: str | EmojiReplyPart,
         record: TimelineRecord,
-        first_part: bool,
+        quote_source: bool,
         segment: int | None,
     ) -> bool:
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
@@ -1137,7 +1154,7 @@ class Heartbeat:
             return False
         if self._maintenance_paused:
             return False
-        quote_source = first_part and target.quoted_message_id is not None
+        quote_source = quote_source and self._can_quote_reply(target)
         if isinstance(part, EmojiReplyPart):
             if target.channel != "qq" or target.route is None or self._stop_requested:
                 return False
@@ -1211,16 +1228,17 @@ class Heartbeat:
         after_failure: Callable[[], None] | None = None,
         *,
         emoji: EmojiReplyPart | None = None,
+        quote_source: bool = False,
     ) -> bool:
         """投递已记录的各段。返回本次调用中是否已交给通道。"""
         if self._stop_requested and self._config.typing_delay_enabled:
-            delivered = self._send_reply_part(target, parts[0], record, True, 1)
+            delivered = self._send_reply_part(target, parts[0], record, quote_source, 1)
             finish = after_delivery if delivered else after_failure
             if finish is not None:
                 finish()
             return delivered
         return self._reply_outbox.enqueue(
-            target, record, parts, after_delivery, after_failure, emoji=emoji
+            target, record, parts, after_delivery, after_failure, emoji=emoji, quote_source=quote_source
         )
 
     def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> TimelineRecord:
@@ -2155,6 +2173,7 @@ class Heartbeat:
                 person_id, viewer_is_user=target.trust is TrustLevel.VERIFIED_USER
             ),
             agenda_for_context=self._agenda_hooks._agenda_for_context,
+            can_quote=bool(messages) and self._can_quote_reply(target),
             inbox_attention=(
                 self._platform_inbox is not None
                 and self._config.inbox_attention_enabled

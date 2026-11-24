@@ -36,6 +36,37 @@ async def test_missing_or_invalid_tool_cannot_authorize_reply(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("available, value, accepted", [
+    (False, True, False),
+    (True, True, True),
+    (True, False, True),
+    (True, "701", False),
+])
+async def test_reply_quote_requires_capability_and_boolean(
+    available: bool, value: bool | str, accepted: bool,
+) -> None:
+    tools = planner_tools(PlannerToolOptions(quote_source=available))
+    reply_tool = next(tool for tool in tools if tool.name == "reply")
+    properties = reply_tool.arguments.model_json_schema()["properties"]
+    assert ("quote_source" in properties) is available
+    if available:
+        assert properties["quote_source"]["default"] is False
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        reply = ToolCall("reply", "quote-1", {**_REPLY.arguments, "quote_source": value})
+        return OrganResponse(request.organ_id, "", tool_calls=(reply,))
+
+    async def retrieve(words: tuple[str, ...]) -> tuple[str, str] | None:
+        pytest.fail(f"不应读取记忆：{words}")
+
+    plan, _ = await dispatch_planner_tools(OrganRequest("planner", "当前消息"), tools, call, retrieve)
+    if accepted:
+        assert plan is not None and plan.quote_source is value
+    else:
+        assert plan is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("finish", [_REPLY, ToolCall("stop", "stop-1", {})])
 async def test_only_explicit_terminal_choice_after_real_tool_result(finish: ToolCall) -> None:
     requests: list[OrganRequest] = []

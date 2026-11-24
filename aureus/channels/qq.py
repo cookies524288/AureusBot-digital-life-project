@@ -25,7 +25,7 @@ from aureus.heartbeat import (
 )
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 
-from .onebot import QQ_CHANNEL_NAME, decode_message, encode_message, media_file_id
+from .onebot import QQ_CHANNEL_NAME, decode_message, encode_message, media_file_id, message_id
 from .onebot_transport import OneBotError, OneBotTransport, decode_media_base64
 from .web import HeartbeatHandle
 
@@ -173,6 +173,18 @@ class QQChannel:
             conversation.platform == QQ_CHANNEL_NAME
             and conversation.account_id == self._config.account_id
             and self._allows_route(conversation)
+        )
+
+    def can_quote_reply(self, route: MessageRoute) -> bool:
+        """只允许已连接账号向原群聊或普通私聊显式引用。"""
+        return (
+            self._transport.socket is not None
+            and route.account_id == self._config.account_id
+            and route.kind in ("group", "private")
+            and route.temporary_group_id is None
+            and account_id(route.recipient_id) is not None
+            and message_id(route.message_id) is not None
+            and self._allows_route(route)
         )
 
     async def read_inbox_attachment(

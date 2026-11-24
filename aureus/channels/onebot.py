@@ -28,6 +28,11 @@ def account_id(value: object) -> str | None:
     return _read_id(value, _ACCOUNT_ID)
 
 
+def message_id(value: object) -> str | None:
+    """规范 OneBot 事件或发送回执中的消息键。"""
+    return _read_id(value, _MESSAGE_ID)
+
+
 def media_file_id(value: object) -> str | None:
     """只接受可作为 SnowLuma 缓存标识的值。"""
     return value if isinstance(value, str) and _MEDIA_ID.fullmatch(value) else None
@@ -127,7 +132,7 @@ def _read_segments(
 def encode_message(
     message: OutgoingMessage, route: MessageRoute, *, image: bytes | None = None
 ) -> dict[str, Any]:
-    """按 SnowLuma 的 send_msg 编码；群聊仅在明确需要时引用原消息。"""
+    """按 SnowLuma 的 send_msg 编码；仅按显式请求引用原消息。"""
     part = (
         {
             "type": "image",
@@ -137,7 +142,7 @@ def encode_message(
         else {"type": "text", "data": {"text": message.content}}
     )
     segments = [part]
-    if route.kind == "private" or message.quote_source:
+    if message.quote_source:
         segments.insert(0, {"type": "reply", "data": {"id": route.message_id}})
     params: dict[str, Any] = {"message_type": route.kind, "message": segments}
     if route.kind == "group":

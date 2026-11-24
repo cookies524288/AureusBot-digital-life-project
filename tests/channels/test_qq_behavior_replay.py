@@ -293,25 +293,27 @@ async def test_qq_recall_receipts_only_mark_successful_text_parts(
         assert all(receipt.visibility is answer.visibility for receipt in receipts)
 
 
-@pytest.mark.parametrize("mode", ["ordinary", "mention", "explicit", "private"])
-async def test_qq_reply_parts_quote_only_when_needed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+@pytest.mark.parametrize("is_private", [False, True])
+@pytest.mark.parametrize("has_incoming_quote", [False, True])
+@pytest.mark.parametrize("request_quote", [None, False, True])
+async def test_qq_reply_parts_quote_only_on_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    is_private: bool, has_incoming_quote: bool, request_quote: bool | None,
 ) -> None:
     clock = ManualClock(START)
     async with open_replay(tmp_path, monkeypatch, clock, split_reply=True) as replay:
         replay.planner.plan = {"reply": True, "intent": "继续聊天"}
+        if request_quote is not None:
+            replay.planner.plan["quote_source"] = request_quote
 
         async def reply(request: OrganRequest) -> OrganResponse:
             assert request.context["task"] == "reply"
             return OrganResponse("replyer", "第一段<n>后续段")
 
         monkeypatch.setattr(replay.replyer, "process", reply)
-        is_private = mode == "private"
         incoming = event(701, 2100, "合成来信", group=None if is_private else GROUP)
         prefix = []
-        if mode == "mention":
-            prefix.append({"type": "at", "data": {"qq": str(ACCOUNT)}})
-        elif mode == "explicit":
+        if has_incoming_quote:
             prefix.append({"type": "reply", "data": {"id": 700}})
         incoming["message"] = [*prefix, {"type": "text", "data": {"text": "合成来信"}}]
         await replay.receive(incoming)
@@ -328,11 +330,24 @@ async def test_qq_reply_parts_quote_only_when_needed(
             assert frame["message_type"] == ("private" if is_private else "group")
             recipient = "user_id" if is_private else "group_id"
             assert frame[recipient] == str(2100 if is_private else GROUP)
-            parts = [quote] if is_private or (mode == "explicit" and not index) else []
+            parts = [quote] if request_quote and not index else []
             assert frame["message"] == [*parts, {"type": "text", "data": {"text": text}}]
         heard, answer = replay.records()
-        assert heard.metadata["quoted_message_id"] == ("700" if mode == "explicit" else None)
+        assert heard.metadata["quoted_message_id"] == ("700" if has_incoming_quote else None)
         assert answer.metadata["in_reply_to"] == [heard.id]
+
+
+async def test_qq_quote_targets_stay_with_each_same_named_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with open_replay(tmp_path, monkeypatch, ManualClock(START)) as replay:
+        replay.planner.plan = {"reply": True, "intent": "回应当前群聊", "quote_source": True}
+        for group, target in ((GROUP, 701), (GROUP + 1, 702)):
+            await replay.receive(event(target, 2100, "合成来信", group=group, group_name="同名群"))
+            await replay.step()
+            frame = await replay.fake.messages.get()
+            assert frame["group_id"] == str(group)
+            assert frame["message"][0] == {"type": "reply", "data": {"id": str(target)}}
 
 
 @pytest.mark.parametrize("cortisol", [False, True])
@@ -377,7 +392,7 @@ async def test_group_replay_silence_then_addressed_reply_with_quote(
             {"type": "at", "data": {"qq": str(ACCOUNT)}},
             {"type": "text", "data": {"text": "你能确认集合地点吗？"}},
         ]
-        replay.planner.plan = {"reply": True, "intent": "确认东门"}
+        replay.planner.plan = {"reply": True, "intent": "确认东门", "quote_source": True}
         await replay.receive(addressed)
         await replay.step()
         await replay.assert_sent(103)
