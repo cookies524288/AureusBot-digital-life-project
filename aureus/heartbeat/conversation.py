@@ -66,6 +66,7 @@ from aureus.heartbeat.planning import (
     ReplyLength,
     clean_text,
 )
+from aureus.heartbeat.platform_history import HistoryQuery, PlatformHistory
 from aureus.heartbeat.recall import (
     MAX_RECALL_CHARS,
     format_recall,
@@ -199,6 +200,8 @@ class _ReplyJob:
     summary_scope: tuple[str, str] | None = None
     legacy_user_extractions: bool = False
     can_quote: bool = False
+    history_route: ConversationKey | None = None
+    history_visibility: VisibilityScope = VisibilityScope.PRIVATE
     round_trace: "_RoundTrace | None" = None
 
 
@@ -356,6 +359,7 @@ class ConversationFlow:
         people: PeopleDirectory | None = None,
         people_config: PeopleConfig | None = None,
         working_memory: WorkingMemory | None = None,
+        platform_history: PlatformHistory | None = None,
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
@@ -386,6 +390,7 @@ class ConversationFlow:
         self._people = people
         self._people_config = people_config or PeopleConfig()
         self._working_memory = working_memory
+        self.platform_history = platform_history
 
     def _working_context(
         self, memory: WorkingMemory, target: Perception, batch_ids: set[int], limit: int
@@ -558,9 +563,8 @@ class ConversationFlow:
             else ()
         )
         history_ids = (*experience_ids, *(record.id for record in [*history, *messages]))
-        route_key = (
-            ConversationKey.from_perception(target).language_scope_key() if target.route else None
-        )
+        history_route = ConversationKey.from_perception(target) if target.route else None
+        route_key = history_route.language_scope_key() if history_route is not None else None
         job = _ReplyJob(
             strategy=strategy,
             history=history,
@@ -582,6 +586,8 @@ class ConversationFlow:
             people_history=people_history,
             inbox_attention=inbox_attention,
             can_quote=can_quote,
+            history_route=history_route,
+            history_visibility=target.visibility,
             language_scope_key=route_key,
             summary_scope=summary_scope_for(
                 target.channel, target.sender_id, target.trust, target.visibility, route_key,
@@ -960,6 +966,7 @@ class ConversationFlow:
         special_contact: bool,
         stay_in_conversation: bool,
         quote_source: bool,
+        platform_history: bool = False,
     ) -> PlannerToolOptions:
         """把会话范围和已装配的能力合成对话规划的工具选项。"""
         return PlannerToolOptions(
@@ -972,6 +979,10 @@ class ConversationFlow:
             special_contact=special_contact,
             stay_in_conversation=stay_in_conversation,
             quote_source=quote_source,
+            platform_history=(
+                platform_history and self.platform_history is not None
+                and self.platform_history.allows is not None and not self._config.roleplay_mode
+            ),
         )
 
     async def _plan(
@@ -983,6 +994,14 @@ class ConversationFlow:
     ) -> tuple[Plan | None, _Recall | None]:
         """调用有界的工具规划；失败不发言，网关的拒绝照常抛出。"""
         organ_id = self._config.plan_organ
+        history, key = self.platform_history, job.history_route
+
+        def still_authorized() -> bool:
+            return (
+                history is not None and key is not None and history.permits(key)
+                and (job.planner_run is None or not job.planner_run.restart_requested)
+            )
+
         options = self.planner_tool_options(
             interests=job.with_interests,
             emoji=job.emoji_history is not None,
@@ -990,6 +1009,10 @@ class ConversationFlow:
             special_contact=job.person_id is not None and not job.viewer_is_user,
             stay_in_conversation=any("inbox_message_id" in record.metadata for record in job.messages),
             quote_source=job.can_quote,
+            platform_history=(
+                job.history_visibility in (VisibilityScope.USER_ONLY, VisibilityScope.GROUP,
+                                           VisibilityScope.PUBLIC) and still_authorized()
+            ),
         )
         tools = planner_tools(options)
         heuristic_recall = (
@@ -1029,10 +1052,16 @@ class ConversationFlow:
                 return None
             return format_recall(words, hits, self._timezone), (words, hits)
 
+        async def read_history(query: HistoryQuery) -> str:
+            assert history is not None and key is not None
+            return await asyncio.to_thread(history.read, key, job.history_visibility, query)
+
         try:
             return await dispatch_planner_tools(
                 request, tools, self._call, retrieve,
                 actions=job.round_trace.actions if job.round_trace is not None else None,
+                read_history=read_history if options.platform_history else None,
+                still_authorized=still_authorized if options.platform_history else None,
             )
         except CallRejectedError:
             raise
