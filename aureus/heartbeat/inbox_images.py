@@ -12,7 +12,7 @@ from sqlite3 import Row
 from typing import Any
 
 from aureus.common.sqlite import open_connection
-from aureus.heartbeat.inbox_store import ConversationKey
+from aureus.heartbeat.inbox_store import USER_VISIBLE_INBOX_MESSAGE, ConversationKey
 from aureus.heartbeat.perception import MediaReference, Perception
 from aureus.organs import OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
@@ -35,6 +35,19 @@ _SOURCE = """
     JOIN inbox_conversations c ON c.id = m.conversation_id
 """
 _PUBLIC_FIELDS = "v.id, v.attachment, m.id AS message_id, m.timestamp, c.name AS conversation"
+_COVERAGE = f"""
+WITH candidates AS (
+    SELECT DISTINCT m.id AS message_id, m.conversation_id, attachment.value ->> '$[1]' AS file_id
+    FROM inbox_messages m JOIN json_each(m.attachments) attachment
+    WHERE m.direction = 'incoming' AND {USER_VISIBLE_INBOX_MESSAGE}
+    AND attachment.type = 'array' AND attachment.value ->> '$[0]' = 'image'
+    AND json_type(attachment.value, '$[1]') = 'text' AND attachment.value ->> '$[1]' <> ''
+)
+SELECT c.platform, c.account_id, c.kind, c.recipient_id, c.temporary_group_id, v.space, COUNT(*)
+FROM candidates p JOIN inbox_conversations c ON c.id = p.conversation_id
+LEFT JOIN inbox_image_vectors v ON v.message_id = p.message_id AND v.attachment = p.file_id
+GROUP BY c.id, v.space
+"""
 PICTURE_REFERENCES = (
     """
     SELECT 'inbox', v.id, unixepoch(m.timestamp, 'subsec'), c.name, NULL, NULL,
@@ -119,6 +132,19 @@ class InboxImageIndex:
         """按收录顺序显示来源会话、消息时间和附件引用。"""
         rows, _total = self.browse_page(before, limit)
         return rows
+
+    def coverage_by_conversation(self) -> list[tuple[ConversationKey, str | None, int]]:
+        """只读统计仍随可见入站消息保存的图片；调用方必须再检查会话路由。"""
+        with closing(open_connection(self._path, read_only=True)) as connection:
+            rows = connection.execute(_COVERAGE)
+            return [
+                (
+                    ConversationKey(platform, account, kind, recipient, temporary or None),
+                    space,
+                    total,
+                )
+                for platform, account, kind, recipient, temporary, space, total in rows
+            ]
 
     def browse_page(self, before: int | None, limit: int) -> tuple[list[dict[str, Any]], int]:
         """返回收件箱图片当前页和不受翻页游标影响的总条数。"""

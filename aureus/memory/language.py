@@ -656,28 +656,33 @@ class LanguageStore:
         """返回可用语言和关联证据，管理页可以同时浏览停用条目。"""
         with closing(open_connection(self._path)) as connection:
             connection.execute("BEGIN")
-            entries = self._read_entries(connection, kind)
-            edits = {
-                row["entry_key"]: row for row in connection.execute("SELECT * FROM language_edits")
+            return self._catalog_entries(connection, kind, include_disabled=include_disabled)
+
+    def _catalog_entries(
+        self, connection: Connection, kind: LanguageKind, *, include_disabled: bool = False
+    ) -> list[LanguageEntry]:
+        entries = self._read_entries(connection, kind)
+        edits = {
+            row["entry_key"]: row for row in connection.execute("SELECT * FROM language_edits")
+        }
+        removed = {
+            row["entry_key"] for row in connection.execute("SELECT * FROM language_removed")
+        }
+        if kind == LanguageKind.EXPRESSION:
+            reviews = {
+                row["entry_key"]: ExpressionReviewStatus(row["status"])
+                for row in connection.execute(
+                    """SELECT entry_key, status, max(id) FROM language_expression_reviews
+                       GROUP BY entry_key"""
+                )
             }
-            removed = {
-                row["entry_key"] for row in connection.execute("SELECT * FROM language_removed")
-            }
-            if kind == LanguageKind.EXPRESSION:
-                reviews = {
-                    row["entry_key"]: ExpressionReviewStatus(row["status"])
-                    for row in connection.execute(
-                        """SELECT entry_key, status, max(id) FROM language_expression_reviews
-                           GROUP BY entry_key"""
-                    )
-                }
-                entries = [
-                    replace(
-                        entry,
-                        review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
-                    )
-                    for entry in entries
-                ]
+            entries = [
+                replace(
+                    entry,
+                    review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
+                )
+                for entry in entries
+            ]
         entries = [self._apply_edit(entry, edits.get(entry.entry_key)) for entry in entries]
         entries = [
             replace(entry, is_enabled=False, is_removed=True)
@@ -849,10 +854,17 @@ class LanguageStore:
 
     def expression_candidates(self, conversation_key: str | None) -> list[LanguageEntry]:
         """返回某一会话可用的表达；来源不限制在线记录的召回。"""
+        return [entry for entry in self.expression_pool() if entry.visible_in(conversation_key)]
+
+    def expression_pool(self, connection: Connection | None = None) -> list[LanguageEntry]:
+        """在应用会话授权前读取有效表达；可在调用方的同库读事务中取值。"""
+        entries = (
+            self.entries(LanguageKind.EXPRESSION)
+            if connection is None
+            else self._catalog_entries(connection, LanguageKind.EXPRESSION)
+        )
         return [
-            entry
-            for entry in self._visible_entries(LanguageKind.EXPRESSION, conversation_key)
-            if entry.review_status != ExpressionReviewStatus.REJECTED
+            entry for entry in entries if entry.review_status != ExpressionReviewStatus.REJECTED
         ]
 
     def _visible_entries(

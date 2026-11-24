@@ -69,6 +69,7 @@ from aureus.heartbeat.cortisol import CortisolTiming
 from aureus.heartbeat.diary_runner import DiaryOutcome, DiaryTracker, write_diary
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.emoji_maintenance import EmojiMaintenance
+from aureus.heartbeat.emoji_selection import EmojiSelector
 from aureus.heartbeat.empathy import EmpathyFocus
 from aureus.heartbeat.events import (
     EVENT_COGNITIVE_STATE,
@@ -458,6 +459,11 @@ class Heartbeat:
         self._last_broadcast: str | None = None
 
     # ---------- 给通道用的接口 ----------
+
+    @property
+    def emoji_selector(self) -> EmojiSelector | None:
+        """返回当前负责表情选择的实例，读取的是同一份内存缓存。"""
+        return self._conversation.emoji_selector
 
     def update_available_organs(
         self, available: frozenset[str], *, expression_space: str | None = None

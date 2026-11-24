@@ -99,6 +99,7 @@ def open_web(
             resource_emojis=core.emoji_store,
             resource_database=core.paths.database_file,
             recall_feedback_enabled=core.settings.runtime.memory.recall_feedback_enabled,
+            embedding_progress=core.embedding_progress,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

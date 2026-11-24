@@ -38,7 +38,7 @@ _KEY = (
     "platform = ? AND account_id = ? AND kind = ? AND recipient_id = ? AND temporary_group_id = ?"
 )
 _UNREAD = "m.direction = 'incoming' AND m.id > COALESCE(c.last_read_id, 0)"
-_USER_VISIBLE = "m.visibility IN ('user_only', 'group', 'public')"
+USER_VISIBLE_INBOX_MESSAGE = "m.visibility IN ('user_only', 'group', 'public')"
 _MESSAGES = f"""
 SELECT m.*, c.platform, c.account_id, c.kind, c.recipient_id, c.temporary_group_id, c.name,
        NOT ({_UNREAD}) AS is_read
@@ -309,7 +309,7 @@ class InboxStore:
     ) -> list[InboxConversation]:
         condition = "WHERE summary.first_unread_id IS NOT NULL" if only_unread else ""
         order = "summary.first_unread_id" if only_unread else "m.id DESC"
-        visibility = f"WHERE {_USER_VISIBLE}" if visible_to_user else ""
+        visibility = f"WHERE {USER_VISIBLE_INBOX_MESSAGE}" if visible_to_user else ""
         with closing(open_connection(self._path)) as database:
             rows = database.execute(f"""
                 SELECT c.*, summary.unread_count, m.id AS last_message_id, m.timestamp
@@ -335,6 +335,17 @@ class InboxStore:
             for row in rows
         ]
 
+    def visible_conversation_keys(self) -> list[ConversationKey]:
+        """只读取得网页可见会话键，调用方仍需核对账号和路由权限。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            rows = database.execute(f"""
+                SELECT c.* FROM inbox_conversations c WHERE EXISTS (
+                    SELECT 1 FROM inbox_messages m WHERE m.conversation_id = c.id
+                    AND {USER_VISIBLE_INBOX_MESSAGE}
+                )
+            """)
+            return [_conversation(row) for row in rows]
+
     def list_messages(
         self,
         conversation: ConversationKey,
@@ -344,7 +355,7 @@ class InboxStore:
         visible_to_user: bool = False,
     ) -> list[InboxMessage]:
         """按收件箱序号倒序读取一页，游标边界不重复。"""
-        visibility = f"AND {_USER_VISIBLE}" if visible_to_user else ""
+        visibility = f"AND {USER_VISIBLE_INBOX_MESSAGE}" if visible_to_user else ""
         with closing(open_connection(self._path)) as database:
             rows = database.execute(
                 f"{_MESSAGES} WHERE {_KEY} {visibility} AND (? IS NULL OR m.id < ?) "

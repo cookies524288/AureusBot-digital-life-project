@@ -98,16 +98,7 @@ class EmojiSelector:
                 ):
                     return EmojiReplyPart(digest, intent.before_text)
                 return None
-            records = await asyncio.to_thread(self._store.candidates)
-            candidates: dict[str, str] = {}
-            represented_tags: set[str] = set()
-            for entry in records:
-                if entry.digest and entry.description and entry.description not in candidates:
-                    tags = set(entry.tags)
-                    if tags and tags <= represented_tags:
-                        continue
-                    represented_tags.update(tags)
-                    candidates[entry.description] = entry.digest
+            candidates = await asyncio.to_thread(self._candidates)
             if not candidates:
                 return None
             dialogue = _dialogue_lines(history, user_name, self._timezone)
@@ -125,6 +116,29 @@ class EmojiSelector:
         except (CallRejectedError, OrganCallError, OSError, sqlite3.Error, ValueError):
             return None
         return None
+
+    def _candidates(self) -> dict[str, str]:
+        candidates: dict[str, str] = {}
+        represented_tags: set[str] = set()
+        for entry in self._store.candidates():
+            if entry.digest and entry.description and entry.description not in candidates:
+                tags = set(entry.tags)
+                if tags and tags <= represented_tags:
+                    continue
+                represented_tags.update(tags)
+                candidates[entry.description] = entry.digest
+        return candidates
+
+    async def cache_coverage(
+        self, spaces: tuple[tuple[int, str], ...]
+    ) -> list[tuple[int, int, int]]:
+        """只读取当前有效描述和已存在的内存向量，不启动缓存刷新。"""
+        candidates = await asyncio.to_thread(self._candidates)
+        cached = len(self._vectors.keys() & candidates.keys())
+        return [
+            (number, cached if space == self._space else 0, len(candidates))
+            for number, space in spaces
+        ]
 
     def _visual_images(self) -> Iterator[tuple[str, bytes]]:
         for entry in self._store.candidates()[:VISUAL_CANDIDATE_LIMIT]:

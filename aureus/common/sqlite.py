@@ -10,11 +10,12 @@ from pathlib import Path
 SQLITE_BUSY_TIMEOUT_SECONDS = 1.0
 
 
-def open_connection(db_path: Path) -> sqlite3.Connection:
+def open_connection(db_path: Path, *, read_only: bool = False) -> sqlite3.Connection:
     """打开一个数据库连接，等锁的时间有上限。
 
     Args:
         db_path: 数据库文件。父目录要已经存在。
+        read_only: 只读打开已有数据库，不创建数据库。
 
     Returns:
         新的连接，行用 sqlite3.Row 表示。
@@ -23,7 +24,10 @@ def open_connection(db_path: Path) -> sqlite3.Connection:
         sqlite3.Error: 打不开文件。
     """
     connection = sqlite3.connect(
-        str(db_path), timeout=SQLITE_BUSY_TIMEOUT_SECONDS, check_same_thread=False
+        db_path.resolve().as_uri() + "?mode=ro" if read_only else str(db_path),
+        timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        check_same_thread=False,
+        uri=read_only,
     )
     connection.row_factory = sqlite3.Row
     return connection
