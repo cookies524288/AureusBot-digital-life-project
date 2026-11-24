@@ -1,6 +1,6 @@
 # 路线图 3.11 / 3.14：QQ 表情视觉选择
 
-状态：实现中
+状态：待评审
 
 设计：补 [学习核对](maibot-learning-parity.md#表情)和[提示词核对](maibot-prompt-parity.md)的视觉选择缺口；延用 [3.14](3.14.md) 的候选许可和成功发送统计。
 
@@ -23,10 +23,12 @@
 
 1. 提交本任务书；在独立工作树实现并提交，运行覆盖视觉、文本选择、原 QQ 发送回执、预览和模型传输的合成专项及改动检查。
 
-- [ ] 实际可选 VLM 请求里的 PNG 像素、行列、左上角编号及结果映射吻合；坏图、未登记、停用和移除资源不入模型，完全无候选不调用模型。
-- [ ] 0、负数、越界、缺键、布尔、字符串和损坏 JSON 不发表情；选择后撤销发送权限不改发别的表情。
-- [ ] 网页预览与实际模型 HTTP 请求的消息角色、正文和附件位置逐一对照；真实请求有图，预览不读媒体、不带媒体内容、不调用模型。
-- [ ] 合成 QQ 正常回复接通视觉选择；现有文字/语义路径、文字与表情顺序及成功回执验证通过。
+- [x] `test_visual_grid_filters_candidates_and_maps_labels_to_the_same_order` 核对 PNG 像素、行列、左上角角标及编号映射，坏图、未登记、停用和移除资源不入模型。
+- [x] `test_visual_no_selection_and_late_moderation_do_not_try_text` 验证 0、负数、越界、缺键、布尔、字符串、浮点数和损坏 JSON 均不发表情；选择后停用不改发其他表情，无候选不调用模型。
+- [x] `test_emoji_visual_preview_matches_actual_http_request_without_reading_media` 用 `MockTransport` 核对实际请求与预览的角色、正文、附件位置；实际请求含 PNG，预览只给具名占位且不读目录媒体。
+- [x] `test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success` 覆盖文字与视觉两种选择、表情前后置和回执成败；原语义匹配与文字回退测试仍通过。
+
+任务书 `2ae75d0`，实现 `b881bad`。选择、QQ 回环与 HTTP 预览专项 21 项，另有媒体、回放、表情库及提示词 API 回归 42 项；合计 63 项通过。改动 Python 文件 Ruff 规范与格式、Pyright（0 错误；显式使用主工作树既有解释器）、架构规则 8 条通过；未跑全量。合成测试根：`E:/Temp/aureus-emoji-visual-selection-0ec57339f9b44a888bc5fb3b51d87ac8`（`pytest`、`regression` 两组）。
 
 ## 不做
 

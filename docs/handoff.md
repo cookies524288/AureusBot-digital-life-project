@@ -14,6 +14,8 @@ SnowLuma 的正向 WebSocket 使用本机回环端口 23104。OneBot 已核实�
 
 ## 下一步
 
+独立工作树 `E:/WorkShopE/Projects/Aureus-emoji-visual-selection-dev`（`codex/emoji-visual-selection`）的 [QQ 表情视觉选择](tasks/emoji-visual-selection.md)待 Astra 复审：任务书 `2ae75d0`、实现 `b881bad`。仅显式开启时将已登记、未禁用、未移除且可发送的候选组成带编号 PNG，实际经 `vlm` 选择；0 或无效编号不发，不改原文字、语义选择和回执计数。预览不读附件或真实对话。合成专项 63 项通过，改动 Ruff/格式、Pyright 和 8 条架构规则通过；未跑全量、未合入、未重启或推送。
+
 独立工作树 `E:/WorkShopE/Projects/Aureus-learning-stages-dev` (`codex/learning-stages`) 的[在线语言抽取与黑话释义](tasks/language-extraction-stages.md)已在 `7665b17` 上集成 `b3a4478`，待 Astra 复审。两路抽取独立消费；黑话仅使用同会话真实证据进行三阶段判定。QQ 合成回放确认私聊所得可在群聊内部参考，原文与发言人不附在习得语言参考，保留防泄漏提示。语言包独立授权及撤销规则不变。集成后 147 项专项通过，包括跨会话记忆、表情识别、在线语言及网页回归；未跑全量，未操作正式实例或数据，未推送。
 
 [QQ 表情识别](tasks/emoji-recognition-labels.md)实现 `85611e7`、返工 `bf825a2` 已通过复审（`2d04e42`）。旧登记表情没有标签时，只识别本次收到的图片，不复用旧说明或回填标签。返工联合专项 35 项通过；主会话独立复跑的四种旧表情状态均通过。上一项长期记忆发布的重启已验证，不是本项上线凭据。
