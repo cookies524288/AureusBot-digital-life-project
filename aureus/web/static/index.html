@@ -512,7 +512,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-message.outgoing .inbox-bubble{border-color:var(--accent);border-radius:8px 2px 8px 8px}
 .inbox-bubble p,.inbox-component{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
 .inbox-component.event{display:block}
-.inbox-image{display:grid;justify-items:end;gap:5px;margin:6px 0 0}
+.inbox-image{display:grid;justify-content:start;justify-items:end;gap:5px;margin:6px 0 0}
 .inbox-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}
 .inbox-image .btn{justify-self:end}
 .inbox-pagination{margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -2344,7 +2344,7 @@ function openInboxView(view) {
   return rendered;
 }
 
-function renderInboxImage(message, attachment, position) {
+function renderInboxImage(message, position) {
   const label = `图片 ${position + 1}`;
   const unavailable = el('p', {class:'muted hidden', text:'原图暂不可读取。'});
   const picture = el('img', {alt:label, loading:'lazy', onerror:() => {
@@ -2361,24 +2361,30 @@ function renderInboxImage(message, attachment, position) {
     picture.classList.add('hidden');
     unavailable.classList.remove('hidden');
   }
-  const description = el('p', {class:'muted hidden', text:'这张图片没有保存可核验的 VLM 或规划器描述。'});
-  const toggle = el('button', {type:'button', class:'btn small', 'aria-pressed':'false', text:'查看描述'});
-  let descriptionRequested = false;
+  const noDescription = '这张图片没有可核验的已有描述；不会再次识别。';
+  const description = el('p', {class:'muted hidden'});
+  const toggle = el('button', {type:'button', class:'btn small', hidden:!sourceURL,
+    'aria-label':`查看${label}描述`, 'aria-pressed':'false', text:'查看描述'});
+  let controller;
   toggle.addEventListener('click', async () => {
     const showing = description.classList.contains('hidden');
     description.classList.toggle('hidden', !showing);
     preview.classList.toggle('hidden', showing);
     toggle.setAttribute('aria-pressed', String(showing));
+    toggle.setAttribute('aria-label', showing ? `查看${label}原图` : `查看${label}描述`);
     toggle.textContent = showing ? '查看原图' : '查看描述';
-    if (!showing || !sourceURL || !attachment.is_emoji || descriptionRequested) return;
-    descriptionRequested = true;
-    description.textContent = '正在查找已有表情描述…';
+    controller?.abort();
+    description.textContent = '';
+    if (!showing || !sourceURL) return;
+    const current = controller = new AbortController();
+    description.textContent = '正在查找已有描述…';
     const request = inbox.messageRequest, session = state.loaded;
-    const res = await api(sourceURL + '&view=description');
-    if (request !== inbox.messageRequest || session !== state.loaded) return;
-    description.textContent = res.ok && res.data.source === 'emoji_catalog' && res.data.description
-      ? '来源：表情资料库（相同图片）\n' + res.data.description
-      : '没有可核验的会话描述或表情资料；不会再次识别。';
+    const res = await api(sourceURL + '&view=description', undefined, undefined, {}, current.signal);
+    if (current.signal.aborted || request !== inbox.messageRequest || session !== state.loaded) return;
+    const sources = {vlm:'视觉模型（VLM）', emoji_catalog:'表情资料库（相同图片）'};
+    const source = res.ok && Object.hasOwn(sources, res.data?.source) && sources[res.data.source];
+    description.textContent = source && res.data.description
+      ? `来源：${source}\n${res.data.description}` : noDescription;
   });
   return el('figure', {class:'inbox-image', 'aria-label':label}, preview, description, toggle);
 }
@@ -2403,7 +2409,7 @@ function renderInboxComponent(message, item) {
       break;
     }
     case 'image':
-      if (attachment?.kind === 'image') return renderInboxImage(message, attachment, item.attachment_index);
+      if (attachment?.kind === 'image') return renderInboxImage(message, item.attachment_index);
       text = '图片原件未保存';
       break;
     case 'record': text = '语音消息'; break;

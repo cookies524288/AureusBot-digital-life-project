@@ -404,6 +404,7 @@ class Heartbeat:
                 HistoryRetention(inbox_store, timeline.platform_history, clock, timezone)
                 if inbox_store is not None else None
             ),
+            inbox_store=inbox_store,
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._memory_consolidator = (

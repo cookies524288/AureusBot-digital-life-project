@@ -12,7 +12,8 @@ from aureus.common import AureusPaths, ManualClock
 from aureus.common.sqlite import open_connection
 from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
-from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxImageNote, InboxStore
+from aureus.heartbeat.perception import MediaReference
 from aureus.heartbeat.platform_history import HistoryQuery, PlatformHistory
 from aureus.memory import HistoricalMemory, MemoryIndex, MemorySource
 from aureus.timeline import TimelineQuery
@@ -132,6 +133,32 @@ def test_confirmation_rechecks_auth_only_removes_fixed_scoped_originals(rig: Ret
             assert "old-original" not in str(audit) and "legacy-only" not in str(audit)
     finally:
         memory.close()
+
+
+def test_confirmed_cleanup_removes_caption_and_discards_late_write(rig: RetentionRig) -> None:
+    source = replace(perception(KEY, "same", "原件"),
+                     attachments=(MediaReference("image", "same-name"),))
+    old = rig.store.add(source)
+    assert old is not None
+    rig.store.mark_read([old.id])
+    caption = InboxImageNote("vlm", "只属于将清理的旧图")
+    rig.store.save_image_note(old.id, source, 0, caption)
+    rig.advance_to_today()
+    rig.web.log_in()
+    endpoint = f"/api/inbox/messages/{old.id}/images/0"
+    params = {**SCOPE, "view": "description"}
+    assert rig.client.get(endpoint, params=params).json() == {
+        "source": "vlm", "description": caption.value,
+    }
+    preview = rig.preview()
+    assert rig.confirm(preview).status_code == 200
+    assert rig.store.add(source) is None
+    rig.store.save_image_note(old.id, source, 0, caption)
+    assert rig.client.get(endpoint, params=params).status_code == 404
+    with closing(open_connection(rig.path, read_only=True)) as connection:
+        assert not connection.execute(
+            "SELECT 1 FROM inbox_messages WHERE id = ? OR image_notes <> '{}'", (old.id,)
+        ).fetchone()
 
 
 @pytest.mark.parametrize("change", ["zero", "read_water", "canonical_arrives", "vectors"])
