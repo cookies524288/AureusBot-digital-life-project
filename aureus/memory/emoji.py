@@ -8,13 +8,14 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
-from sqlite3 import Row
+from sqlite3 import Connection, Row
 from tempfile import NamedTemporaryFile
 from typing import Literal
 
 from PIL import Image, ImageSequence
 
 from aureus.common import Clock
+from aureus.common.config import DEFAULT_EMOJI_REGISTRATION_LIMIT
 from aureus.common.sqlite import open_connection
 from aureus.memory.history import MemorySource
 
@@ -42,6 +43,8 @@ _SORT_COLUMNS: dict[EmojiSort, str] = {
 _REVIEW = """coalesce((SELECT verdict FROM emoji_reviews
     WHERE emoji_reviews.digest = emoji_assets.digest), 'unreviewed')"""
 _SENDABLE = f"""is_registered AND NOT is_banned AND {_REVIEW} <> 'rejected' AND NOT EXISTS (
+    SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)"""
+_ACTIVE = """is_registered AND NOT is_banned AND NOT EXISTS (
     SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)"""
 _CATALOG = f"""WITH entries AS (
     SELECT emoji_assets.*, (SELECT min(source_key) FROM emoji_sources source
@@ -82,7 +85,32 @@ CREATE TABLE IF NOT EXISTS emoji_reviews (
     digest TEXT PRIMARY KEY REFERENCES emoji_assets(digest),
     verdict TEXT NOT NULL CHECK (verdict IN ('approved', 'rejected'))
 );
+CREATE TABLE IF NOT EXISTS emoji_registration_versions (
+    digest TEXT PRIMARY KEY REFERENCES emoji_assets(digest), version INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS emoji_registration_update
+AFTER UPDATE OF description, tags, is_registered, is_banned ON emoji_assets
+WHEN (OLD.description, OLD.tags, OLD.is_registered, OLD.is_banned) IS NOT
+     (NEW.description, NEW.tags, NEW.is_registered, NEW.is_banned)
+BEGIN
+    INSERT INTO emoji_registration_versions VALUES (NEW.digest, 1)
+    ON CONFLICT(digest) DO UPDATE SET version = version + 1;
+END;
 """
+
+
+def _version(connection: Connection, digest: str) -> None:
+    connection.execute(
+        """INSERT INTO emoji_registration_versions VALUES (?, 1)
+           ON CONFLICT(digest) DO UPDATE SET version = version + 1""",
+        (digest,),
+    )
+
+
+def _active_count(connection: Connection) -> int:
+    return int(
+        connection.execute(f"SELECT count(*) FROM emoji_assets WHERE {_ACTIVE}").fetchone()[0]
+    )
 
 
 @dataclass(frozen=True)
@@ -115,6 +143,18 @@ class EmojiIntegrityPreview:
     checked: int
     unavailable: int
     examples: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class EmojiReplacement:
+    """指定新旧内容地址及当前可审核的登记版本，不携带文件路径。"""
+
+    incoming: str
+    outgoing: str
+    incoming_version: int
+    outgoing_version: int
+    incoming_description: str
+    outgoing_description: str
 
 
 @dataclass(frozen=True)
@@ -183,11 +223,19 @@ def _clean_description(description: str) -> str:
 class EmojiStore:
     """维护资源目录及内容寻址附件，各操作使用独立连接。"""
 
-    def __init__(self, database_file: Path, memory_dir: Path, clock: Clock) -> None:
+    def __init__(
+        self,
+        database_file: Path,
+        memory_dir: Path,
+        clock: Clock,
+        *,
+        registration_limit: int = DEFAULT_EMOJI_REGISTRATION_LIMIT,
+    ) -> None:
         self._database_file = database_file
         self._memory_dir = memory_dir
         self._attachments = memory_dir / "attachments"
         self._clock = clock
+        self.registration_limit = registration_limit
         self._unavailable_digests: frozenset[str] = frozenset()
 
     def open(self) -> None:
@@ -210,11 +258,15 @@ class EmojiStore:
         self._write_media(digest, data)
         description = description.strip()
         with closing(open_connection(self._database_file)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            can_register = register and bool(description) and self._has_slot(connection)
             row = connection.execute(
                 f"""INSERT INTO emoji_assets VALUES (?, ?, ?, ?, 0, 1, 0, ?, NULL)
                    ON CONFLICT(digest) DO UPDATE SET collection_count = collection_count + ?,
                        is_registered = is_registered OR (
-                           excluded.is_registered AND NOT is_banned AND description = ''),
+                           excluded.is_registered AND NOT is_banned AND description = ''
+                           AND {_REVIEW} <> 'rejected' AND NOT EXISTS (
+                               SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || ?)),
                        description = CASE WHEN description = '' THEN excluded.description
                                           ELSE description END,
                        tags = CASE WHEN tags = '[]' THEN excluded.tags ELSE tags END
@@ -225,9 +277,10 @@ class EmojiStore:
                     digest,
                     description,
                     json.dumps(tags, ensure_ascii=False),
-                    register and bool(description),
+                    can_register,
                     self._clock.now().timestamp(),
                     int(not register),
+                    digest,
                     digest,
                 ),
             ).fetchone()
@@ -241,14 +294,18 @@ class EmojiStore:
             raise ValueError("表情标签数量或长度不可用。")
         description = "，".join(tags)
         with closing(open_connection(self._database_file)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            can_register = self._has_slot(connection)
             return bool(
                 connection.execute(
-                    """UPDATE emoji_assets SET description = ?, tags = ?, is_registered = 1
+                    f"""UPDATE emoji_assets SET description = ?, tags = ?, is_registered = ?
                        WHERE digest = ? AND NOT is_registered AND NOT is_banned
+                         AND {_REVIEW} <> 'rejected'
                          AND description = '' AND tags = '[]' AND NOT EXISTS (
                              SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)""",
-                    (description, json.dumps(tags, ensure_ascii=False), digest),
+                    (description, json.dumps(tags, ensure_ascii=False), can_register, digest),
                 ).rowcount
+                and can_register
             )
 
     def import_records(self, records: Iterable[ImportedEmoji]) -> tuple[int, int]:
@@ -294,6 +351,8 @@ class EmojiStore:
         digest = sha256(data).hexdigest()
         self._write_media(digest, data)
         with closing(open_connection(self._database_file)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            registered = registered and self._has_slot(connection)
             created = connection.execute(
                 """INSERT INTO emoji_assets VALUES (?, ?, '[]', ?, 0, 0, 0, ?, NULL)
                    ON CONFLICT(digest) DO NOTHING""",
@@ -330,7 +389,10 @@ class EmojiStore:
         with closing(open_connection(self._database_file)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT * FROM emoji_assets WHERE digest = ?", (digest,)
+                f"""SELECT *, {_REVIEW} AS review, EXISTS (
+                    SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest
+                ) AS is_removed FROM emoji_assets WHERE digest = ?""",
+                (digest,),
             ).fetchone()
             if row is None:
                 return False
@@ -347,6 +409,11 @@ class EmojiStore:
                 raise ValueError(_REGISTRATION_DESCRIPTION_REQUIRED)
             if (registering or restoring) and media_error:
                 raise ValueError(media_error)
+            if (registering or restoring) and not banned:
+                if row["is_removed"] or row["review"] == "rejected":
+                    raise ValueError("已移除或被拒绝的表情不能登记。")
+                if not self._has_slot(connection):
+                    raise ValueError("登记容量已满，请先取消旧登记或使用替换。")
             connection.execute(
                 """UPDATE emoji_assets SET description = ?, tags = ?, is_registered = ?,
                    is_banned = ? WHERE digest = ?""",
@@ -379,11 +446,14 @@ class EmojiStore:
                     raise ValueError("找不到可用原件，不能通过表情审批。")
                 if not row["description"].strip():
                     raise ValueError("请先填写表情描述，再通过审批。")
-            connection.execute(
+            changed = connection.execute(
                 """INSERT INTO emoji_reviews VALUES (?, ?)
-                   ON CONFLICT(digest) DO UPDATE SET verdict = excluded.verdict""",
+                   ON CONFLICT(digest) DO UPDATE SET verdict = excluded.verdict
+                   WHERE verdict <> excluded.verdict""",
                 (digest, verdict),
-            )
+            ).rowcount
+            if changed:
+                _version(connection, digest)
         return True
 
     def set_status(self, digest: str, *, is_registered: bool, is_banned: bool) -> None:
@@ -422,8 +492,118 @@ class EmojiStore:
                 if removed
                 else "DELETE FROM emoji_removed WHERE entry_key = ?"
             )
-            connection.executemany(statement, ((key,) for key in keys))
+            if not removed:
+                restored = sum(
+                    connection.execute(
+                        """SELECT EXISTS (SELECT 1 FROM emoji_assets
+                           JOIN emoji_removed ON entry_key = 'asset:' || digest
+                           WHERE entry_key = ? AND is_registered AND NOT is_banned)""",
+                        (key,),
+                    ).fetchone()[0]
+                    for key in set(keys)
+                )
+                if restored and _active_count(connection) + restored > self.registration_limit:
+                    raise ValueError("恢复后将超过表情登记容量，请先取消旧登记。")
+            for key in dict.fromkeys(keys):
+                if connection.execute(statement, (key,)).rowcount and key.startswith("asset:"):
+                    _version(connection, key.removeprefix("asset:"))
         return True
+
+    def _has_slot(self, connection: Connection) -> bool:
+        return _active_count(connection) < self.registration_limit
+
+    def registration_count(self) -> int:
+        """返回参与容量计算的现有登记数，不改变历史数据。"""
+        with closing(open_connection(self._database_file)) as connection:
+            return _active_count(connection)
+
+    def is_registered(self, digest: str) -> bool:
+        """检查上传条目的实际登记结果。"""
+        with closing(open_connection(self._database_file)) as connection:
+            row = connection.execute(
+                f"SELECT 1 FROM emoji_assets WHERE digest = ? AND {_ACTIVE}", (digest,)
+            ).fetchone()
+        return row is not None
+
+    def replacement_options(self, incoming: str, offset: int, limit: int) -> list[EmojiReplacement]:
+        """读取一页可撤销登记的替换对象，供预览或独立建议使用。"""
+        with closing(open_connection(self._database_file)) as connection:
+            connection.execute("BEGIN")
+            target = self._replacement_row(connection, incoming)
+            self._check_replacement_target(target)
+            assert target is not None
+            rows = connection.execute(
+                f"""SELECT digest FROM emoji_assets WHERE {_ACTIVE}
+                    ORDER BY use_count, last_used_at, digest LIMIT ? OFFSET ?""",
+                (limit, offset),
+            ).fetchall()
+            return [
+                self._replacement(target, previous)
+                for row in rows
+                if (previous := self._replacement_row(connection, row["digest"])) is not None
+            ]
+
+    def confirm_replacement(
+        self, incoming: str, outgoing: str, incoming_version: int, outgoing_version: int
+    ) -> None:
+        """确认旧登记撤销与新登记生效，原件及审批均不变。"""
+        data = self.read_media(incoming)
+        if data is None:
+            raise ValueError("找不到可用原件，不能替换。")
+        _validate_image(data)
+        with closing(open_connection(self._database_file)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            target = self._replacement_row(connection, incoming)
+            previous = self._replacement_row(connection, outgoing)
+            self._check_replacement_target(target)
+            if (
+                target is None
+                or previous is None
+                or not previous["is_active"]
+                or target["version"] != incoming_version
+                or previous["version"] != outgoing_version
+            ):
+                raise ValueError("登记或审批已变更，请重新预览。")
+            connection.execute(
+                "UPDATE emoji_assets SET is_registered = 0 WHERE digest = ?", (outgoing,)
+            )
+            connection.execute(
+                "UPDATE emoji_assets SET is_registered = 1 WHERE digest = ?", (incoming,)
+            )
+
+    @staticmethod
+    def _replacement_row(connection: Connection, digest: str) -> Row | None:
+        return connection.execute(
+            f"""SELECT emoji_assets.*, {_ACTIVE} AS is_active, {_REVIEW} AS review,
+                coalesce(version, 0) AS version, EXISTS (SELECT 1 FROM emoji_removed
+                WHERE entry_key = 'asset:' || digest) AS is_removed
+                FROM emoji_assets LEFT JOIN emoji_registration_versions USING (digest)
+                WHERE digest = ?""",
+            (digest,),
+        ).fetchone()
+
+    @staticmethod
+    def _check_replacement_target(row: Row | None) -> None:
+        if (
+            row is None
+            or row["is_registered"]
+            or row["is_banned"]
+            or row["is_removed"]
+            or row["review"] == "rejected"
+            or not row["description"].strip()
+        ):
+            raise ValueError("新表情须未登记、未禁用、未移除、未被拒绝且有描述。")
+
+    @staticmethod
+    def _replacement(target: Row, previous: Row) -> EmojiReplacement:
+        return EmojiReplacement(
+            target["digest"],
+            previous["digest"],
+            target["version"],
+            previous["version"],
+            target["description"],
+            previous["description"],
+        )
 
     def browse(
         self, query: str, offset: int, limit: int, status: EmojiStatus = ""

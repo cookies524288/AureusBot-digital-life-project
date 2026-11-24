@@ -51,6 +51,9 @@ config_version = 1
 # qq_emoji_selection_enabled = true
 # 每 10 分钟核对原件，只影响发送候选；不修改登记或原件。
 # qq_emoji_maintenance_enabled = true
+# qq_emoji_registration_limit = 64
+# 手动请求替换建议才调用表情器官，该调用可能收费；默认关闭。
+# qq_emoji_replacement_suggestion_enabled = false
 # 可选视觉选择改用 vlm 查看候选拼图；关闭时保留原来的文字或语义选择。
 # qq_emoji_visual_enabled = false
 # 可选语义匹配优先调用文本向量模型，无有效匹配时继续使用文字模型。

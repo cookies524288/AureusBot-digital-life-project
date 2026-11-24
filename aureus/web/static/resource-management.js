@@ -607,7 +607,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function emojiUploadResult(response, headers) {
     if (!response.ok) return errorText(response);
     if (!response.data.created) return '已存在，保留原有记录';
-    return headers[emojiRegistrationHeader] ? '已上传并登记' : '已上传';
+    if (!headers[emojiRegistrationHeader]) return '已上传';
+    return response.data.registered === false ? '已上传，登记容量已满' : '已上传并登记';
   }
   function emojiForm(refresh, item) {
     const submit = el('button', {type:'submit', class:'btn primary small', text:item ? '保存' : '上传', disabled:!item});
@@ -743,6 +744,53 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     if (examples.length) result.append(el('p', {class:'muted', text:'问题示例（最多 30 条）'}),
       el('ul', {}, ...examples.map(description => el('li', {text:description || '未填写描述'}))));
   }
+  async function emojiReplacement(item, refresh, offset = 0) {
+    const endpoint = '/api/resources/emoji/replacement/' + encodeURIComponent(item.digest);
+    const status = el('p', {role:'status', text:'正在检查可替换的旧登记…'});
+    const result = el('div', {class:'stack'});
+    const controls = el('fieldset', {class:'stack'}, status, result);
+    detail('替换表情登记', el('p', {text:'只撤销旧表情的登记，不删除原图或改动审批。'}),
+      controls, action('取消', () => $('editor-dialog').close()));
+    const visible = () => controls.isConnected && $('editor-dialog').open;
+    function choose(choice) {
+      result.replaceChildren(field('新登记', choice.incoming_description),
+        field('取消旧登记', choice.outgoing_description || '未填写描述'),
+        action('确认替换', async () => {
+          if (controls.disabled) return;
+          controls.disabled = true;
+          try {
+            const {incoming, outgoing, incoming_version, outgoing_version, expires, token} = choice;
+            const saved = await api('/api/resources/emoji/replacement/confirm', 'POST',
+              {incoming, outgoing, incoming_version, outgoing_version, expires, token});
+            if (!saved.ok) { status.textContent = errorText(saved); return; }
+            if (visible()) $('editor-dialog').close();
+            toast('已替换登记，原图仍保留');
+            await refresh();
+          } finally { controls.disabled = false; }
+        }), action('返回可替换列表', () => emojiReplacement(item, refresh, offset)));
+    }
+    const response = await api(endpoint + '?' + new URLSearchParams({offset}));
+    if (!visible()) return;
+    if (!response.ok) { status.textContent = errorText(response); return; }
+    const {items, has_next, page_size, suggestion_enabled} = response.data;
+    status.textContent = items.length ? '选择要撤销的旧登记。' : '没有可撤销的旧登记。';
+    const previous = action('上一页', () => emojiReplacement(item, refresh, Math.max(0, offset - page_size)));
+    const next = action('下一页', () => emojiReplacement(item, refresh, offset + page_size));
+    previous.disabled = !offset;
+    next.disabled = !has_next;
+    const suggest = suggestion_enabled && items.length && action('请求模型建议（可能收费）', async () => {
+      if (controls.disabled) return;
+      controls.disabled = true;
+      try {
+        const suggestion = await api(endpoint + '/suggest', 'POST');
+        if (!visible()) return;
+        if (suggestion.ok && suggestion.data.item) choose(suggestion.data.item);
+        else status.textContent = suggestion.ok ? '没有可用建议，登记未变更。' : errorText(suggestion);
+      } finally { controls.disabled = false; }
+    });
+    result.replaceChildren(...items.map(choice => action(choice.outgoing_description || '未填写描述', () => choose(choice))),
+      actions('替换候选分页', previous, next, suggest || null));
+  }
   function emojiActions(item, refresh) {
     const actions = el('div', {class:'row'});
     const edit = action('编辑', () => emojiForm(refresh, item));
@@ -760,6 +808,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     if (!item.is_banned) actions.append(update(item.is_registered ? '取消登记' : '登记', {
       is_registered:!item.is_registered,
     }));
+    if (!item.is_registered && !item.is_banned && item.review !== 'rejected' && item.text?.trim()) {
+      actions.append(action('替换旧登记', () => emojiReplacement(item, refresh)));
+    }
     actions.append(update(item.is_banned ? '恢复' : '禁用', {is_banned:!item.is_banned}));
     return actions;
   }
@@ -875,6 +926,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         if (counts) {
           const total = data.counts;
           counts.textContent = total ? `全库 ${total.total} 条 · 已登记 ${total.registered} · 未登记 ${total.unregistered} · 已禁用 ${total.banned} · 已移除 ${total.removed}` : '';
+          if (data.capacity) counts.textContent += ` · 活跃登记 ${data.capacity.active} / ${data.capacity.limit}`;
         }
       }},
       form, '/api/resources/media', fields => ({kind, q:fields.q.value, ...(emoji ? {

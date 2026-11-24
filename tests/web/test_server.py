@@ -388,7 +388,11 @@ def test_emoji_upload_registers_only_valid_new_assets(tmp_path: Path) -> None:
             duplicate = client.post(endpoint, content=old, headers=registration)
             assert duplicate.json() == {"digest": digest, "created": False}
             registered = client.post(endpoint, content=new, headers=registration)
-            assert registered.json() == {"digest": sha256(new).hexdigest(), "created": True}
+            assert registered.json() == {
+                "digest": sha256(new).hexdigest(),
+                "created": True,
+                "registered": True,
+            }
             assert client.post(endpoint, content=invalid, headers=headers).json()["created"] is True
             retry = client.post(endpoint, content=invalid, headers=registration)
             assert retry.json()["created"] is False

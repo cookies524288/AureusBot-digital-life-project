@@ -51,7 +51,7 @@ from aureus.memory import (
     MemoryIndex,
 )
 from aureus.memory.imported_messages import ImportedPlatformHistory
-from aureus.organs import OrganResponse, ToolDefinition
+from aureus.organs import OrganRequest, OrganResponse, ToolDefinition
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 
@@ -267,6 +267,7 @@ def create_app(
     resource_people: PeopleDirectory | None = None,
     resource_memory_dir: Path | None = None,
     resource_emojis: EmojiStore | None = None,
+    suggest_emoji_replacement: Callable[[OrganRequest], Awaitable[OrganResponse]] | None = None,
     resource_database: Path | None = None,
     recall_feedback_enabled: bool = False,
     memory_graph_grants: GraphGrants | None = None,
@@ -618,6 +619,7 @@ def create_app(
         database=resource_database,
         clock=clock,
         inbox=inbox_store,
+        suggest_emoji_replacement=suggest_emoji_replacement,
     )
 
     if maintenance_paused is not None and set_maintenance_paused is not None:
