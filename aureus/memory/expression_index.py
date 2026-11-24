@@ -6,7 +6,7 @@ SQLite 替代 JSON/NPZ；键、有效范围及向量计算接 Aureus，不复制
 
 import json
 from collections import defaultdict
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from math import sumprod
@@ -197,7 +197,11 @@ class ExpressionVectorIndex:
         return list(candidates.values())
 
     def browse(
-        self, language: LanguageStore, *, allowed_entry_keys: Collection[str]
+        self,
+        language: LanguageStore,
+        *,
+        allowed_entry_keys: Collection[str],
+        authorized_versions: Mapping[str, str] | None = None,
     ) -> tuple[VisibleExpressionCluster, ...]:
         """只投影网页明确获准展示且当前指纹有效的运行索引成员。"""
         if not allowed_entry_keys:
@@ -215,7 +219,14 @@ class ExpressionVectorIndex:
             )
             clusters: dict[tuple[str, int], list[tuple[LanguageEntry, str]]] = defaultdict(list)
             for space, cluster, key, mark in rows:
-                if (entry := eligible.get(key)) is not None and fingerprint(entry) == mark:
+                if (
+                    (entry := eligible.get(key)) is not None
+                    and fingerprint(entry) == mark
+                    and (
+                        authorized_versions is None
+                        or authorized_versions.get(key) == display_version(entry)
+                    )
+                ):
                     clusters[space, cluster].append((entry, mark))
         return tuple(
             VisibleExpressionCluster(
@@ -234,6 +245,11 @@ def embedding_text(entry: LanguageEntry) -> str:
 def fingerprint(entry: LanguageEntry) -> str:
     """使用本地稳定键及规范化的情景、风格。"""
     return _fingerprint(f"{entry.entry_key}\n{embedding_text(entry)}")
+
+
+def display_version(entry: LanguageEntry) -> str:
+    """授权绑定精确展示内容，不把向量规范化后的文本当作人工确认。"""
+    return _fingerprint(json.dumps([entry.entry_key, entry.text, entry.detail], ensure_ascii=False))
 
 
 def distinct_expressions(

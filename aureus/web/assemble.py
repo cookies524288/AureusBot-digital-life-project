@@ -14,6 +14,7 @@ from aureus.identity import IdentityEditor
 
 from .auth import LoginLimiter, PasswordStore, WebAuth
 from .config_files import ConfigService
+from .expression_cluster_grants import ExpressionClusterDisplay
 from .runner import WebServer, check_can_start
 from .server import create_app
 from .session import SessionStore
@@ -110,6 +111,12 @@ def open_web(
             recall_feedback_enabled=core.settings.runtime.memory.recall_feedback_enabled,
             embedding_progress=core.embedding_progress,
             expression_recall=core.heartbeat.expression_recall,
+            expression_cluster_display=(
+                ExpressionClusterDisplay(core.paths.database_file, core.language)
+                if core.language is not None and core.embedding_progress is not None
+                and core.embedding_progress.expression_index is not None
+                else None
+            ),
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

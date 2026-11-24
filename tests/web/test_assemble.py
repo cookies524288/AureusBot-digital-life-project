@@ -17,8 +17,11 @@ from aureus.channels import WEB_CHANNEL_NAME
 from aureus.common import AureusPaths, ConfigError, ManualClock, shutdown_logging
 from aureus.core.runtime import open_core
 from aureus.memory import (
+    ExpressionVectorIndex,
     HistoricalMemory,
     ImportedLanguageRow,
+    LanguageContent,
+    LanguageKind,
     MemoryEntry,
     MemoryEvidence,
     MemoryGraphSource,
@@ -125,6 +128,63 @@ def test_normal_web_connects_published_graph_display_grants(paths: AureusPaths) 
             assert result.status_code == 200
             [node] = client.get(graph).json()["items"]
             assert node["name"] == "合成图节点"
+
+
+def test_normal_web_grants_and_revokes_only_selected_expression(paths: AureusPaths) -> None:
+    password = "correct horse"
+    PasswordStore(paths.web_password_file, FAST_HASHER).set_password(password)
+    paths.runtime_config_file.write_text(
+        "[language]\nuse_vector_expression = true\n", encoding="utf-8"
+    )
+    clock = ManualClock(START)
+    with (
+        open_core(paths, fake_organs=True, clock=clock, to_console=False) as core,
+        open_web(core, clock) as server,
+    ):
+        assert server is not None and core.language is not None
+        language = core.language
+        key = language.add_entry(LanguageKind.EXPRESSION, LanguageContent("获准表达", "合成情景"))
+        language.add_entry(LanguageKind.EXPRESSION, LanguageContent("未授权表达", "另一情景"))
+        entries = language.expression_candidates(None)
+        index = ExpressionVectorIndex(paths.database_file)
+        index.publish("synthetic", entries, ((1.0, 2.0), (1.0, 2.0)))
+        app = server._server.config.app
+        assert isinstance(app, FastAPI)
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            clusters = "/api/resources/learning/clusters"
+            grants = clusters + "/grants"
+            origin = {"Origin": "http://testserver"}
+            assert client.get(grants, params={"entry_key": key}).status_code == 401
+            assert client.post("/api/login", json={"password": password}).status_code == 200
+            assert client.get(clusters).json() == {"items": [], "total": 0, "next_offset": None}
+            selected = client.get(grants, params={"entry_key": key}).json()
+            assert selected["enabled"] and not selected["granted"] and selected["version"]
+            body = {"entry_key": key, "version": selected["version"], "password": password}
+            assert client.put(grants, json=body).status_code == 403
+            stale = client.put(grants, headers=origin, json={**body, "version": "0" * 64})
+            assert stale.status_code == 409
+            assert client.put(grants, headers=origin, json=body).status_code == 200
+            [cluster] = client.get(clusters).json()["items"]
+            assert cluster["count"] == 1 and cluster["title"] == "获准表达"
+            detail = clusters + "/detail"
+            params = {"location": cluster["location"]}
+            visible = client.get(detail, params=params)
+            assert visible.headers["cache-control"] == "no-store"
+            assert visible.json()["members"] == [{"text": "获准表达", "detail": "合成情景"}]
+            revoked = client.put(grants, headers=origin, json={**body, "version": None})
+            assert revoked.status_code == 200
+            assert client.get(clusters).json() == {"items": [], "total": 0, "next_offset": None}
+            old = client.get(detail, params=params)
+            unknown = client.get(detail, params={"location": "0" * 64})
+            assert old.status_code == unknown.status_code == 404 and old.content == unknown.content
+            assert language.expression_candidates(None) == entries
+            assert client.put(grants, headers=origin, json=body).status_code == 200
+            assert language.update_entry(
+                LanguageKind.EXPRESSION, key, LanguageContent("获准表达", "合成  情景"), None
+            )
+            index.publish("synthetic", language.expression_candidates(None), ((1.0, 2.0),) * 2)
+            assert client.get(clusters).json()["total"] == 0
+            assert client.get(detail, params=params).content == unknown.content
 
 
 def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -> None:
