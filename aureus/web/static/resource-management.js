@@ -18,8 +18,9 @@ function createResourcePager({el, panel, id, request, render, grid = false, prep
     return Math.min(100, rows * columns);
   }
   function sync() {
-    previous.disabled = !active || busy || page === 0;
-    next.disabled = !active || busy || cursors.length <= page + 1 || (pages != null && page + 1 >= pages);
+    const canNavigate = active && !busy && pages != null;
+    previous.disabled = !canNavigate || page === 0;
+    next.disabled = !canNavigate || cursors.length <= page + 1 || page + 1 >= pages;
     navigation.style.visibility = !busy && pages == null ? 'hidden' : '';
     status.textContent = busy ? '读取中…' : pages == null ? '' : `第 ${pages ? page + 1 : 0} / ${pages} 页`;
     list.setAttribute('aria-busy', busy);
@@ -38,9 +39,9 @@ function createResourcePager({el, panel, id, request, render, grid = false, prep
     if (!active || generation !== serial) return;
     busy = false;
     if (!response.ok) {
+      pages = null;
       if (clearOnError) {
         page = 0;
-        pages = null;
         cursors = [null];
       }
       sync();
