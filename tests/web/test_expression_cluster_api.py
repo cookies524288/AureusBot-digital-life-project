@@ -143,10 +143,10 @@ def test_cluster_filtering_precedes_counts_and_detail_rechecks_state(
         assert left["location"] != right["location"]
         detail = client.get(DETAIL, params={"location": left["location"]})
         assert detail.headers["cache-control"] == "no-store"
-        assert detail.json() == {"members": [{"text": "可见甲", "detail": "合成情景"}]}
-        assert client.get(DETAIL, params={"location": right["location"]}).json() == {
-            "members": [{"text": "可见乙", "detail": "合成情景"}]
-        }
+        assert detail.json()["members"] == [{"text": "可见甲", "detail": "合成情景"}]
+        assert client.get(DETAIL, params={"location": right["location"]}).json()["members"] == [
+            {"text": "可见乙", "detail": "合成情景"}
+        ]
         missing = client.get(DETAIL, params={"location": "bad"})
         allowed.remove(keys["可见甲"])
         assert client.get(CLUSTERS).json()["total"] == 1
@@ -155,6 +155,46 @@ def test_cluster_filtering_precedes_counts_and_detail_rechecks_state(
         assert revoked.content == missing.content
         _save(store, language, "synthetic:second", keys["可见乙"])
         assert client.get(DETAIL, params={"location": right["location"]}).content == missing.content
+
+
+def test_cluster_member_pages_use_filtered_total_and_reject_invalid_limits(
+    fixture: tuple[Rig, LanguageStore, ExpressionClusterStore, dict[str, str]],
+) -> None:
+    rig, language, store, keys = fixture
+    set_password(rig)
+    members = {}
+    for index in range(7):
+        text = f"可见成员{index}"
+        members[language.add_entry(EXPRESSION, LanguageContent(text, "合成情景"))] = text
+    hidden = keys["隐藏"]
+    _save(store, language, "synthetic:first", hidden, *members)
+    with _client(rig, language, store, lambda _token: members.keys()) as client:
+        client.cookies.set(SESSION_COOKIE, rig.sessions.create())
+        [cluster] = client.get(CLUSTERS).json()["items"]
+        params = {"location": cluster["location"], "limit": 3}
+        first, second, last, past_end = [
+            client.get(DETAIL, params={**params, "offset": offset}).json()
+            for offset in (0, 3, 6, 9)
+        ]
+        assert [page["total"] for page in (first, second, last, past_end)] == [7] * 4
+        assert [(page["offset"], page["limit"]) for page in (first, second, last, past_end)] == [
+            (0, 3),
+            (3, 3),
+            (6, 3),
+            (9, 3),
+        ]
+        assert [page["next_offset"] for page in (first, second, last, past_end)] == [
+            3,
+            6,
+            None,
+            None,
+        ]
+        assert [len(page["members"]) for page in (first, second, last, past_end)] == [3, 3, 1, 0]
+        assert [member["text"] for page in (first, second, last) for member in page["members"]] == [
+            members[key] for key in sorted(members)
+        ]
+        for invalid in ({"offset": -1}, {"limit": 0}, {"limit": 101}):
+            assert client.get(DETAIL, params={**params, **invalid}).status_code == 422
 
 
 def test_cluster_inflight_revocation_discards_list_and_detail(

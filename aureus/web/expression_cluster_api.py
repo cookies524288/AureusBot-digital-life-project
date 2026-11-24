@@ -76,13 +76,26 @@ def register_expression_cluster_routes(
 
     @app.get(_PATH + "/detail")
     async def read_detail(
-        token: Annotated[str, Depends(require_ready)], location: str = ""
+        token: Annotated[str, Depends(require_ready)],
+        location: str = "",
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
     ) -> JSONResponse:
         if _LOCATION.fullmatch(location):
             for cluster in await browse(token, detail=True):
                 if cluster.location == location:
+                    total = len(cluster.members)
                     return JSONResponse(
-                        {"members": [asdict(member) for member in cluster.members]},
+                        {
+                            "members": [
+                                asdict(member)
+                                for member in cluster.members[offset : offset + limit]
+                            ],
+                            "total": total,
+                            "offset": offset,
+                            "limit": limit,
+                            "next_offset": offset + limit if offset + limit < total else None,
+                        },
                         headers=_NO_STORE,
                     )
         raise HTTPException(404, _MISSING, headers=_NO_STORE)

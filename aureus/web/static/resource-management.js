@@ -781,32 +781,54 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function clusterView(panel) {
     const endpoint = '/api/resources/learning/clusters';
     const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
-    let generation = 0;
+    const dialog = $('editor-dialog');
+    const memberLimit = 3;
     panel.append(el('div', {class:'row resource-filters'}, action('刷新', () => pager.reset()), count));
 
     function invalidate() {
-      generation++;
       count.textContent = '';
-      const dialog = $('editor-dialog');
       if ($('editor-body').querySelector('[data-cluster-detail]')) {
         if (dialog.open) dialog.close();
         $('editor-body').replaceChildren();
       }
     }
 
-    async function open(item) {
-      const current = ++generation;
-      const response = await api(endpoint + '/detail?' + new URLSearchParams({location:item.location}));
-      if (current !== generation) return;
-      if (!response.ok) {
-        fail(response);
-        return pager.reset();
+    function open(item) {
+      const body = el('div', {class:'stack resource-detail', 'data-cluster-detail':'', 'aria-live':'polite'});
+      const status = el('span', {class:'muted', role:'status'});
+      let offset = 0, nextOffset = null;
+      const previous = action('上一页', () => read(Math.max(0, offset - memberLimit)));
+      const next = action('下一页', () => read(nextOffset));
+      const navigation = el('div', {class:'row resource-pagination', role:'group', 'aria-label':'成员分页'},
+        previous, status, next);
+
+      async function read(target) {
+        previous.disabled = next.disabled = true;
+        status.textContent = '读取中…';
+        body.replaceChildren();
+        const params = new URLSearchParams({location:item.location, offset:target, limit:memberLimit});
+        const response = await api(endpoint + '/detail?' + params);
+        if (!dialog.open || !body.isConnected) return;
+        if (!response.ok) {
+          fail(response);
+          return pager.reset();
+        }
+        const {members, total, next_offset} = response.data;
+        if (!members.length && target > 0) {
+          return read(Math.max(0, Math.ceil(total / memberLimit) - 1) * memberLimit);
+        }
+        offset = target;
+        nextOffset = next_offset;
+        previous.disabled = offset === 0;
+        next.disabled = nextOffset == null;
+        status.textContent = `第 ${Math.floor(offset / memberLimit) + 1} / ${Math.ceil(total / memberLimit)} 页`;
+        body.replaceChildren(el('p', {class:'muted', text:`共 ${total} 条可见表达`}),
+          ...members.map(member => el('div', {class:'stack'},
+            field('表达方式', member.text), field('使用情景', member.detail))));
       }
-      const members = response.data.members;
-      openEditor('表达簇成员', el('div', {class:'stack resource-detail', 'data-cluster-detail':''},
-        el('p', {class:'muted', text:`共 ${members.length} 条可见表达`}),
-        ...members.map(member => el('div', {class:'stack'},
-          field('表达方式', member.text), field('使用情景', member.detail)))));
+
+      openEditor('表达簇成员', body, false, [navigation]);
+      return read(0);
     }
 
     const pager = createResourcePager({el, panel, id:'learning-clusters', error:fail, prepare:invalidate, clearOnError:true,
