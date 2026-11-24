@@ -26,19 +26,36 @@ def directory(tmp_path: Path) -> Iterator[PeopleDirectory]:
         people.close()
 
 
-def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(directory: PeopleDirectory) -> None:
+def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(
+    directory: PeopleDirectory,
+) -> None:
     sources = []
     records = []
     for name, account in (("old", "110"), ("other", "220")):
-        records.extend([
-            HistoricalRecord(instance=name, kind=HistoricalKind.PROFILE, source_key="1",
-                             subject_key="same-key", account=("qq", account), name="同名者"),
-            HistoricalRecord(instance=name, kind=HistoricalKind.PROFILE_SNAPSHOT, source_key="[1]",
-                             subject_key="same-key", profile_version=1, summary=f"旧画像 {name}",
-                             aliases=["同名者"], evidence=["旧证据一", "旧证据二"],
-                             occurred_at=NOW.timestamp(),
-                             expires_at=(NOW + timedelta(hours=1)).timestamp()),
-        ])
+        records.extend(
+            [
+                HistoricalRecord(
+                    instance=name,
+                    kind=HistoricalKind.PROFILE,
+                    source_key="1",
+                    subject_key="same-key",
+                    account=("qq", account),
+                    name="同名者",
+                ),
+                HistoricalRecord(
+                    instance=name,
+                    kind=HistoricalKind.PROFILE_SNAPSHOT,
+                    source_key="[1]",
+                    subject_key="same-key",
+                    profile_version=1,
+                    summary=f"旧画像 {name}",
+                    aliases=["同名者"],
+                    evidence=["旧证据一", "旧证据二"],
+                    occurred_at=NOW.timestamp(),
+                    expires_at=(NOW + timedelta(hours=1)).timestamp(),
+                ),
+            ]
+        )
         sources.append(json.dumps([name, HistoricalKind.PROFILE_SNAPSHOT, "[1]"]))
     directory.publish_history(records)
     first, second = sources
@@ -50,13 +67,24 @@ def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(directory
     async def ready() -> str:
         return "synthetic-session"
 
-    register_profile_lifecycle_routes(app, ready, directory, lambda _: True, lambda _: session_active)
+    register_profile_lifecycle_routes(
+        app, ready, directory, lambda _: True, lambda _: session_active
+    )
     endpoint = "/api/resources/profiles/maintenance"
     with TestClient(app) as client:
+
         def preview(text: str) -> str:
-            response = client.post(endpoint + "/preview", json={"source": first, "edit": {
-                "summary": text, "aliases": ["可信别名"], "evidence": [1],
-            }})
+            response = client.post(
+                endpoint + "/preview",
+                json={
+                    "source": first,
+                    "edit": {
+                        "summary": text,
+                        "aliases": ["可信别名"],
+                        "evidence": [1],
+                    },
+                },
+            )
             assert response.status_code == 200, response.text
             return response.json()["plan_id"]
 
@@ -73,14 +101,26 @@ def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(directory
         assert client.post(f"{endpoint}/{competing}/apply").status_code == 409
         effective = client.get(endpoint, params={"source": first}).json()["effective"]
         assert effective == {"summary": "修订画像", "aliases": ["可信别名"], "evidence": [1]}
-        assert client.get(endpoint, params={"source": second}).json()["effective"]["summary"] == "旧画像 other"
+        assert (
+            client.get(endpoint, params={"source": second}).json()["effective"]["summary"]
+            == "旧画像 other"
+        )
         recalled = directory.history_for(person.id, limit=10)
-        [local] = [entry.record for entry in recalled if entry.record.kind is HistoricalKind.LOCAL_PROFILE_OVERRIDE]
+        [local] = [
+            entry.record
+            for entry in recalled
+            if entry.record.kind is HistoricalKind.LOCAL_PROFILE_OVERRIDE
+        ]
         assert local.summary == "修订画像" and local.evidence == ["旧证据二"]
         assert all(entry.record.summary != "旧画像 old" for entry in recalled)
-        assert any(entry.record.summary == "旧画像 old" for entry in directory.history_for(
-            person.id, limit=10, use_local_content=False,
-        ))
+        assert any(
+            entry.record.summary == "旧画像 old"
+            for entry in directory.history_for(
+                person.id,
+                limit=10,
+                use_local_content=False,
+            )
+        )
         latest = preview("再修订画像")
         assert client.post(f"{endpoint}/{latest}/apply").status_code == 200
         assert client.post(f"{endpoint}/{plan}/undo").status_code == 409
@@ -92,36 +132,67 @@ def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(directory
         stored = directory.historical_record("old", HistoricalKind.PROFILE_SNAPSHOT, "[1]")
         assert stored is not None and stored.record == records[1]
         pending = preview("待处理旧版本")
-        directory.publish_history([records[1].model_copy(update={
-            "source_key": "[2]", "profile_version": 2, "summary": "新来源画像",
-            "evidence": ["新证据"],
-        })])
+        directory.publish_history(
+            [
+                records[1].model_copy(
+                    update={
+                        "source_key": "[2]",
+                        "profile_version": 2,
+                        "summary": "新来源画像",
+                        "evidence": ["新证据"],
+                    }
+                )
+            ]
+        )
         assert client.post(f"{endpoint}/{pending}/apply").status_code == 409
-        assert client.get(endpoint, params={"source": first}).json()["effective"]["summary"] == "新来源画像"
-        assert any(entry.record.summary == "新来源画像" for entry in directory.history_for(person.id, limit=10))
+        assert (
+            client.get(endpoint, params={"source": first}).json()["effective"]["summary"]
+            == "新来源画像"
+        )
+        assert any(
+            entry.record.summary == "新来源画像"
+            for entry in directory.history_for(person.id, limit=10)
+        )
 
 
-def _maintained_profile(tmp_path: Path) -> tuple[PeopleDirectory, ManualClock, HistoricalRecord, str]:
+def _maintained_profile(
+    tmp_path: Path,
+) -> tuple[PeopleDirectory, ManualClock, HistoricalRecord, str]:
     clock = ManualClock(NOW)
     people = PeopleDirectory(tmp_path / "aliases.db", clock)
     people.open()
     snapshot = HistoricalRecord(
-        instance="old", kind=HistoricalKind.PROFILE_SNAPSHOT, source_key="[1]",
-        subject_key="same-key", profile_version=1, summary="旧画像", aliases=["同名者"],
-        evidence=["旧证据一", "旧证据二"], occurred_at=NOW.timestamp(),
+        instance="old",
+        kind=HistoricalKind.PROFILE_SNAPSHOT,
+        source_key="[1]",
+        subject_key="same-key",
+        profile_version=1,
+        summary="旧画像",
+        aliases=["同名者"],
+        evidence=["旧证据一", "旧证据二"],
+        occurred_at=NOW.timestamp(),
         expires_at=(NOW + timedelta(hours=1)).timestamp(),
     )
-    people.publish_history([
-        HistoricalRecord(instance="old", kind=HistoricalKind.PROFILE, source_key="1",
-                         subject_key="same-key", account=("qq", "110"), name="同名者"),
-        snapshot,
-    ])
+    people.publish_history(
+        [
+            HistoricalRecord(
+                instance="old",
+                kind=HistoricalKind.PROFILE,
+                source_key="1",
+                subject_key="same-key",
+                account=("qq", "110"),
+                name="同名者",
+            ),
+            snapshot,
+        ]
+    )
     return people, clock, snapshot, json.dumps(["old", HistoricalKind.PROFILE_SNAPSHOT, "[1]"])
 
 
 @pytest.mark.parametrize("change", ("new_version", "expired"))
 def test_alias_only_change_does_not_revive_an_unanchored_profile_body(
-    tmp_path: Path, change: str,
+    tmp_path: Path,
+    change: str,
 ) -> None:
     people, clock, snapshot, source = _maintained_profile(tmp_path)
     app = FastAPI()
@@ -138,21 +209,38 @@ def test_alias_only_change_does_not_revive_an_unanchored_profile_body(
             assert planned.status_code == 200, planned.text
             assert client.post(f"{endpoint}/{planned.json()['plan_id']}/apply").status_code == 200
             if change == "new_version":
-                people.publish_history([snapshot.model_copy(update={
-                    "source_key": "[2]", "profile_version": 2, "summary": "新来源画像",
-                })])
+                people.publish_history(
+                    [
+                        snapshot.model_copy(
+                            update={
+                                "source_key": "[2]",
+                                "profile_version": 2,
+                                "summary": "新来源画像",
+                            }
+                        )
+                    ]
+                )
             else:
                 clock.advance(timedelta(hours=2))
             person = people.find("qq", "110")
             assert person is not None
             stale = people.history_for(person.id, limit=10)
-            assert all(entry.record.kind is not HistoricalKind.LOCAL_PROFILE_OVERRIDE for entry in stale)
+            assert all(
+                entry.record.kind is not HistoricalKind.LOCAL_PROFILE_OVERRIDE for entry in stale
+            )
             details = client.get(endpoint, params={"source": source}).json()
             assert details["edit"]["summary"] is None and details["edit"]["evidence"] is None
             # 与前端一致：正文和证据没改时原样回传 details["edit"]，只改别名。
-            renamed = client.post(endpoint + "/preview", json={"source": source, "edit": {
-                **details["edit"], "aliases": ["只改别名"],
-            }})
+            renamed = client.post(
+                endpoint + "/preview",
+                json={
+                    "source": source,
+                    "edit": {
+                        **details["edit"],
+                        "aliases": ["只改别名"],
+                    },
+                },
+            )
             assert renamed.status_code == 200, renamed.text
             assert client.post(f"{endpoint}/{renamed.json()['plan_id']}/apply").status_code == 200
             recalled = people.history_for(person.id, limit=10)
@@ -167,7 +255,9 @@ def test_alias_only_change_does_not_revive_an_unanchored_profile_body(
 
 @pytest.mark.parametrize("operation", ("profile_details", "preview_profile", "change_profile"))
 def test_profile_maintenance_reports_database_errors_as_unavailable(
-    directory: PeopleDirectory, monkeypatch: pytest.MonkeyPatch, operation: str,
+    directory: PeopleDirectory,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
 ) -> None:
     def broken(*_args: object, **_kwargs: object) -> None:
         raise sqlite3.OperationalError("database is locked")

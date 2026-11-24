@@ -52,14 +52,19 @@ def init_schema(connection: sqlite3.Connection) -> None:
 
 
 def content(
-    connection: sqlite3.Connection, source: tuple[str, str],
+    connection: sqlite3.Connection,
+    source: tuple[str, str],
 ) -> tuple[str | None, list[int] | None, int | None]:
     """取本机挂接的正文与原证据位置，不复制证据内容。"""
     row = connection.execute(
         "SELECT summary, evidence, anchor FROM local_profile_content WHERE instance=? AND person_key=?",
         source,
     ).fetchone()
-    return (row[0], json.loads(row[1]) if row[1] is not None else None, row[2]) if row else (None, None, None)
+    return (
+        (row[0], json.loads(row[1]) if row[1] is not None else None, row[2])
+        if row
+        else (None, None, None)
+    )
 
 
 def write_content(
@@ -70,8 +75,12 @@ def write_content(
         """INSERT INTO local_profile_content VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(instance, person_key) DO UPDATE SET
                summary=excluded.summary, evidence=excluded.evidence, anchor=excluded.anchor""",
-        (*source, edit.summary, json.dumps(edit.evidence) if edit.evidence is not None else None,
-         edit.anchor),
+        (
+            *source,
+            edit.summary,
+            json.dumps(edit.evidence) if edit.evidence is not None else None,
+            edit.anchor,
+        ),
     )
 
 

@@ -282,7 +282,11 @@ class PeopleDirectory:
     bundle_profile_candidates = staticmethod(history.bundle_profile_candidates)
 
     def history_for(
-        self, person_id: int, *, limit: int | None = None, use_local_aliases: bool = True,
+        self,
+        person_id: int,
+        *,
+        limit: int | None = None,
+        use_local_aliases: bool = True,
         use_local_content: bool = True,
     ) -> list[HistoricalEntry]:
         """按人物取历史资料，可使用当前发言人账号查到的人物编号。"""
@@ -329,13 +333,18 @@ class PeopleDirectory:
             conn.execute("BEGIN")
             return history.profile_alias_details(conn, profile_id, self._clock.now().timestamp())
 
-    def profile_details(self, source: ProfileSource, active: Callable[[], bool]) -> dict[str, object] | None:
+    def profile_details(
+        self, source: ProfileSource, active: Callable[[], bool]
+    ) -> dict[str, object] | None:
         """查询已绑定来源组的有效画像。"""
         with closing(open_connection(self._db_path)) as conn:
             return history.profile_details(conn, source, self._clock.now(), active)
 
     def preview_profile(
-        self, source: ProfileSource, edit: ProfileEdit, active: Callable[[], bool],
+        self,
+        source: ProfileSource,
+        edit: ProfileEdit,
+        active: Callable[[], bool],
     ) -> dict[str, object] | None:
         """为可信画像生成带版本的本机覆盖计划。"""
         with closing(open_connection(self._db_path)) as conn:

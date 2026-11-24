@@ -556,36 +556,62 @@ class MemoryIndex:
             return summary_detail(conn, source, *access)
 
     def preview_lifecycle(
-        self, source: MemorySource, action: LifecycleAction, text: str | None,
-        can_show_summary: ScopeCheck | None, session_active: Callable[[], bool],
+        self,
+        source: MemorySource,
+        action: LifecycleAction,
+        text: str | None,
+        can_show_summary: ScopeCheck | None,
+        session_active: Callable[[], bool],
     ) -> dict[str, object] | None:
         """预览可信事实、关系或情景的单项变更。"""
         with closing(open_connection(self._db_path)) as conn:
             return preview_change(
-                conn, source, action, text, self._clock.now(), self._summary_access(can_show_summary),
+                conn,
+                source,
+                action,
+                text,
+                self._clock.now(),
+                self._summary_access(can_show_summary),
                 session_active,
             )
 
     def lifecycle_history(
-        self, source: MemorySource, can_show_summary: ScopeCheck | None,
-        session_active: Callable[[], bool], offset: int, limit: int,
+        self,
+        source: MemorySource,
+        can_show_summary: ScopeCheck | None,
+        session_active: Callable[[], bool],
+        offset: int,
+        limit: int,
     ) -> tuple[list[LifecycleOperation], int] | None:
         """查询可追溯的检修历史，不公开已替代正文。"""
         with closing(open_connection(self._db_path)) as conn:
             return operation_history(
-                conn, source, self._clock.now(), self._summary_access(can_show_summary),
-                session_active, offset, limit,
+                conn,
+                source,
+                self._clock.now(),
+                self._summary_access(can_show_summary),
+                session_active,
+                offset,
+                limit,
             )
 
     def apply_lifecycle(
-        self, plan: str, can_show_summary: ScopeCheck | None, session_active: Callable[[], bool],
-        *, undo: bool,
+        self,
+        plan: str,
+        can_show_summary: ScopeCheck | None,
+        session_active: Callable[[], bool],
+        *,
+        undo: bool,
     ) -> dict[str, object] | None:
         """应用或撤销服务端计划，原子复核有效来源和版本。"""
         with closing(open_connection(self._db_path)) as conn:
             return change_plan(
-                conn, plan, self._clock.now(), self._summary_access(can_show_summary),
-                session_active, undo=undo,
+                conn,
+                plan,
+                self._clock.now(),
+                self._summary_access(can_show_summary),
+                session_active,
+                undo=undo,
             )
 
     def recheck_summary_hits(

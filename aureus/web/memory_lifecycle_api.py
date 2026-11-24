@@ -65,15 +65,25 @@ def register_memory_lifecycle_routes(
 
     @app.get(path + "/history")
     async def history(
-        response: Response, token: Annotated[str, Depends(require_ready)],
+        response: Response,
+        token: Annotated[str, Depends(require_ready)],
         source: Annotated[str, Query(min_length=1, max_length=4096)],
-        offset: Annotated[int, Query(ge=0)] = 0, limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
     ) -> dict[str, object]:
         location = decode_source(source)
-        result = await asyncio.to_thread(
-            memory.lifecycle_history, location, can_show_summary, lambda: active_session(token),
-            offset, limit,
-        ) if memory is not None else None
+        result = (
+            await asyncio.to_thread(
+                memory.lifecycle_history,
+                location,
+                can_show_summary,
+                lambda: active_session(token),
+                offset,
+                limit,
+            )
+            if memory is not None
+            else None
+        )
         if result is None:
             raise HTTPException(404, "未找到对应资料。")
         items, total = result
@@ -82,14 +92,20 @@ def register_memory_lifecycle_routes(
 
     @app.post(path + "/preview")
     async def preview(
-        request: Request, response: Response, body: LifecyclePreview,
+        request: Request,
+        response: Response,
+        body: LifecyclePreview,
         token: Annotated[str, Depends(require_ready)],
     ) -> dict[str, object]:
         index = ready(request)
         source = decode_source(body.source)
         try:
             plan = await asyncio.to_thread(
-                index.preview_lifecycle, source, body.action, body.text, can_show_summary,
+                index.preview_lifecycle,
+                source,
+                body.action,
+                body.text,
+                can_show_summary,
                 lambda: active_session(token),
             )
         except LifecycleConflictError as error:
@@ -105,7 +121,10 @@ def register_memory_lifecycle_routes(
 
     @app.post(path + "/{plan}/{operation}")
     async def change(
-        request: Request, response: Response, plan: str, operation: str,
+        request: Request,
+        response: Response,
+        plan: str,
+        operation: str,
         token: Annotated[str, Depends(require_ready)],
     ) -> dict[str, object]:
         index = ready(request)
@@ -113,7 +132,10 @@ def register_memory_lifecycle_routes(
             raise HTTPException(404, "未找到可执行的检修计划。")
         try:
             result = await asyncio.to_thread(
-                index.apply_lifecycle, plan, can_show_summary, lambda: active_session(token),
+                index.apply_lifecycle,
+                plan,
+                can_show_summary,
+                lambda: active_session(token),
                 undo=operation == "undo",
             )
         except LifecycleConflictError as error:
@@ -127,8 +149,11 @@ def register_memory_lifecycle_routes(
 
 
 def register_profile_lifecycle_routes(
-    app: FastAPI, require_ready: Callable[..., Awaitable[str]], people: PeopleDirectory | None,
-    same_origin: Callable[[Request], bool], active_session: Callable[[str], bool],
+    app: FastAPI,
+    require_ready: Callable[..., Awaitable[str]],
+    people: PeopleDirectory | None,
+    same_origin: Callable[[Request], bool],
+    active_session: Callable[[str], bool],
 ) -> None:
     """只在真实已绑定的画像来源组上读写本机覆盖。"""
     path = "/api/resources/profiles/maintenance"
@@ -151,13 +176,20 @@ def register_profile_lifecycle_routes(
 
     @app.get(path)
     async def details(
-        response: Response, token: Annotated[str, Depends(require_ready)],
+        response: Response,
+        token: Annotated[str, Depends(require_ready)],
         source: Annotated[str, Query(min_length=1, max_length=4096)],
     ) -> dict[str, object]:
         try:
-            result = await asyncio.to_thread(
-                people.profile_details, location(source), lambda: active_session(token),
-            ) if people is not None else None
+            result = (
+                await asyncio.to_thread(
+                    people.profile_details,
+                    location(source),
+                    lambda: active_session(token),
+                )
+                if people is not None
+                else None
+            )
         except sqlite3.Error:
             raise HTTPException(503, "暂时无法读取人物画像。") from None
         if result is None:
@@ -167,13 +199,17 @@ def register_profile_lifecycle_routes(
 
     @app.post(path + "/preview")
     async def preview(
-        request: Request, response: Response, body: ProfilePreview,
+        request: Request,
+        response: Response,
+        body: ProfilePreview,
         token: Annotated[str, Depends(require_ready)],
     ) -> dict[str, object]:
         directory = ready(request)
         try:
             result = await asyncio.to_thread(
-                directory.preview_profile, location(body.source), body.edit,
+                directory.preview_profile,
+                location(body.source),
+                body.edit,
                 lambda: active_session(token),
             )
         except ProfileChangedError as error:
@@ -189,7 +225,10 @@ def register_profile_lifecycle_routes(
 
     @app.post(path + "/{plan}/{operation}")
     async def change(
-        request: Request, response: Response, plan: str, operation: str,
+        request: Request,
+        response: Response,
+        plan: str,
+        operation: str,
         token: Annotated[str, Depends(require_ready)],
     ) -> dict[str, bool]:
         directory = ready(request)
@@ -197,7 +236,9 @@ def register_profile_lifecycle_routes(
             raise HTTPException(404, "未找到画像计划。")
         try:
             result = await asyncio.to_thread(
-                directory.change_profile, plan, lambda: active_session(token),
+                directory.change_profile,
+                plan,
+                lambda: active_session(token),
                 undo=operation == "undo",
             )
         except ProfileChangedError as error:
