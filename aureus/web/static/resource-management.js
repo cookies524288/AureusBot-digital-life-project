@@ -778,7 +778,76 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   pictureForm.addEventListener('submit', event => { event.preventDefault(); searchPictures(); });
   pictureForm.elements.availability.addEventListener('change', searchPictures);
-  const learning = {jargon:learningView('jargon'), expression:learningView('expression'), emoji:mediaView($('learning-panel-emoji'), 'emoji')};
+  function clusterView(panel) {
+    const endpoint = '/api/resources/learning/clusters';
+    const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
+    const dialog = $('editor-dialog');
+    const memberLimit = 3;
+    panel.append(el('div', {class:'row resource-filters'}, action('刷新', () => pager.reset()), count));
+
+    function invalidate() {
+      count.textContent = '';
+      if ($('editor-body').querySelector('[data-cluster-detail]')) {
+        if (dialog.open) dialog.close();
+        $('editor-body').replaceChildren();
+      }
+    }
+
+    function open(item) {
+      const body = el('div', {class:'stack resource-detail', 'data-cluster-detail':'', 'aria-live':'polite'});
+      const status = el('span', {class:'muted', role:'status'});
+      let offset = 0, nextOffset = null;
+      const previous = action('上一页', () => read(Math.max(0, offset - memberLimit)));
+      const next = action('下一页', () => read(nextOffset));
+      const navigation = el('div', {class:'row resource-pagination', role:'group', 'aria-label':'成员分页'},
+        previous, status, next);
+
+      async function read(target) {
+        previous.disabled = next.disabled = true;
+        status.textContent = '读取中…';
+        body.replaceChildren();
+        const params = new URLSearchParams({location:item.location, offset:target, limit:memberLimit});
+        const response = await api(endpoint + '/detail?' + params);
+        if (!dialog.open || !body.isConnected) return;
+        if (!response.ok) {
+          fail(response);
+          return pager.reset();
+        }
+        const {members, total, next_offset} = response.data;
+        if (!members.length && target > 0) {
+          return read(Math.max(0, Math.ceil(total / memberLimit) - 1) * memberLimit);
+        }
+        offset = target;
+        nextOffset = next_offset;
+        previous.disabled = offset === 0;
+        next.disabled = nextOffset == null;
+        status.textContent = `第 ${Math.floor(offset / memberLimit) + 1} / ${Math.ceil(total / memberLimit)} 页`;
+        body.replaceChildren(el('p', {class:'muted', text:`共 ${total} 条可见表达`}),
+          ...members.map(member => el('div', {class:'stack'},
+            field('表达方式', member.text), field('使用情景', member.detail))));
+      }
+
+      openEditor('表达簇成员', body, false, [navigation]);
+      return read(0);
+    }
+
+    const pager = createResourcePager({el, panel, id:'learning-clusters', error:fail, prepare:invalidate, clearOnError:true,
+      request:async ({offset, limit}) => {
+        const response = await api(endpoint + '?' + new URLSearchParams({offset, limit}));
+        if (response.ok) response.data.enabled = true;
+        return response;
+      },
+      empty:() => '当前没有可见的表达簇',
+      loaded:data => { count.textContent = `共 ${data.total} 个可见表达簇`; },
+      render:item => record(`簇 ${item.number} · ${item.count} 条 · ${item.title}`, () => open(item)),
+    });
+    return {
+      show:() => pager.show(),
+      hide:() => { pager.hide(); pager.list.replaceChildren(); },
+    };
+  }
+  const learning = {jargon:learningView('jargon'), expression:learningView('expression'),
+    clusters:clusterView($('learning-panel-clusters')), emoji:mediaView($('learning-panel-emoji'), 'emoji')};
   const operations = createResourcePager({el, panel:$('memory-panel-operations'), id:'memory-operations', error:fail,
     request:({offset, limit}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit})),
     empty:() => '没有可见的移除或恢复记录',
@@ -856,7 +925,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     activeLearning?.hide();
     learningKind = kind;
     activate('data-learning-tab', kind);
-    switchPanel({jargon:'learning-panel-jargon', expression:'learning-panel-expression', emoji:'learning-panel-emoji'}, kind);
+    switchPanel({jargon:'learning-panel-jargon', expression:'learning-panel-expression',
+      clusters:'learning-panel-clusters', emoji:'learning-panel-emoji'}, kind);
     activeLearning = learning[kind];
     return activeLearning.show();
   }

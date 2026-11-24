@@ -36,7 +36,7 @@ from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.identity import Identity
-from aureus.memory import EmojiStore, LanguageStore, MemoryIndex
+from aureus.memory import EmojiStore, ExpressionClusterStore, LanguageStore, MemoryIndex
 from aureus.organs import OrganResponse
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
@@ -51,6 +51,7 @@ from .auth import (
 )
 from .config_api import register_config_routes
 from .config_files import ConfigService
+from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
 from .inbox_api import register_inbox_routes
 from .language_package_api import register_language_package_routes
 from .memory_graph_api import GraphGrants, register_memory_graph_routes
@@ -235,6 +236,8 @@ def create_app(
     resource_database: Path | None = None,
     recall_feedback_enabled: bool = False,
     memory_graph_grants: GraphGrants | None = None,
+    expression_cluster_store: ExpressionClusterStore | None = None,
+    expression_cluster_grants: ExpressionClusterGrants | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -465,6 +468,14 @@ def create_app(
     register_memory_transfer_routes(app, require_ready, _same_http_origin, resource_memory, clock)
     register_memory_graph_routes(
         app, require_ready, resource_memory, memory_graph_grants, sessions.is_active
+    )
+    register_expression_cluster_routes(
+        app,
+        require_ready,
+        resource_language,
+        expression_cluster_store,
+        expression_cluster_grants,
+        sessions.is_active,
     )
     register_memory_inspection_routes(
         app, require_inspection_access, resource_memory, channel.user_visibility
