@@ -21,6 +21,7 @@ from aureus.memory import (
     ImportedLanguageRow,
     MemoryEntry,
     MemoryEvidence,
+    MemoryGraphSource,
     MemorySource,
 )
 from aureus.memory.emoji import ImportedEmoji
@@ -89,6 +90,41 @@ def test_an_enabled_web_channel_is_attached_to_the_heartbeat(paths: AureusPaths)
             core.heartbeat.attach_channel(WEB_CHANNEL_NAME, lambda _message: None)
     # 关闭后数据库连接都放掉了：Windows 上文件没被锁住，能删掉。
     paths.database_file.unlink()
+
+
+def test_normal_web_connects_published_graph_display_grants(paths: AureusPaths) -> None:
+    password = "correct horse"
+    PasswordStore(paths.web_password_file, FAST_HASHER).set_password(password)
+    clock = ManualClock(START)
+    source = MemorySource("demo", "memory", "entities", (43,))
+    with (
+        open_core(paths, fake_organs=True, clock=clock, to_console=False) as core,
+        open_web(core, clock) as server,
+    ):
+        assert server is not None and core.memory is not None
+        core.memory.publish(
+            [HistoricalMemory(source, "只供测试")],
+            snapshot=("demo", "synthetic-fingerprint"),
+            graph_sources=[MemoryGraphSource(source, "entity", "active", name="合成图节点")],
+        )
+        app = server._server.config.app
+        assert isinstance(app, FastAPI)
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            assert client.post("/api/login", json={"password": password}).status_code == 200
+            graph = "/api/resources/memory/graph"
+            assert client.get(graph).json()["total"] == 0
+            catalog = client.get(graph + "/grants").json()
+            assert catalog["enabled"]
+            [batch] = catalog["items"]
+            assert batch["instance"] == "demo" and not batch["categories"]
+            result = client.put(
+                graph + "/grants/" + batch["batch_id"],
+                headers={"Origin": "http://testserver"},
+                json={"password": password, "categories": ["entities"]},
+            )
+            assert result.status_code == 200
+            [node] = client.get(graph).json()["items"]
+            assert node["name"] == "合成图节点"
 
 
 def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -> None:

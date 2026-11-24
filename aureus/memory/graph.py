@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from aureus.common.sqlite import SQLITE_BUSY_TIMEOUT_SECONDS
+from aureus.memory.graph_access import GraphAccess, GraphCategory, read_graph_access
 from aureus.memory.history import MemorySource, MemoryStatus
 from aureus.memory.message_boundary import is_message_source
 
@@ -130,6 +131,36 @@ def _same_scope(owner: MemorySource, target: MemorySource, table: str) -> bool:
     return owner.instance == target.instance and owner.role == target.role and target.table == table
 
 
+def collect_graph_batch_members(
+    instance: str, published: set[str], graph: Iterable[MemoryGraphSource]
+) -> dict[str, GraphCategory]:
+    """只接受本次发布提供的结构原件及与其同批发布的真实关联和段落。"""
+    members: dict[str, GraphCategory] = {}
+    for item in graph:
+        owner = item.source
+        category = "entities" if item.kind == "entity" else "relations"
+        if (owner.instance, owner.role, owner.table) != (instance, "memory", category):
+            continue
+        if owner.encode() not in published:
+            continue
+        members[owner.encode()] = category
+        link_table = "paragraph_entities" if item.kind == "entity" else "paragraph_relations"
+        for evidence in item.evidence:
+            target, link = evidence.source, evidence.link_source
+            if target is None or not _same_scope(owner, target, "paragraphs"):
+                continue
+            target_key = target.encode()
+            if target_key not in published:
+                continue
+            if link is not None:
+                link_key = link.encode()
+                if not _same_scope(owner, link, link_table) or link_key not in published:
+                    continue
+                members[link_key] = "evidence"
+            members[target_key] = "evidence"
+    return members
+
+
 def _evidence(
     row: sqlite3.Row, allowed: dict[str, sqlite3.Row], owner: MemorySource
 ) -> tuple[MemorySource, ...]:
@@ -188,19 +219,23 @@ def project_graph(rows: list[sqlite3.Row]) -> MemoryGraph:
 
 
 def read_graph(
-    database: Path, *, allowed_sources: Collection[MemorySource], now: datetime
+    database: Path, *, allowed_sources: Collection[MemorySource] | GraphAccess, now: datetime
 ) -> MemoryGraph:
     """只读已获准且有效的原件；空授权和旧库无材料均返回无覆盖。
 
     调用者只可传入已独立获准的原件；端点可见或知晓来源键均不是关系授权。
     未解析端点不返回，段落证据另按目标及关联行过滤。库不可读时抛 SQLite 错误。
     """
-    if not allowed_sources:
+    expected = allowed_sources if isinstance(allowed_sources, GraphAccess) else None
+    selected = expected.sources if expected is not None else allowed_sources
+    if not selected:
         return MemoryGraph()
     uri = database.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=SQLITE_BUSY_TIMEOUT_SECONDS)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("BEGIN")
+        if expected is not None and expected != read_graph_access(connection, now):
+            return MemoryGraph()
         if not has_graph_sources(connection):
             return MemoryGraph()
         rows = connection.execute(
@@ -221,7 +256,7 @@ def read_graph(
                  AND NOT coalesce(edit.is_bundle_removed, 0)
                ORDER BY history.source_key""",
             (
-                json.dumps([source.encode() for source in allowed_sources]),
+                json.dumps([source.encode() for source in selected]),
                 now.timestamp(),
                 now.timestamp(),
             ),

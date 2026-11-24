@@ -1,7 +1,7 @@
 """记忆全文索引：只管增量保存和检索，内容由调用方决定（D80）。"""
 
 import sqlite3
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
@@ -33,7 +33,19 @@ from aureus.memory.edits import (
     write_edit,
 )
 from aureus.memory.flow import MemoryEvent, MemoryEventType, browse_flow, open_flow, publish_events
-from aureus.memory.graph import MemoryGraph, MemoryGraphSource, put_graph_sources, read_graph
+from aureus.memory.graph import (
+    MemoryGraph,
+    MemoryGraphSource,
+    collect_graph_batch_members,
+    put_graph_sources,
+    read_graph,
+)
+from aureus.memory.graph_access import (
+    GraphAccess,
+    MemoryGraphDisplay,
+    open_graph_access,
+    save_graph_batch,
+)
 from aureus.memory.graph_query import (
     MAX_GRAPH_PAGE_SIZE,
     MemoryGraphItem,
@@ -216,6 +228,7 @@ class MemoryIndex:
         self._clock = clock if clock is not None else SystemClock()
         self._config = config or MemoryConfig()
         self._conn: sqlite3.Connection | None = None
+        self.graph_display = MemoryGraphDisplay(db_path, self._clock)
 
     def open(self) -> None:
         """创建派生表；SQLite 不支持 trigram 时抛 sqlite3.Error。"""
@@ -227,6 +240,7 @@ class MemoryIndex:
             open_history(conn)
             _open_live_index(conn)
             open_edits(conn)
+            open_graph_access(conn)
             bundles.open_bundles(conn)
             open_removal_operations(conn)
             open_consolidation(conn)
@@ -290,20 +304,34 @@ class MemoryIndex:
         """写入长期记忆原件及派生索引，保留归档记录。"""
         if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
+        published: set[str] = set()
+
+        def published_records() -> Iterator[HistoricalMemory]:
+            for record in records:
+                if snapshot is not None and record.source.role == "memory":
+                    published.add(record.source.encode())
+                yield record
+
         with self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
-            written = publish_history(self._conn, records, snapshot)
-            put_graph_sources(self._conn, graph_sources)
+            written = publish_history(self._conn, published_records(), snapshot)
+            if snapshot is None:
+                put_graph_sources(self._conn, graph_sources)
+            else:
+                projected = tuple(graph_sources)
+                put_graph_sources(self._conn, projected)
+                members = collect_graph_batch_members(snapshot[0], published, projected)
+                save_graph_batch(self._conn, snapshot, members)
         return written
 
-    def read_graph(self, *, allowed_sources: Collection[MemorySource]) -> MemoryGraph:
+    def read_graph(self, *, allowed_sources: Collection[MemorySource] | GraphAccess) -> MemoryGraph:
         """显式获准的原件范围内读取图来源；不初始化、扩权或推测关系。"""
         return read_graph(self._db_path, allowed_sources=allowed_sources, now=self._clock.now())
 
     def query_graph(
         self,
         *,
-        allowed_sources: Collection[MemorySource],
+        allowed_sources: Collection[MemorySource] | GraphAccess,
         query: str = "",
         neighbor_of: MemorySource | None = None,
         offset: int = 0,
@@ -316,7 +344,7 @@ class MemoryIndex:
         return query_graph(graph, query=query, neighbor_of=neighbor_of, offset=offset, limit=limit)
 
     def graph_detail(
-        self, source: MemorySource, *, allowed_sources: Collection[MemorySource]
+        self, source: MemorySource, *, allowed_sources: Collection[MemorySource] | GraphAccess
     ) -> MemoryGraphItem | None:
         """只读获准原件的图详情；未授权、失效或未知来源均返回 None。"""
         return graph_detail(self.read_graph(allowed_sources=allowed_sources), source)
