@@ -1077,6 +1077,101 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function memoryTarget(item) {
     return {kind:item.kind ?? (item.source ? 'history' : 'live'), entry_id:item.entry_id ?? item.record_id};
   }
+  const maintenanceEndpoint = '/api/resources/memory/maintenance';
+  const maintenanceLabels = {correct:'修正正文', enable:'恢复召回', disable:'停用召回', freeze:'冻结关系',
+    unfreeze:'解除冻结', protect:'保护关系', unprotect:'解除保护', remove:'移除', restore:'恢复'};
+  function locationKey({instance, role, table, key}) {
+    return JSON.stringify([instance, role, table, key]);
+  }
+  function lifecycleActions(item) {
+    const relation = item.source.table === 'relations';
+    const operations = item.status !== 'active' ? [] : item.is_removed ? ['restore'] : relation ? [
+      item.is_frozen ? 'unfreeze' : 'freeze', item.is_protected ? 'unprotect' : 'protect',
+      ...(!item.is_frozen && !item.is_protected ? [item.is_enabled ? 'disable' : 'enable', 'remove'] : []),
+    ] : ['correct', item.is_enabled ? 'disable' : 'enable', 'remove'];
+    return actions('记忆检修', ...operations.map(operation =>
+      action(maintenanceLabels[operation], () => lifecycleForm(item, operation))),
+    action('纠错历史', () => lifecycleHistory(item)));
+  }
+  function showLifecycleError(response, message, container) {
+    if (!container.isConnected) return;
+    if ([401, 403, 404].includes(response.status)) {
+      detail('记忆检修不可用', field('状态', '此资料或登录状态已不可用。'));
+      void memory.read();
+      return;
+    }
+    message.textContent = errorText(response);
+  }
+  async function lifecycleHistory(item, offset = 0) {
+    const body = el('div', {class:'stack resource-detail'});
+    const message = el('p', {role:'status', text:'正在读取纠错历史…'});
+    body.append(message);
+    openEditor('纠错历史', body);
+    const params = new URLSearchParams({source:locationKey(item.source), offset, limit:20});
+    const response = await api(maintenanceEndpoint + '/history?' + params);
+    if (!body.isConnected || !$('editor-dialog').open) return;
+    if (!response.ok) { showLifecycleError(response, message, body); return; }
+    const {items, total} = response.data;
+    message.textContent = total ? `${offset + 1}–${offset + items.length} / ${total} 项` : '没有已执行的操作';
+    body.append(...items.map(operation => el('div', {class:'stack'},
+      field(maintenanceLabels[operation.action], fmtTime(operation.applied_at, true)),
+      field('撤销日期', operation.undone_at && fmtTime(operation.undone_at, true)),
+      operation.can_undo && action('撤销此操作', async event => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          const result = await api(`${maintenanceEndpoint}/${encodeURIComponent(operation.plan_id)}/undo`, 'POST');
+          if (!result.ok) { showLifecycleError(result, message, body); return; }
+          if (body.isConnected && $('editor-dialog').open) await lifecycleHistory(item, offset);
+          await memory.read();
+        } finally { button.disabled = false; }
+      }))));
+    body.append(actions('纠错历史分页',
+      offset > 0 && action('上一页', () => lifecycleHistory(item, offset - 20)),
+      offset + 20 < total && action('下一页', () => lifecycleHistory(item, offset + 20))));
+  }
+  function lifecycleForm(item, operation) {
+    const label = maintenanceLabels[operation];
+    const editor = operation === 'correct' ? textControl('修正正文', item.text, 20000, true) : null;
+    const result = el('p', {class:'muted', role:'status'});
+    const submit = el('button', {class:'btn primary small', text:'生成预览'});
+    const form = el('form', {class:'stack'}, field('来源', sourceText(item.source)), editor?.field, submit, result);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      submit.disabled = true;
+      try {
+        const response = await api(maintenanceEndpoint + '/preview', 'POST', {
+          source:locationKey(item.source), action:operation, ...(editor ? {text:editor.input.value} : {}),
+        });
+        if (!form.isConnected || !$('editor-dialog').open) return;
+        if (!response.ok) { showLifecycleError(response, result, form); return; }
+        const preview = response.data;
+        const editorPane = el('div', {class:'stack'});
+        async function changePlan(method, button) {
+          button.disabled = true;
+          try {
+            const changed = await api(`${maintenanceEndpoint}/${encodeURIComponent(preview.plan_id)}/${method}`, 'POST');
+            if (!changed.ok) { showLifecycleError(changed, message, editorPane); return; }
+            if (editorPane.isConnected && $('editor-dialog').open) {
+              message.textContent = method === 'apply' ? '已执行' : '已撤销';
+              buttons.replaceChildren(...(method === 'apply' ? [undo] : []));
+            }
+            await memory.read();
+          } finally { button.disabled = false; }
+        }
+        const message = el('p', {role:'status'});
+        const confirm = action('确认' + label, event => changePlan('apply', event.currentTarget));
+        const undo = action('撤销本次操作', event => changePlan('undo', event.currentTarget));
+        const buttons = actions('纠错计划', action('返回草稿', () => openEditor(label, form)), confirm);
+        editorPane.append(field('原件版本', preview.original_version),
+          field('旧值', preview.before_text), field('新值', preview.after_text),
+          field('影响', `召回${preview.before.is_enabled && !preview.before.is_removed ? '开启' : '关闭'} → ${preview.state.is_enabled && !preview.state.is_removed ? '开启' : '关闭'}；原件保留`),
+          field('过期时间', fmtTime(preview.expires_at, true)), buttons, message);
+        openEditor(label + '预览', editorPane);
+      } finally { submit.disabled = false; }
+    });
+    openEditor(label, form);
+  }
   function editMemories(items) {
     const inputs = items.map(item => ({item, ...textControl(labels[item.labels?.[0]] || '记忆正文', item.text, 20000, true)}));
     const save = el('button', {class:'btn primary small', text:'保存修正'});
@@ -1118,8 +1213,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function renderMemory(item) {
     const type = labels[item.labels?.[0] ?? item.source?.table ?? 'live'] || item.source?.table;
     if (item.kind === 'summary') return renderSummaryFact(item);
-    const box = el('input', {type:'checkbox', 'aria-label':'选择' + type});
-    box.addEventListener('change', () => {
+    const guided = ['fact_claims', 'relations', 'episodes'].includes(item.source?.table);
+    const box = guided ? null : el('input', {type:'checkbox', 'aria-label':'选择' + type});
+    box?.addEventListener('change', () => {
       if (box.checked) selected.set(box, item); else selected.delete(box);
       syncSelection();
     });
@@ -1127,10 +1223,11 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     return record(title, () => detail(type || '文字记忆', field('正文', item.text), field('原件', item.original_text),
       field('人物', item.actor_label), field('时间', item.recorded_at && fmtTime(item.recorded_at, true)),
       field('召回状态', item.is_recallable ? '参与召回' : '不参与召回'), field('原始状态', term(item.status)),
+      field('关系冻结', item.is_frozen), field('关系保护', item.is_protected),
       field('来源', sourceText(item.source)), field('时间线编号', item.record_id),
       field('证据', item.evidence?.map(entry => [term(entry.kind) + '：' + entry.reference,
         sourceText(entry.source), term(entry.status)].filter(Boolean).join(' · ')).join('\n')),
-      !item.is_removed && el('div', {class:'row'}, action('修正', () => editMemories([item])),
+      guided ? lifecycleActions(item) : !item.is_removed && el('div', {class:'row'}, action('修正', () => editMemories([item])),
         action(item.is_enabled ? '停用召回' : '恢复召回', async event => {
           const button = event.currentTarget;
           if (await change('/api/resources/memory', 'PATCH', {...memoryTarget(item), is_enabled:!item.is_enabled},
@@ -1142,8 +1239,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     return record(title, async () => {
       const state = el('p', {class:'muted', role:'status', text:'正在复核事实来源…'});
       detail('会话总结事实', state);
-      const {instance, role, table, key} = item.source;
-      const params = new URLSearchParams({source:JSON.stringify([instance, role, table, key])});
+      const params = new URLSearchParams({source:locationKey(item.source)});
       const response = await api('/api/resources/memory/facts/detail?' + params);
       if (!state.isConnected || !$('editor-dialog').open) return;
       if (!response.ok) {
@@ -1155,7 +1251,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       detail('会话总结事实', field('事实', fact.text), field('事实来源', sourceText(fact.source)),
         field('状态', fact.status === 'superseded' ? '已更正' : term(fact.status)),
         field('证据定位', fact.evidence.map(entry => [term(entry.kind), entry.reference,
-          sourceText(entry.source)].join(' · ')).join('\n') || '没有可用证据'));
+          sourceText(entry.source)].join(' · ')).join('\n') || '没有可用证据'),
+        lifecycleActions({...item, ...fact}));
     });
   }
   const counts = $('memory-counts');
@@ -1189,6 +1286,69 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   const profilePanel = $('memory-query-profiles');
   const profileForm = searchForm('搜索人物画像', '搜索人物、画像或来源 ID');
   profilePanel.append(profileForm);
+  const profileMaintenance = '/api/resources/profiles/maintenance';
+  async function openProfileMaintenance(item) {
+    const profile = item.record;
+    const source = JSON.stringify([profile.instance, profile.kind, profile.source_key]);
+    const status = el('p', {role:'status', text:'正在复核画像来源…'});
+    openEditor('检修人物画像', status);
+    const response = await api(profileMaintenance + '?' + new URLSearchParams({source}));
+    if (!status.isConnected || !$('editor-dialog').open) return;
+    if (!response.ok) { showLifecycleError(response, status, status); return; }
+    const {effective, choices, history, edit} = response.data;
+    const summary = textControl('画像正文（留空使用来源值）', effective.summary || '', 20000);
+    const aliases = textControl('人工别名（每行一个，留空使用来源值）', effective.aliases.join('\n'), 13000);
+    const selected = choices.map((choice, index) => {
+      const input = el('input', {type:'checkbox', checked:effective.evidence.includes(index)});
+      return {input, label:el('label', {class:'row'}, input, readable(choice))};
+    });
+    const message = el('p', {role:'status'});
+    const submit = el('button', {class:'btn primary small', text:'生成预览'});
+    const form = el('form', {class:'stack resource-detail'}, field('画像来源', sourceText(profile)),
+      summary.field, aliases.field, el('fieldset', {}, el('legend', {text:'引用已有证据'}),
+        selected.map(entry => entry.label)), submit, message);
+    async function operate(plan, operation, container, feedback, button) {
+      button.disabled = true;
+      try {
+        const changed = await api(`${profileMaintenance}/${encodeURIComponent(plan)}/${operation}`, 'POST');
+        if (!changed.ok) { showLifecycleError(changed, feedback, container); return; }
+        toast(operation === 'apply' ? '画像检修已应用' : '画像检修已撤销');
+        if (container.isConnected && $('editor-dialog').open) await openProfileMaintenance(item);
+        await profiles.read();
+      } finally { button.disabled = false; }
+    }
+    form.append(el('h4', {text:'纠错历史'}), ...history.map(operation => el('div', {class:'row'},
+      field('执行日期', fmtTime(operation.applied_at, true)),
+      field('撤销日期', operation.undone_at && fmtTime(operation.undone_at, true)),
+      operation.can_undo && action('撤销此操作', event =>
+        operate(operation.id, 'undo', form, message, event.currentTarget)))));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      submit.disabled = true;
+      try {
+        const names = aliases.input.value.split('\n').map(name => name.trim()).filter(Boolean);
+        const evidence = selected.flatMap(({input}, index) => input.checked ? [index] : []);
+        const text = summary.input.value.trim() || null;
+        const unchanged = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+        const planned = await api(profileMaintenance + '/preview', 'POST', {source, edit:{
+          summary:text === effective.summary ? edit.summary : text,
+          aliases:unchanged(names, effective.aliases) ? edit.aliases : names.length ? names : null,
+          evidence:unchanged(evidence, effective.evidence) ? edit.evidence
+            : evidence.length === choices.length ? null : evidence,
+        }});
+        if (!form.isConnected || !$('editor-dialog').open) return;
+        if (!planned.ok) { showLifecycleError(planned, message, form); return; }
+        const preview = planned.data;
+        const feedback = el('p', {role:'status'});
+        const pane = el('div', {class:'stack resource-detail'}, field('原件版本', preview.version),
+          field('旧画像', preview.before), field('新画像', preview.after), feedback);
+        pane.append(actions('画像纠错计划', action('返回草稿', () => openEditor('检修人物画像', form)),
+          action('确认应用', event => operate(preview.plan_id, 'apply', pane, feedback, event.currentTarget))));
+        openEditor('画像检修预览', pane);
+      } finally { submit.disabled = false; }
+    });
+    openEditor('检修人物画像', form);
+  }
   async function openProfileAliases(item, button) {
     const endpoint = `/api/resources/profiles/${item.id}/aliases`;
     const generation = editorGeneration;
@@ -1245,7 +1405,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     return record(caption, () => detail(title, field('画像', profile.summary || profile.impression),
       field('人物', item.person_id), field('原件别名', profile.aliases?.join('、')),
       field('关联状态', item.pending_reason), field('证据', readable(profile.evidence)), field('来源', sourceText(profile)),
-      item.can_edit_aliases ? action('维护别名', event => openProfileAliases(item, event.currentTarget)) : null));
+      item.can_edit_aliases ? actions('画像检修', action('检修画像', () => openProfileMaintenance(item)),
+        action('维护别名', event => openProfileAliases(item, event.currentTarget))) : null));
   }}, profileForm, '/api/resources/profiles', fields => ({q:fields.q.value}));
 
   const picturePanel = $('memory-pictures');

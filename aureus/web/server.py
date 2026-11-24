@@ -85,6 +85,10 @@ from .memory_graph_api import (
     register_memory_graph_routes,
 )
 from .memory_inspection_api import register_memory_inspection_routes
+from .memory_lifecycle_api import (
+    register_memory_lifecycle_routes,
+    register_profile_lifecycle_routes,
+)
 from .memory_transfer_api import register_memory_transfer_routes
 from .prompt_api import register_prompt_routes
 from .recall_feedback_api import register_recall_feedback_routes
@@ -682,6 +686,12 @@ def create_app(
         inbox=inbox_store,
         can_show_summary=can_show_summary,
         suggest_emoji_replacement=suggest_emoji_replacement,
+    )
+    register_memory_lifecycle_routes(
+        app, require_ready, resource_memory, _same_http_origin, sessions.is_active, can_show_summary
+    )
+    register_profile_lifecycle_routes(
+        app, require_ready, resource_people, _same_http_origin, sessions.is_active
     )
 
     if maintenance_paused is not None and set_maintenance_paused is not None:

@@ -16,8 +16,10 @@ from aureus.memory.bundle_format import (
     paragraph_hash,
 )
 from aureus.memory.graph import MemoryGraphEvidence, MemoryGraphSource
+from aureus.memory.lifecycle import LifecycleAction
 from aureus.people import PeopleDirectory
 from aureus.people.history import HistoricalKind, HistoricalRecord
+from aureus.people.profile_maintenance import ProfileEdit, ProfileSource
 from aureus.timeline import TimelineDatabase
 
 
@@ -236,6 +238,60 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
         assert json.loads(snapshot["evidence_ids_json"]) == [doc["id"]]
         assert index.preview_bundle(output, people)["counts"]["fact_claims"] == 1
         assert index.install_bundle(output, "merge", people)["status"] == "installed"
+
+        def maintain(action: LifecycleAction, text: str | None = None) -> str:
+            plan = index.preview_lifecycle(fact, action, text, None, lambda: True)
+            assert plan is not None
+            identifier = str(plan["plan_id"])
+            assert index.apply_lifecycle(identifier, None, lambda: True, undo=False)
+            return identifier
+
+        correction = maintain("correct", "地点：桂花港")
+        changed = index.generate_bundle([selected.source_id], "full", people)
+        assert changed["counts"]["fact_claims"] == 0
+        assert changed["counts"]["person_profile_snapshots"] == 0
+        with pytest.raises(MemoryBundleConflictError):
+            index.generate_bundle(
+                [selected.source_id],
+                "full",
+                people,
+                output=BytesIO(),
+                expected_digest=preview["preview_digest"],
+            )
+        assert index.apply_lifecycle(correction, None, lambda: True, undo=True)
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"]
+            == 1
+        )
+        maintain("remove")
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"]
+            == 0
+        )
+        maintain("restore")
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"]["fact_claims"]
+            == 1
+        )
+
+        profile = ProfileSource("selected", HistoricalKind.PROFILE_SNAPSHOT, "2")
+        plan = people.preview_profile(profile, ProfileEdit(summary="本机修订"), lambda: True)
+        assert plan is not None
+        identifier = str(plan["plan_id"])
+        assert people.change_profile(identifier, lambda: True, undo=False)
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"][
+                "person_profile_snapshots"
+            ]
+            == 0
+        )
+        assert people.change_profile(identifier, lambda: True, undo=True)
+        assert (
+            index.generate_bundle([selected.source_id], "full", people)["counts"][
+                "person_profile_snapshots"
+            ]
+            == 1
+        )
 
         minimal = index.generate_bundle([selected.source_id], "knowledge", people)
         assert minimal["components"] == ["knowledge.json"]

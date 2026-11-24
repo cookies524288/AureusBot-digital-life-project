@@ -6,7 +6,7 @@
 """
 
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +24,7 @@ from aureus.people.history import (
     PeopleError,
 )
 from aureus.people.profile_aliases import ProfileAliases
+from aureus.people.profile_maintenance import ProfileEdit, ProfileSource
 
 _TIMESTAMP_PRECISION = "microseconds"
 
@@ -281,7 +282,12 @@ class PeopleDirectory:
     bundle_profile_candidates = staticmethod(history.bundle_profile_candidates)
 
     def history_for(
-        self, person_id: int, *, limit: int | None = None, use_local_aliases: bool = True
+        self,
+        person_id: int,
+        *,
+        limit: int | None = None,
+        use_local_aliases: bool = True,
+        use_local_content: bool = True,
     ) -> list[HistoricalEntry]:
         """按人物取历史资料，可使用当前发言人账号查到的人物编号。"""
         conn = self._require_open()
@@ -293,6 +299,7 @@ class PeopleDirectory:
             limit,
             self._clock.now().timestamp(),
             use_local_aliases=use_local_aliases,
+            use_local_content=use_local_content,
         )
 
     def historical_record(
@@ -325,6 +332,28 @@ class PeopleDirectory:
         with closing(open_connection(self._db_path)) as conn, conn:
             conn.execute("BEGIN")
             return history.profile_alias_details(conn, profile_id, self._clock.now().timestamp())
+
+    def profile_details(
+        self, source: ProfileSource, active: Callable[[], bool]
+    ) -> dict[str, object] | None:
+        """查询已绑定来源组的有效画像。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return history.profile_details(conn, source, self._clock.now(), active)
+
+    def preview_profile(
+        self,
+        source: ProfileSource,
+        edit: ProfileEdit,
+        active: Callable[[], bool],
+    ) -> dict[str, object] | None:
+        """为可信画像生成带版本的本机覆盖计划。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return history.preview_profile(conn, source, edit, self._clock.now(), active)
+
+    def change_profile(self, plan: str, active: Callable[[], bool], *, undo: bool) -> bool:
+        """确认或撤销画像覆盖。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return history.change_profile(conn, plan, self._clock.now(), active, undo=undo)
 
     def set_profile_aliases(
         self, profile_id: int, aliases: list[str] | None

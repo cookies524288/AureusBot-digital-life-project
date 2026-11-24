@@ -872,7 +872,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
       <div class="row resource-actions" role="group" aria-label="检修操作">
         <button id="memory-inspection" type="button" class="btn small">只读检修</button>
         <button id="memory-inspect-text" type="button" class="btn small">维护文字记录</button>
-        <button id="memory-inspect-profiles" type="button" class="btn small">维护人物别名</button>
+        <button id="memory-inspect-profiles" type="button" class="btn small">维护人物画像</button>
       </div>
       <p class="muted">如需查看原始聊天，请前往 <a href="#inbox">平台会话</a>。</p>
     </div>
@@ -3799,6 +3799,7 @@ const CFG_FIELDS = {
   'people.affinity_enabled': ['好感调节', '是否根据互动经历调整好感。'],
   'people.history_in_reply_enabled': ['回复参考人物资料', '是否在正常回复时带上与当前对话有关的迁入人物资料；关闭后仍可查看来源。'],
   'people.profile_alias_maintenance_in_reply_enabled': ['回复使用本地人物别名', '回复检索人物资料时，是否也用本地维护的别名匹配人物。'],
+  'people.profile_content_maintenance_in_reply_enabled': ['回复使用本地画像修订', '关闭只影响回复使用本地画像正文或证据覆盖；网页仍保留维护记录。'],
   'people.user_initial_affinity': ['用户初始好感', '首次建立用户资料时采用的好感值。'],
   'people.stranger_affinity': ['陌生人初始好感', '初次遇到陌生人时采用的好感值。'],
   'people.praise_amount': ['夸奖增量', '受到夸奖后好感增加多少。'],

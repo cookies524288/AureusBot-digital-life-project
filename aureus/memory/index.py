@@ -75,6 +75,14 @@ from aureus.memory.history import (
     search_history,
 )
 from aureus.memory.inspection import LiveMemoryInspection, inspect_live_memory
+from aureus.memory.lifecycle import (
+    LifecycleAction,
+    LifecycleOperation,
+    change_plan,
+    open_lifecycle,
+    operation_history,
+    preview_change,
+)
 from aureus.memory.message_boundary import (
     MESSAGE_EVENT_TYPE,
     MESSAGE_EVENT_TYPES,
@@ -277,6 +285,7 @@ class MemoryIndex:
             open_removal_operations(conn)
             open_consolidation(conn)
             open_summaries(conn)
+            open_lifecycle(conn)
             open_flow(conn)
         except BaseException:
             conn.close()
@@ -542,6 +551,65 @@ class MemoryIndex:
         with closing(open_connection(self._db_path)) as conn:
             conn.execute("BEGIN")
             return summary_detail(conn, source, *access)
+
+    def preview_lifecycle(
+        self,
+        source: MemorySource,
+        action: LifecycleAction,
+        text: str | None,
+        can_show_summary: ScopeCheck | None,
+        session_active: Callable[[], bool],
+    ) -> dict[str, object] | None:
+        """预览可信事实、关系或情景的单项变更。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return preview_change(
+                conn,
+                source,
+                action,
+                text,
+                self._clock.now(),
+                self._summary_access(can_show_summary),
+                session_active,
+            )
+
+    def lifecycle_history(
+        self,
+        source: MemorySource,
+        can_show_summary: ScopeCheck | None,
+        session_active: Callable[[], bool],
+        offset: int,
+        limit: int,
+    ) -> tuple[list[LifecycleOperation], int] | None:
+        """查询可追溯的检修历史，不公开已替代正文。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return operation_history(
+                conn,
+                source,
+                self._clock.now(),
+                self._summary_access(can_show_summary),
+                session_active,
+                offset,
+                limit,
+            )
+
+    def apply_lifecycle(
+        self,
+        plan: str,
+        can_show_summary: ScopeCheck | None,
+        session_active: Callable[[], bool],
+        *,
+        undo: bool,
+    ) -> dict[str, object] | None:
+        """应用或撤销服务端计划，原子复核有效来源和版本。"""
+        with closing(open_connection(self._db_path)) as conn:
+            return change_plan(
+                conn,
+                plan,
+                self._clock.now(),
+                self._summary_access(can_show_summary),
+                session_active,
+                undo=undo,
+            )
 
     def recheck_summary_hits(
         self, hits: Sequence[MemoryHit], target: SummaryScope | None
