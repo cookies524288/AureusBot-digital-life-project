@@ -640,16 +640,14 @@ class MemoryIndex:
     def preview_bundle(self, file: BinaryIO, people: BundlePeople | None = None) -> dict[str, Any]:
         """校验上传包并检查当前安装条件。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.preview_bundle(connection, file, people, self._bundle_vector_spaces)
+            return bundles.preview_bundle(connection, file, people)
 
     def install_bundle(
         self, file: BinaryIO, mode: BundleMode, people: BundlePeople | None = None
     ) -> dict[str, Any]:
         """将兼容的包安装到实际记忆原件和索引。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.install_bundle(
-                connection, file, mode, self._clock.now(), people, self._bundle_vector_spaces
-            )
+            return bundles.install_bundle(connection, file, mode, self._clock.now(), people)
 
     def read_bundle_image(self, digest: str) -> tuple[bytes, str] | None:
         """按摘要读取当前仍有有效包归属的图片。"""
@@ -664,7 +662,11 @@ class MemoryIndex:
         *,
         allowed_sources: Collection[MemorySource] = (),
     ) -> list[tuple[MemorySource, float]]:
-        """在独立启用的配置空间召回；图空间仍需调用方明确授权。"""
+        """在独立启用的配置空间召回；图空间仍需调用方明确授权。
+
+        仅为兼容已合入的包内向量读侧而保留：安装不再写入包内向量（D105），
+        角色召回也不接入此方法，向量索引由本机嵌入模型重建。
+        """
         fingerprint = self._bundle_vector_spaces.get(scope)
         if not fingerprint or limit <= 0 or (scope == "graph" and not allowed_sources):
             return []

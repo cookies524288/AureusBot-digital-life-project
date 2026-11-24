@@ -7,13 +7,12 @@ import re
 import sqlite3
 import struct
 import zipfile
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Sequence
 from io import BytesIO
 from typing import Any
 
 from aureus.memory.bundle_format import VECTOR_MEMBERS, MemoryBundle, MemoryBundleError
-from aureus.memory.bundle_image_projection import semantic_targets
-from aureus.memory.history import HistoricalMemory, MemorySource
+from aureus.memory.history import MemorySource
 
 MAX_VECTOR_BYTES = 16 * 1024 * 1024
 _MAX_HEADER = 32 * 1024
@@ -145,70 +144,29 @@ def parse_vectors(payload: bytes) -> tuple[int, dict[str, bytes]]:
         raise MemoryBundleError("向量成员必须是大小受限的有限数值 NPZ。") from error
 
 
-def prepare_vectors(
-    bundle: MemoryBundle,
-    records: dict[MemorySource, HistoricalMemory],
-    spaces: Mapping[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[tuple[str, str, str, bytes]]]:
-    """预检每个向量成员；只有完整指纹、维数和可携带键吻合时才候选安装。"""
+VECTOR_REBUILD_REASON = "由本机嵌入模型重建"
+
+
+def prepare_vectors(bundle: MemoryBundle) -> list[dict[str, Any]]:
+    """预检包内向量成员：一律跳过，向量由本机嵌入模型重建（D105）。
+
+    仍逐个解析成员，损坏、含 pickle 或非有限数值的成员照旧被拒绝；
+    通过解析的成员只报告「跳过」，不读入、不写库，也不算失败。
+
+    Args:
+        bundle: 已读入的记忆包。
+
+    Returns:
+        每个向量成员一条预检记录，按成员名排序。
+
+    Raises:
+        MemoryBundleError: 某个向量成员不是大小受限的有限数值 NPZ。
+    """
     report: list[dict[str, Any]] = []
-    rows: list[tuple[str, str, str, bytes]] = []
-    targets = semantic_targets(bundle, records)
     for member in sorted(bundle.binary_members.keys() & VECTOR_MEMBERS):
-        dimension, values = parse_vectors(bundle.binary_members[member])
-        scope = member.removeprefix("vectors/").removesuffix(".npz")
-        fingerprint = (
-            bundle.manifest.get("image_embedding_fingerprint")
-            if scope == "images" and bundle.images is not None
-            else bundle.manifest.get("embedding_fingerprint")
-        )
-        current = spaces.get(scope)
-        if (
-            not current
-            or not isinstance(fingerprint, dict)
-            or current != fingerprint
-            or current.get("dimension") != dimension
-            or (scope != "images" and not current.get("hash"))
-        ):
-            report.append(
-                {
-                    "name": member,
-                    "status": "skip",
-                    "reason": "未配置模型、算法与维数完全相同的向量空间。",
-                }
-            )
-            continue
-        if scope == "paragraphs":
-            allowed = {
-                key: source for (kind, key), source in targets.items() if kind == "paragraph"
-            }
-        elif scope == "graph":
-            allowed = {
-                f"{kind}:{key}": source
-                for (kind, key), source in targets.items()
-                if kind in ("entity", "relation")
-            }
-        else:
-            assets = {source.key[0]: source for source in records if source.table == "image_assets"}
-            allowed = {
-                row["asset_id"]: assets[row["content_hash"]]
-                for row in (bundle.images or {}).get("assets", [])
-            }
-        if set(values) - allowed.keys():
-            report.append(
-                {"name": member, "status": "skip", "reason": "向量内容键不完全属于本包语义闭包。"}
-            )
-            continue
-        mapped = {allowed[key].encode(): value for key, value in values.items()}
-        if len(mapped) != len(values):
-            report.append({"name": member, "status": "skip", "reason": "向量内容键重复映射。"})
-            continue
-        rows.extend(
-            (scope, json.dumps(current, sort_keys=True), key, value)
-            for key, value in mapped.items()
-        )
-        report.append({"name": member, "status": "install", "count": len(values)})
-    return report, rows
+        parse_vectors(bundle.binary_members[member])
+        report.append({"name": member, "status": "skip", "reason": VECTOR_REBUILD_REASON})
+    return report
 
 
 def open_bundle_vectors(connection: sqlite3.Connection) -> None:
