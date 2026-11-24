@@ -392,6 +392,13 @@ def register_resource_routes(
                 media_type=emoji_media_type(data),
                 headers={"X-Content-Type-Options": "nosniff"},
             )
+        if memory is not None and (
+            bundled := await asyncio.to_thread(memory.read_bundle_image, digest)
+        ):
+            data, media_type = bundled
+            return Response(
+                data, media_type=media_type, headers={"X-Content-Type-Options": "nosniff"}
+            )
         if memory_dir is None or _ATTACHMENT.fullmatch(f"attachments/{digest}") is None:
             raise HTTPException(404, "找不到归档图片。")
         directory = (memory_dir / "attachments").resolve()
