@@ -1049,6 +1049,83 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   pictureForm.addEventListener('submit', event => { event.preventDefault(); searchPictures(); });
   pictureForm.elements.availability.addEventListener('change', searchPictures);
+  function qualityView(panel) {
+    const endpoint = '/api/resources/learning/quality';
+    const statuses = {passed:'模型通过', rejected:'模型拒绝', error:'质检错误'};
+    const reasons = {matched:'说法符合情境且可复用', mismatch:'说法与情境不匹配',
+      too_specific:'说法过于特指', no_route:'没有可用的质检器官', blocked:'预算或安全网关拒绝',
+      failed:'器官调用失败', invalid:'返回格式不符合要求'};
+    const changes = {rescued:'人工挽回', withdrawn:'挽回已撤回'};
+    const source = el('select', {name:'scope', 'aria-label':'质检来源'});
+    const counts = el('p', {class:'muted resource-counts', role:'status'});
+    const form = el('form', {class:'row resource-filters'}, source,
+      el('select', {name:'status', 'aria-label':'质检状态'}, el('option', {value:'', text:'全部状态'}),
+        ...Object.entries(statuses).map(([value, text]) => el('option', {value, text}))),
+      el('label', {}, '开始日期（UTC）', el('input', {type:'date', name:'start', 'aria-label':'开始日期（UTC）'})),
+      el('label', {}, '结束日期（UTC）', el('input', {type:'date', name:'end', 'aria-label':'结束日期（UTC）'})),
+      el('button', {class:'btn small primary', text:'查询'}), action('刷新', () => pager.read()));
+    panel.append(el('p', {class:'muted', text:'独立模型质检不是人工审核；挽回的条目仍需在表达列表批准，且仅限原会话。查看记录不会调用模型。'}), form, counts);
+    const dialog = $('editor-dialog');
+    let revision = 0;
+    function invalidate() {
+      revision++;
+      counts.textContent = '';
+      if ($('editor-body').querySelector('[data-quality-detail]') && dialog.open) dialog.close();
+    }
+    function show(item) {
+      const actionType = item.actions.length === 0 ? 'rescued' : 'withdrawn';
+      const title = actionType === 'rescued' ? '挽回' : '撤回挽回';
+      const body = el('div', {class:'stack resource-detail', 'data-quality-detail':''},
+        field('质检状态', statuses[item.status]), field('质检理由', reasons[item.reason]),
+        field('质检时间', fmtTime(item.recorded_at, true)), field('来源', item.source_label),
+        field('候选说法', item.text), field('情境', item.detail),
+        ...item.actions.map(([operation, time]) => field(changes[operation], fmtTime(time, true))));
+      const buttons = item.status === 'rejected' && item.actions.length < 2 ? [action('预览' + title, preview)] : [];
+      openEditor('表达质检记录', body, false, buttons);
+      const current = ++revision;
+      const path = endpoint + '/' + item.id;
+      const isCurrent = () => current === revision && dialog.open && body.isConnected;
+      async function preview() {
+        buttons[0].disabled = true;
+        const response = await api(path, 'POST', {action:actionType});
+        if (!isCurrent()) return;
+        buttons[0].disabled = false;
+        if (!response.ok) return fail(response);
+        const data = response.data;
+        body.replaceChildren(field('来源', item.source_label), field('候选说法', data.text), field('情境', data.detail),
+          el('p', {class:'muted', text:actionType === 'rescued' ? '不改原来的模型判断。新条目进入待审，仅此来源会话可用。' : '撤回后即使后来批准或恢复，也不会重新加入回复候选。'}));
+        const confirm = action('确认' + title, async () => {
+          confirm.disabled = true;
+          const result = await api(path, 'POST', {action:actionType, version:data.version});
+          if (!isCurrent()) return;
+          confirm.disabled = false;
+          if (!result.ok) return fail(result);
+          dialog.close();
+          toast(title + '已记录');
+          return pager.read();
+        });
+        openEditor('确认' + title, body, false, [action('取消', () => dialog.close()), confirm]);
+        confirm.focus();
+      }
+    }
+    const pager = createResourcePager({el, panel, id:'learning-quality', error:fail, prepare:invalidate,
+      request:({offset, limit, signal}) => {
+        const params = new URLSearchParams({offset, limit});
+        for (const [name, value] of new FormData(form)) if (value) params.set(name, value);
+        return api(endpoint + '?' + params, 'GET', undefined, {}, signal);
+      },
+      loaded:data => {
+        const value = source.value;
+        source.replaceChildren(el('option', {value:'', text:'全部获准来源'}),
+          ...data.sources.map(entry => el('option', {value:entry.key, text:entry.label})));
+        source.value = data.sources.some(entry => entry.key === value) ? value : '';
+        counts.textContent = data.enabled ? `共 ${data.total} 条质检记录` : '';
+      },
+      render:item => record(`${statuses[item.status]} · ${item.text} · ${item.source_label}`, () => show(item)),
+    });
+    form.addEventListener('submit', event => { event.preventDefault(); counts.textContent = ''; pager.reset(); });
+    return {show:() => pager.show(), hide:() => { pager.hide(); source.replaceChildren(); pager.list.replaceChildren(); }};
+  }
   function clusterView(panel) {
     const endpoint = '/api/resources/learning/clusters';
     const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
@@ -1105,6 +1182,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     };
   }
   const learning = {jargon:learningView('jargon'), expression:learningView('expression'),
+    quality:qualityView($('learning-panel-quality')),
     clusters:clusterView($('learning-panel-clusters')), emoji:mediaView($('learning-panel-emoji'), 'emoji')};
   const operations = createResourcePager({el, panel:$('memory-panel-operations'), id:'memory-operations', error:fail,
     request:({offset, limit, signal}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit}),
@@ -1399,9 +1477,10 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       emoji:'learning-panel-emoji'}, kind);
     if (kind === 'expression') {
       activate('data-expression-view', expressionView);
-      switchPanel({list:'learning-expression-list', clusters:'learning-panel-clusters'}, expressionView);
+      switchPanel({list:'learning-expression-list', quality:'learning-panel-quality',
+        clusters:'learning-panel-clusters'}, expressionView);
     }
-    const view = kind === 'expression' && expressionView === 'clusters' ? learning.clusters : learning[kind];
+    const view = kind === 'expression' && expressionView !== 'list' ? learning[expressionView] : learning[kind];
     activeLearning = view;
     return () => view.show();
   }

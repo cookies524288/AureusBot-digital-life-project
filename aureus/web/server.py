@@ -66,6 +66,7 @@ from .auth import (
 from .config_api import register_config_routes
 from .config_files import ConfigService
 from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
+from .expression_quality_api import register_expression_quality_routes
 from .inbox_api import register_inbox_routes
 from .inbox_operations import register_inbox_operations
 from .language_package_api import register_language_package_routes
@@ -546,6 +547,17 @@ def create_app(
     )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock
+    )
+    register_expression_quality_routes(
+        app,
+        require_ready,
+        _same_http_origin,
+        sessions.is_active,
+        resource_language,
+        timeline,
+        inbox_store,
+        allows_inbox_conversation,
+        clock,
     )
     register_memory_transfer_routes(
         app,

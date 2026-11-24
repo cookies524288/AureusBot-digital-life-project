@@ -12,9 +12,11 @@ from aureus.memory.emoji import (
 from aureus.memory.expression_clusters import ExpressionClusterStore, VisibleExpressionCluster
 from aureus.memory.expression_index import ExpressionVectorIndex
 from aureus.memory.expression_quality import (
+    ExpressionQualityAction,
     ExpressionQualityDecision,
     ExpressionQualityReason,
     ExpressionQualityStatus,
+    ExpressionRescuePreview,
 )
 from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphNode, MemoryGraphSource
@@ -82,9 +84,11 @@ __all__ = [
     "EmojiRecord",
     "EmojiStore",
     "ExpressionClusterStore",
+    "ExpressionQualityAction",
     "ExpressionQualityDecision",
     "ExpressionQualityReason",
     "ExpressionQualityStatus",
+    "ExpressionRescuePreview",
     "ExpressionVectorIndex",
     "GraphAccess",
     "GraphCategory",

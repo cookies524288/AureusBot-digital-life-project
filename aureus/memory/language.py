@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from hashlib import sha256
 from itertools import groupby
@@ -16,8 +16,15 @@ from sqlite3 import Connection, Row, connect
 from aureus.common.sqlite import open_connection
 from aureus.memory.expression_quality import (
     QUALITY_SCHEMA,
+    ExpressionQualityAction,
     ExpressionQualityDecision,
+    ExpressionQualityRecord,
     ExpressionQualityStatus,
+    ExpressionRescuePreview,
+    QualitySourceCheck,
+    apply_quality_action,
+    browse_quality_records,
+    quality_rescue_target,
     save_quality_decision,
     save_quality_term,
 )
@@ -473,6 +480,45 @@ class LanguageStore:
                 (attempt.term_id, attempt.evidence_count, outcome, meaning),
             )
 
+    def expression_quality_page(
+        self,
+        scopes: Sequence[str],
+        offset: int,
+        limit: int,
+        *,
+        status: ExpressionQualityStatus | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> tuple[list[ExpressionQualityRecord], int]:
+        """在同一个读事务中查询已获准来源的质检记录和计数。"""
+        with closing(open_connection(self._path)) as connection:
+            connection.execute("BEGIN")
+            return browse_quality_records(
+                connection, scopes, offset, limit, status=status, start=start, end=end
+            )
+
+    def maintain_expression_quality(
+        self,
+        identifier: int,
+        action: ExpressionQualityAction,
+        source_check: QualitySourceCheck,
+        now: datetime,
+        *,
+        version: str | None = None,
+    ) -> ExpressionRescuePreview | str | None:
+        """无版本只预览，确认时以当前授权及目标版本复核后原子追加。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE" if version is not None else "BEGIN")
+            target = quality_rescue_target(connection, identifier, action, source_check)
+            if target is None:
+                return None
+            row, actions, preview = target
+            if version is None:
+                return preview
+            if version != preview.version:
+                return None
+            return apply_quality_action(connection, row, actions, action, now)
+
     @staticmethod
     def _observe_existing(connection: Connection, samples: dict[int, LanguageSample]) -> None:
         """表达原样再次出现时补证据，保留原有的情景和例句。"""
@@ -736,17 +782,25 @@ class LanguageStore:
                 )
             }
             checked = {
-                f"online:{row['term_id']}": bool(row["is_scoped"])
-                for row in connection.execute("SELECT * FROM language_expression_quality_terms")
+                f"online:{row['term_id']}": row
+                for row in connection.execute(
+                    """SELECT term_id, is_scoped,
+                       EXISTS (SELECT 1 FROM language_expression_quality_actions AS action
+                       WHERE action.term_id = term.term_id AND action.action = 'withdrawn')
+                       AS is_withdrawn FROM language_expression_quality_terms AS term"""
+                )
             }
+            removed.update(key for key, row in checked.items() if row["is_withdrawn"])
             entries = [
                 replace(
                     entry,
                     review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
                     requires_approval=entry.entry_key in checked,
-                    restricted_scope=entry.learning_source
-                    if checked.get(entry.entry_key)
-                    else None,
+                    restricted_scope=(
+                        entry.learning_source
+                        if entry.entry_key in checked and checked[entry.entry_key]["is_scoped"]
+                        else None
+                    ),
                 )
                 for entry in entries
             ]

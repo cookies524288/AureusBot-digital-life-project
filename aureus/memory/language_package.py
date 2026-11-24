@@ -116,6 +116,11 @@ def make_package(store: LanguageStore, kind: LanguageKind, timestamp: str) -> by
     originals = store.package_originals(kind)
     items: list[dict[str, object]] = []
     for entry in store.entries(kind, include_disabled=True):
+        if kind == LanguageKind.EXPRESSION and (
+            entry.restricted_scope is not None
+            or (entry.requires_approval and not entry.can_reference_expression())
+        ):
+            continue
         if entry.entry_key in originals:
             source, raw = originals[entry.entry_key]
             item = json.loads(raw)
