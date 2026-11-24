@@ -66,7 +66,12 @@ from .auth import (
 )
 from .config_api import register_config_routes
 from .config_files import ConfigService
-from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
+from .expression_cluster_api import (
+    ExpressionClusterGrants,
+    register_expression_cluster_grants,
+    register_expression_cluster_routes,
+)
+from .expression_cluster_grants import ExpressionClusterDisplay
 from .expression_quality_api import register_expression_quality_routes
 from .expression_vector_api import register_expression_vector_routes
 from .inbox_api import register_inbox_routes
@@ -276,6 +281,7 @@ def create_app(
     memory_graph_display: MemoryGraphDisplay | None = None,
     expression_cluster_store: ExpressionClusterStore | None = None,
     expression_cluster_grants: ExpressionClusterGrants | None = None,
+    expression_cluster_display: ExpressionClusterDisplay | None = None,
     embedding_progress: EmbeddingProgress | None = None,
     expression_recall: ExpressionRecall | None = None,
 ) -> FastAPI:
@@ -606,6 +612,12 @@ def create_app(
         or (embedding_progress.expression_index if embedding_progress else None),
         expression_cluster_grants,
         sessions.is_active,
+        display=expression_cluster_display,
+        scopes=embedding_progress.expression_scopes if embedding_progress else None,
+    )
+    register_expression_cluster_grants(
+        app, require_ready, sessions.is_active, _same_http_origin, auth,
+        expression_cluster_display, embedding_progress.expression_scopes if embedding_progress else None,
     )
     register_expression_vector_routes(
         app, require_ready, _same_http_origin, sessions.is_active, embedding_progress,

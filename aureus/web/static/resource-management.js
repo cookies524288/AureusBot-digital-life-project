@@ -395,6 +395,49 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     return history;
   }
+  async function editClusterGrant(item) {
+    const endpoint = '/api/resources/learning/clusters/grants';
+    const body = el('div', {class:'stack'}, el('p', {text:'正在核对这条表达…'}));
+    openEditor('表达簇展示授权', body);
+    const response = await api(endpoint + '?' + new URLSearchParams({entry_key:item.entry_key}));
+    const isCurrent = () => body.isConnected && $('editor-dialog').open;
+    if (!isCurrent()) return;
+    if (!response.ok) { body.replaceChildren(el('p', {text:'暂时无法读取授权。'})); return fail(response); }
+    const {enabled, granted, version} = response.data;
+    if (!enabled || (!version && !granted)) {
+      body.replaceChildren(el('p', {text:enabled ? '该表达当前不可授权。' : '当前未接入表达簇展示授权。'}));
+      return;
+    }
+    const password = el('input', {type:'password', required:true, autocomplete:'current-password'});
+    const grant = el('button', {type:'submit', class:'btn small primary', text:'授权这条表达'});
+    const revoke = action('撤回这条授权', () => { if (form.reportValidity()) save(null); });
+    const canGrant = version && version === item.cluster_display_version;
+    grant.disabled = !canGrant;
+    revoke.disabled = !granted;
+    const controls = el('fieldset', {class:'stack'},
+      el('p', {text:item.text}),
+      el('p', {class:'muted', text:'只允许已登录者在表达簇查看该条表达与情景，不改变召回或语言包范围。'}),
+      el('p', {text:granted ? '有已保存的展示授权' : '尚未授权展示'}),
+      version && !canGrant && el('p', {text:'条目已变化；刷新表达列表后再授权。'}),
+      el('label', {class:'stack'}, '确认当前网页密码', password), el('div', {class:'row'}, grant, revoke));
+    const form = el('form', {class:'stack'}, controls);
+    form.addEventListener('submit', event => { event.preventDefault(); if (canGrant) save(version); });
+    body.replaceChildren(form);
+
+    async function save(target) {
+      if (controls.disabled) return;
+      const secret = password.value;
+      password.value = '';
+      controls.disabled = true;
+      try {
+        const result = await api(endpoint, 'PUT', {entry_key:item.entry_key, version:target, password:secret});
+        if (!isCurrent()) return;
+        if (!result.ok) return fail(result);
+        $('editor-dialog').close();
+        toast(target ? '已授权该表达在簇中展示。' : '已撤回该表达的簇展示授权。');
+      } finally { controls.disabled = false; }
+    }
+  }
   async function editLearningScope(kind, item, refresh) {
     const form = el('form', {class:'stack'}, el('p', {text:'读取已知会话…'}));
     openEditor('设置生效会话', form);
@@ -510,6 +553,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           item.review_status === 'pending' ? '' : item.review_status),
         el('div', {class:'row'}, action('编辑', () => editLearning(kind, pager.read, item)),
           item.jargon_status && !item.is_removed && action('定性', () => classifyJargon([item.entry_key], pager.read)),
+          kind === 'expression' && action('表达簇展示授权', () => editClusterGrant(item)),
           item.package_source != null && action('设置生效会话', () => editLearningScope(kind, item, pager.read)),
           !item.pending_scope && !item.is_removed && action(item.is_enabled ? '停用' : '恢复', async event => {
             const button = event.currentTarget;

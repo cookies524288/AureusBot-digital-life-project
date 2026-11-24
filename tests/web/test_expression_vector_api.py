@@ -13,10 +13,14 @@ from aureus.channels import WebChannel
 from aureus.common import LanguageConfig
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import EmbeddingSpaces, ModelRuntime
+from aureus.heartbeat import MessageRoute, Perception, TrustLevel
 from aureus.heartbeat.expression_recall import EXPRESSION_MAINTENANCE_BATCH, ExpressionRecall
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.memory import ExpressionVectorIndex, LanguageContent, LanguageKind, LanguageStore
+from aureus.memory.language import LanguagePackageRow
 from aureus.organs import LOCAL_EXPRESSION_EMBEDDING, CallPurpose, KeyResolver, OrganBus
 from aureus.organs.interface import OrganRequest, OrganResponse
+from aureus.timeline import VisibilityScope
 from aureus.web import create_app
 from aureus.web.server import SESSION_COOKIE
 from tests.web.test_server import FakeHeartbeat, Rig, set_password
@@ -39,12 +43,18 @@ class VectorRig:
         self.index = ExpressionVectorIndex(path)
         self.requests: list[OrganRequest] = []
         self.started = threading.Event()
+        self.release = threading.Event()
         self.wait = False
         self.invalid = False
         self.grants: set[str] = set()
-        models = ModelRuntime(OrganBus(), KeyResolver(tmp_path / "unused"), fake_organs=True)
-        models.embedding_spaces = EmbeddingSpaces(expression=ACTIVE)
-        progress = EmbeddingProgress(models, True, self.language, self.index)
+        self.models = ModelRuntime(OrganBus(), KeyResolver(tmp_path / "unused"), fake_organs=True)
+        self.models.embedding_spaces = EmbeddingSpaces(expression=ACTIVE)
+        self.inbox = InboxStore(path, self.web.clock)
+        self.allowed: set[ConversationKey] = set()
+        progress = EmbeddingProgress(
+            self.models, True, self.language, self.index,
+            inbox=self.inbox, allows_conversation=self.allowed.__contains__,
+        )
         self.recall = ExpressionRecall(self.language, self.index, LanguageConfig(), self.embed)
         self.recall.space = ACTIVE
         self.app = create_app(
@@ -63,7 +73,8 @@ class VectorRig:
         self.requests.append(request)
         self.started.set()
         if self.wait:
-            await asyncio.Event().wait()
+            while not self.release.is_set():
+                await asyncio.sleep(0.01)
         return OrganResponse(
             request.organ_id,
             "",
@@ -75,6 +86,21 @@ class VectorRig:
         return self.language.add_entry(
             EXPRESSION, LanguageContent(f"合成表达 {number}", "合成情景", "不传例句")
         )
+
+    def scoped_package(self) -> str:
+        heard = Perception(
+            "qq", "synthetic-speaker", "测试材料", VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT, MessageRoute("bot", "group", "group", "1"),
+        )
+        self.inbox.add(heard)
+        route = ConversationKey.from_perception(heard)
+        self.allowed.add(route)
+        scope = route.language_scope_key()
+        package = LanguagePackageRow(LanguageContent("限群表达", "合成情景"), 1, "合成来源", "{}")
+        assert self.language.save_package(EXPRESSION, [package]) == 1
+        key = f"package:{package.digest}"
+        assert self.language.package_scope(EXPRESSION, key, [scope], confirm=True) == ()
+        return scope
 
 
 @pytest.fixture
@@ -131,6 +157,29 @@ def test_selected_space_writes_only_a_batch_and_does_not_grant_clusters(rig: Vec
         assert client.get(CLUSTERS + "/detail", params={"location": location}).status_code == 200
         rig.grants.clear()
         assert client.get(CLUSTERS + "/detail", params={"location": location}).status_code == 404
+
+
+@pytest.mark.parametrize("change", ["model", "source"])
+def test_backfill_discards_completed_embedding_after_route_or_source_change(
+    rig: VectorRig, change: str
+) -> None:
+    scope = rig.scoped_package()
+    rig.wait = True
+    with TestClient(rig.app) as client:
+        client.cookies.set(SESSION_COOKIE, rig.web.sessions.create())
+        started = client.post(SPACES + "/backfill", headers=ORIGIN, json={"space": ACTIVE})
+        assert started.status_code == 202 and rig.started.wait(2)
+        assert "限群表达" in str(rig.requests[0].embedding_inputs)
+        if change == "model":
+            rig.models.embedding_spaces = EmbeddingSpaces(expression=PREVIOUS)
+            rig.recall.space = PREVIOUS
+        else:
+            rig.allowed.clear()
+        rig.release.set()
+        assert _finished(client, "cancelled")["written"] == 0
+        assert rig.index.coverage(rig.language, ACTIVE, frozenset({scope})) == (0, 1)
+        assert rig.index.coverage(rig.language, PREVIOUS, frozenset({scope})) == (0, 1)
+        assert all(not item["established"] for item in client.get(SPACES).json()["items"])
 
 
 @pytest.mark.parametrize(("cancel", "state"), [(True, "cancelled"), (False, "failed")])

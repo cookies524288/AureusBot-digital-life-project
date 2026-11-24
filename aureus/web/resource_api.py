@@ -47,6 +47,7 @@ from aureus.memory.emoji import (
     EmojiVerdict,
     emoji_media_type,
 )
+from aureus.memory.expression_index import display_version
 from aureus.memory.language import MAX_REVIEW_REASON
 from aureus.memory.language_matching import ExpressionReviewStatus, JargonStatus
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
@@ -712,7 +713,12 @@ def register_resource_routes(
                 shared=shared,
                 is_removed=removed,
             )
-            return [asdict(entry) for entry in rows], total
+            return [
+                {**asdict(entry), "cluster_display_version": display_version(entry)}
+                if kind == LanguageKind.EXPRESSION
+                else asdict(entry)
+                for entry in rows
+            ], total
 
         rows, total = await asyncio.to_thread(query)
         return {
