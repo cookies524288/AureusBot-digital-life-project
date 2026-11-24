@@ -166,6 +166,51 @@ def test_initial_chat_history_keeps_a_live_notice() -> None:
     )
 
 
+def test_planner_tool_menu_follows_binding_and_discards_closed_requests() -> None:
+    run_page_script(
+        r"""
+        const configuration = { models: [], providers: [], organs: {} };
+        api = async path => {
+          assert.equal(path, '/api/models');
+          return {ok:true, data:{
+            config:configuration, defaults:{organs:{models:[]}}, planner_organ:'custom-planner',
+          }};
+        };
+        assert.equal(await loadModelsConfig(), true);
+        const toolButton = () => $('editor-body').children[0].children.find(node => node.textContent === '工具列表');
+        openOrganEditor('planner');
+        assert.equal(toolButton(), undefined);
+        openOrganEditor('custom-planner');
+        assert.equal(toolButton().tagName, 'BUTTON');
+        const pending = [];
+        api = (path, method) => new Promise(resolve => {
+          assert.equal(path, '/api/organs/custom-planner/planner-tools');
+          assert.equal(method, undefined);
+          pending.push(resolve);
+        });
+        const obsolete = toolButton().listeners.click[0]();
+        const dialog = $('planner-tools');
+        assert.equal(dialog.open, true);
+        dialog.close();
+        const current = toolButton().listeners.click[0]();
+        pending[1]({ok:true, data:{tools:[{
+          name:'reply', description:'提交回复方向',
+          parameters:{properties:{target:{description:'当前对话'}}, required:['target']},
+        }, {name:'stop', description:'不发言', parameters:{}}]}});
+        await current;
+        const entries = $('planner-tools-body').children;
+        assert.equal(entries[1].children[0].textContent, 'reply');
+        assert.equal(entries[1].children[1].textContent, '提交回复方向');
+        assert.equal(entries[1].children[2].children[0].textContent, 'target（必填）');
+        assert.equal(entries[2].children[2].textContent, '无参数。');
+        pending[0]({ok:true, data:{tools:[]}});
+        await obsolete;
+        assert.equal($('planner-tools-body').children, entries);
+        assert.equal($('editor-dialog').open, true);
+        """
+    )
+
+
 def test_initial_chat_history_merges_live_reply_by_record_id() -> None:
     run_page_script(
         r"""

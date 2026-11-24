@@ -20,6 +20,7 @@ from aureus.organs import (
     ModelsConfig,
     OrganCallError,
     OrganResponse,
+    ToolDefinition,
     validate_models_config,
 )
 from aureus.organs.llm_adapter import ModelProbeError, model_probe_inputs, probe_model
@@ -161,6 +162,8 @@ def register_config_routes(
     model_runtime: ModelRuntime | None = None,
     run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
     | None = None,
+    *,
+    planner_tool_definitions: Callable[[], tuple[ToolDefinition, ...]] | None = None,
 ) -> None:
     """注册配置接口；统一要求已登录且已修改默认密码。"""
     if model_runtime is not None:
@@ -169,7 +172,18 @@ def register_config_routes(
     @app.get("/api/models")
     async def view_models(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
         with _translate_errors(service):
-            return await asyncio.to_thread(service.view_models)
+            models = await asyncio.to_thread(service.view_models)
+        if planner_tool_definitions is not None:
+            models["planner_organ"] = service.runtime.heartbeat.plan_organ
+        return models
+
+    @app.get("/api/organs/{organ}/planner-tools")
+    async def view_planner_tools(
+        organ: str, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, tuple[ToolDefinition, ...]]:
+        if planner_tool_definitions is None or organ != service.runtime.heartbeat.plan_organ:
+            raise HTTPException(404, detail="该器官不负责会话规划。")
+        return {"tools": planner_tool_definitions()}
 
     @app.post("/api/models/catalog")
     async def catalog(

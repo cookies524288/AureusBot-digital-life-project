@@ -313,6 +313,11 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 #prompt-preview{width:min(850px,calc(100% - 24px))}
 .prompt-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 16px}
 .prompt-preview .dialog-body{max-height:70dvh;overflow:auto}
+.planner-tool{padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)}
+.planner-tool p,.planner-tool dd{margin:4px 0;color:var(--text-2)}
+.planner-tool dt,.planner-tool h4{font-family:var(--mono);overflow-wrap:anywhere}
+.planner-tool dt{margin-top:8px}
+.planner-tool summary{cursor:pointer;font-size:13px}
 .prompt-scene{padding:8px 22px 12px;margin:0;border-bottom:1px solid var(--border)}
 @media(max-width:700px){.prompt-layout{grid-template-columns:minmax(0,1fr)}.prompt-directory{max-height:24vh}.prompt-source{min-height:13rem}}
 /* ---------- 模型和器官 ---------- */
@@ -894,6 +899,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title" closedby="any"><div class="dialog-shell">
 <header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" aria-label="关闭预览" autofocus><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header>
 <div id="prompt-preview-scene"></div><div id="prompt-preview-body" class="dialog-body" tabindex="0"></div></div></dialog>
+<dialog id="planner-tools" class="editor-dialog prompt-preview" aria-labelledby="planner-tools-title" closedby="any"><div class="dialog-shell">
+<header class="dialog-head"><h3 id="planner-tools-title">工具列表</h3><form method="dialog"><button class="btn small" autofocus>返回配置</button></form></header>
+<div id="planner-tools-body" class="dialog-body stack" tabindex="0"></div></div></dialog>
 
 <script src="/assets/organ-graph.js"></script>
 <script src="/assets/resource-management.js"></script>
@@ -1184,7 +1192,7 @@ function showAuth(view, message) {
   pageNavigation = null;
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
-  for (const id of ['provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview']) if ($(id).open) $(id).close();
+  for (const id of ['planner-tools', 'provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview']) if ($(id).open) $(id).close();
   $('ky-add').disabled = true;
   if (typeof closeSocket === 'function') closeSocket();
   $('app').classList.add('hidden');
@@ -2059,7 +2067,7 @@ $('ps-save-baseline').addEventListener('click', () => {
 PAGES.persona = { load: loadPersona };
 // ---------- 模型库与器官分工（D86）：参考 MaiBot 公开界面交互，保留本页视觉 ----------
 // 参考提交及文件见 docs/tasks/2.12.md 第 2 轮；只参考交互，未复制代码。
-const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], connections: [], provider: '',
+const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], connections: [], plannerOrgan: '', provider: '',
   dirty: false, revision: 0, saved: 0, pending: 0, queue: Promise.resolve() };
 const MODEL_KIND_LABELS = { llm: '语言模型', embedding: '文本嵌入', image_embedding: '图片嵌入', transcription: '语音转写' };
 const MODEL_KIND_OPTIONS = Object.entries(MODEL_KIND_LABELS).map(([value, label]) => ({ value, label }));
@@ -2120,6 +2128,7 @@ async function loadModelsConfig() {
   mdl.choices = res.data.choices || {}; mdl.keys = res.data.key_status || {}; mdl.entries = res.data.key_entries || [];
   mdl.builtin = res.data.builtin_organs || [];
   mdl.connections = res.data.organ_connections || [];
+  mdl.plannerOrgan = res.data.planner_organ || '';
   refreshDirty();
   return true;
 }
@@ -2674,7 +2683,7 @@ function organCard(name, organ) {
 function renderOrgans() {
   if (!$('page-organs').classList.contains('active')) return;
   if (!organGraph) organGraph = new OrganFlowView($('og-grid'), $('og-routes'), openOrganEditor);
-  const names = [...new Set([...mdl.builtin, ...Object.keys(mdl.cfg.organs)])];
+  const names = [...new Set([...mdl.builtin, ...Object.keys(mdl.cfg.organs), mdl.plannerOrgan])].filter(Boolean);
   const cards = names.map(id => ({ id, element: organCard(id, mdl.cfg.organs[id] || emptyOrgan()) }));
   organGraph.update(cards, mdl.connections);
 }
@@ -2736,6 +2745,9 @@ function openOrganEditor(name) {
   const effortField = el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort);
   body.append(list, search, picker, chainActions, effortField, temperature.node, maxTokens.node);
   body.append(el('button', { class: 'btn', type: 'button', text: '预览完整提示词', onclick: () => openPromptPreview(name) }));
+  if (name === mdl.plannerOrgan) body.append(el('button', {
+    class: 'btn', type: 'button', text: '工具列表', onclick: () => openPlannerTools(name),
+  }));
   openEditor(name.toUpperCase(), body, true); refreshList();
   notifyModelWarnings([name]);
 }
@@ -2749,6 +2761,41 @@ async function loadOrgansPage() {
   if (result === true) { renderOrgans(); notifyModelWarnings(); }
 }
 PAGES.organs = { load: loadOrgansPage };
+
+function plannerToolCard({ name, description, parameters }) {
+  const fields = Object.entries(parameters.properties || {});
+  const list = fields.length ? [
+    el('dl', {}, ...fields.flatMap(([key, field]) => [
+      el('dt', { text: key + (parameters.required?.includes(key) ? '（必填）' : '（可选）') }),
+      el('dd', { text: field.description || '' }),
+    ])),
+    el('details', {}, el('summary', { text: '查看参数类型和限制' }),
+      el('pre', { text: JSON.stringify(parameters, null, 2) })),
+  ] : [el('p', { text: '无参数。' })];
+  return el('section', { class: 'planner-tool' }, el('h4', { text: name }),
+    el('p', { text: description }), ...list);
+}
+
+async function openPlannerTools(organ) {
+  const dialog = $('planner-tools');
+  const body = $('planner-tools-body');
+  $('planner-tools-title').textContent = organ.toUpperCase() + ' · 工具列表';
+  const loading = el('p', { role: 'status', text: '正在加载…' });
+  body.replaceChildren(loading);
+  body.scrollTop = 0;
+  dialog.showModal();
+  const response = await api('/api/organs/' + encodeURIComponent(organ) + '/planner-tools');
+  if (!dialog.open || loading.parentElement !== body) return;
+  if (!response.ok) {
+    body.replaceChildren(el('p', { class: 'banner', role: 'alert', text: errorText(response) }));
+    return;
+  }
+  const tools = response.data.tools;
+  body.replaceChildren(...(tools.length ? [
+    el('p', { class: 'muted', text: '以下工具按当前运行配置列出。单轮规划会按会话范围限制工具和参数。' }),
+    ...tools.map(plannerToolCard),
+  ] : [el('p', { class: 'empty', text: '当前规划器没有已启用的模型。' })]));
+}
 
 // ---------- 高级管理：按器官查找提示词及逐项恢复 ----------
 const promptCatalog = { organs: {}, templates: [], selected: '' };

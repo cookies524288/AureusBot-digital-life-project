@@ -793,6 +793,27 @@ class ConversationFlow:
             return self._affinity.current(sender_id)
         return self._affinity.config.stranger_affinity
 
+    def planner_tool_options(
+        self,
+        *,
+        interests: bool,
+        emoji: bool,
+        inbox: bool,
+        special_contact: bool,
+        stay_in_conversation: bool,
+    ) -> PlannerToolOptions:
+        """把会话范围和已装配的能力合成对话规划的工具选项。"""
+        return PlannerToolOptions(
+            agenda=self._agenda is not None,
+            interests=interests,
+            recall=self._can_recall(),
+            expressions=self._can_recall_language(),
+            emoji=emoji and self._emoji_selector is not None,
+            inbox=inbox,
+            special_contact=special_contact,
+            stay_in_conversation=stay_in_conversation,
+        )
+
     async def _plan(
         self,
         job: _ReplyJob,
@@ -802,12 +823,9 @@ class ConversationFlow:
     ) -> tuple[Plan | None, _Recall | None]:
         """调用有界的工具规划；失败不发言，网关的拒绝照常抛出。"""
         organ_id = self._config.plan_organ
-        options = PlannerToolOptions(
-            agenda=self._agenda is not None,
+        options = self.planner_tool_options(
             interests=job.with_interests,
-            recall=self._can_recall(),
-            expressions=self._can_recall_language(),
-            emoji=job.emoji_history is not None and self._emoji_selector is not None,
+            emoji=job.emoji_history is not None,
             inbox=job.inbox_attention,
             special_contact=job.person_id is not None and not job.viewer_is_user,
             stay_in_conversation=any("inbox_message_id" in record.metadata for record in job.messages),
