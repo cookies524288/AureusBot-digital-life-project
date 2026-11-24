@@ -368,22 +368,52 @@ def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bu
     run_page_script(
         r"""
         state.loggedIn = true;
+        state.page = 'chat';
         openSocket();
-        api = async () => ({ok:true, data:[]});
-        await loadChatHistory();
-        const time = '2026-11-22T12:00:00Z';
-        sockets.at(-1).onmessage({data:JSON.stringify({type:'reply', id:40, delivery_key:'40:1',
-          time, sender:'小绿', channel:'web', content:'首段'})});
-        api = async path => {
-          assert.equal(path, '/api/history?replies_only=true');
-          return {ok:true, data:[
-            {id:41, delivery_key:'40:1', time, who:'me', channel:'web', content:'首段'},
-            {id:42, delivery_key:'40:2', time, who:'me', channel:'web', content:'第二段'},
-          ]};
+        let finishHistory;
+        api = path => {
+          if (path === '/api/inbox/conversations') return Promise.resolve({ok:true, data:{enabled:false}});
+          assert.equal(path, '/api/history');
+          return new Promise(resolve => { finishHistory = resolve; });
         };
-        await recoverChatReplies(sockets.at(-1));
-        const messages = Array.from($('chat-log').children).filter(node => node.className === 'msg me');
-        assert.deepEqual(messages.map(node => node.children[0].textContent), ['首段', '第二段']);
+        const loading = loadChatHistory();
+        const time = '2026-11-22T12:00:00Z';
+        const push = (ws, part, content) => ws.onmessage({data:JSON.stringify({type:'reply',
+          id:40, delivery_key:'40:' + part, time, sender:'测试助手', channel:'web', content})});
+        const firstSocket = sockets.at(-1);
+        push(firstSocket, 1, '同一段文字');
+        const messages = () => $('chat-log').children.filter(node => node.className === 'msg me');
+        const firstBubble = messages()[0];
+        await showPage('inbox');
+        finishHistory({ok:true, data:[{id:41, delivery_key:'40:1', time, who:'me',
+          channel:'web', content:'同一段文字'}]});
+        await loading;
+        firstSocket.onclose();
+        openSocket();
+        const replacement = sockets.at(-1);
+        const recovered = Array.from({length:51}, (_, index) => ({
+          id:42 + index, delivery_key:`${40 + index}:2`, time, who:'me', channel:'web',
+          content:index === 0 ? '同一段文字' : '补读 ' + index,
+        }));
+        const requested = [];
+        api = async path => {
+          requested.push(path);
+          if (requested.length === 1) {
+            push(replacement, 2, '同一段文字');
+            push(firstSocket, 3, '旧连接不能插入');
+            return {ok:true, data:recovered.slice(0, 50)};
+          }
+          return {ok:true, data:recovered.slice(50)};
+        };
+        await replacement.onopen();
+        await showPage('chat');
+        assert.deepEqual(requested, [
+          '/api/history?replies_only=true&since_id=41&limit=50',
+          '/api/history?replies_only=true&since_id=91&limit=50',
+        ]);
+        assert.equal(messages()[0], firstBubble);
+        assert.deepEqual(Array.from(messages(), node => node.children[0].textContent),
+          ['同一段文字', ...recovered.map(record => record.content)]);
         """
     )
 

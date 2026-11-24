@@ -1576,9 +1576,10 @@ const showMemoryTab = installResourcePages({$, api, el, fail, fmtTime, openEdito
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------
 // 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
 const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
+const CHAT_RECOVERY_PAGE_SIZE = 50;
 let socket = null, socketWanted = false, lastDay = '';
 const chatEntries = [];
-const renderedChatKeys = new Set();
+const chatEntriesByKey = new Map();
 
 function setConn(text, kind) {
   setLiveText($('conn-text'), text);
@@ -1599,13 +1600,18 @@ function chatMessage({kind, sender, channel, content, time, notice, id}) {
   return {node, when, id};
 }
 
-function registerChatMessage(message) {
+function registerChatMessage(message, fromHistory = false) {
   const key = message.delivery_key ?? message.id;
-  if (key != null) {
-    if (renderedChatKeys.has(key)) return null;
-    renderedChatKeys.add(key);
+  const existing = chatEntriesByKey.get(key);
+  if (existing) {
+    if (fromHistory) {
+      existing.when = new Date(message.time);
+      existing.id = message.id;
+    }
+    return null;
   }
   const entry = chatMessage(message);
+  if (key != null) chatEntriesByKey.set(key, entry);
   chatEntries.push(entry);
   return entry;
 }
@@ -1630,7 +1636,7 @@ function addMessage(message) {
 function mergeChatHistory(items) {
   const log = $('chat-log');
   for (const item of items) {
-    registerChatMessage({...item, kind:item.who, sender:WHO_NAME[item.who] || item.who});
+    registerChatMessage({...item, kind:item.who, sender:WHO_NAME[item.who] || item.who}, true);
   }
   chatEntries.sort((a, b) => a.when - b.when || (a.id != null && b.id != null ? a.id - b.id : 0));
   for (const child of Array.from(log.children)) {
@@ -1659,6 +1665,7 @@ function loadChatHistory() {
     $('chat-send').disabled = false;
     if (!res.ok) { delete loaded.chat; fail(res); return; }
     mergeChatHistory(res.data);
+    loaded.chatCursor = res.data.at(-1)?.id ?? 0;
   });
   return loaded.chat;
 }
@@ -1668,12 +1675,18 @@ async function recoverChatReplies(ws) {
   const loaded = state.loaded;
   if (!loaded.chat) return;
   await loaded.chat;
-  if (state.loaded !== loaded || socket !== ws) return;
-  const res = await api('/api/history?replies_only=true');
-  if (res.ok && state.loaded === loaded && socket === ws) mergeChatHistory(res.data);
+  const current = () => state.loaded === loaded && socket === ws;
+  while (current() && loaded.chatCursor !== undefined) {
+    const query = '?replies_only=true&since_id=' + loaded.chatCursor + '&limit=' + CHAT_RECOVERY_PAGE_SIZE;
+    const res = await api('/api/history' + query);
+    if (!current() || !res.ok || !res.data.length) return;
+    mergeChatHistory(res.data);
+    loaded.chatCursor = res.data.at(-1).id;
+    if (res.data.length < CHAT_RECOVERY_PAGE_SIZE) return;
+  }
 }
 
-function openSocket(reconnecting = false) {
+function openSocket() {
   socketWanted = true;
   if (socket) return;
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1683,7 +1696,7 @@ function openSocket(reconnecting = false) {
   ws.onopen = () => {
     if (socket !== ws) return;
     setConn('已连接', 'ok');
-    if (reconnecting) void recoverChatReplies(ws);
+    return recoverChatReplies(ws);
   };
   ws.onmessage = ev => {
     if (socket !== ws) return;
@@ -1706,7 +1719,7 @@ function closeSocket() {
   if (old) old.close();
   chatEntries.length = 0;
   $('chat-send').disabled = true;
-  renderedChatKeys.clear();
+  chatEntriesByKey.clear();
   lastDay = '';
   $('chat-log').replaceChildren();
 }
@@ -1716,7 +1729,7 @@ function reconnectLater() {
     if (!socketWanted || !state.loggedIn || socket) return;
     const res = await api('/api/status');
     if (!socketWanted || !state.loggedIn || socket) return;
-    if (res.ok) openSocket(true);
+    if (res.ok) openSocket();
     else if (res.status === 0) reconnectLater();
   }, 3000);
 }
@@ -1726,7 +1739,7 @@ function sendChat() {
   const text = box.value.trim();
   if (!text) return;
   // 等历史快照合并后再发送，避免同一条消息同时出现在快照和本地气泡里。
-  if (pendingChat !== null) {
+  if (state.loaded.chatCursor === undefined) {
     toast('正在读取聊天记录，读取完成后请再发送。');
     loadChatHistory();
     return;

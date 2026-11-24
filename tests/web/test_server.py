@@ -905,3 +905,25 @@ def test_history_limit_is_bounded_and_keeps_the_latest(rig: Rig) -> None:
     ]
     assert len(client.get("/api/history?limit=0").json()) == 1  # 下限 1
     assert len(client.get("/api/history?limit=100000").json()) == 5  # 上限 200，不报错
+
+
+def test_chat_recovery_pages_confirmed_user_visible_segments_in_cursor_order(rig: Rig) -> None:
+    set_password(rig)
+    logged = [
+        rig.timeline.append(
+            EVENT_REPLY_DELIVERED, f"分段 {part}", ActorType.ME,
+            visibility=VisibilityScope.USER_ONLY,
+            metadata={"reply_id": 32, "segment": part, "channel": "web"},
+        )
+        for part in range(1, 5)
+    ]
+    rig.timeline.append(EVENT_REPLY_DELIVERED, "不可见分段", ActorType.ME)
+    add_message(rig, "普通消息", ActorType.USER, "web")
+    client = rig.client()
+    query = "/api/history?replies_only=true&limit=2&since_id="
+    assert client.get(query + str(logged[0].id)).status_code == 401
+    login(client, GOOD)
+
+    first_page = client.get(query + str(logged[0].id)).json()
+    second_page = client.get(query + str(first_page[-1]["id"])).json()
+    assert [item["delivery_key"] for item in first_page + second_page] == ["32:2", "32:3", "32:4"]
