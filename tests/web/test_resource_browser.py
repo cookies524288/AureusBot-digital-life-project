@@ -2672,6 +2672,93 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
     )
 
 
+def test_memory_graph_drag_selects_node_and_opens_its_detail_at_390px(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000'), '文字记忆初始查询');
+      const path = '/api/resources/memory/graph';
+      const entity = index => ({kind:'entity', source:`["合成","memory","entities",[${index}]]`,
+        name:'同名拖动实体', evidence:[]});
+      const link = (index, predicate) => ({kind:'relation',
+        source:`["合成","memory","relations",[${index}]]`, subject:entity(0), object:entity(1),
+        predicate, confidence:0.5, evidence:[]});
+      const records = [entity(0), entity(1), link(1, '合成谓词甲'), link(2, '合成谓词乙')];
+      window.graphDetails = [];
+      const realFetch = window.fetch;
+      window.fetch = (resource, options) => {
+        const url = new URL(resource, location.origin);
+        const headers = {'X-Aureus-Graph-Revision':'open'};
+        if (url.pathname === path + '/access') return Promise.resolve(Response.json({}, {headers}));
+        if (url.pathname === path + '/detail') {
+          const source = url.searchParams.get('source');
+          window.graphDetails.push(source);
+          const item = records.find(item => item.source === source);
+          return Promise.resolve(Response.json(item, {headers}));
+        }
+        if (url.pathname === path) {
+          return Promise.resolve(Response.json({covered:true, items:records,
+            total:records.length, next_offset:null}, {headers}));
+        }
+        return realFetch(resource, options);
+      };
+      press('关系图');
+      await waitFor(() => find('.memory-graph-node'), '图谱绘出');
+      const canvas = find('#memory-panel-graph .memory-graph-viewport svg');
+      const edges = [...canvas.querySelectorAll('.memory-graph-edge')];
+      for (const predicate of ['合成谓词甲', '合成谓词乙']) {
+        edges.find(edge => edge.getAttribute('aria-label').includes(predicate))
+          .dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'}));
+        await waitFor(() => document.querySelector('[data-graph-detail]')?.textContent
+          .includes(predicate), '同一有向端点的每个谓词都能单独打开');
+        document.querySelector('#editor-dialog').close();
+      }
+      const target = canvas.querySelectorAll('.memory-graph-node')[1];
+      target.scrollIntoView({block:'center', inline:'center'});
+      window.graphDrag = {before:target.getAttribute('transform')};
+    """,
+    )
+    box = browser.evaluate(
+        "(() => { const rect = document.querySelectorAll('.page.active .memory-graph-node')[1]"
+        ".querySelector('circle').getBoundingClientRect();"
+        " return [rect.x + rect.width / 2, rect.y + rect.height / 2]; })()"
+    )
+    assert isinstance(box, list)
+    x, y = box
+    for event_type, offset in (("mousePressed", 0), ("mouseMoved", 30), ("mouseReleased", 30)):
+        browser.command(
+            "Input.dispatchMouseEvent",
+            type=event_type,
+            x=x + offset,
+            y=y + offset,
+            button="left",
+            buttons=0 if event_type == "mouseReleased" else 1,
+            clickCount=1,
+        )
+    _run(
+        browser,
+        r"""
+      const nodes = [...find('#memory-panel-graph svg').querySelectorAll('.memory-graph-node')];
+      const target = nodes[1];
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      check(target.getAttribute('transform') !== window.graphDrag.before, '拖动改变节点位置');
+      check(document.activeElement === target && target.classList.contains('is-selected'),
+        '拖动结束选中并聚焦该节点');
+      check(!document.querySelector('#editor-dialog').open && window.graphDetails.length === 2,
+        '拖动本身不误开详情');
+      target.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'}));
+      await waitFor(() => document.querySelector('#editor-dialog').open, '拖选后打开详情');
+      check(window.graphDetails.at(-1) === '["合成","memory","entities",[1]]',
+        '同名实体中打开的正是被拖选的那个');
+      document.querySelector('#editor-dialog').close();
+      press('复位');
+      check(target.getAttribute('transform') === window.graphDrag.before
+        && !nodes.some(node => node.classList.contains('is-selected')), '复位回到全图初始布局');
+    """,
+    )
+
+
 def test_memory_graph_grant_editor_and_late_response_at_390px(browser: Browser) -> None:
     browser.open("memory", 390, 740)
     _run(
@@ -2726,6 +2813,7 @@ def test_memory_graph_grant_editor_and_late_response_at_390px(browser: Browser) 
       press('关系图');
       await waitFor(() => text('当前没有获准的图谱资料'), '关闭态不显示图');
       const panel = find('#memory-panel-graph');
+      check(!panel.querySelector('.memory-graph-node, .memory-graph-edge'), '空授权不绘制任何节点');
       panel.querySelector('summary').click();
       await waitFor(() => button('保存展示授权'), '真实管理表单');
       const legend = panel.querySelector('legend');

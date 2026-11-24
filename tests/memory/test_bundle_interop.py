@@ -4,7 +4,9 @@ import ast
 import asyncio
 import hashlib
 import os
+import sqlite3
 import struct
+from contextlib import closing
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -27,7 +29,7 @@ from aureus.memory.bundle_format import (
     write_bundle,
 )
 from aureus.memory.bundle_images import canonical_image_semantics
-from aureus.memory.bundle_vectors import parse_vectors
+from aureus.memory.bundle_vectors import VECTOR_REBUILD_REASON, parse_vectors
 from aureus.timeline import TimelineDatabase
 
 NOW = datetime(2026, 11, 24, tzinfo=UTC)
@@ -109,11 +111,11 @@ def _make_bundle(package: str, png: bytes, *, target: str | None = None) -> Byte
     return output
 
 
-def test_v2_reversible_media_ownership_and_actual_vector_read(tmp_path: Path) -> None:
+def test_v2_reversible_media_ownership_and_vectors_skipped(tmp_path: Path) -> None:
     clock = ManualClock(NOW)
     database = tmp_path / "index.db"
     timeline = TimelineDatabase(database, clock)
-    index = MemoryIndex(database, timeline, clock, bundle_vector_spaces={"paragraphs": SPACE})
+    index = MemoryIndex(database, timeline, clock)
     timeline.open()
     index.open()
     data = _png()
@@ -123,31 +125,52 @@ def test_v2_reversible_media_ownership_and_actual_vector_read(tmp_path: Path) ->
             index.preview_bundle(_make_bundle("invalid", data, target="foreign"))
         first = _make_bundle("first", data)
         second = _make_bundle("second", data)
-        assert index.preview_bundle(first)["components"][-1]["status"] == "install"
-        no_match = MemoryIndex(
-            database,
-            timeline,
-            clock,
-            bundle_vector_spaces={"paragraphs": SPACE | {"algorithm": "other"}},
-        )
-        assert no_match.preview_bundle(first)["components"][-1]["status"] == "skip"
+        component = index.preview_bundle(first)["components"][-1]
+        assert component["status"] == "skip"
+        assert "重建" in component["reason"]
         left = index.install_bundle(first, "merge")["installation_id"]
         assert index.install_bundle(first, "merge")["already_installed"]
         right = index.install_bundle(second, "merge")["installation_id"]
         assert index.read_bundle_image(digest) == (data, "image/png")
-        assert len(index.search_bundle_vectors("paragraphs", (1.0, 0.0), 5)) == 1
         assert index.set_bundle_installed(left, False)
         assert index.read_bundle_image(digest) is not None
-        assert index.search_bundle_vectors("paragraphs", (1.0, 0.0), 5)
         assert index.set_bundle_installed(right, False)
         assert index.read_bundle_image(digest) is None
-        assert not index.search_bundle_vectors("paragraphs", (1.0, 0.0), 5)
         assert not index.search(["冰川调查"], (), 5)
         assert index.set_bundle_installed(left, True)
         assert index.read_bundle_image(digest) is not None
         original = BytesIO()
         assert index.export_bundle(left, original)
         assert load_bundle(original).images == load_bundle(first).images
+    finally:
+        index.close()
+        timeline.close()
+
+
+def test_matching_vector_member_skipped_while_knowledge_installs_and_uninstalls(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(NOW)
+    database = tmp_path / "index.db"
+    timeline = TimelineDatabase(database, clock)
+    index = MemoryIndex(database, timeline, clock)
+    timeline.open()
+    index.open()
+    try:
+        installed = index.install_bundle(_make_bundle("vector-skip", _png()), "merge")
+        assert installed["status"] == "installed"
+        member = [c for c in installed["components"] if c["name"] == "vectors/paragraphs.npz"]
+        assert member == [
+            {"name": "vectors/paragraphs.npz", "status": "skip", "reason": VECTOR_REBUILD_REASON}
+        ]
+        with closing(sqlite3.connect(database)) as connection:
+            tables = connection.execute(
+                "SELECT name FROM sqlite_schema WHERE name LIKE '%vector%'"
+            ).fetchall()
+            assert tables == []
+        assert index.search(["冰川调查"], (), 5)
+        assert index.set_bundle_installed(installed["installation_id"], False)
+        assert not index.search(["冰川调查"], (), 5)
     finally:
         index.close()
         timeline.close()

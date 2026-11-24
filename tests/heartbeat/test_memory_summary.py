@@ -351,6 +351,17 @@ def test_context_cannot_be_self_evidence(
     assert rig.index.summary_reference(rig.scope) == (0, (), ())
 
 
+def test_text_only_message_cannot_borrow_image(rig: Rig) -> None:
+    excerpt = "我住在晴桂巷。"
+    rig.add("m1", excerpt)
+    rig.add("m2", "另一条消息的照片", image=True)
+    window = rig.window()
+    assert parse_delta(_answer("晴桂巷", excerpt), window).facts
+    for reference in (("m1", "0"), ("m2", "0")):
+        with pytest.raises(ValueError, match="图片"):
+            parse_delta(_answer("晴桂巷", excerpt, image=reference), window)
+
+
 def test_correction_retains_history_and_rechecks_route_under_transaction(rig: Rig) -> None:
     original = "我一直住在晴桂巷。"
     rig.add("m1", original)
@@ -364,6 +375,8 @@ def test_correction_retains_history_and_rechecks_route_under_transaction(rig: Ri
     window = rig.window()
     assert window.previous_summaries == ("阿青：居住地点是晴桂巷。",)
     old = window.previous_facts[0]
+    with pytest.raises(ValueError):
+        parse_delta(_answer("晴桂巷", original, message="m1"), window)
     with pytest.raises(ValueError):
         parse_delta(_answer("晴桂巷", original, message="m4"), window)
     with pytest.raises(ValueError):

@@ -9,7 +9,12 @@ import pytest
 
 from aureus.common import ManualClock
 from aureus.memory import HistoricalMemory, MemoryEvidence, MemoryIndex, MemorySource
-from aureus.memory.bundle_format import MemoryBundleConflictError, load_bundle, paragraph_hash
+from aureus.memory.bundle_format import (
+    VECTOR_MEMBERS,
+    MemoryBundleConflictError,
+    load_bundle,
+    paragraph_hash,
+)
 from aureus.memory.graph import MemoryGraphEvidence, MemoryGraphSource
 from aureus.memory.lifecycle import LifecycleAction
 from aureus.people import PeopleDirectory
@@ -221,6 +226,9 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
             expected_digest=preview["preview_digest"],
         )
         bundle = load_bundle(output)
+        # 导出不附向量，向量由安装方的本机嵌入模型重建（D105）。
+        assert not bundle.binary_members.keys() & VECTOR_MEMBERS
+        assert bundle.manifest["embedding_fingerprint"] is None
         assert bundle.state is not None
         assert bundle.installation_id == preview["installation_id"]
         [doc] = bundle.knowledge["docs"]

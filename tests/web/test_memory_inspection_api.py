@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from aureus.channels import WebChannel
+from aureus.heartbeat.events import EVENT_DIARY_WRITTEN
 from aureus.memory import HistoricalMemory, MemoryEntry, MemoryIndex, MemorySource
 from aureus.timeline import ActorType, VisibilityScope
 from aureus.web import create_app
@@ -25,7 +26,9 @@ def test_inspection_checks_only_authorized_originals_without_writing(tmp_path: P
     try:
 
         def append(text: str, visibility: VisibilityScope) -> int:
-            return rig.timeline.append("message", text, ActorType.USER, visibility=visibility).id
+            return rig.timeline.append(
+                EVENT_DIARY_WRITTEN, text, ActorType.ME, visibility=visibility
+            ).id
 
         enabled = append("合成用户正常原件", VisibilityScope.USER_ONLY)
         disabled = append("合成用户停用原件", VisibilityScope.USER_ONLY)
