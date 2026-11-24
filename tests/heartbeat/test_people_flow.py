@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.testclient import TestClient
 
 from aureus.common import HeartbeatConfig, ManualClock
 from aureus.heartbeat import (
@@ -22,9 +24,10 @@ from aureus.heartbeat import (
 )
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, OrganResponse
-from aureus.people import PeopleDirectory
+from aureus.people import HistoricalKind, HistoricalRecord, PeopleDirectory
 from aureus.safety import EmergencyStop, PermissionChecker
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from aureus.web.resource_api import register_resource_routes
 from tests.prompt_assertions import dialogue_text
 
 pytestmark = pytest.mark.asyncio
@@ -133,6 +136,120 @@ def make_rig(made: list[Rig], tmp_path: Path, *, with_people: bool = True) -> Ri
     rig = Rig(timeline, people, organs, heartbeat)
     made.append(rig)
     return rig
+
+
+async def test_local_profile_aliases_reach_only_the_exact_accounts_reply(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    rig = make_rig(made, tmp_path)
+    rig.people.publish_history(
+        [
+            HistoricalRecord(
+                instance="sample",
+                kind=HistoricalKind.PROFILE,
+                source_key=account,
+                subject_key=account,
+                account=(CHANNEL, account),
+                nickname="同名",
+            )
+            for account in ("account-a", "account-b")
+        ]
+        + [
+            HistoricalRecord(
+                instance="sample",
+                kind=HistoricalKind.PROFILE_SNAPSHOT,
+                source_key=f"{account}:{version}",
+                subject_key=account,
+                profile_version=version,
+                aliases=[alias],
+                occurred_at=NOW.timestamp(),
+                evidence=[version],
+            )
+            for account, version, alias in (
+                ("account-a", 1, "旧版画像别名"),
+                ("account-a", 2, "甲原有别名"),
+                ("account-b", 1, "乙原有别名"),
+                ("unmapped", 1, "待关联别名"),
+            )
+        ]
+    )
+    app = FastAPI()
+
+    async def require_session(request: Request) -> str:
+        if request.cookies.get("session") != "test":
+            raise HTTPException(401)
+        return "test"
+
+    register_resource_routes(
+        app,
+        require_session,
+        None,
+        None,
+        people=rig.people,
+        same_origin=lambda request: request.headers.get("origin") == "http://testserver",
+    )
+    with TestClient(app) as web:
+        web.cookies.set("session", "test")
+        profiles = {
+            item["record"]["source_key"]: item
+            for item in web.get("/api/resources/profiles").json()["items"]
+            if item["entry_type"] == "profile"
+        }
+        base_url = "/api/resources/profiles"
+        primary = f"{base_url}/{profiles['account-a:2']['id']}/aliases"
+        prior = f"{base_url}/{profiles['account-a:1']['id']}/aliases"
+        pending = f"{base_url}/{profiles['unmapped:1']['id']}/aliases"
+        origin = {"Origin": "http://testserver"}
+        web.cookies.clear()
+        assert web.get(primary).status_code == 401
+        assert web.patch(primary, json={"aliases": ["未登录"]}, headers=origin).status_code == 401
+        web.cookies.set("session", "test")
+        response = web.get(primary)
+        assert response.status_code == 200, response.text
+        assert response.json()["effective_aliases"] == ["甲原有别名"]
+        assert profiles["account-a:2"]["can_edit_aliases"]
+        assert not profiles["unmapped:1"]["can_edit_aliases"]
+        assert web.patch(primary, json={"aliases": ["越权"]}).status_code == 403
+        assert web.get(pending).status_code == 404
+        assert web.patch(pending, json={"aliases": ["不可关联"]}, headers=origin).status_code == 404
+        assert web.patch(primary, json={"aliases": [" "]}, headers=origin).status_code == 422
+        assert web.get(primary).json()["local_aliases"] is None
+        assert web.patch(
+            prior, json={"aliases": ["甲新增别名", " Atlas ", "atlas"]}, headers=origin
+        ).is_success
+
+        rig.people.close()
+        rig.people.open()
+        assert web.get(primary).json()["local_aliases"] == ["甲新增别名", "Atlas"]
+        person = rig.people.find(CHANNEL, "account-a")
+        assert person is not None
+        original_entries = rig.people.history_for(person.id, limit=5, use_local_aliases=False)
+        assert [entry.record.aliases for entry in original_entries if entry.record.aliases] == [
+            ["甲原有别名"]
+        ]
+        for account, present, absent in (
+            ("account-a", "甲新增别名", "乙原有别名"),
+            ("account-b", "乙原有别名", "甲新增别名"),
+        ):
+            rig.say(account, "在吗？", TrustLevel.VERIFIED_CONTACT)
+            await rig.settle()
+            prompt = dialogue_text(rig.organs.requests[-1])
+            assert present in prompt and absent not in prompt
+            assert "甲原有别名" not in prompt and "待关联别名" not in prompt
+
+        assert web.patch(primary, json={"aliases": None}, headers=origin).is_success
+        rig.say("account-a", "还在吗？", TrustLevel.VERIFIED_CONTACT)
+        await rig.settle()
+        prompt = dialogue_text(rig.organs.requests[-1])
+        assert "甲原有别名" in prompt and "甲新增别名" not in prompt
+        original = rig.people.historical_record(
+            "sample", HistoricalKind.PROFILE_SNAPSHOT, "account-a:2"
+        )
+        assert (
+            original
+            and original.record.aliases == ["甲原有别名"]
+            and original.record.evidence == [2]
+        )
 
 
 async def test_another_person_gets_a_reply_and_the_user_is_not_addressed(

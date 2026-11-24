@@ -155,6 +155,14 @@ class EmojiUpdate(BaseModel):
     is_banned: bool | None = None
 
 
+class ProfileAliasUpdate(BaseModel):
+    """更新完整的本机覆盖，显式 null 只撤销本机维护。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    aliases: list[str] | None
+
+
 def register_resource_routes(
     app: FastAPI,
     require_ready: Callable[..., Awaitable[str]],
@@ -391,6 +399,38 @@ def register_resource_routes(
             "total": total,
             "next_offset": offset + limit if offset + limit < total else None,
         }
+
+    aliases_path = "/api/resources/profiles/{profile_id}/aliases"
+
+    @app.get(aliases_path)
+    async def get_profile_aliases(
+        profile_id: int, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, list[str] | None]:
+        if people is None:
+            raise HTTPException(409, "人物资料当前关闭。")
+        details = await asyncio.to_thread(people.profile_alias_details, profile_id)
+        if details is None:
+            raise HTTPException(404, "找不到已关联账号的画像来源。")
+        return {**asdict(details), "effective_aliases": details.effective_aliases}
+
+    @app.patch(aliases_path)
+    async def set_profile_aliases(
+        profile_id: int,
+        body: ProfileAliasUpdate,
+        request: Request,
+        _token: Annotated[str, Depends(require_ready)],
+    ) -> dict[str, list[str] | None]:
+        if same_origin is None or not same_origin(request):
+            raise HTTPException(403, "请在当前网页上维护人物别名。")
+        if people is None:
+            raise HTTPException(409, "人物资料当前关闭。")
+        try:
+            details = await asyncio.to_thread(people.set_profile_aliases, profile_id, body.aliases)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        if details is None:
+            raise HTTPException(404, "找不到已关联账号的画像来源。")
+        return {**asdict(details), "effective_aliases": details.effective_aliases}
 
     @app.get("/api/resources/pictures")
     async def list_pictures(

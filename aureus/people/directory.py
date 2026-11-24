@@ -15,7 +15,7 @@ from pathlib import Path
 
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
-from aureus.people import history
+from aureus.people import history, profile_aliases
 from aureus.people.history import (
     HistoricalEntry,
     HistoricalKind,
@@ -23,6 +23,7 @@ from aureus.people.history import (
     HistoricalRecord,
     PeopleError,
 )
+from aureus.people.profile_aliases import ProfileAliases
 
 _TIMESTAMP_PRECISION = "microseconds"
 
@@ -105,6 +106,7 @@ class PeopleDirectory:
         )
         history.init_schema(conn)
         history.open_flow(conn)
+        profile_aliases.init_schema(conn)
         conn.commit()
 
     def _require_open(self) -> sqlite3.Connection:
@@ -271,12 +273,20 @@ class PeopleDirectory:
             conn, records, lambda platform, account: self._meet_id(conn, platform, account)
         )
 
-    def history_for(self, person_id: int, *, limit: int | None = None) -> list[HistoricalEntry]:
+    def history_for(
+        self, person_id: int, *, limit: int | None = None, use_local_aliases: bool = True
+    ) -> list[HistoricalEntry]:
         """按人物取历史资料，可使用当前发言人账号查到的人物编号。"""
         conn = self._require_open()
         if limit is None:
             return history.for_person(conn, person_id)
-        return history.for_recall(conn, person_id, limit, self._clock.now().timestamp())
+        return history.for_recall(
+            conn,
+            person_id,
+            limit,
+            self._clock.now().timestamp(),
+            use_local_aliases=use_local_aliases,
+        )
 
     def historical_record(
         self, instance: str, kind: HistoricalKind, source_key: str
@@ -302,6 +312,23 @@ class PeopleDirectory:
         """在同一个目录中浏览人物和画像，不合并同名档案。"""
         with closing(open_connection(self._db_path)) as conn:
             return history.browse_profile_resources(conn, query, offset, limit)
+
+    def profile_alias_details(self, profile_id: int) -> ProfileAliases | None:
+        """按画像原件读取别名；未经账号关联的原件没有维护入口。"""
+        with closing(open_connection(self._db_path)) as conn, conn:
+            conn.execute("BEGIN")
+            return history.profile_alias_details(conn, profile_id, self._clock.now().timestamp())
+
+    def set_profile_aliases(
+        self, profile_id: int, aliases: list[str] | None
+    ) -> ProfileAliases | None:
+        """保存校验后的完整本机覆盖，或用 None 只撤销本机覆盖。"""
+        normalized = None if aliases is None else profile_aliases.normalize_aliases(aliases)
+        with closing(open_connection(self._db_path)) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return history.profile_alias_details(
+                conn, profile_id, self._clock.now().timestamp(), write=True, aliases=normalized
+            )
 
     def accounts_of(self, person_id: int) -> list[tuple[str, str]]:
         """这个人的全部（平台，账号 ID），按平台和账号排序。"""
