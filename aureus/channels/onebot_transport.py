@@ -33,7 +33,7 @@ class OneBotError(RuntimeError):
     """OneBot 动作失败或连接不可用"""
 
 
-class OneBotUnsupported(OneBotError):
+class OneBotUnsupportedError(OneBotError):
     """连接明确返回未知动作。"""
 
 
@@ -228,7 +228,7 @@ class OneBotTransport:
             raise OneBotError("OneBot 连接已断开")
         if response.get("status") != "ok" or response.get("retcode") != 0:
             if response.get("retcode") == 1404:
-                raise OneBotUnsupported("当前 OneBot 连接不支持此操作")
+                raise OneBotUnsupportedError("当前 OneBot 连接不支持此操作")
             raise OneBotError("OneBot 拒绝了动作")
         data = response.get("data")
         return data if isinstance(data, dict) else {}

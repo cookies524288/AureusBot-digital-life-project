@@ -493,8 +493,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-messages{display:grid;gap:12px}
 .inbox-message{display:flex;gap:8px;align-items:flex-start}
 .inbox-message.outgoing{flex-direction:row-reverse;text-align:right}
-.inbox-avatar{display:grid;flex:none;place-items:center;width:32px;height:32px;background:var(--bg);border:1px solid var(--border)}
+.inbox-avatar{position:relative;display:grid;flex:none;place-items:center;width:32px;height:32px;background:var(--bg);border:1px solid var(--border)}
 .inbox-avatar .ico{width:22px;height:22px;shape-rendering:crispEdges}
+.inbox-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0}
+.inbox-avatar img.loaded{opacity:1}
 .inbox-message-body{min-width:0;max-width:88%;display:grid;justify-items:start;gap:5px}
 .inbox-message.outgoing .inbox-message-body{justify-items:end}
 .inbox-message-meta{display:flex;gap:6px 12px;align-items:baseline;flex-wrap:wrap;font-size:12px}
@@ -2369,6 +2371,16 @@ function renderInboxMessage(message) {
   glyph.setAttribute('href', '#i-inbox-person');
   icon.append(glyph);
   avatar.append(icon);
+  if (message.source === 'inbox' && message.conversation?.platform === 'qq' && message.sender_id
+      && message.event_type !== 'poke_notice' && !message.conversation.temporary_group_id
+      && Number.isSafeInteger(message.id)) {
+    const picture = el('img', {alt:'', loading:'lazy', referrerpolicy:'no-referrer',
+      onload:() => { icon.classList.add('hidden'); picture.classList.add('loaded'); },
+      onerror:() => picture.remove(),
+    });
+    picture.src = `/api/inbox/messages/${message.id}/avatar?${inboxScope(message.conversation)}`;
+    avatar.append(picture);
+  }
   return el('article', {class:'inbox-message ' + direction}, avatar,
     el('div', {class:'inbox-message-body'}, el('div', {class:'inbox-message-meta'},
       el('strong', {text:message.sender_name || message.sender_id || '未知发件人'}),
@@ -3780,6 +3792,7 @@ const CFG_FIELDS = {
   'qq.endpoint': ['QQ 网关地址', '程序主动连接的 QQ 网关 WebSocket 服务地址。'],
   'qq.account_id': ['QQ 机器人账号', '用于确认网关登录账号与当前配置一致的 QQ 号。'],
   'qq.allowed_group_id': ['唯一允许的 QQ 群', '填写后限制到指定的 QQ 群，同时保留本人的普通私聊。'],
+  'web.qq_avatars_enabled': ['平台会话 QQ 头像', '只通过服务端读取获准会话的 QQ 头像；关闭后显示像素头像。'],
   'qq.action_timeout_seconds': ['QQ 操作超时（秒）', '向 QQ 网关发起一次操作后，最多等待多少秒取得响应。'],
   'qq.reconnect_seconds': ['QQ 重连等待（秒）', '与 QQ 网关断开或连接失败后，等待多久再连接。'],
 };

@@ -12,8 +12,12 @@ MAX_FILE_BYTES = 700 * 1024
 MAX_IMAGE_PIXELS = 16_000_000
 _NAME = re.compile(r"[^\W.][\w .()-]{0,95}\.(?:txt|png|jpe?g|gif|webp)", re.IGNORECASE)
 _TYPES = {
-    "txt": "text/plain", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-    "gif": "image/gif", "webp": "image/webp",
+    "txt": "text/plain",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
 }
 
 

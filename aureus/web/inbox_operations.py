@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from aureus.channels.qq_desktop import DesktopError, QQDesktop
+from aureus.channels import DesktopError, QQDesktop
 from aureus.common import Clock
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 
@@ -39,9 +39,13 @@ class PokeOperation(BaseModel):
 
 
 def register_inbox_operations(
-    app: FastAPI, require_ready: Callable[..., Awaitable[str]],
-    is_active: Callable[[str], bool], same_origin: Callable[[Request], bool],
-    store: InboxStore | None, desktop: QQDesktop | None, clock: Clock | None,
+    app: FastAPI,
+    require_ready: Callable[..., Awaitable[str]],
+    is_active: Callable[[str], bool],
+    same_origin: Callable[[Request], bool],
+    store: InboxStore | None,
+    desktop: QQDesktop | None,
+    clock: Clock | None,
     allows_delivery: Callable[[], bool] | None,
 ) -> None:
     """注册有限桌面操作，沿用心跳实际投递前的急停与维护暂停检查。"""
@@ -73,7 +77,9 @@ def register_inbox_operations(
         return result
 
     async def execute[T](
-        request: Request, token: str, key: ConversationKey,
+        request: Request,
+        token: str,
+        key: ConversationKey,
         operation: Callable[[QQDesktop, Callable[[], None]], Awaitable[T]],
     ) -> T:
         nonlocal in_flight, last_operation
@@ -83,7 +89,8 @@ def register_inbox_operations(
         if in_flight:
             raise HTTPException(429, "上一项 QQ 操作尚未完成。")
         if (
-            clock is not None and last_operation is not None
+            clock is not None
+            and last_operation is not None
             and clock.now() - last_operation < MIN_OPERATION_INTERVAL
         ):
             raise HTTPException(429, "QQ 操作过于频繁。", headers={"Retry-After": "1"})
@@ -117,7 +124,8 @@ def register_inbox_operations(
 
     @app.post("/api/inbox/operations/text")
     async def send_text(
-        request: Request, body: TextOperation,
+        request: Request,
+        body: TextOperation,
         token: Annotated[str, Depends(require_ready)],
         key: Annotated[ConversationKey, Depends(_conversation_key)],
     ) -> dict[str, str]:
@@ -134,7 +142,8 @@ def register_inbox_operations(
 
     @app.post("/api/inbox/operations/poke")
     async def send_poke(
-        request: Request, body: PokeOperation,
+        request: Request,
+        body: PokeOperation,
         token: Annotated[str, Depends(require_ready)],
         key: Annotated[ConversationKey, Depends(_conversation_key)],
     ) -> dict[str, bool]:
@@ -147,7 +156,8 @@ def register_inbox_operations(
 
     @app.post("/api/inbox/operations/file")
     async def upload_file(
-        request: Request, token: Annotated[str, Depends(require_ready)],
+        request: Request,
+        token: Annotated[str, Depends(require_ready)],
         key: Annotated[ConversationKey, Depends(_conversation_key)],
         name: Annotated[str, Query(min_length=1, max_length=120)],
         confirmed: Annotated[Literal["yes"], Query()],

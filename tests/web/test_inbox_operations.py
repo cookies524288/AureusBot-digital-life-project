@@ -10,9 +10,10 @@ import httpx
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
-from aureus.channels.qq import QQChannel
+from aureus.channels import QQAvatars, QQChannel
 from aureus.common import ManualClock, QQConfig
 from aureus.heartbeat.inbox_store import InboxStore
+from aureus.safety import ACTION_REPLY_TO_USER, EmergencyStop, PermissionChecker
 from tests.channels.test_qq_inbox import Receiver
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, event
 from tests.web.config_rig import ConfigRig
@@ -27,15 +28,19 @@ ORIGIN = {"Origin": "http://testserver"}
 
 @pytest.mark.asyncio
 async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_path: Path) -> None:
-    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    clock = ManualClock(NOW)
+    store = InboxStore(tmp_path / "inbox.db", clock)
+    halt = EmergencyStop(tmp_path / "halt.json", clock)
+    permissions = PermissionChecker(halt)
     calls: list[dict[str, Any]] = []
-    allowed = True
     revoke_on_member = False
+    avatar_url = f"https://q.qlogo.cn/g?b=qq&nk={PEER}&s=100"
+    fetches: list[str] = []
+    redirect_avatar = False
     private = {**SCOPE, "recipient_id": str(PEER), "kind": "private"}
     ready = asyncio.Event()
 
     async def handle(socket: ServerConnection) -> None:
-        nonlocal allowed
         async for raw in socket:
             call = json.loads(raw)
             calls.append(call)
@@ -48,13 +53,15 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     reply = {"group_name": "测试群"}
                 case "get_msg":
                     reply = {
-                        "message_id": -10, "message_type": "group",
-                        "group_id": GROUP, "user_id": PEER,
+                        "message_id": -10,
+                        "message_type": "group",
+                        "group_id": GROUP,
+                        "user_id": PEER,
                     }
                 case "get_group_member_info":
                     reply = {"group_id": GROUP, "user_id": PEER, "nickname": "合成成员"}
                     if revoke_on_member:
-                        allowed = False
+                        halt.engage("合成急停")
                 case "send_msg":
                     if call["params"]["message_type"] == "group":
                         reply = {"message_id": -55}
@@ -64,9 +71,18 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     reply = {"file_id": "/fixture-group-file"}
                 case "upload_private_file":
                     reply = {"file_id": "fixture-private-file"}
-            await socket.send(json.dumps({
-                "echo": call["echo"], "status": status, "retcode": retcode, "data": reply,
-            }))
+                case "_get_friend_dress":
+                    reply = {"target_uin": str(PEER), "avatar_url": avatar_url}
+            await socket.send(
+                json.dumps(
+                    {
+                        "echo": call["echo"],
+                        "status": status,
+                        "retcode": retcode,
+                        "data": reply,
+                    }
+                )
+            )
             if call["action"] == "get_login_info":
                 records = (event(-10, PEER, "群原件", group=GROUP), event(11, PEER, "私聊原件"))
                 for record in records:
@@ -76,26 +92,56 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
         if len(store.visible_conversation_keys()) == 2:
             ready.set()
 
+    def fetch_avatar(request: httpx.Request) -> httpx.Response:
+        fetches.append(str(request.url))
+        assert not request.headers.get("Cookie") and not request.headers.get("Referer")
+        if redirect_avatar:
+            return httpx.Response(302, headers={"Location": "https://unlisted.invalid/photo"})
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "image/png"},
+            stream=httpx.ByteStream(b"\x89PNG\r\n\x1a\n"),
+        )
+
     async with asyncio.timeout(10), serve(handle, "127.0.0.1", 0) as server:
         address = server.sockets[0].getsockname()
         config = QQConfig(
-            enabled=True, account_id=str(ACCOUNT), allowed_group_id=str(GROUP),
+            enabled=True,
+            account_id=str(ACCOUNT),
+            allowed_group_id=str(GROUP),
             endpoint=f"ws://127.0.0.1:{address[1]}",
         )
         async with QQChannel(
-            config, None, Receiver(), lambda account: account == str(PEER),
-            inbox_store=store, on_inbox_message=notice,
+            config,
+            None,
+            Receiver(),
+            lambda account: account == str(PEER),
+            inbox_store=store,
+            on_inbox_message=notice,
         ) as channel:
             await ready.wait()
-            rig = ConfigRig(tmp_path, inbox_store=store, qq_desktop=channel.desktop,
-                            allows_inbox_conversation=channel.allows_inbox_conversation,
-                            allows_qq_delivery=lambda: allowed)
+            rig = ConfigRig(
+                tmp_path,
+                inbox_store=store,
+                qq_desktop=channel.desktop,
+                allows_inbox_conversation=channel.allows_inbox_conversation,
+                allows_qq_delivery=lambda: permissions.check(ACTION_REPLY_TO_USER).allowed,
+                qq_avatars=QQAvatars(
+                    channel.desktop,
+                    clock,
+                    transport=httpx.MockTransport(fetch_avatar),
+                ),
+            )
             try:
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=rig.app), base_url="http://testserver"
                 ) as client:
+
                     async def submit(
-                        kind: str, body: dict[str, Any], *, scope: dict[str, str] = SCOPE,
+                        kind: str,
+                        body: dict[str, Any],
+                        *,
+                        scope: dict[str, str] = SCOPE,
                         headers: dict[str, str] = ORIGIN,
                     ) -> httpx.Response:
                         response = await client.post(
@@ -117,34 +163,65 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     assert (await submit("text", text, scope=temporary)).status_code == 403
                     page = (await client.get("/api/inbox/messages", params=SCOPE)).json()
                     anchor = page["messages"][0]["id"]
+                    photo = f"/api/inbox/messages/{anchor}/avatar"
+                    assert (await client.get(photo, params=private)).status_code == 404
+                    assert (await client.get(photo, params=other)).status_code == 404
+                    assert not fetches
+                    result = await client.get(photo, params=SCOPE)
+                    assert result.is_success and result.headers["cache-control"] == "no-store"
+                    assert result.headers["cross-origin-resource-policy"] == "same-origin"
+                    assert (await client.get(photo, params=SCOPE)).is_success
+                    assert fetches == [avatar_url]
+                    direct_page = (await client.get("/api/inbox/messages", params=private)).json()
+                    direct = f"/api/inbox/messages/{direct_page['messages'][0]['id']}/avatar"
+                    # 同一人出现在另一段会话时也不沿用原会话的授权与缓存。
+                    redirect_avatar = True
+                    assert (await client.get(direct, params=private)).status_code == 404
+                    assert fetches == [avatar_url, avatar_url]
+                    clock.advance(timedelta(minutes=6))
+                    avatar_url = "https://unlisted.invalid/photo"
+                    assert (await client.get(photo, params=SCOPE)).status_code == 404
+                    assert len(fetches) == 2
                     quoted = {**text, "quote": anchor}
                     assert (await submit("text", quoted, scope=private)).status_code == 404
                     assert (await submit("text", {**quoted, "mention": anchor})).json() == {
                         "message_id": "-55",
                     }
                     sent = next(call["params"] for call in calls if call["action"] == "send_msg")
-                    assert sent == {"group_id": str(GROUP), "message_type": "group", "message": [
-                        {"type": "reply", "data": {"id": "-10"}},
-                        {"type": "at", "data": {"qq": str(PEER)}},
-                        {"type": "text", "data": {"text": text["text"]}},
-                    ]}
+                    assert sent == {
+                        "group_id": str(GROUP),
+                        "message_type": "group",
+                        "message": [
+                            {"type": "reply", "data": {"id": "-10"}},
+                            {"type": "at", "data": {"qq": str(PEER)}},
+                            {"type": "text", "data": {"text": text["text"]}},
+                        ],
+                    }
                     page = (await client.get("/api/inbox/messages", params=SCOPE)).json()
                     outbound = page["messages"][0]
                     assert outbound["direction"] == "outgoing"
                     assert outbound["platform_message_id"] == "-55"
                     assert [part["kind"] for part in outbound["components"]] == [
-                        "reply", "at", "text",
+                        "reply",
+                        "at",
+                        "text",
                     ]
                     poke = {"confirmed": True}
                     assert (await submit("poke", {**poke, "member": anchor})).status_code == 501
                     assert (await submit("poke", poke, scope=private)).json() == {"accepted": True}
                     assert (await submit("text", text, scope=private)).status_code == 502
+
                     async def upload(
-                        scope: dict[str, str], name: str, data: bytes, mime: str = "text/plain",
+                        scope: dict[str, str],
+                        name: str,
+                        data: bytes,
+                        mime: str = "text/plain",
                     ) -> httpx.Response:
                         response = await client.post(
-                            f"{BASE}/file", params={**scope, "name": name, "confirmed": "yes"},
-                            headers={**ORIGIN, "Content-Type": mime}, content=data,
+                            f"{BASE}/file",
+                            params={**scope, "name": name, "confirmed": "yes"},
+                            headers={**ORIGIN, "Content-Type": mime},
+                            content=data,
                         )
                         rig.clock.advance(timedelta(seconds=1))
                         return response
@@ -159,7 +236,9 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     assert (await upload(private, "test.txt", b"data")).json() == {
                         "file_id": "fixture-private-file",
                     }
-                    uploads = [call["params"] for call in calls if call["action"].startswith("upload_")]
+                    uploads = [
+                        call["params"] for call in calls if call["action"].startswith("upload_")
+                    ]
                     assert uploads == [
                         {"group_id": str(GROUP), "name": "合成.txt", "file": "base64://ZGF0YQ=="},
                         {"user_id": str(PEER), "name": "test.txt", "file": "base64://ZGF0YQ=="},

@@ -5,6 +5,8 @@
 
 from .onebot import QQ_CHANNEL_NAME
 from .qq import QQChannel
+from .qq_avatar import QQAvatars
+from .qq_desktop import DesktopError, QQDesktop
 from .terminal import CHANNEL_NAME, TERMINAL_USER_ID, TerminalChannel
 from .web import CHANNEL_NAME as WEB_CHANNEL_NAME
 from .web import WEB_USER_ID, WebChannel
@@ -15,7 +17,10 @@ __all__ = [
     "TERMINAL_USER_ID",
     "WEB_CHANNEL_NAME",
     "WEB_USER_ID",
+    "DesktopError",
+    "QQAvatars",
     "QQChannel",
+    "QQDesktop",
     "TerminalChannel",
     "WebChannel",
 ]
