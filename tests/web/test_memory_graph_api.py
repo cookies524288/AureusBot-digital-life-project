@@ -8,7 +8,7 @@ from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx2 import Response
 
 from aureus.channels import WebChannel
 from aureus.memory import (

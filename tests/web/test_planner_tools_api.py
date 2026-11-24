@@ -12,12 +12,18 @@ from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.planner_tools import PlannerToolOptions, planner_tools
 from aureus.identity import Identity
 from aureus.memory import MemoryIndex
+from aureus.organs import OrganRequest, OrganResponse
 from aureus.safety import EmergencyStop, PermissionChecker
 from tests.web.config_rig import ConfigRig
 
 
 class _CustomPlannerConfig(HeartbeatConfig):
     plan_organ: ClassVar[str] = "custom-planner"
+
+
+class _UnusedOrganCaller:
+    async def call(self, request: OrganRequest) -> OrganResponse:
+        raise AssertionError(f"不应调用器官：{request.organ_id}")
 
 
 @pytest.mark.parametrize(
@@ -55,7 +61,7 @@ def test_planner_tool_catalog_uses_active_binding_and_runtime_capabilities(
         heartbeat = Heartbeat(
             clock=rig.clock,
             timeline=rig.timeline,
-            organs=rig.models.bus,
+            organs=_UnusedOrganCaller(),
             identity=Identity.model_validate(
                 {
                     "facts": {"name": "测试助手", "birthday": "2026-11-23"},

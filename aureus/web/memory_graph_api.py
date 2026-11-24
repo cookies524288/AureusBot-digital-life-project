@@ -245,6 +245,8 @@ def _grant_request(body: object) -> tuple[str, tuple[GraphCategory, ...]]:
             and isinstance(categories, list) and len(categories) <= len(GRAPH_CATEGORIES)
             and all(category in GRAPH_CATEGORIES for category in categories)
         ):
-            selected = tuple(category for category in GRAPH_CATEGORIES if category in categories)
+            selected: tuple[GraphCategory, ...] = tuple(
+                category for category in GRAPH_CATEGORIES if category in categories
+            )
             return password, selected
     raise HTTPException(422, "请选择展示类别并确认密码。", headers=_NO_STORE)
