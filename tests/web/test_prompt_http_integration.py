@@ -137,6 +137,104 @@ def _dialogue(record_id: int, actor: ActorType, content: str) -> TimelineRecord:
 
 
 @pytest.mark.asyncio
+async def test_emoji_text_preview_matches_actual_http_request(
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, emoji_store: EmojiStore
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
+
+    for color, description in (("red", "合成   欢呼"), ("blue", "合成\n道谢")):
+        emoji_store.collect(synthetic_emoji(color), description=description, register=True)
+    first, second = emoji_store.candidates()
+    actual: list[list[dict[str, str]]] = []
+    suggestions = iter((1, 0, "1", 3))
+
+    def provider_reply(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://prompt-test.invalid/v1/chat/completions"
+        actual.append(json.loads(request.content)["messages"])
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-emoji-text-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "sample-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps({"selected": next(suggestions)}),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    adapter = LLMOrgan(
+        "replyer",
+        mock_models().routes_for("replyer"),
+        KeyResolver(tmp_path / "unused", environ={"AUREUS_KEY_PROMPT_HTTP_TEST": "mock"}),
+        token_counter=lambda _messages: 12,
+        prompts=rig.models.prompts,
+    )
+    selector = EmojiSelector(emoji_store, adapter.process, ManualClock(NOW), HeartbeatConfig(), UTC)
+    history = [_dialogue(1, ActorType.PERSON, "合成招呼")]
+
+    def forbid_catalog(*_args: object) -> None:
+        pytest.fail("预览不可读取表情目录或媒体")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider_reply)) as client:
+        monkeypatch.setattr(litellm, "aclient_session", client)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(EmojiStore, "candidates", forbid_catalog)
+                patch.setattr(EmojiStore, "read_sendable", forbid_catalog)
+                preview = rig.client.get("/api/organs/replyer/prompt-preview")
+            assert preview.status_code == 200
+            assert not actual
+            [scene] = [scene for scene in preview.json()["scenes"] if scene["id"] == "emoji"]
+            assert scene["label"] == "QQ 表情文字选择"
+            assert "合成招呼" not in preview.text
+            results = [
+                await selector.select(
+                    EmojiIntent("合成情绪", before_text=True),
+                    history,
+                    "模拟用户",
+                    ModelPreference.PREFERRED,
+                    has_embedding=False,
+                )
+                for _ in range(4)
+            ]
+        finally:
+            litellm.in_memory_llm_clients_cache.flush_cache()
+
+    selected, *unselected = results
+    assert selected is not None and selected.digest == first.digest and selected.before_text
+    assert unselected == [None, None, None]
+    assert [message["role"] for message in scene["messages"]] == ["system", "user"]
+    expected = _expanded_messages(
+        scene["messages"],
+        {
+            "〔聊天历史〕": f"[{NOW:%m-%d %H:%M}] 模拟群友：合成招呼",
+            "〔表情情绪意图〕": "合成情绪",
+            "〔候选表情描述一〕": " ".join(first.description.split()),
+            "〔候选表情描述二〕": " ".join(second.description.split()),
+        },
+    )
+    assert '只返回 JSON {"selected": 编号}' in expected[0]["content"]
+    assert expected[1]["content"].split("\n\n") == [
+        f"近期对话\n[{NOW:%m-%d %H:%M}] 模拟群友：合成招呼",
+        "情绪意图：合成情绪",
+        f"候选表情\n1. {' '.join(first.description.split())}"
+        f"\n2. {' '.join(second.description.split())}",
+    ]
+    assert actual == [expected] * 4
+
+
+@pytest.mark.asyncio
 async def test_emoji_visual_preview_matches_actual_http_request_without_reading_media(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, emoji_store: EmojiStore
 ) -> None:
