@@ -118,7 +118,9 @@ const context = vm.createContext({
     createElementNS: (_, tag) => element(tag),
     createTextNode: text => Object.assign(element(), { nodeType: 3, textContent: text }),
     documentElement: { dataset: {} },
+    hidden: false,
   },
+  navigator: { onLine: true },
   window: { listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; } },
   localStorage: { getItem: () => null },
   location: { protocol: 'http:', host: 'localhost', hash: '' },
@@ -193,7 +195,9 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
             archives:[{archive:'imported', name:'迁入原件'}],
           });
           if (path.includes('view=description')) {
-            return reply(200, {source:'emoji_catalog', description:'合成描述'});
+            return reply(200, path.includes('/images/1?')
+              ? {source:'emoji_catalog', description:'合成描述'}
+              : {source:null, description:null});
           }
           if (path.startsWith('/api/inbox/history-cleanup?')) return reply(200, {preview:null});
           if (path.startsWith('/api/inbox/uncategorized?')) return reply(200,
@@ -237,7 +241,7 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
         assert.match(second.children[0].children[0].attributes.src,
           /^\/api\/inbox\/messages\/13\/images\/1\?/);
         await first.children[2].listeners.click[0]();
-        assert.match(first.children[1].textContent, /没有保存/);
+        assert.match(first.children[1].textContent, /没有可核验的已有描述/);
         assert.equal(second.children[1].classList.contains('hidden'), true);
         await second.children[2].listeners.click[0]();
         assert.match(second.children[1].textContent, /来源：表情资料库.*\n合成描述/);
@@ -436,7 +440,9 @@ def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bu
         state.page = 'chat';
         openSocket();
         let finishHistory;
+        const typing = {ok:true, data:{typing:false}};
         api = path => {
+          if (path === '/api/chat/typing') return Promise.resolve(typing);
           if (path === '/api/inbox/conversations') {
             return Promise.resolve({ok:true, data:{enabled:false}});
           }
@@ -464,6 +470,7 @@ def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bu
         }));
         const requested = [];
         api = async path => {
+          if (path === '/api/chat/typing') return typing;
           requested.push(path);
           if (requested.length === 1) {
             push(replacement, 2, '同一段文字');
@@ -572,6 +579,7 @@ def test_persona_pronoun_updates_existing_labels_and_not_user_text() -> None:
         api = async (path, method, body) => {
           if (path === '/api/status') return {ok:true, data:{bot_pronoun:pronoun}};
           if (path === '/api/history') return {ok:true, data:[]};
+          if (path === '/api/chat/typing') return {ok:true, data:{typing:false}};
           assert.equal(path, '/api/settings');
           if (method === 'PUT') {
             writes.push(body.facts);
