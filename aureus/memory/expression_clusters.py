@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from aureus.common.sqlite import open_connection
 from aureus.memory.language import LanguageKind, LanguageStore
-from aureus.memory.language_matching import ExpressionReviewStatus, LanguageEntry
+from aureus.memory.language_matching import LanguageEntry
 
 _CLUSTER_SEED = 20260621
 _MAX_ITERATIONS = 100
@@ -178,7 +178,7 @@ class ExpressionClusterStore:
             if entry.entry_key in allowed
             and not entry.is_removed
             and not entry.pending_scope
-            and entry.review_status != ExpressionReviewStatus.REJECTED
+            and entry.can_reference_expression()
         }
         visible: dict[tuple[str, int], list[ExpressionClusterMember]] = {}
         for row in rows:
