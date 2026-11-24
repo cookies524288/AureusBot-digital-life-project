@@ -31,6 +31,10 @@ def open_edits(connection: Connection) -> None:
             connection.execute(
                 "ALTER TABLE memory_edits ADD COLUMN is_removed INTEGER NOT NULL DEFAULT 0"
             )
+        if "is_bundle_removed" not in columns:
+            connection.execute(
+                "ALTER TABLE memory_edits ADD COLUMN is_bundle_removed INTEGER NOT NULL DEFAULT 0"
+            )
         if (
             connection.execute(
                 "SELECT 1 FROM sqlite_schema WHERE name = 'memory_edits_fts'"

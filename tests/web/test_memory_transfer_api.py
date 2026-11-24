@@ -1,9 +1,11 @@
 """验证文字记忆交换与按原时间浏览。"""
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -32,6 +34,65 @@ EMPTY_COUNTS = {
     "episodes": 0,
     "other": 0,
 }
+BUNDLES = "/api/resources/memory/bundles"
+BUNDLE_HEADERS = {"origin": "http://testserver", "content-type": "application/zip"}
+
+
+def _maibot_bundle(
+    package_id: str,
+    *,
+    state_tables: dict[str, list[dict[str, object]]] | None = None,
+    unsupported_member: bool = False,
+    bad_checksum: bool = False,
+) -> bytes:
+    def encode(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+
+    knowledge = {
+        "format": "lpmm_openie",
+        "format_version": 1,
+        "docs": [
+            {
+                "id": "p1",
+                "passage": "合成海岛旅行日记",
+                "extracted_entities": ["海岛"],
+                "extracted_triples": [["海岛", "位于", "海上"]],
+                "a_memorix": {"source": "chat:synthetic", "metadata": {"chat_id": "synthetic"}},
+            }
+        ],
+    }
+    state = (
+        None
+        if state_tables is None
+        else {
+            "schema": "a-memorix-semantic-state",
+            "schema_version": 1,
+            "tables": state_tables,
+        }
+    )
+    manifest = {
+        "format": "a-memorix-memory-bundle",
+        "format_version": 1,
+        "package": {"id": package_id, "version": "1.0.0", "name": "合成记忆包"},
+        "content_level": "knowledge" if state is None else "full",
+        "content_digest": hashlib.sha256(
+            encode({"knowledge": knowledge, "state": state})
+        ).hexdigest(),
+    }
+    members = {"manifest.json": encode(manifest), "knowledge.json": encode(knowledge)}
+    if state is not None:
+        members["state.json"] = encode(state)
+    if unsupported_member:
+        members["vectors/paragraphs.npz"] = b"synthetic"
+    checksums = {name: hashlib.sha256(content).hexdigest() for name, content in members.items()}
+    if bad_checksum:
+        checksums["knowledge.json"] = "wrong"
+    members["checksums.json"] = encode({"algorithm": "sha256", "files": checksums})
+    buffer = BytesIO()
+    with ZipFile(buffer, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
 
 
 def _open_memory(path: Path, clock: ManualClock) -> tuple[TimelineDatabase, MemoryIndex]:
@@ -57,6 +118,114 @@ def _client(memory: MemoryIndex | None, clock: ManualClock | None = None) -> Tes
     )
     register_resource_routes(app, require_ready, None, memory, same_origin=same_origin)
     return TestClient(app)
+
+
+def test_maibot_bundle_installs_in_recall_and_uninstalls_only_exclusive_material(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 24, tzinfo=UTC))
+    timeline, memory = _open_memory(tmp_path / "bundle.db", clock)
+    native = HistoricalMemory(MemorySource("aureus", "native", "paragraphs", (1,)), "原有旅行日记")
+    memory.publish([native])
+    try:
+        with _client(memory) as client:
+            client.cookies.set("session", "test")
+            first = _maibot_bundle("first")
+            preview = client.post(BUNDLES + "/preview", content=first, headers=BUNDLE_HEADERS)
+            assert preview.status_code == 200, preview.text
+            assert preview.json()["counts"]["paragraphs"] == 1
+            assert not client.get(BUNDLES).json()["items"]
+            assert len(memory.search(["旅行日记"], set(), 10)) == 1
+
+            response = client.post(BUNDLES, content=first, headers=BUNDLE_HEADERS)
+            assert response.status_code == 200, response.text
+            first_id = response.json()["installation_id"]
+            repeated = client.post(BUNDLES, content=first, headers=BUNDLE_HEADERS)
+            assert repeated.json()["already_installed"]
+            second = client.post(BUNDLES, content=_maibot_bundle("second"), headers=BUNDLE_HEADERS)
+            assert second.json()["added"] == 0
+            second_id = second.json()["installation_id"]
+            paragraph = next(
+                record
+                for record in memory.browse_history("", "", 0, 10)
+                if record.source != native.source and record.source.table == "paragraphs"
+            )
+            assert paragraph.evidence[0].reference == "chat:synthetic"
+            assert paragraph.evidence[1].reference == "synthetic"
+            assert len(memory.search(["旅行日记"], set(), 10)) == 2
+
+            def change(installation_id: str, action: str) -> None:
+                result = client.post(
+                    f"{BUNDLES}/{installation_id}/{action}", headers=BUNDLE_HEADERS
+                )
+                assert result.status_code == 200, result.text
+
+            change(first_id, "uninstall")
+            assert len(memory.search(["旅行日记"], set(), 10)) == 2
+            change(second_id, "uninstall")
+            assert len(memory.search(["旅行日记"], set(), 10)) == 1
+            assert memory.get_history(paragraph.source) is not None
+            assert not any(item["installed"] for item in client.get(BUNDLES).json()["items"])
+            downloaded = client.get(f"{BUNDLES}/{first_id}/download")
+            assert downloaded.status_code == 200
+            assert (
+                client.post(
+                    BUNDLES + "/preview", content=downloaded.content, headers=BUNDLE_HEADERS
+                ).json()["status"]
+                == "uninstalled"
+            )
+            change(first_id, "restore")
+            assert len(memory.search(["旅行日记"], set(), 10)) == 2
+            assert paragraph.entry_id is not None
+            assert memory.update_resource("history", paragraph.entry_id, None, False)
+            change(first_id, "uninstall")
+            change(first_id, "restore")
+            assert len(memory.search(["旅行日记"], set(), 10)) == 1
+    finally:
+        memory.close()
+        timeline.close()
+
+
+def test_maibot_full_bundle_requires_empty_store_and_rejects_unsupported_members(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 24, tzinfo=UTC))
+    timeline, memory = _open_memory(tmp_path / "restore.db", clock)
+    tables: dict[str, list[dict[str, object]]] = {
+        "paragraphs": [{"hash": "p1", "content": "合成海岛旅行日记"}],
+        "episodes": [{"episode_id": "e1", "title": "旅行情景", "summary": "参观了海岛"}],
+        "episode_paragraphs": [{"episode_id": "e1", "paragraph_hash": "p1"}],
+    }
+    unsupported_tables: dict[str, list[dict[str, object]]] = {"fact_claims": [{"claim_id": "x"}]}
+    try:
+        with _client(memory) as client:
+            client.cookies.set("session", "test")
+            for malformed in (
+                _maibot_bundle("vector", unsupported_member=True),
+                _maibot_bundle("corrupt", bad_checksum=True),
+                _maibot_bundle("state", state_tables=tables | unsupported_tables),
+            ):
+                for path in (BUNDLES + "/preview", BUNDLES):
+                    rejected = client.post(path, content=malformed, headers=BUNDLE_HEADERS)
+                    assert rejected.status_code == 422, rejected.text
+            assert not client.get(BUNDLES).json()["items"]
+            full = _maibot_bundle("full", state_tables=tables)
+            preflight = client.post(BUNDLES + "/preview", content=full, headers=BUNDLE_HEADERS)
+            assert preflight.json()["restore_blocked"] == ""
+            restored = client.post(BUNDLES + "?mode=restore", content=full, headers=BUNDLE_HEADERS)
+            assert restored.status_code == 200, restored.text
+            episodes, _ = memory.browse_history_page("", "", 0, 10, source_table="episodes")
+            assert episodes[0].text == "旅行情景\n参观了海岛"
+            assert episodes[0].evidence[0].source is not None
+            assert (
+                client.post(
+                    BUNDLES + "?mode=restore", content=full, headers=BUNDLE_HEADERS
+                ).status_code
+                == 409
+            )
+    finally:
+        memory.close()
+        timeline.close()
 
 
 def test_memory_package_preview_counts_all_rows_before_confirming_real_import(

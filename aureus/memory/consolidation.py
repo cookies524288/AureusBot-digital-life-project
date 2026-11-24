@@ -237,6 +237,7 @@ def read_candidates(
                AND live_edit.edited_content IS NULL)
            OR (h.status = 'active' AND coalesce(history_edit.is_enabled, 1)
                AND NOT coalesce(history_edit.is_removed, 0)
+               AND NOT coalesce(history_edit.is_bundle_removed, 0)
                AND history_edit.edited_content IS NULL
                AND (h.valid_from IS NULL OR h.valid_from <= ?)
                AND (h.valid_to IS NULL OR h.valid_to > ?))

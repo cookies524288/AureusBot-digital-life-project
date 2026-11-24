@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import timedelta
 from tempfile import TemporaryFile
-from typing import Annotated, Any, BinaryIO, cast
+from typing import Annotated, Any, BinaryIO, Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -15,6 +15,12 @@ from starlette.background import BackgroundTask
 
 from aureus.common import Clock, SystemClock
 from aureus.memory import MemoryEventType, MemoryIndex
+from aureus.memory.bundle_format import (
+    MAX_BUNDLE_BYTES,
+    BundleMode,
+    MemoryBundleConflictError,
+    MemoryBundleError,
+)
 from aureus.memory.transfer import (
     ARCHIVE_MEDIA_TYPE,
     MemoryArchiveConflictError,
@@ -28,6 +34,8 @@ _CHUNK_SIZE = 1024 * 1024
 _MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 _FLOW_PATH = "/api/resources/memory/flow"
 _TRANSFER_PATH = "/api/resources/memory/transfer"
+_BUNDLE_PATH = "/api/resources/memory/bundles"
+_BUNDLE_MEDIA_TYPE = "application/zip"
 
 
 def _download(file: BinaryIO) -> Iterator[bytes]:
@@ -35,22 +43,26 @@ def _download(file: BinaryIO) -> Iterator[bytes]:
 
 
 @asynccontextmanager
-async def _read_upload(request: Request) -> AsyncIterator[BinaryIO]:
-    if request.headers.get("content-type") != ARCHIVE_MEDIA_TYPE:
-        raise HTTPException(415, "请选择 Aureus 导出的 JSONL 记忆包。")
+async def _read_upload(request: Request, *, bundle: bool = False) -> AsyncIterator[BinaryIO]:
+    media_type = _BUNDLE_MEDIA_TYPE if bundle else ARCHIVE_MEDIA_TYPE
+    if request.headers.get("content-type") != media_type:
+        hint = "请选择 .amembundle 记忆包。" if bundle else "请选择 Aureus 导出的 JSONL 记忆包。"
+        raise HTTPException(415, hint)
     with cast(BinaryIO, TemporaryFile()) as file:
         size = 0
         async for chunk in request.stream():
             size += len(chunk)
-            if size > _MAX_ARCHIVE_BYTES:
-                raise HTTPException(413, "记忆包最大为 2 GiB。")
+            if size > (MAX_BUNDLE_BYTES if bundle else _MAX_ARCHIVE_BYTES):
+                raise HTTPException(
+                    413, "记忆包超过上传大小上限。" if bundle else "记忆包最大为 2 GiB。"
+                )
             await asyncio.to_thread(file.write, chunk)
         file.seek(0)
         try:
             yield file
-        except MemoryArchiveConflictError as error:
+        except (MemoryArchiveConflictError, MemoryBundleConflictError) as error:
             raise HTTPException(409, str(error)) from error
-        except MemoryArchiveError as error:
+        except (MemoryArchiveError, MemoryBundleError) as error:
             raise HTTPException(422, str(error)) from error
 
 
@@ -65,6 +77,7 @@ def register_memory_transfer_routes(
 ) -> None:
     """注册记忆流及文件交换，数据库和文件操作交给后台线程。"""
     flow_clock = clock or SystemClock()
+    _register_bundle_routes(app, require_ready, same_origin, memory, require_preview_access)
 
     @app.get(_FLOW_PATH)
     async def memory_flow(
@@ -156,3 +169,93 @@ def register_memory_transfer_routes(
         async with _read_upload(request) as file:
             added, skipped = await asyncio.to_thread(memory.import_archive, file)
         return {"added": added, "skipped": skipped}
+
+
+def _register_bundle_routes(
+    app: FastAPI,
+    require_ready: Callable[..., Awaitable[str]],
+    same_origin: Callable[[Request], bool],
+    memory: MemoryIndex | None,
+    require_preview_access: Callable[..., Awaitable[str]],
+) -> None:
+    def index(request: Request | None = None) -> MemoryIndex:
+        if request is not None and not same_origin(request):
+            raise HTTPException(403, "请从当前网页操作长期记忆包。")
+        if memory is None:
+            raise HTTPException(409, "长期记忆功能当前关闭。")
+        return memory
+
+    @app.post(_BUNDLE_PATH + "/preview")
+    async def preview(
+        request: Request, _token: Annotated[str, Depends(require_preview_access)]
+    ) -> JSONResponse:
+        current = index(request)
+        async with _read_upload(request, bundle=True) as file:
+            report = await asyncio.to_thread(current.preview_bundle, file)
+        return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
+    @app.post(_BUNDLE_PATH)
+    async def install(
+        request: Request, _token: Annotated[str, Depends(require_ready)], mode: BundleMode = "merge"
+    ) -> JSONResponse:
+        current = index(request)
+        async with _read_upload(request, bundle=True) as file:
+            report = await asyncio.to_thread(current.install_bundle, file, mode)
+        return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
+    @app.get(_BUNDLE_PATH)
+    async def installations(
+        _token: Annotated[str, Depends(require_ready)],
+        offset: Annotated[int, Query(ge=0, le=2**63 - 1)] = 0,
+        limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
+    ) -> JSONResponse:
+        items = await asyncio.to_thread(index().list_bundles, offset, limit + 1)
+        return JSONResponse(
+            {
+                "items": items[:limit],
+                "next_offset": offset + limit if len(items) > limit else None,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(_BUNDLE_PATH + "/{installation_id}/{action}")
+    async def set_installed(
+        request: Request,
+        _token: Annotated[str, Depends(require_ready)],
+        installation_id: str,
+        action: Literal["uninstall", "restore"],
+    ) -> dict[str, bool]:
+        installed = action == "restore"
+        if not await asyncio.to_thread(
+            index(request).set_bundle_installed, installation_id, installed
+        ):
+            raise HTTPException(404, "找不到该包安装记录。")
+        return {"installed": installed}
+
+    @app.get(_BUNDLE_PATH + "/{installation_id}/download")
+    async def download(
+        _token: Annotated[str, Depends(require_ready)], installation_id: str
+    ) -> StreamingResponse:
+        current = index()
+
+        def make_file() -> BinaryIO:
+            file = cast(BinaryIO, TemporaryFile())  # noqa: SIM115 - 响应完成时关闭。
+            try:
+                if not current.export_bundle(installation_id, file):
+                    raise HTTPException(404, "找不到该包安装记录。")
+                file.seek(0)
+                return file
+            except BaseException:
+                file.close()
+                raise
+
+        file = await asyncio.to_thread(make_file)
+        return StreamingResponse(
+            _download(file),
+            media_type=_BUNDLE_MEDIA_TYPE,
+            background=BackgroundTask(file.close),
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": 'attachment; filename="maibot-memory.amembundle"',
+            },
+        )

@@ -220,6 +220,7 @@ def read_graph(
                  AND (history.valid_from IS NULL OR history.valid_from <= ?)
                  AND (history.valid_to IS NULL OR history.valid_to > ?)
                  AND coalesce(edit.is_enabled, 1) AND NOT coalesce(edit.is_removed, 0)
+                 AND NOT coalesce(edit.is_bundle_removed, 0)
                ORDER BY history.source_key""",
             (
                 json.dumps([source.encode() for source in allowed_sources]),

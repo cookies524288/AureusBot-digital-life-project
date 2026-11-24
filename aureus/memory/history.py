@@ -264,7 +264,7 @@ def browse_history(
                     AS is_recallable
            FROM memory_history AS history
            LEFT JOIN memory_edits AS edit ON edit.kind = 'history' AND edit.entry_id = history.id
-           WHERE NOT coalesce(edit.is_removed, 0)
+           WHERE NOT coalesce(edit.is_removed, 0) AND NOT coalesce(edit.is_bundle_removed, 0)
            ), filtered AS (SELECT * FROM annotated AS history
            WHERE (? = '' OR status = ?)
              AND (? = '' OR json_extract(source_key, '$[2]') = ?
@@ -347,6 +347,7 @@ def search_history(
         "(valid_to IS NULL OR valid_to > ?)",
         "coalesce(edit.is_enabled, 1) = 1",
         "NOT coalesce(edit.is_removed, 0)",
+        "NOT coalesce(edit.is_bundle_removed, 0)",
     ]
     point = now.timestamp()
     parameters: list[str | int | float] = [point, point]
