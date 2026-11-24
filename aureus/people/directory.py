@@ -278,6 +278,7 @@ class PeopleDirectory:
     publish_bundle_profiles = staticmethod(bundle_profiles.publish)
     set_bundle_profiles_installed = staticmethod(bundle_profiles.set_installed)
     bundle_person_key = staticmethod(bundle_profiles.person_key)
+    bundle_profile_candidates = staticmethod(history.bundle_profile_candidates)
 
     def history_for(
         self, person_id: int, *, limit: int | None = None, use_local_aliases: bool = True

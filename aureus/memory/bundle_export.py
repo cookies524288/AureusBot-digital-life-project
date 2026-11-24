@@ -2,17 +2,22 @@
 
 import json
 import sqlite3
+from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, BinaryIO
 
+from aureus.memory.bundle_closure import BundleProfileSource, add_profiles, build_closure
 from aureus.memory.bundle_format import (
     BUNDLE_FORMAT,
+    ContentLevel,
     MemoryBundle,
     MemoryBundleConflictError,
     bundle_digest,
     paragraph_hash,
     write_bundle,
 )
+from aureus.memory.bundle_sources import select_bundle_records
 from aureus.memory.history import decode_history_row
 from aureus.memory.message_boundary import is_message_source
 
@@ -168,3 +173,130 @@ def export_knowledge(connection: sqlite3.Connection, output: BinaryIO, now: date
         ),
         output,
     )
+
+
+_EXCLUDED = (
+    "不是全库备份。不包含消息正文、已安装包原件、账号绑定、后台任务、审计和实例配置。",
+    "不包含不能确认来源或完整重建的资料、手工画像覆盖和本地别名。",
+    "在线总结和未登记的旧迁入快照没有此入口的导出范围。",
+    "图片原件和向量空间未在此版文字包中导出。",
+)
+
+
+def _build_docs(tables: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    names = {row["hash"]: row["name"] for row in tables["entities"]}
+    triples = {
+        row["hash"]: [row[key] for key in ("subject", "predicate", "object")]
+        for row in tables["relations"]
+    }
+    entities: dict[str, list[str]] = defaultdict(list)
+    relations: dict[str, list[list[str]]] = defaultdict(list)
+    for row in tables["paragraph_entities"]:
+        entities[row["paragraph_hash"]].append(names[row["entity_hash"]])
+    for row in tables["paragraph_relations"]:
+        relations[row["paragraph_hash"]].append(triples[row["relation_hash"]])
+    return [
+        {
+            "id": row["hash"],
+            "passage": row["content"],
+            "extracted_entities": entities[row["hash"]],
+            "extracted_triples": relations[row["hash"]],
+            "a_memorix": {
+                "knowledge_type": row["knowledge_type"],
+                "source": row.get("source", ""),
+                "time_meta": {
+                    name: row[name]
+                    for name in ("event_time", "time_granularity")
+                    if row.get(name) is not None
+                },
+                "metadata": {},
+            },
+        }
+        for row in sorted(tables["paragraphs"], key=lambda row: row["hash"])
+    ]
+
+
+def generate_bundle(
+    connection: sqlite3.Connection,
+    source_ids: Sequence[str],
+    level: ContentLevel,
+    now: datetime,
+    people: BundleProfileSource | None,
+    *,
+    output: BinaryIO | None = None,
+    expected_digest: str | None = None,
+) -> dict[str, Any]:
+    """预检或生成选定闭包；下载时需要与同范围的最新预检匹配。"""
+    with connection:
+        connection.execute("BEGIN")
+        instances, records, excluded = select_bundle_records(connection, source_ids, now)
+        closure = build_closure(connection, records, is_full=level == "full")
+        if level == "full" and people is not None:
+            add_profiles(closure, people.bundle_profile_candidates(connection, instances, now))
+    knowledge = {"format": "lpmm_openie", "format_version": 1, "docs": _build_docs(closure.tables)}
+    state = (
+        {
+            "schema": "a-memorix-semantic-state",
+            "schema_version": 1,
+            "tables": closure.tables,
+            "excluded": list(_EXCLUDED),
+        }
+        if level == "full"
+        else None
+    )
+    digest = bundle_digest({"knowledge": knowledge, "state": state})
+    permit = bundle_digest([sorted(source_ids), level, digest])
+    counts = {
+        table: len(rows)
+        for table, rows in closure.tables.items()
+        if state is not None or table in ("paragraphs", "entities", "relations")
+    }
+    package = {
+        "id": f"amx.{digest[:16]}",
+        "version": "1.0.0",
+        "name": "Aureus 完整语义包" if state is not None else "Aureus 知识包",
+    }
+    components = ["knowledge.json", *(["state.json"] if state is not None else [])]
+    manifest = {
+        "format": BUNDLE_FORMAT,
+        "format_version": 1,
+        "content_level": level,
+        "created_at": now.isoformat(),
+        "content_digest": digest,
+        "package": package,
+        "selector": {"type": "all"},
+        "components": components,
+        "counts": counts,
+        "embedding_fingerprint": None,
+        "compatibility": {
+            "knowledge_semantics": "lpmm_openie",
+            "minimum_a_memorix_bundle_version": 1,
+        },
+    }
+    bundle = MemoryBundle(
+        package["id"],
+        package["version"],
+        package["name"],
+        level,
+        digest,
+        manifest,
+        knowledge,
+        state,
+    )
+    can_export = bool(knowledge["docs"])
+    if output is not None:
+        if not can_export or expected_digest != permit:
+            raise MemoryBundleConflictError("没有可导出段落，或闭包已变化；请重新预检。")
+        write_bundle(bundle, output)
+    return {
+        "content_level": level,
+        "format_version": 1,
+        "counts": counts,
+        "can_export": can_export,
+        "excluded": excluded | closure.skipped,
+        "limitations": list(_EXCLUDED),
+        "content_digest": digest,
+        "preview_digest": permit,
+        "components": components,
+        "installation_id": bundle.installation_id,
+    }

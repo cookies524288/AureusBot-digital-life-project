@@ -224,11 +224,36 @@ class _Projection:
                 self._reference("relation", key) for key in _list(raw.get("relation_ids"))
             )
         elif table == "episodes":
+            fields = {field: _text(raw, field) for field in ("title", "summary")}
+            if all(fields.values()):
+                evidence.append(
+                    MemoryEvidence("bundle_episode_fields", json.dumps(fields, ensure_ascii=False))
+                )
             text = " ".join(dict.fromkeys(filter(None, (_text(raw, "title"), text))))
             evidence.extend(
                 self._reference("paragraph", key) for key in _list(raw.get("evidence_ids_json"))
             )
         elif table == "fact_claims":
+            fields = {
+                field: _text(raw, field)
+                for field in (
+                    "scope_type",
+                    "scope_id",
+                    "fact_key",
+                    "value_text",
+                    "value_normalized",
+                    "polarity",
+                    "cardinality",
+                    "conflict_group",
+                    "stability",
+                    "profile_section",
+                    "authority",
+                )
+            }
+            if all(fields.values()):
+                evidence.append(
+                    MemoryEvidence("bundle_fact_fields", json.dumps(fields, ensure_ascii=False))
+                )
             status = _FACT_STATES.get(_text(raw, "status"), "inactive")
             if _text(raw, "scope_type") == "person":
                 person = _person(row.source.instance, _text(raw, "scope_id"))

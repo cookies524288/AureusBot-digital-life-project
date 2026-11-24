@@ -11,8 +11,16 @@ from typing import Any, BinaryIO
 from aureus.common import Clock, MemoryConfig, SystemClock
 from aureus.common.sqlite import open_connection
 from aureus.memory import bundles
-from aureus.memory.bundle_export import export_knowledge
-from aureus.memory.bundle_format import BundleMode
+from aureus.memory.bundle_closure import BundleProfileSource
+from aureus.memory.bundle_export import export_knowledge, generate_bundle
+from aureus.memory.bundle_format import BundleMode, ContentLevel
+from aureus.memory.bundle_sources import (
+    EXPORT_TABLES,
+    BundleSource,
+    list_bundle_sources,
+    open_bundle_sources,
+    register_bundle_source,
+)
 from aureus.memory.bundles import BundlePeople
 from aureus.memory.consolidation import (
     CandidateKind,
@@ -253,6 +261,7 @@ class MemoryIndex:
             open_edits(conn)
             open_graph_access(conn)
             bundles.open_bundles(conn)
+            open_bundle_sources(conn)
             open_removal_operations(conn)
             open_consolidation(conn)
             open_summaries(conn)
@@ -317,11 +326,17 @@ class MemoryIndex:
         if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
         published: set[str] = set()
+        portable: set[str] = set()
 
         def published_records() -> Iterator[HistoricalMemory]:
             for record in records:
                 if snapshot is not None and record.source.role == "memory":
                     published.add(record.source.encode())
+                    if (
+                        record.source.instance == snapshot[0]
+                        and record.source.table in EXPORT_TABLES
+                    ):
+                        portable.add(record.source.encode())
                 yield record
 
         with self._conn:
@@ -334,6 +349,7 @@ class MemoryIndex:
                 put_graph_sources(self._conn, projected)
                 members = collect_graph_batch_members(snapshot[0], published, projected)
                 save_graph_batch(self._conn, snapshot, members)
+                register_bundle_source(self._conn, snapshot[0], portable)
         return written
 
     def read_graph(self, *, allowed_sources: Collection[MemorySource] | GraphAccess) -> MemoryGraph:
@@ -596,6 +612,32 @@ class MemoryIndex:
         """把当前可用知识段落和证据关系打包。"""
         with closing(open_connection(self._db_path)) as connection:
             export_knowledge(connection, output, self._clock.now())
+
+    def list_bundle_sources(self) -> list[BundleSource]:
+        """列出已可信登记、可供明确选择的资料包来源。"""
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return list_bundle_sources(connection)
+
+    def generate_bundle(
+        self,
+        source_ids: Sequence[str],
+        level: ContentLevel,
+        people: BundleProfileSource | None,
+        *,
+        output: BinaryIO | None = None,
+        expected_digest: str | None = None,
+    ) -> dict[str, Any]:
+        """预检或下载从此库当前可重建语义生成的新包。"""
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return generate_bundle(
+                connection,
+                source_ids,
+                level,
+                self._clock.now(),
+                people,
+                output=output,
+                expected_digest=expected_digest,
+            )
 
     def import_archive(self, file: BinaryIO) -> tuple[int, int]:
         """将文件追加到此运行库，返回新增和跳过条数。"""
