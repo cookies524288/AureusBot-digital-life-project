@@ -1109,6 +1109,90 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       el('time', {datetime:item.occurred_at, class:'muted',
         text:`${new Date(item.occurred_at).getFullYear()}年${fmtTime(item.occurred_at, true)}`})),
   });
+  function graphGrantManager(endpoint, pauseGraph, resumeGraph) {
+    const manager = el('details', {class:'stack'}, el('summary', {text:'管理图谱展示授权'}));
+    const message = el('p', {class:'muted', role:'status'});
+    const batches = el('div', {class:'stack'});
+    const choices = {entities:'实体', relations:'关系（两端也须获准）', evidence:'独立证据'};
+    let pending, saving = false;
+    manager.append(el('p', {class:'muted', text:'只列已登记的发布批次，不预览内容。浏览授权不改变资料本身或内部召回。'}),
+      message, batches);
+
+    function clear() {
+      pending?.abort();
+      pending = null;
+      message.textContent = '';
+      batches.replaceChildren();
+    }
+    async function load() {
+      clear();
+      const request = new AbortController();
+      pending = request;
+      message.textContent = '正在读取发布批次…';
+      const response = await api(endpoint, 'GET', undefined, {}, request.signal);
+      if (pending !== request || !manager.open) return;
+      pending = null;
+      if (!response.ok) {
+        message.textContent = '无法读取发布批次。';
+        batches.append(action('重试读取批次', load));
+        return fail(response);
+      }
+      message.textContent = !response.data.enabled ? '当前未接入展示授权管理。'
+        : response.data.items.length ? '' : '没有可授权的发布批次。旧批次需从原已校验来源重新发布。';
+      batches.replaceChildren(...response.data.items.map(render));
+    }
+    function render(batch) {
+      const group = el('fieldset', {class:'stack'});
+      group.append(el('legend', {text:batch.instance}));
+      const options = Object.entries(choices).map(([value, text]) => {
+        const input = el('input', {type:'checkbox', value});
+        input.checked = batch.categories.includes(value);
+        group.append(el('label', {class:'row'}, input, el('span', {text})));
+        return input;
+      });
+      const password = el('input', {type:'password', required:true});
+      password.autocomplete = 'current-password';
+      group.append(el('label', {class:'stack'}, el('span', {text:'确认当前网页密码'}), password));
+      const form = el('form', {class:'stack'}, group);
+      const save = el('button', {type:'submit', class:'btn small primary', text:'保存展示授权'});
+      const revoke = action('撤回本批授权', () => {
+        if (form.reportValidity()) saveGrant([]);
+      });
+      revoke.disabled = !batch.categories.length;
+      group.append(el('div', {class:'row'}, save, revoke));
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        saveGrant(options.filter(input => input.checked).map(input => input.value));
+      });
+
+      async function saveGrant(categories) {
+        if (saving) return;
+        saving = group.disabled = true;
+        const secret = password.value;
+        password.value = '';
+        pauseGraph();
+        let changed = false;
+        try {
+          const response = await api(`${endpoint}/${encodeURIComponent(batch.batch_id)}`, 'PUT',
+            {categories, password:secret});
+          if (!response.ok) {
+            fail(response);
+            if (response.status === 404 && manager.open) await load();
+            return;
+          }
+          changed = true;
+          toast(categories.length ? '图谱展示授权已更新。' : '本批图谱展示授权已撤回。');
+        } finally {
+          saving = group.disabled = false;
+          resumeGraph(changed);
+        }
+        if (manager.open) await load();
+      }
+      return form;
+    }
+    manager.addEventListener('toggle', () => manager.open ? load() : clear());
+    return {element:manager, close() { manager.open = false; clear(); }};
+  }
   function graphView(panel) {
     const endpoint = '/api/resources/memory/graph';
     const pageSize = 16, accessInterval = 5000;
@@ -1120,7 +1204,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const list = el('div', {id:'memory-graph-result', class:'resource-list memory-graph-list',
       tabindex:'0', role:'region', 'aria-label':'当前页图谱列表', 'aria-live':'polite'});
     const canvas = createMemoryGraphCanvas({el, open, label});
-    let anchor = null, query = '', active = false, suspended = false, revision;
+    const updates = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('memory-graph-grants');
+    const grants = graphGrantManager(endpoint + '/grants', pauseForGrant, finishGrant);
+    let anchor = null, query = '', active = false, suspended = false, savingGrant = false, revision;
     let detailRequest, accessRequest, accessTimer;
     const sources = new Set();
     unanchor.classList.add('hidden');
@@ -1158,12 +1244,29 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     function accessChanged() {
       return anchor ? applyBrowse(null) : pager.reset();
     }
+    function pauseForGrant() {
+      savingGrant = true;
+      pager.hide();
+      list.replaceChildren();
+    }
+    function finishGrant(notify) {
+      if (notify) updates?.postMessage('changed');
+      savingGrant = false;
+      applyBrowse(null);
+      if (active && !suspended && !document.hidden) pager.show();
+    }
+    updates?.addEventListener('message', () => {
+      if (active && !suspended && !savingGrant) accessChanged();
+    });
+    function verifyAccess(signal) {
+      return api(endpoint + '/access', 'GET', undefined, {}, signal);
+    }
     async function checkAccess() {
       clearTimeout(accessTimer);
       if (!revision || accessRequest) return;
       const request = new AbortController();
       accessRequest = request;
-      const response = await api(endpoint + '/access', 'GET', undefined, {}, request.signal);
+      const response = await verifyAccess(request.signal);
       if (request !== accessRequest) return;
       accessRequest = null;
       if (!response.ok || response.graphRevision !== revision) return accessChanged();
@@ -1181,13 +1284,16 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       detailStatus.textContent = '正在读取关系图详情…';
       const response = await api(endpoint + '/detail?' + new URLSearchParams({source}), 'GET', undefined, {}, request.signal);
       if (request !== detailRequest) return;
+      const access = response.ok ? await verifyAccess(request.signal) : null;
+      if (request !== detailRequest) return;
       detailRequest = null;
       detailStatus.textContent = '';
       if (!response.ok) {
         fail(response);
         return response.status === 404 || response.status === 409 ? accessChanged() : pager.reset();
       }
-      if (revision !== response.graphRevision || response.data.source !== source) return accessChanged();
+      if (!access?.ok || revision !== access.graphRevision || revision !== response.graphRevision
+          || response.data.source !== source) return accessChanged();
       const item = response.data;
       const evidence = item.evidence.map(key => field('证据来源', sourceId(key)));
       const nodes = item.kind === 'entity' ? [item] : item.subject.source === item.object.source
@@ -1202,12 +1308,19 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           action(`查看${index === 0 ? '起点' : '终点'}实体：${node.name}`, () => open(node.source))) : [])));
     }
     const pager = createPagedResource({el, list, measure:() => pageSize, label:'关系图分页', error:fail,
-      prepare:invalidate, clearOnError:true, isVisible:() => active && !suspended && !document.hidden,
+      prepare:invalidate, clearOnError:true, isVisible:() => active && !suspended && !savingGrant && !document.hidden,
       request:async ({offset, limit, signal}) => {
         const params = new URLSearchParams({q:query, offset, limit});
         if (anchor) params.set('neighbor_of', anchor);
         const response = await api(endpoint + '?' + params, 'GET', undefined, {}, signal);
-        if (response.ok) Object.assign(response.data, {enabled:true, revision:response.graphRevision});
+        if (response.ok && !signal.aborted) {
+          const access = await verifyAccess(signal);
+          if (!access.ok) return access;
+          if (!response.graphRevision || response.graphRevision !== access.graphRevision) {
+            return {ok:false, status:409, data:{detail:'图谱可见范围已变更，请重试。'}};
+          }
+          Object.assign(response.data, {enabled:true, revision:response.graphRevision});
+        }
         return response;
       },
       empty:data => data.covered ? '没有符合条件的图谱资料' : '当前没有获准的图谱资料',
@@ -1233,7 +1346,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         return row;
       },
     });
-    panel.append(form, count, detailStatus, el('div', {class:'memory-graph-layout'}, canvas.element,
+    panel.append(grants.element, form, count, detailStatus, el('div', {class:'memory-graph-layout'}, canvas.element,
       el('div', {class:'stack'}, el('h3', {text:'当前页图谱列表'}), list, pager.navigation)));
     form.addEventListener('submit', event => {
       event.preventDefault();
@@ -1243,13 +1356,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     function suspend() {
       if (!active || suspended) return;
       suspended = true;
+      grants.close();
       pager.hide();
       list.replaceChildren();
     }
     function resume() {
       if (!active || !suspended || document.hidden) return;
       suspended = false;
-      return pager.show();
+      if (!savingGrant) return pager.show();
     }
     document.addEventListener('visibilitychange', () => document.hidden ? suspend() : resume());
     window.addEventListener('pagehide', suspend);
@@ -1259,10 +1373,11 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       show() {
         active = true;
         suspended = Boolean(document.hidden);
-        if (!suspended) return pager.show();
+        if (!suspended && !savingGrant) return pager.show();
       },
       hide() {
         active = suspended = false;
+        grants.close();
         pager.hide();
         list.replaceChildren();
         applyBrowse(null);
