@@ -809,9 +809,11 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
     <div id="learning-panel-expression" class="stack resource-panel">
       <div class="row resource-navigation" role="group" aria-label="表达浏览">
         <button class="btn small primary" type="button" data-expression-view="list" aria-pressed="true" aria-disabled="true" aria-controls="learning-expression-list">表达列表</button>
+        <button class="btn small" type="button" data-expression-view="quality" aria-pressed="false" aria-controls="learning-panel-quality">质检记录</button>
         <button class="btn small" type="button" data-expression-view="clusters" aria-pressed="false" aria-controls="learning-panel-clusters">表达簇</button>
       </div>
       <div id="learning-expression-list" class="stack resource-panel"></div>
+      <div id="learning-panel-quality" class="stack resource-panel hidden"></div>
       <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
     </div>
     <div id="learning-panel-jargon" class="stack resource-panel hidden"></div>
@@ -3830,6 +3832,8 @@ const CFG_FIELDS = {
   'language.recall_enabled': ['回复参考习得语言', '回复前是否检索可用的表达方式和黑话作为语言参考。'],
   'language.learning_enabled': ['自动学习语言资料', '允许从符合条件的对话提取新的表达方式和黑话。'],
   'language.organ': ['语言学习器官', '指定整理候选表达和黑话时使用的器官。'],
+  'language.expression_quality_enabled': ['独立质检表达', '默认关闭。开启后，学习每批最多额外检查 10 个表达，按可选模型预算计费。不合适、检查失败或预算拒绝的条目不入库；模型通过仍需人工批准才用于回复。'],
+  'language.expression_quality_organ': ['表达质检器官', '独立判断说法是否适合情境及是否过于特指。开启后若未指定或器官未配置，则不采纳新表达；不影响黑话学习。'],
   'language.reference_chars': ['语言参考字数上限', '每种语言参考块最多可带多少字符；设为零时不带入参考。'],
   'language.use_vector_expression': ['表达向量检索', '开启后优先用本地向量索引匹配与当前语境相近的表达候选。'],
   'language.expression_selector_organ': ['表达筛选器官', '指定从向量候选中筛选表达的器官；不填写时不启用该筛选器官。'],

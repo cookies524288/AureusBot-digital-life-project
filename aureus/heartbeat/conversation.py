@@ -47,7 +47,7 @@ from aureus.heartbeat.inbox_attention import InboxResidence, InboxSelection
 from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
-from aureus.heartbeat.language_runner import speaker_key
+from aureus.heartbeat.language_runner import local_language_scope, speaker_key
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome
 from aureus.heartbeat.memory_summary_source import summary_scope_for
 from aureus.heartbeat.people_context import format_people_context
@@ -595,7 +595,7 @@ class ConversationFlow:
             can_quote=can_quote,
             history_route=history_route,
             history_visibility=target.visibility,
-            language_scope_key=route_key,
+            language_scope_key=route_key or local_language_scope(target),
             summary_scope=summary_scope_for(
                 target.channel, target.sender_id, target.trust, target.visibility, route_key,
             ),

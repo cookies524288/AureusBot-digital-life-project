@@ -14,25 +14,32 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from aureus.heartbeat.inbox_store import InboxMessage
+from aureus.common import Clock
+from aureus.heartbeat.events import EVENT_MESSAGE
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage
 from aureus.heartbeat.language_requests import (
     build_comparison,
     build_content_only,
+    build_expression_quality,
     build_extraction,
     build_with_context,
 )
 from aureus.heartbeat.perception import Perception, TrustLevel
 from aureus.memory import (
     MAX_DETAIL,
+    ExpressionQualityDecision,
+    ExpressionQualityReason,
+    ExpressionQualityStatus,
     JargonInference,
     LanguageKind,
     LanguageProposal,
     LanguageSample,
     LanguageStore,
+    expression_proposals,
 )
 from aureus.organs import OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
-from aureus.timeline import TimelineRecord
+from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
 
 logger = logging.getLogger(__name__)
 TASK_NAME = "aureus-language-learning"
@@ -40,6 +47,56 @@ _MAX_PROPOSALS = {LanguageKind.EXPRESSION: 10, LanguageKind.JARGON: 30}
 _MAX_SAMPLE_CHARS = 400
 _MAX_RESPONSE_CHARS = 6000
 OrganCall = Callable[[OrganRequest], Awaitable[OrganResponse]]
+_QUALITY_REASONS = {
+    (True, "matched"): (ExpressionQualityStatus.PASSED, ExpressionQualityReason.MATCHED),
+    (False, "mismatch"): (ExpressionQualityStatus.REJECTED, ExpressionQualityReason.MISMATCH),
+    (False, "too_specific"): (
+        ExpressionQualityStatus.REJECTED,
+        ExpressionQualityReason.TOO_SPECIFIC,
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ExpressionQuality:
+    """显式启用的质检及其独立器官；未绑定时只记录错误，不回退。"""
+
+    organ: str | None
+    clock: Clock
+
+    async def assess(
+        self, call: OrganCall, proposal: LanguageProposal
+    ) -> ExpressionQualityDecision:
+        """获取一条有界结构化建议，按注入时钟记录，不捕获任务取消。"""
+        status, reason = await self._assess(call, proposal)
+        return ExpressionQualityDecision(status, reason, self.clock.now().isoformat())
+
+    async def _assess(
+        self, call: OrganCall, proposal: LanguageProposal
+    ) -> tuple[ExpressionQualityStatus, ExpressionQualityReason]:
+        if not self.organ:
+            return ExpressionQualityStatus.ERROR, ExpressionQualityReason.NO_ROUTE
+        try:
+            reply = await call(build_expression_quality(self.organ, proposal.detail, proposal.text))
+        except CallRejectedError:
+            return ExpressionQualityStatus.ERROR, ExpressionQualityReason.BLOCKED
+        except ValueError:
+            return ExpressionQualityStatus.ERROR, ExpressionQualityReason.NO_ROUTE
+        except Exception as error:
+            logger.warning("表达质检器官失败：%s", type(error).__name__)
+            return ExpressionQualityStatus.ERROR, ExpressionQualityReason.FAILED
+        result = _decode(reply.suggestion)
+        if (
+            isinstance(result, dict)
+            and result.keys() == {"suitable", "reason"}
+            and type(result.get("suitable")) is bool
+            and isinstance(result.get("reason"), str)
+        ):
+            return _QUALITY_REASONS.get(
+                (result["suitable"], result["reason"]),
+                (ExpressionQualityStatus.ERROR, ExpressionQualityReason.INVALID),
+            )
+        return ExpressionQualityStatus.ERROR, ExpressionQualityReason.INVALID
 
 
 @dataclass(frozen=True)
@@ -57,13 +114,22 @@ def queue_language_sample(
     conversation = None
     if inbox_message is not None:
         conversation = inbox_message.conversation.language_scope_key()
-    elif (
+    else:
+        conversation = local_language_scope(perception)
+    return QueuedLanguageSample(
+        language_sample(record, perception.source_message_id, conversation), conversation
+    )
+
+
+def local_language_scope(perception: Perception) -> str | None:
+    """识别不使用平台收件箱的可信本机私聊。"""
+    if (
         perception.channel in ("web", "terminal")
         and perception.trust is TrustLevel.VERIFIED_USER
         and perception.route is None
     ):
-        conversation = json.dumps((perception.channel, perception.sender_id), separators=(",", ":"))
-    return QueuedLanguageSample(language_sample(record, perception.source_message_id), conversation)
+        return json.dumps((perception.channel, perception.sender_id), separators=(",", ":"))
+    return None
 
 
 def take_language_batch(
@@ -93,16 +159,58 @@ def speaker_key(record: TimelineRecord) -> str:
     return json.dumps((record.metadata.get("channel"), record.actor_id), ensure_ascii=False)
 
 
-def language_sample(record: TimelineRecord, source_message_id: str | None) -> LanguageSample:
+def language_sample(
+    record: TimelineRecord, source_message_id: str | None, conversation: str | None = None
+) -> LanguageSample:
     """保存可回查的首次入站记录；通道重投时沿用稳定来源键。"""
-    key = (
-        json.dumps(
-            (record.metadata.get("channel"), record.actor_id, source_message_id), ensure_ascii=False
+    if not source_message_id:
+        return LanguageSample(
+            f"timeline:{record.id}", record.id, speaker_key(record), record.content
         )
-        if source_message_id
-        else f"timeline:{record.id}"
+    parts = (record.metadata.get("channel"), record.actor_id, source_message_id)
+    key = json.dumps((conversation, *parts), ensure_ascii=False)
+    previous = json.dumps(parts, ensure_ascii=False)
+    return LanguageSample(
+        key, record.id, speaker_key(record), record.content, previous, conversation
     )
-    return LanguageSample(key, record.id, speaker_key(record), record.content)
+
+
+def previous_language_scope(
+    timeline: TimelineDatabase, record_id: int, previous_key: str
+) -> str | None:
+    """从旧观察的不可变时间线原件核对平台地址，不用当前重投地址猜。"""
+    record = timeline.get(record_id)
+    if record is None or record.event_type != EVENT_MESSAGE:
+        return None
+    if record.actor_type not in (ActorType.USER, ActorType.PERSON):
+        return None
+    metadata = record.metadata
+    source_message = metadata.get("source_message_id")
+    if not isinstance(source_message, str) or not source_message:
+        return None
+    if language_sample(record, source_message).previous_source_key != previous_key:
+        return None
+    channel, trust = metadata.get("channel"), metadata.get("trust")
+    if channel in ("web", "terminal") and trust == TrustLevel.VERIFIED_USER:
+        return json.dumps((channel, record.actor_id), separators=(",", ":"))
+    if channel != "qq" or type(metadata.get("inbox_message_id")) is not int:
+        return None
+    account, kind, recipient, temporary_group = (
+        metadata.get("account_id"),
+        metadata.get("message_type"),
+        metadata.get("recipient_id"),
+        metadata.get("temporary_group_id"),
+    )
+    if (
+        not isinstance(account, str)
+        or not account
+        or not isinstance(recipient, str)
+        or not recipient
+        or kind not in ("group", "private")
+        or (temporary_group is not None and not isinstance(temporary_group, str))
+    ):
+        return None
+    return ConversationKey(channel, account, kind, recipient, temporary_group).language_scope_key()
 
 
 def _decode(text: str) -> Any:
@@ -157,6 +265,7 @@ async def learn_language(
     *,
     conversation_key: str | None = None,
     bot_names: Sequence[str] = (),
+    expression_quality: ExpressionQuality | None = None,
 ) -> None:
     """独立抽取表达和候选黑话，并只对同会话的有效来源推断。"""
     try:
@@ -166,7 +275,14 @@ async def learn_language(
         banned_names = {name.strip().casefold() for name in bot_names if name.strip()}
         for kind in LanguageKind:
             attempts = await _extract(
-                store, organ, call, samples, conversation_key, kind, banned_names
+                store,
+                organ,
+                call,
+                samples,
+                conversation_key,
+                kind,
+                banned_names,
+                expression_quality if kind == LanguageKind.EXPRESSION else None,
             )
             for attempt in attempts:
                 await _infer(store, organ, call, attempt)
@@ -182,6 +298,7 @@ async def _extract(
     scope: str,
     kind: LanguageKind,
     banned_names: set[str],
+    expression_quality: ExpressionQuality | None,
 ) -> list[JargonInference]:
     fresh = await asyncio.to_thread(store.pending_extraction, kind, samples)
     if not fresh:
@@ -194,13 +311,23 @@ async def _extract(
     if not isinstance(result, list):
         return []
     records = {str(number): sample for number, sample in enumerate(evidence.values(), start=1)}
+    proposals = _parse_proposals(result, kind, records, banned_names)
+    quality = (
+        {
+            candidate: await expression_quality.assess(call, candidate)
+            for candidate in expression_proposals(proposals, presented)
+        }
+        if expression_quality is not None
+        else None
+    )
     return await asyncio.to_thread(
         store.observe_extraction,
         kind,
         scope,
         fresh,
         presented,
-        _parse_proposals(result, kind, records, banned_names),
+        proposals,
+        quality=quality,
     )
 
 

@@ -621,6 +621,8 @@ class LanguageConfig(BaseModel):
     recall_enabled: bool = True
     learning_enabled: bool = False
     organ: str = "summarizer"
+    expression_quality_enabled: bool = False
+    expression_quality_organ: str | None = None
     reference_chars: int = Field(default=700, ge=0, le=2000)
     use_vector_expression: bool = False
     expression_selector_organ: str | None = None

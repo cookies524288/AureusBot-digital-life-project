@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from hashlib import sha256
 from itertools import groupby
@@ -14,6 +14,20 @@ from pathlib import Path
 from sqlite3 import Connection, Row, connect
 
 from aureus.common.sqlite import open_connection
+from aureus.memory.expression_quality import (
+    QUALITY_SCHEMA,
+    ExpressionQualityAction,
+    ExpressionQualityDecision,
+    ExpressionQualityRecord,
+    ExpressionQualityStatus,
+    ExpressionRescuePreview,
+    QualitySourceCheck,
+    apply_quality_action,
+    browse_quality_records,
+    quality_rescue_target,
+    save_quality_decision,
+    save_quality_term,
+)
 from aureus.memory.language_import import (
     EXPRESSION_TABLE,
     IMPORT_SCHEMA,
@@ -170,6 +184,8 @@ class LanguageSample:
     record_id: int
     speaker: str
     content: str
+    previous_source_key: str | None = None
+    scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -236,16 +252,69 @@ def _online_text(text: str, limit: int) -> bool:
     )
 
 
+def expression_proposals(
+    proposals: Sequence[LanguageProposal], presented: Mapping[int, str]
+) -> list[LanguageProposal]:
+    """抽取、质检和写入共用同一个决定性表达筛选与稳定去重规则。"""
+    candidates: dict[tuple[int, str, str], LanguageProposal] = {}
+    for proposal in proposals:
+        text, detail = proposal.text.strip(), proposal.detail.strip()
+        if (
+            proposal.kind != LanguageKind.EXPRESSION
+            or not _online_text(text, MAX_TEXT)
+            or not _online_text(detail, MAX_DETAIL)
+            or normalize(text) == normalize(detail)
+        ):
+            continue
+        for record_id in proposal.record_ids:
+            if presented.get(record_id):
+                candidates.setdefault(
+                    (record_id, normalize(text), detail),
+                    LanguageProposal(proposal.kind, text, detail, (record_id,)),
+                )
+    return list(candidates.values())
+
+
 class LanguageStore:
     """在同一个运行主库读写习得语言，连接只在当前操作内使用。"""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *, old_source_scope: Callable[[int, str], str | None] | None = None
+    ) -> None:
         self._path = path
+        self._old_source_scope = old_source_scope
+
+    def _observation(
+        self, connection: Connection, sample: LanguageSample
+    ) -> tuple[str, int | None] | None:
+        row = connection.execute(
+            "SELECT record_id FROM language_observations WHERE source_key = ?", (sample.source_key,)
+        ).fetchone()
+        if row is not None:
+            return sample.source_key, row["record_id"]
+        if sample.previous_source_key is None:
+            return None
+        previous = connection.execute(
+            "SELECT record_id FROM language_observations WHERE source_key = ?",
+            (sample.previous_source_key,),
+        ).fetchone()
+        if previous is None:
+            return None
+        old_scope = (
+            self._old_source_scope(previous["record_id"], sample.previous_source_key)
+            if self._old_source_scope
+            else None
+        )
+        if old_scope is None or sample.scope is None:
+            return sample.previous_source_key, None
+        if old_scope == sample.scope:
+            return sample.previous_source_key, previous["record_id"]
+        return None
 
     def open(self) -> None:
         """初始化语言子系统持有的表。"""
         with closing(open_connection(self._path)) as connection:
-            connection.executescript(_SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA)
+            connection.executescript(_SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA)
 
     def publish(
         self,
@@ -265,7 +334,9 @@ class LanguageStore:
                 is None
             ):
                 raise LanguageTargetError("language_target_not_runtime")
-            connection.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA)
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA
+            )
             return publish_rows(connection, instance, manifest, source_counts, rows)
 
     def unseen(self, samples: Sequence[LanguageSample]) -> list[LanguageSample]:
@@ -277,11 +348,8 @@ class LanguageStore:
         with closing(open_connection(self._path)) as connection:
             return [
                 sample
-                for key, sample in unique.items()
-                if connection.execute(
-                    "SELECT 1 FROM language_observations WHERE source_key = ?", (key,)
-                ).fetchone()
-                is None
+                for sample in unique.values()
+                if self._observation(connection, sample) is None
             ]
 
     def observe(
@@ -293,9 +361,10 @@ class LanguageStore:
     ) -> None:
         """一次事务记录原文观察；提议只从本轮展示的原文前缀取证。"""
         with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             accepted: dict[int, LanguageSample] = {}
             for sample in samples:
-                if not _is_learnable(sample):
+                if not _is_learnable(sample) or self._observation(connection, sample) is not None:
                     continue
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO language_observations VALUES (?, ?, ?)",
@@ -325,16 +394,14 @@ class LanguageStore:
         with closing(open_connection(self._path)) as connection:
             return [
                 sample
-                for key, sample in unique.items()
-                if connection.execute(
-                    """SELECT 1 FROM language_observations AS observation
-                       WHERE source_key = ? AND record_id = ? AND NOT EXISTS (
-                           SELECT 1 FROM language_extractions AS extraction
-                           WHERE extraction.source_key = observation.source_key AND kind = ?
-                       )""",
-                    (key, sample.record_id, kind),
+                for sample in unique.values()
+                if (observed := self._observation(connection, sample)) is not None
+                and observed[1] == sample.record_id
+                and connection.execute(
+                    "SELECT 1 FROM language_extractions WHERE kind = ? AND source_key = ?",
+                    (kind, observed[0]),
                 ).fetchone()
-                is not None
+                is None
             ]
 
     def observe_extraction(
@@ -344,9 +411,12 @@ class LanguageStore:
         samples: Sequence[LanguageSample],
         presented: Mapping[int, str],
         proposals: Sequence[LanguageProposal],
+        *,
+        quality: Mapping[LanguageProposal, ExpressionQualityDecision] | None = None,
     ) -> list[JargonInference]:
         """独立消费成功的抽取，并返回本轮达到门槛的黑话候选。"""
         with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             accepted: dict[int, tuple[str, str]] = {}
             for sample in samples:
                 fragment = presented.get(sample.record_id, "")
@@ -356,20 +426,56 @@ class LanguageStore:
                     or not _is_learnable(sample)
                 ):
                     continue
+                observation = self._observation(connection, sample)
+                if observation is None or observation[1] != sample.record_id:
+                    continue
+                source_key = observation[0]
                 changed = connection.execute(
-                    """INSERT OR IGNORE INTO language_extractions
-                       SELECT ?, source_key FROM language_observations
-                       WHERE source_key = ? AND record_id = ?""",
-                    (kind, sample.source_key, sample.record_id),
+                    "INSERT OR IGNORE INTO language_extractions VALUES (?, ?)", (kind, source_key)
                 )
                 if changed.rowcount:
-                    accepted[sample.record_id] = (sample.source_key, fragment)
-            return self._save_extraction(connection, kind, scope, accepted, proposals)
+                    accepted[sample.record_id] = (source_key, fragment)
+            if kind == LanguageKind.EXPRESSION:
+                self._save_expressions(connection, scope, accepted, proposals, quality)
+                return []
+            return self._save_jargons(connection, scope, accepted, proposals)
 
     @staticmethod
-    def _save_extraction(
+    def _save_expressions(
         connection: Connection,
-        kind: LanguageKind,
+        scope: str,
+        accepted: Mapping[int, tuple[str, str]],
+        proposals: Sequence[LanguageProposal],
+        quality: Mapping[LanguageProposal, ExpressionQualityDecision] | None,
+    ) -> None:
+        candidates = expression_proposals(
+            proposals, {record_id: fragment for record_id, (_, fragment) in accepted.items()}
+        )
+        for candidate in candidates:
+            record_id = candidate.record_ids[0]
+            source_key, fragment = accepted[record_id]
+            if quality is None:
+                save_online_term(
+                    connection,
+                    candidate.kind,
+                    scope,
+                    candidate.text,
+                    candidate.detail,
+                    ((source_key, fragment),),
+                )
+                continue
+            decision = quality.get(candidate)
+            if decision is None:
+                continue
+            save_quality_decision(
+                connection, scope, source_key, record_id, candidate.text, candidate.detail, decision
+            )
+            if decision.status == ExpressionQualityStatus.PASSED:
+                save_quality_term(connection, scope, candidate.text, candidate.detail, source_key)
+
+    @staticmethod
+    def _save_jargons(
+        connection: Connection,
         scope: str,
         accepted: Mapping[int, tuple[str, str]],
         proposals: Sequence[LanguageProposal],
@@ -377,26 +483,18 @@ class LanguageStore:
         terms: dict[int, str] = {}
         for proposal in proposals:
             text, detail = proposal.text.strip(), proposal.detail.strip()
-            if proposal.kind != kind or not _online_text(text, MAX_TEXT):
-                continue
-            if kind == LanguageKind.EXPRESSION and (
-                not _online_text(detail, MAX_DETAIL) or normalize(text) == normalize(detail)
-            ):
+            if proposal.kind != LanguageKind.JARGON or not _online_text(text, MAX_TEXT):
                 continue
             sources = [
                 accepted[record_id]
                 for record_id in dict.fromkeys(proposal.record_ids)
-                if record_id in accepted
-                and (
-                    kind == LanguageKind.EXPRESSION
-                    or normalize(text) in normalize(accepted[record_id][1])
-                )
+                if record_id in accepted and normalize(text) in normalize(accepted[record_id][1])
             ]
             if sources:
-                term = save_online_term(connection, kind, scope, text, detail, sources)
+                term = save_online_term(connection, proposal.kind, scope, text, detail, sources)
                 if term is not None:
                     terms[term] = text
-        return ready_inferences(connection, terms) if kind == LanguageKind.JARGON else []
+        return ready_inferences(connection, terms)
 
     def record_jargon_inference(
         self, attempt: JargonInference, outcome: str, meaning: str = ""
@@ -411,6 +509,45 @@ class LanguageStore:
                 "INSERT OR IGNORE INTO language_jargon_decisions VALUES (?, ?, ?, ?)",
                 (attempt.term_id, attempt.evidence_count, outcome, meaning),
             )
+
+    def expression_quality_page(
+        self,
+        scopes: Sequence[str],
+        offset: int,
+        limit: int,
+        *,
+        status: ExpressionQualityStatus | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> tuple[list[ExpressionQualityRecord], int]:
+        """在同一个读事务中查询已获准来源的质检记录和计数。"""
+        with closing(open_connection(self._path)) as connection:
+            connection.execute("BEGIN")
+            return browse_quality_records(
+                connection, scopes, offset, limit, status=status, start=start, end=end
+            )
+
+    def maintain_expression_quality(
+        self,
+        identifier: int,
+        action: ExpressionQualityAction,
+        source_check: QualitySourceCheck,
+        now: datetime,
+        *,
+        version: str | None = None,
+    ) -> ExpressionRescuePreview | str | None:
+        """无版本只预览，确认时以当前授权及目标版本复核后原子追加。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE" if version is not None else "BEGIN")
+            target = quality_rescue_target(connection, identifier, action, source_check)
+            if target is None:
+                return None
+            row, actions, preview = target
+            if version is None:
+                return preview
+            if version != preview.version:
+                return None
+            return apply_quality_action(connection, row, actions, action, now)
 
     @staticmethod
     def _observe_existing(connection: Connection, samples: dict[int, LanguageSample]) -> None:
@@ -665,9 +802,7 @@ class LanguageStore:
         edits = {
             row["entry_key"]: row for row in connection.execute("SELECT * FROM language_edits")
         }
-        removed = {
-            row["entry_key"] for row in connection.execute("SELECT * FROM language_removed")
-        }
+        removed = {row["entry_key"] for row in connection.execute("SELECT * FROM language_removed")}
         if kind == LanguageKind.EXPRESSION:
             reviews = {
                 row["entry_key"]: ExpressionReviewStatus(row["status"])
@@ -676,10 +811,26 @@ class LanguageStore:
                        GROUP BY entry_key"""
                 )
             }
+            checked = {
+                f"online:{row['term_id']}": row
+                for row in connection.execute(
+                    """SELECT term_id, is_scoped,
+                       EXISTS (SELECT 1 FROM language_expression_quality_actions AS action
+                       WHERE action.term_id = term.term_id AND action.action = 'withdrawn')
+                       AS is_withdrawn FROM language_expression_quality_terms AS term"""
+                )
+            }
+            removed.update(key for key, row in checked.items() if row["is_withdrawn"])
             entries = [
                 replace(
                     entry,
                     review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
+                    requires_approval=entry.entry_key in checked,
+                    restricted_scope=(
+                        entry.learning_source
+                        if entry.entry_key in checked and checked[entry.entry_key]["is_scoped"]
+                        else None
+                    ),
                 )
                 for entry in entries
             ]
@@ -863,9 +1014,7 @@ class LanguageStore:
             if connection is None
             else self._catalog_entries(connection, LanguageKind.EXPRESSION)
         )
-        return [
-            entry for entry in entries if entry.review_status != ExpressionReviewStatus.REJECTED
-        ]
+        return [entry for entry in entries if entry.can_reference_expression()]
 
     def _visible_entries(
         self, kind: LanguageKind, conversation_key: str | None
