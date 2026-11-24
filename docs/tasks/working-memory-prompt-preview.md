@@ -1,6 +1,6 @@
 # Phase 3.11：工作记忆摘要提示词预览
 
-状态：待实现
+状态：待评审
 
 ## 先读
 
@@ -18,9 +18,22 @@
 
 ## 自检清单
 
-- [ ] 联测先失败于缺少场景，实施后通过；模拟 HTTP 捕获请求逐条与预览比较，验证 `system`、`user` 及固定摘要协议。
-- [ ] 两份合成摘要请求各只含对应分区材料；预览不发请求、不读真实经历。
-- [ ] 工作记忆和提示词相邻专项通过；无 `main_loop.py`、路由、配置或摘要契约改动。
+- [x] `test_working_memory_preview_matches_partitioned_summary_http_request` 在任务书提交 `6f9c0b5` 上因缺少 `working_memory_summary` 场景而失败；实现后通过。模拟 HTTP 捕获请求逐条与预览比较，独立断言 `system`、`user` 及 1200 字正文输出契约。
+- [x] 同一联测使用用户私聊与公开经历的两份旧摘要和新发言，逐一核对各分区最终请求；预览期间禁止时间线查询，模拟 HTTP 请求数保持零。
+- [x] `tests/web/test_prompt_http_integration.py`、`tests/web/test_prompt_api.py`、`tests/heartbeat/test_working_memory.py` 共 13 项通过。改动文件 Ruff 规范、Pyright 和 8 条架构规则通过，`git diff --check` 通过。无 `main_loop.py`、路由、配置或摘要契约改动。
+
+## 实现与验证（2026-11-24）
+
+任务书 `6f9c0b5`，实现 `9ce6df9`。`build_working_memory_summary_request` 经 attention 公开接口导出；生产端仍先按原来源键分组，再调用构造器。预览使用一条固定模拟经历，不查询真实时间线，不调用器官，也不增加编辑项。
+
+从本工作树使用主工作树既有 `.venv/Scripts/python.exe`，设置 `PYTHONPATH` 为本工作树、`PYTHONDONTWRITEBYTECODE=1`、`PYTHONUTF8=1`、`LITELLM_LOCAL_MODEL_COST_MAP=True`，`AUREUS_HOME` 指向本轮合成根 `E:/Temp/aureus-working-memory-preview-4326ac96a8494439957f7720eb02fb67/aureus_home`。
+
+```text
+python -m pytest -q -p no:cacheprovider --tb=short --basetemp <合成根>/baseline tests/web/test_prompt_http_integration.py::test_working_memory_preview_matches_partitioned_summary_http_request
+python -m pytest -q -p no:cacheprovider --tb=short --basetemp <合成根>/specialized tests/web/test_prompt_http_integration.py tests/web/test_prompt_api.py tests/heartbeat/test_working_memory.py
+```
+
+第一条为旧版失败证据；第二条 13 项通过、3 条依赖警告。只跑直接专项，未跑全量。Ruff 格式检查三个改动文件通过；`working_memory.py` 的未改动 `recent_records` 列表推导格式不通过，任务书提交的旧文件同样不通过，保留基线原状，不作全绿声明。Pyright 使用 `--pythonpath` 指向既有解释器，结果 0 错误（工具另提示本工作树没有本地 `.venv`）；8 条架构约束全过。
 
 ## 不做
 
