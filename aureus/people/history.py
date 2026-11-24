@@ -531,6 +531,9 @@ def bundle_profile_candidates(
             record = snapshot.record
             if not origins[instance] or record.bundle_origin != origins[instance]:
                 continue
+            summary, positions, anchor = profile_maintenance.content(connection, (instance, subject))
+            if anchor == snapshot.id and (summary is not None or positions is not None):
+                continue
             original = record.original or {}
             if not record.summary or type(record.profile_version) is not int:
                 continue
