@@ -1023,6 +1023,51 @@ def test_learning_scope_shows_preview_and_cancel_never_confirms(browser: Browser
     )
 
 
+def test_expression_quality_jumps_pages_and_cancels_rescue(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成表达000'), '表达列表已就绪');
+      const nativeFetch = window.fetch;
+      const calls = [];
+      let offset;
+      const row = {id:2, text:'合成候选', detail:'庆祝', status:'rejected', reason:'mismatch',
+        recorded_at:'2026-11-24T00:00:00Z', source_label:'同名群 · 群聊 10', actions:[]};
+      window.fetch = (url, options) => {
+        const request = new URL(url, location.href);
+        if (!request.pathname.startsWith('/api/resources/learning/quality')) return nativeFetch(url, options);
+        if (options.method === 'POST') {
+          calls.push(JSON.parse(options.body));
+          return Promise.resolve(new Response(JSON.stringify({...row, version:'0'.repeat(64)})));
+        }
+        offset = Number(request.searchParams.get('offset'));
+        const payload = {enabled:true, total:320, sources:[{key:'group10', label:row.source_label}],
+          items:[{...row, text:row.text + offset}]};
+        return Promise.resolve(new Response(JSON.stringify(payload)));
+      };
+      try {
+        press('质检记录');
+        await waitFor(() => text('模型拒绝 · 合成候选0') && page()?.startsWith('第 1 /'), '质检首页');
+        const jump = find('#learning-panel-quality .resource-page-jump');
+        jump.value = '3';
+        jump.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+        await waitFor(() => page()?.startsWith('第 3 /') && offset > 0 && text('合成候选' + offset), '输入页码直达');
+        press('模型拒绝 · 合成候选' + offset + ' · ' + row.source_label);
+        const dialog = document.querySelector('#editor-dialog');
+        const dialogButton = label => [...dialog.querySelectorAll('button')]
+          .find(node => node.textContent.trim() === label);
+        dialogButton('预览挽回').click();
+        await waitFor(() => dialogButton('确认挽回'), '挽回预览');
+        check(dialog.innerText.includes('仅此来源会话可用'), '说明范围');
+        dialogButton('取消').click();
+        check(!dialog.open && calls.length === 1 && calls[0].action === 'rescued' &&
+          !('version' in calls[0]), '取消不发确认');
+      } finally { window.fetch = nativeFetch; }
+    """,
+    )
+
+
 def test_learning_package_entry_previews_without_writing(browser: Browser) -> None:
     browser.open("learning", 1280, 900)
     _run(
