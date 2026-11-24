@@ -117,12 +117,12 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
-from aureus.heartbeat.platform_history import PlatformHistory
 from aureus.heartbeat.planner_tools import planner_tools
 from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
-from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD, delivery_callbacks
+from aureus.heartbeat.platform_history import PlatformHistory
 from aureus.heartbeat.recall import MemoryTracker
 from aureus.heartbeat.reply_outbox import EmojiReplyPart, ReplyOutbox
+from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD, delivery_callbacks
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.hormones import (
@@ -403,7 +403,8 @@ class Heartbeat:
             ),
             history_retention=(
                 HistoryRetention(inbox_store, timeline.platform_history, clock, timezone)
-                if inbox_store is not None else None
+                if inbox_store is not None
+                else None
             ),
             inbox_store=inbox_store,
         )
@@ -459,7 +460,10 @@ class Heartbeat:
         self._sinks: dict[str, MessageSink] = {}
         self._quote_routes: dict[str, Callable[[MessageRoute], bool]] = {}
         self._reply_outbox = ReplyOutbox(
-            clock, config, self._send_reply_part, self._record_discarded_reply,
+            clock,
+            config,
+            self._send_reply_part,
+            self._record_discarded_reply,
         )
         self._interests = None if config.roleplay_mode else interests
         self._findings = findings
@@ -563,7 +567,11 @@ class Heartbeat:
         return self._conversation.expression_recall
 
     def attach_channel(
-        self, name: str, sink: MessageSink, *, can_quote: Callable[[MessageRoute], bool] | None = None
+        self,
+        name: str,
+        sink: MessageSink,
+        *,
+        can_quote: Callable[[MessageRoute], bool] | None = None,
     ) -> None:
         """接上消息通道，并可提供按目的路由检查引用能力的接口。
 
@@ -792,15 +800,21 @@ class Heartbeat:
         return self._thought is not None
 
     def is_replying_to(
-        self, *, conversation: ConversationKey | None = None,
+        self,
+        *,
+        conversation: ConversationKey | None = None,
         web_visibility: VisibilityScope | None = None,
     ) -> bool:
         """只向指定平台原件会话或认证网页私聊报告正在进行的回复。"""
         thought = self._thought
         if (
-            thought is None or not thought.replying_to or thought.task.done()
-            or thought.task.cancelling() or thought.inbox_discard_reason is not None
-            or self._stop_requested or self._halt_status.halted
+            thought is None
+            or not thought.replying_to
+            or thought.task.done()
+            or thought.task.cancelling()
+            or thought.inbox_discard_reason is not None
+            or self._stop_requested
+            or self._halt_status.halted
         ):
             return False
         heard = thought.replying_to[-1]
@@ -810,12 +824,18 @@ class Heartbeat:
             return (
                 target.visibility is not VisibilityScope.PRIVATE
                 and _platform_key(heard) == conversation
-                and (heard.residence is None or (inbox is not None and inbox.permits(heard.residence)))
+                and (
+                    heard.residence is None
+                    or (inbox is not None and inbox.permits(heard.residence))
+                )
             )
         return (
-            target.channel == WEB_CHANNEL_NAME and target.sender_id == WEB_USER_ID
-            and target.trust is TrustLevel.VERIFIED_USER and target.route is None
-            and web_visibility is VisibilityScope.USER_ONLY and target.visibility is web_visibility
+            target.channel == WEB_CHANNEL_NAME
+            and target.sender_id == WEB_USER_ID
+            and target.trust is TrustLevel.VERIFIED_USER
+            and target.route is None
+            and web_visibility is VisibilityScope.USER_ONLY
+            and target.visibility is web_visibility
         )
 
     # ---------- 生命周期 ----------
@@ -1559,7 +1579,9 @@ class Heartbeat:
 
     @staticmethod
     def _round_metadata(thought: _Thought) -> dict[str, Any]:
-        metadata: dict[str, Any] = {"in_reply_to": [heard.record.id for heard in thought.replying_to]}
+        metadata: dict[str, Any] = {
+            "in_reply_to": [heard.record.id for heard in thought.replying_to]
+        }
         if thought.round_trace is not None:
             metadata["round_id"] = thought.round_trace.id
         return metadata
@@ -1572,10 +1594,13 @@ class Heartbeat:
         if trace.judge is not None:
             self._record_judgment(thought, trace.judge)
         self._timeline.append(
-            EVENT_PLANNING_INTERRUPTED, reason, ActorType.ME,
+            EVENT_PLANNING_INTERRUPTED,
+            reason,
+            ActorType.ME,
             visibility=target.visibility,
             metadata={
-                **self._round_metadata(thought), "channel": target.channel,
+                **self._round_metadata(thought),
+                "channel": target.channel,
                 "actions": [action.to_metadata() for action in trace.actions],
             },
         )
@@ -1583,7 +1608,9 @@ class Heartbeat:
     def _record_round_delivery_block(self, thought: _Thought, reason: str) -> None:
         target = thought.replying_to[-1].perception
         self._timeline.append(
-            EVENT_REPLY_DELIVERY_FAILED, reason, ActorType.SYSTEM,
+            EVENT_REPLY_DELIVERY_FAILED,
+            reason,
+            ActorType.SYSTEM,
             visibility=target.visibility,
             metadata={**self._round_metadata(thought), "channel": target.channel},
         )
@@ -1930,7 +1957,11 @@ class Heartbeat:
         task = asyncio.create_task(self._conversation._think(job), name="aureus-thought")
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(
-            task=task, replying_to=batch, strategy=job.strategy, planner_run=run, round_trace=trace,
+            task=task,
+            replying_to=batch,
+            strategy=job.strategy,
+            planner_run=run,
+            round_trace=trace,
         )
 
     def _maybe_learn_language(self) -> None:
@@ -1957,7 +1988,8 @@ class Heartbeat:
                     language_runner.ExpressionQuality(
                         self._language_config.expression_quality_organ, self._clock
                     )
-                    if self._language_config.expression_quality_enabled else None
+                    if self._language_config.expression_quality_enabled
+                    else None
                 ),
             ),
             name=language_runner.TASK_NAME,
@@ -2164,7 +2196,9 @@ class Heartbeat:
             return
         strategy = self._current_strategy()
         task = asyncio.create_task(
-            consolidator.run(self._call_organ, strategy.model_preference, self._identity.facts.name),
+            consolidator.run(
+                self._call_organ, strategy.model_preference, self._identity.facts.name
+            ),
             name="aureus-memory-consolidation",
         )
         task.add_done_callback(self._on_thought_done)

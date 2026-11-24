@@ -30,12 +30,21 @@ VISIBILITY = VisibilityScope.GROUP
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", [
-    "explicit", "explicit_revoked", "automatic", "other_query_revoked", "expression_revoked",
-    "before_first_call",
-])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "explicit",
+        "explicit_revoked",
+        "automatic",
+        "other_query_revoked",
+        "expression_revoked",
+        "before_first_call",
+    ],
+)
 async def test_private_fact_reaches_group_planner_and_replyer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
 ) -> None:
     path = tmp_path / "summary.db"
     clock = ManualClock(NOW)
@@ -43,7 +52,8 @@ async def test_private_fact_reaches_group_planner_and_replyer(
     timeline.open()
     automatic = mode not in {"explicit", "explicit_revoked"}
     config = MemoryConfig(
-        consolidation_enabled=True, consolidation_extract_enabled=True,
+        consolidation_enabled=True,
+        consolidation_extract_enabled=True,
         heuristic_recall_enabled=automatic,
     )
     index = MemoryIndex(path, timeline, clock, config=config)
@@ -55,7 +65,11 @@ async def test_private_fact_reaches_group_planner_and_replyer(
     ordinary = "远晴镜头与竹质三脚架的保养记录"
     planner_reference = "规划器产出的合成回复参考"
     private_message = Perception(
-        "qq", "sender", original, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_CONTACT,
+        "qq",
+        "sender",
+        original,
+        VisibilityScope.USER_ONLY,
+        TrustLevel.VERIFIED_CONTACT,
         route=MessageRoute("bot", "private", "sender", "private-origin"),
     )
     requests: list[OrganRequest] = []
@@ -80,21 +94,33 @@ async def test_private_fact_reaches_group_planner_and_replyer(
                 assert "private-origin" not in result
                 if mode == "explicit_revoked":
                     allowed.remove(private)
-            return plan_response(request, {
-                "reply": True, "recall": ["竹质三脚架" if automatic else "远晴镜头"],
-                "intent": planner_reference,
-            })
+            return plan_response(
+                request,
+                {
+                    "reply": True,
+                    "recall": ["竹质三脚架" if automatic else "远晴镜头"],
+                    "intent": planner_reference,
+                },
+            )
 
     stop = EmergencyStop(tmp_path / "halt.json", clock)
     heart = Heartbeat(
-        clock=clock, timeline=timeline, organs=Organs(),
-        identity=Identity.model_validate({
-            "facts": {"name": "测试", "birthday": "2026-11-24"}, "user": {"name": "维护者"},
-            "persona": {"immutable": "温和。"},
-        }),
+        clock=clock,
+        timeline=timeline,
+        organs=Organs(),
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试", "birthday": "2026-11-24"},
+                "user": {"name": "维护者"},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
         config=HeartbeatConfig(inbox_debounce_enabled=False),
-        permissions=PermissionChecker(stop), emergency_stop=stop, inbox_store=store,
-        memory=index, memory_config=config,
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+        memory=index,
+        memory_config=config,
     )
     heart.attach_channel("qq", lambda outgoing: None)
     heart.set_inbox_route_filter(lambda key: key in allowed)
@@ -126,23 +152,40 @@ async def test_private_fact_reaches_group_planner_and_replyer(
         source.allows = lambda key: key in allowed
         window = source.next_window(1)
         assert window is not None
-        proposal = {"summary": fact, "entities": [], "relations": [], "facts": [{
-            "fact_id": "lens", "text": fact, "predicate": "器材", "value": "远晴镜头",
-            "source": {
-                "message_id": "private-origin", "sender_id": "sender", "excerpt": "远晴镜头",
-            },
-            "image_evidence": [],
-        }]}
+        proposal = {
+            "summary": fact,
+            "entities": [],
+            "relations": [],
+            "facts": [
+                {
+                    "fact_id": "lens",
+                    "text": fact,
+                    "predicate": "器材",
+                    "value": "远晴镜头",
+                    "source": {
+                        "message_id": "private-origin",
+                        "sender_id": "sender",
+                        "excerpt": "远晴镜头",
+                    },
+                    "image_evidence": [],
+                }
+            ],
+        }
         delta = parse_delta(json.dumps(proposal), window)
         assert index.commit_summary(window, delta, source.check_window)
         ordinary_source = MemorySource("fixture", "main", "episodes", (1,))
         assert index.publish([HistoricalMemory(ordinary_source, ordinary)]) == 1
         heart.wake_up()
-        heart.submit(Perception(
-            "qq", "group-member", "还记得远晴镜头？" if automatic else "聊聊摄影器材。",
-            VISIBILITY, TrustLevel.VERIFIED_CONTACT,
-            route=MessageRoute("bot", "group", "target", "current"),
-        ))
+        heart.submit(
+            Perception(
+                "qq",
+                "group-member",
+                "还记得远晴镜头？" if automatic else "聊聊摄影器材。",
+                VISIBILITY,
+                TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", "target", "current"),
+            )
+        )
         heart.beat()
         await heart.wait_for_thought()
         heart.beat()
@@ -167,18 +210,35 @@ async def test_private_fact_reaches_group_planner_and_replyer(
 
 def perception(key: ConversationKey, identifier: str, content: str) -> Perception:
     return Perception(
-        "qq", "owner", content, VISIBILITY, TrustLevel.VERIFIED_USER,
-        route=MessageRoute(key.account_id, key.kind, key.recipient_id, identifier,
-                           key.temporary_group_id),
+        "qq",
+        "owner",
+        content,
+        VISIBILITY,
+        TrustLevel.VERIFIED_USER,
+        route=MessageRoute(
+            key.account_id, key.kind, key.recipient_id, identifier, key.temporary_group_id
+        ),
     )
 
 
-def record_legacy(timeline: TimelineDatabase, key: ConversationKey, identifier: str, text: str) -> None:
-    timeline.append("message", text, ActorType.PERSON, "member", visibility=VISIBILITY, metadata={
-        "channel": key.platform, "account_id": key.account_id, "message_type": key.kind,
-        "recipient_id": key.recipient_id, "temporary_group_id": key.temporary_group_id,
-        "message_id": identifier,
-    })
+def record_legacy(
+    timeline: TimelineDatabase, key: ConversationKey, identifier: str, text: str
+) -> None:
+    timeline.append(
+        "message",
+        text,
+        ActorType.PERSON,
+        "member",
+        visibility=VISIBILITY,
+        metadata={
+            "channel": key.platform,
+            "account_id": key.account_id,
+            "message_type": key.kind,
+            "recipient_id": key.recipient_id,
+            "temporary_group_id": key.temporary_group_id,
+            "message_id": identifier,
+        },
+    )
 
 
 def test_history_uses_scoped_read_watermark_and_separate_legacy_cursor(tmp_path: Path) -> None:
@@ -187,28 +247,48 @@ def test_history_uses_scoped_read_watermark_and_separate_legacy_cursor(tmp_path:
     store, timeline = InboxStore(path, clock), TimelineDatabase(path, clock)
     timeline.open()
     try:
-        for key in (ConversationKey("qq", "other", "group", "target"),
-                    ConversationKey("qq", "bot", "group", "other"),
-                    ConversationKey("qq", "bot", "private", "target", "other"), KEY):
-            stored = store.add(perception(key, "same", f"keyword:{key.account_id}:{key.kind}:{key.recipient_id}"))
+        for key in (
+            ConversationKey("qq", "other", "group", "target"),
+            ConversationKey("qq", "bot", "group", "other"),
+            ConversationKey("qq", "bot", "private", "target", "other"),
+            KEY,
+        ):
+            stored = store.add(
+                perception(key, "same", f"keyword:{key.account_id}:{key.kind}:{key.recipient_id}")
+            )
             assert stored is not None
             store.mark_read([stored.id])
             record_legacy(timeline, key, "same", "keyword:duplicate")
         record_legacy(timeline, KEY, "legacy", "legacy keyword")
-        record_legacy(timeline, ConversationKey("qq", "bot", "private", "target"), "legacy", "other private")
-        record_legacy(timeline, ConversationKey("qq", "", "group", "target"), "legacy", "unclassified keyword")
+        record_legacy(
+            timeline, ConversationKey("qq", "bot", "private", "target"), "legacy", "other private"
+        )
+        record_legacy(
+            timeline, ConversationKey("qq", "", "group", "target"), "legacy", "unclassified keyword"
+        )
         unread = store.add(perception(KEY, "unread", "unread keyword"))
         assert unread is not None
         history = PlatformHistory(store, timeline.platform_history)
         first = json.loads(history.read(KEY, VISIBILITY, HistoryQuery(1, "keyword", None)))
         assert [item["content"] for item in first["messages"]] == ["keyword:bot:group:target"]
-        second = json.loads(history.read(KEY, VISIBILITY, HistoryQuery(
-            1, "keyword", HistoryBoundary(**first["next_before"]),
-        )))
+        second = json.loads(
+            history.read(
+                KEY,
+                VISIBILITY,
+                HistoryQuery(
+                    1,
+                    "keyword",
+                    HistoryBoundary(**first["next_before"]),
+                ),
+            )
+        )
         assert second["messages"][0]["content"] == "legacy keyword"
         assert second["messages"][0]["platform_message_id"] == "legacy"
         assert second["next_before"] is None
-        assert json.loads(history.read(KEY, VISIBILITY, HistoryQuery(20, "duplicate", None)))["status"] == "no_results"
+        assert (
+            json.loads(history.read(KEY, VISIBILITY, HistoryQuery(20, "duplicate", None)))["status"]
+            == "no_results"
+        )
         assert store.list_unread(KEY) == [unread]
         store.add_delivered(perception(KEY, "outgoing", '"' * 6000), sender_name="bot")
         encoded = history.read(KEY, VISIBILITY, HistoryQuery(20, None, None))
@@ -229,9 +309,15 @@ async def test_planner_dispatch_reads_at_most_one_tool_and_does_not_fall_back(mo
         requests.append(request)
         if not request.tool_history:
             arguments = {"account_id": "other"} if mode == "foreign_route" else {"limit": 8}
-            return OrganResponse("planner", "", tool_calls=(ToolCall("read_platform_history", "first", arguments),))
+            return OrganResponse(
+                "planner", "", tool_calls=(ToolCall("read_platform_history", "first", arguments),)
+            )
         assert request.tool_history[0].results[0].content == '{"status":"no_results"}'
-        followup = ToolCall("query_memory", "second", {"keywords": ["消息"]}) if mode == "repeat" else ToolCall("stop", "second", {})
+        followup = (
+            ToolCall("query_memory", "second", {"keywords": ["消息"]})
+            if mode == "repeat"
+            else ToolCall("stop", "second", {})
+        )
         return OrganResponse("planner", "", tool_calls=(followup,))
 
     async def history(query: HistoryQuery) -> str:
@@ -245,8 +331,14 @@ async def test_planner_dispatch_reads_at_most_one_tool_and_does_not_fall_back(mo
     async def recall(_words: tuple[str, ...]) -> None:
         pytest.fail("不准绕过共享查询上限")
 
-    work = dispatch_planner_tools(OrganRequest("planner", ""), tools, call, recall,
-                                  read_history=history, still_authorized=lambda: authorized)
+    work = dispatch_planner_tools(
+        OrganRequest("planner", ""),
+        tools,
+        call,
+        recall,
+        read_history=history,
+        still_authorized=lambda: authorized,
+    )
     if mode == "failure":
         with pytest.raises(OSError, match="synthetic"):
             await work
@@ -258,7 +350,9 @@ async def test_planner_dispatch_reads_at_most_one_tool_and_does_not_fall_back(mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["read", "read_then_reply", "cleanup", "revoked_cleanup"])
-async def test_actual_heartbeat_declares_scope_and_uses_tool_message(tmp_path: Path, action: str) -> None:
+async def test_actual_heartbeat_declares_scope_and_uses_tool_message(
+    tmp_path: Path, action: str
+) -> None:
     path = tmp_path / "test.db"
     clock = ManualClock(NOW - timedelta(days=1))
     store, timeline = InboxStore(path, clock), TimelineDatabase(path, clock)
@@ -286,24 +380,51 @@ async def test_actual_heartbeat_declares_scope_and_uses_tool_message(tmp_path: P
                     authorized = False
                 assert "旧文只给工具" not in request.prompt
                 if action == "read_then_reply":
-                    return OrganResponse("planner", "", tool_calls=(ToolCall("reply", "reply", {
-                        "addressed_to_me": "yes", "reply_reference": "旧文只给工具",
-                        "intent": "旧文只给工具", "reason": "旧文只给工具",
-                    }),))
+                    return OrganResponse(
+                        "planner",
+                        "",
+                        tool_calls=(
+                            ToolCall(
+                                "reply",
+                                "reply",
+                                {
+                                    "addressed_to_me": "yes",
+                                    "reply_reference": "旧文只给工具",
+                                    "intent": "旧文只给工具",
+                                    "reason": "旧文只给工具",
+                                },
+                            ),
+                        ),
+                    )
                 return OrganResponse("planner", "", tool_calls=(ToolCall("stop", "stop", {}),))
             arguments = {"keyword": "旧文"} if reading else {"before_date": "2026-11-24"}
-            return OrganResponse("planner", "", tool_calls=(ToolCall(
-                tool_name, action, arguments,
-            ),))
+            return OrganResponse(
+                "planner",
+                "",
+                tool_calls=(
+                    ToolCall(
+                        tool_name,
+                        action,
+                        arguments,
+                    ),
+                ),
+            )
 
     heart = Heartbeat(
-        clock=clock, timeline=timeline, organs=Organs(),
-        identity=Identity.model_validate({
-            "facts": {"name": "测试", "birthday": "2026-11-24"}, "user": {"name": "维护者"},
-            "persona": {"immutable": "温和。"},
-        }),
+        clock=clock,
+        timeline=timeline,
+        organs=Organs(),
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试", "birthday": "2026-11-24"},
+                "user": {"name": "维护者"},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
         config=HeartbeatConfig(inbox_debounce_enabled=False),
-        permissions=PermissionChecker(stop), emergency_stop=stop, inbox_store=store,
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
     )
     delivered = []
     heart.attach_channel("qq", delivered.append)
