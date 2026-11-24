@@ -640,6 +640,19 @@ def assemble_messages(
     ]
 
 
+def assemble_image_messages(
+    messages: list[dict[str, str]], image_part: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """在最后一条用户消息中依次放置文字与图片部分；预览传入占位而非图片载荷。"""
+    return [
+        *messages[:-1],
+        {
+            "role": messages[-1]["role"],
+            "content": [{"type": "text", "text": messages[-1]["content"]}, image_part],
+        },
+    ]
+
+
 def conversational_routes(organ_id: str, routes: Sequence[ModelRoute]) -> tuple[ModelRoute, ...]:
     """按器官职责筛选配置好的对话、视觉和语音路线。"""
     if organ_id == "voice":
@@ -874,16 +887,9 @@ class LLMOrgan:
         elif self.organ_id == "vlm":
             assert media is not None and media_type is not None
             data_url = f"data:{media_type};base64,{base64.b64encode(media).decode('ascii')}"
-            kwargs["messages"] = [
-                *messages[:-1],
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": messages[-1]["content"]},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                },
-            ]
+            kwargs["messages"] = assemble_image_messages(
+                messages, {"type": "image_url", "image_url": {"url": data_url}}
+            )
         if route.temperature is not None and self.organ_id != "voice":
             kwargs["temperature"] = route.temperature
         if route.max_tokens is not None and self.organ_id != "voice":

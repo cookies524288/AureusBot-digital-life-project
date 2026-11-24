@@ -1,13 +1,16 @@
 """集成新增记忆、人际和语言片段，并在 MockTransport 捕获模型 HTTP 请求。"""
 
 import json
+from base64 import b64decode
 from collections.abc import Callable, Iterator
 from datetime import UTC
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from PIL import Image
 
 from aureus.common import HeartbeatConfig, MemoryConfig
 from aureus.common.language_prompts import (
@@ -16,7 +19,7 @@ from aureus.common.language_prompts import (
     language_reference_block,
 )
 from aureus.common.time_format import format_local_time
-from aureus.heartbeat import Perception, TrustLevel
+from aureus.heartbeat import MediaReference, Perception, TrustLevel
 from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
@@ -24,6 +27,7 @@ from aureus.heartbeat.context import (
     build_reply_request,
     build_system_context,
 )
+from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.language_runner import learn_language
 from aureus.heartbeat.memory_consolidation import _extract
 from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
@@ -33,10 +37,12 @@ from aureus.memory import LanguageSample, LanguageStore, MemoryHit
 from aureus.memory.consolidation import ConsolidationItem
 from aureus.organs import (
     BUILTIN_ORGANS,
+    CallPurpose,
     LLMOrgan,
     ModelPreference,
     ModelsConfig,
     OrganRequest,
+    OrganResponse,
 )
 from aureus.organs.api_keys import KeyResolver
 from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
@@ -55,8 +61,8 @@ def rig(tmp_path: Path) -> Iterator[ConfigRig]:
     item.close()
 
 
-def mock_models() -> ModelsConfig:
-    """给四个联测器官配置同一个只会连接 MockTransport 的模型。"""
+def mock_models(*, vision: bool = False) -> ModelsConfig:
+    """给联测器官配置同一个只会连接 MockTransport 的模型。"""
     return ModelsConfig.model_validate(
         {
             "providers": [
@@ -68,7 +74,14 @@ def mock_models() -> ModelsConfig:
                     "max_retry": 0,
                 }
             ],
-            "models": [{"name": "sample", "identifier": "sample-model", "provider": "mock"}],
+            "models": [
+                {
+                    "name": "sample",
+                    "identifier": "sample-model",
+                    "provider": "mock",
+                    "vision": vision,
+                }
+            ],
             "organs": {organ: {"models": ["sample"]} for organ in BUILTIN_ORGANS},
         }
     )
@@ -97,6 +110,131 @@ def _dialogue(record_id: int, actor: ActorType, content: str) -> TimelineRecord:
         visibility=VisibilityScope.GROUP,
         content=content,
     )
+
+
+@pytest.mark.asyncio
+async def test_image_prompt_preview_matches_inbox_vision_http_request(
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
+
+    fixed_prompt = (
+        "请用中文详细描述这张图片的内容。如果有文字，请把文字描述概括出来，请留意其主题、直观感受，"
+        "输出为一段平文本，最多100字，请注意不要分点，就输出一段文本"
+    )
+    system_text = "你是 Aureus 的一个器官，按用户消息里的要求回答。"
+    captured: list[dict[str, Any]] = []
+
+    def provider_reply(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "https://prompt-test.invalid/v1/chat/completions"
+        body = json.loads(request.content)
+        assert body["model"] == "sample-model"
+        captured.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-image-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "sample-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "模拟图片说明"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    adapter = LLMOrgan(
+        "vlm",
+        mock_models(vision=True).routes_for("vlm"),
+        KeyResolver(rig.paths.home / "unused", environ={"AUREUS_KEY_PROMPT_HTTP_TEST": "mock"}),
+        token_counter=lambda _messages: 12,
+        prompts=rig.models.prompts,
+    )
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        assert request.organ_id == "vlm"
+        assert request.purpose == CallPurpose.OPTIONAL
+        assert request.model_preference == ModelPreference.CHEAPEST
+        return await adapter.process(request)
+
+    attachment = MediaReference("image", "synthetic.png")
+    emoji = MediaReference("image", "synthetic-emoji.png", is_emoji=True)
+    buffer = BytesIO()
+    Image.new("RGB", (1, 1), "red").save(buffer, format="PNG")
+    image_bytes = buffer.getvalue()
+    source = Perception(
+        "qq",
+        "测试账号",
+        "[图片]",
+        VisibilityScope.GROUP,
+        TrustLevel.UNVERIFIED,
+        attachments=(attachment, emoji),
+    )
+    reads: list[MediaReference] = []
+
+    async def read(media_source: Perception, reference: MediaReference) -> tuple[bytes, str]:
+        assert media_source is source
+        reads.append(reference)
+        return (image_bytes if reference == attachment else image_bytes + b"emoji"), "image/png"
+
+    flow = InboxMedia(call)
+    flow.read = read
+    flow.available = frozenset({"vlm"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider_reply)) as client:
+        monkeypatch.setattr(litellm, "aclient_session", client)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        try:
+            [record] = await flow.enrich(
+                [_dialogue(1, ActorType.PERSON, source.content)], [source], ModelPreference.CHEAPEST
+            )
+            assert record.content == "[图片]\n[图片识别] 模拟图片说明\n[表情识别] 模拟图片说明"
+            assert reads == [attachment, emoji]
+            [actual, actual_emoji] = [body["messages"] for body in captured]
+            [system, user] = actual
+            assert system == {"role": "system", "content": system_text}
+            assert user["role"] == "user"
+            [text, image] = user["content"]
+            assert text == {"type": "text", "text": fixed_prompt}
+            assert image["type"] == "image_url"
+            mime, encoded = image["image_url"]["url"].split(",", 1)
+            assert mime == "data:image/png;base64"
+            assert b64decode(encoded, validate=True) == image_bytes
+            assert actual_emoji[1]["content"][0] == {
+                "type": "text",
+                "text": (
+                    "请客观描述这张图片，读出可辨认的文字。请用一句简短中文注明画面和它表达的情绪。"
+                ),
+            }
+
+            preview = rig.client.get("/api/organs/vlm/prompt-preview")
+            assert preview.status_code == 200
+            [scene] = preview.json()["scenes"]
+            assert scene["id"] == "image_description"
+            assert scene["label"] == "普通图片描述"
+            assert "预览不读取或发送图片" in scene["note"]
+            assert scene["messages"] == [
+                system,
+                {"role": "user", "content": [text, {"type": "image", "label": "〔来信图片〕"}]},
+            ]
+            assert "data:" not in preview.text and encoded not in preview.text
+            assert len(captured) == 2 and reads == [attachment, emoji]
+            for organ in ("planner", "voice"):
+                scenes = rig.client.get(f"/api/organs/{organ}/prompt-preview").json()["scenes"]
+                assert all(scene["id"] != "image_description" for scene in scenes)
+                assert all(
+                    isinstance(message["content"], str)
+                    for scene in scenes
+                    for message in scene["messages"]
+                )
+        finally:
+            litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 async def _check_derived_recall(

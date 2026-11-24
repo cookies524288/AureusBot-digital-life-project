@@ -19,7 +19,13 @@ from .interface import (
     OrganRequest,
     OrganResponse,
 )
-from .llm_adapter import EMPTY_SYSTEM_MESSAGE, LLMOrgan, assemble_messages, count_prompt_tokens
+from .llm_adapter import (
+    EMPTY_SYSTEM_MESSAGE,
+    LLMOrgan,
+    assemble_image_messages,
+    assemble_messages,
+    count_prompt_tokens,
+)
 from .model_config import (
     API_KEY_ENV_PATTERN,
     BUILTIN_ORGANS,
@@ -62,6 +68,7 @@ __all__ = [
     "PromptTemplateError",
     "ProviderProtocol",
     "ReasoningLevel",
+    "assemble_image_messages",
     "assemble_messages",
     "count_prompt_tokens",
     "join_prompt",

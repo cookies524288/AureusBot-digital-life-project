@@ -2828,11 +2828,17 @@ async function openPromptPreview(organ) {
   const select = el('select', { 'aria-label': '运行场景' },
     ...scenes.map(scene => el('option', { value: scene.id, text: scene.label })));
   const messages = el('div', { class: 'stack' });
+  function renderContent(content) {
+    if (!Array.isArray(content)) return [el('pre', { text: content })];
+    return content.map(part => part.type === 'image'
+      ? el('p', { class: 'muted', text: part.label })
+      : el('pre', { text: part.text }));
+  }
   function renderMessages() {
     const scene = scenes.find(item => item.id === select.value);
     messages.replaceChildren(...(scene.note ? [el('p', { class: 'muted', text: scene.note })] : []),
       ...scene.messages.map(message => el('section', {},
-        el('h4', { text: message.role }), el('pre', { text: message.content }))));
+        el('h4', { text: message.role }), ...renderContent(message.content))));
     body.scrollTop = 0;
   }
   select.addEventListener('change', renderMessages);

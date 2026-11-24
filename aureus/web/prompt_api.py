@@ -12,8 +12,10 @@ from aureus.heartbeat import build_prompt_scenes, catalog_template_keys
 from aureus.identity import Identity
 from aureus.organs import (
     BUILTIN_ORGANS,
+    OrganRequest,
     PromptStore,
     PromptTemplateError,
+    assemble_image_messages,
     assemble_messages,
     organ_tasks,
 )
@@ -25,6 +27,15 @@ class PromptUpdate(BaseModel):
     """一份模板的替换原文。"""
 
     source: str
+
+
+def _scene_messages(
+    request: OrganRequest, store: PromptStore, image_label: str | None
+) -> list[dict[str, Any]]:
+    messages = assemble_messages(request, store)
+    if image_label is not None:
+        return assemble_image_messages(messages, {"type": "image", "label": image_label})
+    return messages
 
 
 def register_prompt_routes(
@@ -110,7 +121,7 @@ def register_prompt_routes(
                     "id": scene.key,
                     "label": scene.label,
                     "note": scene.note,
-                    "messages": assemble_messages(scene.request, store),
+                    "messages": _scene_messages(scene.request, store, scene.image_label),
                 }
                 for scene in scenes
             ]

@@ -24,6 +24,7 @@ from aureus.heartbeat.context import (
     build_system_context,
 )
 from aureus.heartbeat.downtime import Downtime
+from aureus.heartbeat.inbox_media import build_image_description_request
 from aureus.heartbeat.language_runner import build_language_learning_request
 from aureus.heartbeat.memory_consolidation import (
     EXTRACTION_FORMAT,
@@ -57,6 +58,7 @@ _CONDITIONAL = {
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
     "judge": "仅在判断器官启用且档位允许时调用，有历史才附对话。",
+    "image_description": "实际请求会附上来信图片；预览不读取或发送图片。",
 }
 
 
@@ -68,6 +70,7 @@ class PromptScene:
     task: str
     label: str
     request: OrganRequest
+    image_label: str | None = None
 
     @property
     def note(self) -> str:
@@ -385,6 +388,16 @@ def build_prompt_scenes(
         build_extraction_prompt("〔编号发言 JSON〕"),
         "",
     )
+    if "image_description" in tasks:
+        scenes.append(
+            PromptScene(
+                "image_description",
+                "image_description",
+                "普通图片描述",
+                build_image_description_request(),
+                image_label="〔来信图片〕",
+            )
+        )
     return scenes or [
         PromptScene("custom", "custom", "通用请求", OrganRequest(organ, "〔调用方提示词〕"))
     ]

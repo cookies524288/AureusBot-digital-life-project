@@ -135,6 +135,28 @@ class ResourceFixture(SimpleHTTPRequestHandler):
             super().do_GET()
         elif url.path == "/api/status":
             self._send_json({"must_change_password": False})
+        elif url.path == "/api/organs/vlm/prompt-preview":
+            self._send_json(
+                {
+                    "scenes": [
+                        {
+                            "id": "image_description",
+                            "label": "普通图片描述",
+                            "note": "实际请求会附上来信图片；预览不读取或发送图片。",
+                            "messages": [
+                                {"role": "system", "content": "合成系统提示"},
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": "合成图片描述指令\n只返回文字"},
+                                        {"type": "image", "label": "〔来信图片〕"},
+                                    ],
+                                },
+                            ],
+                        }
+                    ]
+                }
+            )
         elif url.path == "/api/timeline":
             records = [
                 {"id": 41, "content": "没有依据的旧回复"},
@@ -1179,6 +1201,31 @@ def test_memory_batch_remove_and_restore(browser: Browser) -> None:
       }
       press('未参与召回 · 合成批量014');
       check(dialog.open && dialog.innerText.includes('恢复召回'), '恢复移除不启用原停用记录');
+    """,
+    )
+
+
+def test_image_prompt_preview_displays_text_then_attachment(browser: Browser) -> None:
+    browser.open("timeline", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => typeof openPromptPreview === 'function', '加载预览入口');
+      await openPromptPreview('vlm');
+      const dialog = document.querySelector('#prompt-preview');
+      check(dialog.open && visible(dialog), '显示提示词对话框');
+      check(dialog.querySelector('option').textContent === '普通图片描述', '显示专用场景');
+      check(dialog.innerText.includes('预览不读取或发送图片'), '说明预览没有读取图片');
+      const [system, user] = dialog.querySelectorAll('#prompt-preview-body section');
+      check(system.querySelector('h4').textContent === 'system', '显示 system 角色');
+      check(system.querySelector('pre').textContent === '合成系统提示', '文本消息仍可阅读');
+      const [role, textPart, imagePart] = user.children;
+      check(role.textContent === 'user', '显示 user 角色');
+      check(textPart.tagName === 'PRE' && textPart.textContent === '合成图片描述指令\n只返回文字',
+        '先呈现完整的多行文字');
+      check(imagePart.textContent === '〔来信图片〕' && visible(imagePart), '次序之后显示图片占位');
+      check(!dialog.querySelector('img') && !dialog.innerText.includes('[object Object]'),
+        '不加载图片，也不把图文数组显示为对象字符串');
     """,
     )
 

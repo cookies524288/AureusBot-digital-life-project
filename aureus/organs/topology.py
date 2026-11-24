@@ -79,6 +79,7 @@ def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict
         "language_learning": runtime.language.organ,
         "memory_consolidation": "summarizer",
         "working_memory_summary": "summarizer",
+        "image_description": "vlm",
     }
     if runtime.heartbeat.split_reply_enabled:
         tasks["reply_segments"] = "fast_model"

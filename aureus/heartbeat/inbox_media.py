@@ -30,6 +30,23 @@ ImageIndexer = Callable[[Perception, MediaReference, bytes], Awaitable[None]]
 OrganCall = Callable[[OrganRequest], Awaitable[OrganResponse]]
 
 
+def build_image_description_request(
+    preference: ModelPreference = ModelPreference.PREFERRED,
+    *,
+    data: bytes | None = None,
+    mime: str | None = None,
+) -> OrganRequest:
+    """组装普通图片描述请求；预览不提供媒体字节和类型。"""
+    return OrganRequest(
+        "vlm",
+        _IMAGE_DESCRIPTION,
+        purpose=CallPurpose.OPTIONAL,
+        model_preference=preference,
+        media_bytes=data,
+        media_type=mime,
+    )
+
+
 class InboxMedia:
     """接收部署时绑定的媒体读取器及热更新的模型可用状态。"""
 
@@ -84,20 +101,20 @@ class InboxMedia:
                     logger.warning("QQ 表情收集未完成")
             if organ in self.available:
                 label = "表情识别" if attachment.is_emoji else "图片识别" if image else "语音转写"
-                prompt = ""
-                if image:
-                    prompt = _EMOJI_DESCRIPTION if attachment.is_emoji else _IMAGE_DESCRIPTION
-                try:
-                    result = await self._call(
-                        OrganRequest(
-                            organ,
-                            prompt,
-                            purpose=CallPurpose.OPTIONAL,
-                            model_preference=preference,
-                            media_bytes=data,
-                            media_type=mime,
-                        )
+                request = (
+                    build_image_description_request(preference, data=data, mime=mime)
+                    if image and not attachment.is_emoji
+                    else OrganRequest(
+                        organ,
+                        _EMOJI_DESCRIPTION if image else "",
+                        purpose=CallPurpose.OPTIONAL,
+                        model_preference=preference,
+                        media_bytes=data,
+                        media_type=mime,
                     )
+                )
+                try:
+                    result = await self._call(request)
                     if description := result.suggestion.strip():
                         notes.append(f"[{label}] {description}")
                         if collect is not None and needs_registration:
