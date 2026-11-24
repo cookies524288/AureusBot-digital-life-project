@@ -686,6 +686,7 @@ async def test_private_memory_and_disclosure_reminder_reach_group_replyer(
         await replay.assert_sent()
         _, group, reply = replay.records()
         assert group.visibility == reply.visibility == VisibilityScope.GROUP
+        assert group.metadata["trust"] == "verified_contact"
         assert group.metadata["recipient_id"] == reply.metadata["recipient_id"] == str(GROUP)
         assert reply.metadata["in_reply_to"] == [group.id]
         assert reply.metadata["recall_record_ids"] == [private.id]
@@ -697,6 +698,13 @@ async def test_private_memory_and_disclosure_reminder_reach_group_replyer(
         assert planner_request.context["in_reply_to"] == replyer_request.context["in_reply_to"]
         assert replyer_request.context["in_reply_to"] == [group.id]
         [call] = completion.calls
+        contact_notice = "不要向对方透露用户的称呼、聊天内容、你的预算和内部状态等不该对外说的事；"
+        for messages in (assemble_messages(planner_request), call["messages"]):
+            system, *dialogue = messages
+            assert system["role"] == "system"
+            assert "另一个人，账号是“qq:2200”" in system["content"]
+            assert contact_notice in system["content"]
+            assert all(contact_notice not in row["content"] for row in dialogue)
         heading = "启发式记忆" if heuristic else "长期记忆检索结果"
         reminder = f"【{heading}·内部参考】只供参考，不要原样念出来。"
         private_messages = [row for row in call["messages"] if private_text in row["content"]]
