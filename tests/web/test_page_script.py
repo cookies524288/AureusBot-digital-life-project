@@ -438,7 +438,9 @@ def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bu
         state.page = 'chat';
         openSocket();
         let finishHistory;
+        const typing = {ok:true, data:{typing:false}};
         api = path => {
+          if (path === '/api/chat/typing') return Promise.resolve(typing);
           if (path === '/api/inbox/conversations') {
             return Promise.resolve({ok:true, data:{enabled:false}});
           }
@@ -466,6 +468,7 @@ def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bu
         }));
         const requested = [];
         api = async path => {
+          if (path === '/api/chat/typing') return typing;
           requested.push(path);
           if (requested.length === 1) {
             push(replacement, 2, '同一段文字');
@@ -574,6 +577,7 @@ def test_persona_pronoun_updates_existing_labels_and_not_user_text() -> None:
         api = async (path, method, body) => {
           if (path === '/api/status') return {ok:true, data:{bot_pronoun:pronoun}};
           if (path === '/api/history') return {ok:true, data:[]};
+          if (path === '/api/chat/typing') return {ok:true, data:{typing:false}};
           assert.equal(path, '/api/settings');
           if (method === 'PUT') {
             writes.push(body.facts);
