@@ -105,6 +105,7 @@ class OutgoingMessage:
     visibility: VisibilityScope = VisibilityScope.PRIVATE
     report_delivery_failure: Callable[[str], None] | None = None
     reply_segment: int | None = None
+    can_deliver: Callable[[], bool] | None = None
 
 
 # 通道收消息的函数。必须很快返回、不能阻塞（心跳会直接调用它），出错只影响这个通道。

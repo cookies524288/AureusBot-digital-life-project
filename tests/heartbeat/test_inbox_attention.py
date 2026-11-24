@@ -16,15 +16,21 @@ from aureus.heartbeat import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.events import (
+    EVENT_PLANNING_INTERRUPTED,
+    EVENT_REPLY_DELIVERED,
+    EVENT_REPLY_DELIVERY_FAILED,
+    EVENT_REPLY_REFERENCE,
+)
 from aureus.heartbeat.inbox_attention import InboxAttention, InboxSelection, select_conversations
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.perception import MessageRoute
 from aureus.identity import Identity
 from aureus.organs import ModelPreference, OrganRequest, OrganResponse
-from tests.planner_fixtures import plan_response
 from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import TimelineDatabase, TimelineQuery, VisibilityScope
+from tests.planner_fixtures import plan_response
 
 
 class Organs:
@@ -35,7 +41,7 @@ class Organs:
     async def call(self, request: OrganRequest) -> OrganResponse:
         self.requests.append(request)
         if request.context.get("task") == "inbox_select":
-            return OrganResponse(request.organ_id, '{"conversations":[1,2,3]}')
+            return OrganResponse(request.organ_id, '{"conversation":1,"count":1}')
         if request.context.get("task") == "plan":
             return plan_response(request, self.plan)
         suggestion = {"vlm": "识别出的内容"}.get(request.organ_id, "收到。")
@@ -72,13 +78,18 @@ def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> No
     assert attention.browse(clock.now(), can_browse=True) == []
     clock.advance(timedelta(minutes=5))
     candidates = attention.browse(clock.now(), can_browse=True)
-    rows = attention.read_selection(InboxSelection(tuple(item.key for item in candidates)))
-    assert [row.perception.content for row in rows[:2]] == ["oldest", "newest"]
+    assert [item.key.recipient_id for item in candidates] == ["busy", "backlog"]
+    rows = attention.read_selection(InboxSelection(candidates[1].key, 35))
+    assert rows[0].perception.content == "10"
+    assert rows[-1].perception.content == "44"
     assert len(rows) == 35
+    assert attention.active_conversation == candidates[1].key
+    assert store.list_unread(candidates[1].key) == []
+    assert len(store.list_unread(candidates[0].key)) == 2
 
 
 @pytest.mark.asyncio
-async def test_planner_selects_which_private_and_multiple_groups(tmp_path: Path) -> None:
+async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
@@ -118,18 +129,73 @@ async def test_planner_selects_which_private_and_multiple_groups(tmp_path: Path)
     async def choose(request: OrganRequest) -> OrganResponse:
         assert "denied" not in request.prompt
         assert "message-" not in request.prompt
-        return OrganResponse(request.organ_id, '{"conversations":[4,2,3,1,4]}')
+        return OrganResponse(request.organ_id, '{"conversation":4,"count":1}')
 
     selection = await select_conversations(
-        candidates, choose, "planner", ModelPreference.PREFERRED, stream=False
+        candidates, choose, "planner", ModelPreference.PREFERRED, read_limit=4, stream=False
     )
+    assert selection.conversation == candidates[3].key
+    assert selection.conversation is not None
+    attention.allows = lambda key: key != selection.conversation
+    assert attention.read_selection(selection) == []
+    assert len(store.list_unread(selection.conversation)) == 2
+    attention.allows = lambda key: key.account_id == "bot" and key.recipient_id == "group-two"
     rows = attention.read_selection(selection)
-    assert [row.perception.content for row in rows] == [
-        "message-4",
-        "message-5",
-        "message-6",
-        "message-2",
-    ]
+    assert [row.perception.content for row in rows] == ["message-6"]
+    assert store.list_unread(selection.conversation) == []
+    assert len(store.list_unread(candidates[1].key)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "suggestion",
+    [
+        '{"conversation":null}',
+        '{"conversation":true,"count":1}',
+        '{"conversation":1,"count":true}',
+        '{"conversation":2,"count":1}',
+        '{"conversation":1,"count":0}',
+        '{"conversation":1,"count":5}',
+        '{"conversations":[1]}',
+        '{"conversation":[1],"count":1}',
+        '{"conversation":1, "conversation":1, "count":1}',
+        '{"conversation":1,"count":1} {"conversation":1,"count":3}',
+    ],
+)
+async def test_planner_invalid_or_declined_selection_does_not_enter(
+    tmp_path: Path, suggestion: str
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    store = InboxStore(tmp_path / "aureus.db", clock)
+    row = store.add(
+        Perception(
+            "qq",
+            "visitor",
+            "未读",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "group-one", "message"),
+        )
+    )
+    assert row is not None
+    attention = InboxAttention(
+        store, TimelineDatabase(tmp_path / "aureus.db", clock), None, [], enabled=True, read_limit=4
+    )
+
+    async def choose(request: OrganRequest) -> OrganResponse:
+        return OrganResponse(request.organ_id, suggestion)
+
+    result = await select_conversations(
+        store.list_unread_conversations(),
+        choose,
+        "planner",
+        ModelPreference.PREFERRED,
+        read_limit=4,
+        stream=False,
+    )
+    assert attention.read_selection(result) == []
+    assert attention.active_conversation is None
+    assert store.list_unread(row.conversation) == [row]
 
 
 def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -> None:
@@ -167,7 +233,7 @@ def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_active_conversation_debounces_and_limits_interruptions(tmp_path: Path) -> None:
+async def test_active_conversation_keeps_each_batch_separate(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     timeline = TimelineDatabase(database, clock)
@@ -193,7 +259,9 @@ async def test_active_conversation_debounces_and_limits_interruptions(tmp_path: 
                     raise
                 if "离开当前群" in request.prompt:
                     return plan_response(request, {"reply": False, "stay_in_conversation": False})
-                return plan_response(request, {"reply": True, "intent": "回应", "stay_in_conversation": True})
+                return plan_response(
+                    request, {"reply": True, "intent": "回应", "stay_in_conversation": True}
+                )
             assert not request.stream
             replies.append(request)
             return OrganResponse("replyer", "收到。")
@@ -257,19 +325,14 @@ async def test_active_conversation_debounces_and_limits_interruptions(tmp_path: 
 
         receive("ongoing-message")
         await advance_to_planner()
-        for number in range(4):
-            receive(f"interrupt-{number}")
-            await heart.wait_for_thought()
-            heart.beat()
-            assert len(cancellations) == number + 1
-            await advance_to_planner()
-            assert f"interrupt-{number}" in plans[-1].prompt
-        receive("exceeds-limit")
-        assert len(cancellations) == 4
-        assert "exceeds-limit" not in plans[-1].prompt
+        receive("next-batch-first")
+        receive("next-batch-second")
+        assert cancellations == []
+        assert "next-batch-first" not in plans[-1].prompt
+        assert store.list_unread_conversations()[0].unread_count == 2
         await finish_plan()
         await advance_to_planner()
-        assert "exceeds-limit" in plans[-1].prompt
+        assert all(text in plans[-1].prompt for text in ("next-batch-first", "next-batch-second"))
         await finish_plan()
 
         receive("priority-elsewhere", sender="owner", group="priority-group")
@@ -284,6 +347,150 @@ async def test_active_conversation_debounces_and_limits_interruptions(tmp_path: 
         receive("ordinary-after-leaving", group="priority-group")
         assert not heart.is_thinking
         assert store.list_unread_conversations()[0].unread_count == 1
+    finally:
+        await heart.shut_down()
+        timeline.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["selection", "plan", "delivery"])
+async def test_priority_preemption_discards_stale_selection_reply_or_segments(
+    tmp_path: Path, phase: str
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def finish_late() -> None:
+        entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+
+    class PreemptedOrgans:
+        old_ids: list[int] | None = None
+
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            if request.context["task"] == "inbox_select":
+                if phase == "selection":
+                    await finish_late()
+                return OrganResponse(request.organ_id, '{"conversation":1,"count":1}')
+            if request.context["task"] == "plan":
+                if "原会话消息" in request.prompt:
+                    self.old_ids = request.context["in_reply_to"]
+                    if phase == "plan":
+                        await finish_late()
+                    return plan_response(
+                        request, {"reply": True, "intent": "过时回复", "quote_source": True}
+                    )
+                return plan_response(request, {"reply": True, "intent": "优先回复"})
+            text = (
+                "原会话先发出这一段。原会话不能再发这一段。"
+                if request.context["in_reply_to"] == self.old_ids
+                else "优先会话已收到。"
+            )
+            return OrganResponse(request.organ_id, text)
+
+    identity = Identity.model_validate(
+        {
+            "facts": {"name": "小豆", "birthday": "2026-11-23"},
+            "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
+            "persona": {"immutable": "温和。"},
+        }
+    )
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=PreemptedOrgans(),
+        identity=identity,
+        config=HeartbeatConfig(
+            inbox_debounce_enabled=False,
+            typing_delay_enabled=True,
+            typing_jitter_min_seconds=10,
+            typing_jitter_max_seconds=10,
+        ),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    sent: list[OutgoingMessage] = []
+    heart.attach_channel("qq", sent.append, can_quote=lambda _route: True)
+    heart.wake_up()
+
+    def receive(text: str, sender: str, group: str) -> None:
+        row = store.add(
+            Perception(
+                "qq",
+                sender,
+                text,
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", group, text),
+            )
+        )
+        assert row is not None
+        heart.on_inbox_message(row)
+
+    try:
+        receive("原会话消息", "visitor", "old")
+        heart.beat()
+        clock.advance(timedelta(minutes=5))
+        heart.beat()
+        if phase != "selection":
+            await heart.wait_for_thought()
+            heart.beat()
+        if phase == "delivery":
+            await heart.wait_for_thought()
+            heart.beat()
+            assert [message.content for message in sent] == ["原会话先发出这一段。"]
+            assert sent[0].quote_source is True
+            assert timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED)) == []
+        else:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+        receive("优先会话消息", "owner", "urgent")
+        if phase == "delivery":
+            assert sent[0].can_deliver is not None and not sent[0].can_deliver()
+        else:
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+            await heart.wait_for_thought()
+        clock.advance(timedelta(seconds=30))
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        assert len(sent) == (2 if phase == "delivery" else 1)
+        assert sent[-1].route is not None and sent[-1].route.recipient_id == "urgent"
+        assert sent[-1].confirm_delivery is not None
+        sent[-1].confirm_delivery()
+        if phase == "delivery":
+            assert sent[0].confirm_delivery is not None
+            sent[0].confirm_delivery()
+        references = timeline.query(TimelineQuery(event_type=EVENT_REPLY_REFERENCE))
+        interruptions = timeline.query(TimelineQuery(event_type=EVENT_PLANNING_INTERRUPTED))
+        receipts = timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED))
+        failures = timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERY_FAILED))
+        assert receipts[0].metadata["round_id"] == references[-1].metadata["round_id"]
+        if phase == "delivery":
+            [failure] = failures
+            assert failure.metadata["segment"] == 2
+            assert receipts[-1].metadata["segment"] == 1
+            assert failure.metadata["round_id"] == receipts[-1].metadata["round_id"]
+            assert receipts[-1].metadata["round_id"] != receipts[0].metadata["round_id"]
+            assert interruptions == []
+        elif phase == "plan":
+            [interruption] = interruptions
+            assert "抢占" in interruption.content
+            assert interruption.metadata["round_id"] != receipts[0].metadata["round_id"]
+            assert failures == []
+        else:
+            assert interruptions == [] and failures == []
+        unread = store.list_unread_conversations()
+        assert [row.key.recipient_id for row in unread] == (["old"] if phase == "selection" else [])
     finally:
         await heart.shut_down()
         timeline.close()
@@ -369,7 +576,9 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         await heart.wait_for_thought()
         heart.beat()
         assert sent[-1].route == owner.route
-        organs.plan = '{"reply":true,"intent":"回应","special_contact":true}'
+        organs.plan = (
+            '{"reply":true,"intent":"回应","special_contact":true,"stay_in_conversation":false}'
+        )
         group = receive("visitor", "group-only", attachments=(picture,))
         heart.beat()
         clock.advance(timedelta(minutes=4))
@@ -391,6 +600,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         changes = timeline.query(TimelineQuery(event_type="special_contact_changed"))
         assert len(changes) == 1
         assert changes[0].metadata["add"] is True
+        organs.plan = '{"reply":true,"intent":"回应"}'
 
         clock.advance(timedelta(hours=17))
         ordinary = receive("other-visitor", "night-ordinary")

@@ -2,12 +2,16 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
+
+import pytest
 
 from aureus.common import ManualClock
 from aureus.common.sqlite import open_connection
+from aureus.heartbeat import inbox_store
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.perception import MessageRoute, Perception, TrustLevel, VisibilityScope
 
@@ -126,3 +130,43 @@ def test_concurrent_acknowledgment_and_duplicate_delivery(tmp_path: Path) -> Non
         (entry.perception.content, entry.status)
         for entry in reopened.list_messages(first.conversation)
     ] == [("2", "unread"), ("1", "read")]
+
+
+def test_read_window_marks_only_selected_route_through_entry_watermark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    oldest = store.add(_message(1))
+    other_group = store.add(_message(2, "2"))
+    another = _message(3)
+    assert another.route is not None
+    other_account = store.add(replace(another, route=replace(another.route, account_id="other")))
+    middle = store.add(_message(4))
+    newest = store.add(_message(5))
+    assert oldest and middle and newest and other_group and other_account
+
+    snapshot_taken = Event()
+    writer_started = Event()
+    reconstruct = inbox_store._message
+
+    def observe_snapshot(row: inbox_store.Row) -> inbox_store.InboxMessage:
+        if row["id"] == middle.id:
+            snapshot_taken.set()
+            assert writer_started.wait(timeout=2)
+        return reconstruct(row)
+
+    def receive() -> inbox_store.InboxMessage | None:
+        assert snapshot_taken.wait(timeout=2)
+        writer_started.set()
+        return store.add(_message(6))
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=1) as executor:
+        patch.setattr(inbox_store, "_message", observe_snapshot)
+        pending = executor.submit(receive)
+        assert store.read_window(oldest.conversation, limit=2) == [middle, newest]
+        late = pending.result(timeout=2)
+
+    assert late is not None
+    assert store.list_unread(oldest.conversation) == [late]
+    assert store.list_unread(other_group.conversation) == [other_group]
+    assert store.list_unread(other_account.conversation) == [other_account]

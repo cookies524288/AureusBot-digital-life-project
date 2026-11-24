@@ -362,6 +362,26 @@ class InboxStore:
             ).fetchall()
         return [_message(row) for row in rows]
 
+    def read_window(self, conversation: ConversationKey, *, limit: int) -> list[InboxMessage]:
+        """取得最新未读窗口，并在同一事务内读到此次入场水位。"""
+        with closing(open_connection(self._path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            rows = database.execute(
+                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} ORDER BY m.id DESC LIMIT ?",
+                (*conversation.parameters(), limit),
+            ).fetchall()
+            if not rows:
+                return []
+            messages = [_message(row) for row in reversed(rows)]
+            database.execute(
+                f"""UPDATE inbox_conversations SET last_read_id = ?,
+                first_read_id = COALESCE(first_read_id, (SELECT MIN(m.id) FROM inbox_messages m
+                    WHERE m.conversation_id = inbox_conversations.id AND m.direction = 'incoming'))
+                WHERE {_KEY}""",
+                (messages[-1].id, *conversation.parameters()),
+            )
+            return messages
+
     def existing_message_ids(self, conversation: ConversationKey, ids: Iterable[str]) -> set[str]:
         """核对旧消息是否已有同一完整路由的规范原件，不读取正文。"""
         with closing(open_connection(self._path)) as database:

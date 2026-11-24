@@ -14,13 +14,14 @@ from aureus.heartbeat.inbox_store import (
     InboxStore,
 )
 from aureus.heartbeat.perception import Perception, TrustLevel
-from aureus.heartbeat.planning import Plan, first_json_object
+from aureus.heartbeat.planning import Plan
 from aureus.organs import CallPurpose, ModelPreference, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
 from aureus.safety import CallRejectedError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, TimelineRecord
 
 EVENT_SPECIAL_CONTACT = "special_contact_changed"
+SELECTION_TASK = "aureus-inbox-selection"
 _IDLE_BEFORE_READING = timedelta(minutes=5)
 _PRIORITY_LIMIT = 20
 _CANDIDATE_LIMIT = 100
@@ -29,9 +30,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class InboxSelection:
-    """规划器按本轮候选编号选出的会话。"""
+    """规划器按本轮候选编号选出的一个会话和想读条数。"""
 
-    conversations: tuple[ConversationKey, ...] = ()
+    conversation: ConversationKey | None = None
+    count: int = 0
+
+
+@dataclass(frozen=True, eq=False)
+class InboxResidence:
+    """一次驻留的身份；离开再进入同一路由也不是原来的驻留。"""
+
+    conversation: ConversationKey
+    read_limit: int
 
 
 async def select_conversations(
@@ -40,6 +50,7 @@ async def select_conversations(
     planner: str,
     preference: ModelPreference,
     *,
+    read_limit: int,
     stream: bool,
 ) -> InboxSelection:
     """请求规划器在当前允许的未读清单中挑选会话。"""
@@ -48,16 +59,17 @@ async def select_conversations(
         for number, item in enumerate(candidates, 1)
     ]
     prompt = (
-        "从以下未读平台会话中选出你现在想读的。名称仅是平台资料。"
-        "有私聊时，请选一个私聊优先读。群聊可选择零个或多个，按想读的先后排列。"
-        '仅返回 JSON，例如 {"conversations":[2, 4]}。\n' + json.dumps(catalogue, ensure_ascii=False)
+        "从以下未读平台会话中最多选一个。名称仅是平台资料。"
+        f"count 是本次想看条数，范围 1 至 {read_limit}；不足时只看实际未读。"
+        '仅返回 JSON，例如 {"conversation":1,"count":1}；暂不进入则返回 {"conversation":null}。\n'
+        + json.dumps(catalogue, ensure_ascii=False)
     )
     try:
         result = await call(
             OrganRequest(
                 planner,
                 prompt,
-                context={"task": "inbox_select"},
+                context={"task": "inbox_select", "read_limit": read_limit},
                 purpose=CallPurpose.OPTIONAL,
                 model_preference=preference,
                 stream=stream,
@@ -66,20 +78,23 @@ async def select_conversations(
     except (CallRejectedError, OrganCallError, ValueError) as error:
         logger.warning("不能选取收件箱会话：%s", error)
         return InboxSelection()
-    data = first_json_object(result.suggestion)
-    selected = data.get("conversations") if data is not None else None
-    if not isinstance(selected, list):
+    try:
+        pairs = json.loads(result.suggestion, object_pairs_hook=tuple)
+    except ValueError:
         return InboxSelection()
-    choices = [
-        candidates[number - 1].key
-        for number in selected
-        if type(number) is int and 1 <= number <= len(candidates)
-    ]
-    private = next((key for key in choices if key.kind == "private"), None)
-    if private is None and any(item.key.kind == "private" for item in candidates):
-        return InboxSelection()
-    groups = dict.fromkeys(key for key in choices if key.kind == "group")
-    return InboxSelection((private, *groups) if private is not None else tuple(groups))
+    if isinstance(pairs, tuple) and len(pairs) == 2:
+        data = dict(pairs)
+        if data.keys() != {"conversation", "count"}:
+            return InboxSelection()
+        number, count = data["conversation"], data["count"]
+        if (
+            type(number) is int
+            and 1 <= number <= len(candidates)
+            and type(count) is int
+            and 1 <= count <= read_limit
+        ):
+            return InboxSelection(candidates[number - 1].key, count)
+    return InboxSelection()
 
 
 class InboxAttention:
@@ -100,12 +115,27 @@ class InboxAttention:
         self._people = people
         self._user_accounts = frozenset(user_accounts)
         self._enabled = enabled
-        self._read_limit = read_limit
+        self.read_limit = read_limit
         self._special: set[int] = set()
         self._idle_since: datetime | None = None
         self._wants_to_read = False
-        self.active_conversation: ConversationKey | None = None
+        self.residence: InboxResidence | None = None
+        self._staying = False
         self.allows: Callable[[ConversationKey], bool] = lambda _conversation: True
+
+    @property
+    def active_conversation(self) -> ConversationKey | None:
+        """当前仍驻留的路由；主动退出后可送毕正在回复的这一轮。"""
+        return self.residence.conversation if self._staying and self.residence is not None else None
+
+    def permits(self, residence: InboxResidence) -> bool:
+        """仅当前未被抢占且仍获授权的驻留可处理或投递。"""
+        return self.residence is residence and self.allows(residence.conversation)
+
+    def interrupt(self) -> None:
+        """撤销旧驻留和此前所有未投递内容的资格。"""
+        self.residence = None
+        self._staying = False
 
     def restore(self) -> None:
         """重放特别关心变动；用户绑定不受规划器改动。"""
@@ -142,7 +172,11 @@ class InboxAttention:
             return []
         messages: list[InboxMessage] = []
         for item in self.store.list_unread_conversations():
-            if (senders := accounts.get(item.key.platform)) and self.allows(item.key):
+            if (
+                item.key != self.active_conversation
+                and (senders := accounts.get(item.key.platform))
+                and self.allows(item.key)
+            ):
                 messages.extend(self._priority_page(item.key, senders))
         return sorted(messages, key=lambda row: row.id)[:_PRIORITY_LIMIT]
 
@@ -185,24 +219,33 @@ class InboxAttention:
         return private[:_CANDIDATE_LIMIT] + groups[:_CANDIDATE_LIMIT]
 
     def read_selection(self, selection: InboxSelection) -> list[InboxMessage]:
-        """按选择顺序翻页，合计不超过本次配置的上限。"""
-        messages: list[InboxMessage] = []
-        for key in selection.conversations:
-            if self.allows(key):
-                messages.extend(self.store.list_unread(key, limit=self._read_limit - len(messages)))
-                if len(messages) >= self._read_limit:
-                    break
+        """复验选择与路由权限，成功读取后才占住会话。"""
+        key = selection.conversation
+        if (
+            not self._enabled
+            or self.active_conversation is not None
+            or key is None
+            or type(selection.count) is not int
+            or not 1 <= selection.count <= self.read_limit
+            or not self.allows(key)
+        ):
+            return []
+        messages = self.store.read_window(key, limit=selection.count)
+        if messages:
+            self.residence = InboxResidence(key, selection.count)
+            self._staying = True
         return messages
 
     def active_messages(self) -> list[InboxMessage]:
         """翻到当前停留会话的新消息，权限变化时退出会话。"""
-        key = self.active_conversation
-        if key is None:
+        residence = self.residence
+        if not self._staying or residence is None or not self.permits(residence):
             return []
-        if not self.allows(key):
-            self.active_conversation = None
-            return []
-        return self.store.list_unread(key, limit=self._read_limit)
+        return self.store.read_window(residence.conversation, limit=residence.read_limit)
+
+    def debounce_messages(self, key: ConversationKey) -> list[InboxMessage]:
+        """尚未驻留的优先来信沿用原来的同会话防抖。"""
+        return self.store.list_unread(key, limit=self.read_limit) if self.allows(key) else []
 
     def apply_plan(self, plan: Plan, target: Perception, source: TimelineRecord) -> None:
         """采用规划器的翻阅意愿和对本轮已认出联系人的特别关心建议。"""
@@ -212,9 +255,11 @@ class InboxAttention:
         if target.route is not None and plan.stay_in_conversation is not None:
             key = ConversationKey.from_perception(target)
             if plan.stay_in_conversation and self.allows(key):
-                self.active_conversation = key
+                if self.residence is None or self.residence.conversation != key:
+                    self.residence = InboxResidence(key, self.read_limit)
+                self._staying = True
             elif key == self.active_conversation:
-                self.active_conversation = None
+                self._staying = False
         if target.route is None or self._people is None or plan.special_contact is None:
             return
         person = self._people.find(target.channel, target.sender_id)

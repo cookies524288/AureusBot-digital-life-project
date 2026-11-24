@@ -313,6 +313,8 @@ class QQChannel:
             self._sending.discard(finished)
             if self._last_send.get(conversation) is finished:
                 del self._last_send[conversation]
+            if finished.cancelled() and message.report_delivery_failure is not None:
+                message.report_delivery_failure("QQ 发送已取消，没有收到这段回复的投递确认。")
 
         task.add_done_callback(drop)
 
@@ -357,6 +359,10 @@ class QQChannel:
                         message.report_delivery_failure("表情或 QQ 连接不可用，未投递。")
                     return
             params = encode_message(message, route, image=image)
+            if message.can_deliver is not None and not message.can_deliver():
+                if message.report_delivery_failure is not None:
+                    message.report_delivery_failure("原会话已切换或不再允许发送，未投递。")
+                return
             receipt = await self._transport.call(socket, "send_msg", params)
         except (OSError, TimeoutError, WebSocketException, OneBotError) as error:
             logger.warning("QQ 发送失败（%s）", type(error).__name__)

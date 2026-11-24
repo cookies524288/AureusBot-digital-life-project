@@ -46,9 +46,16 @@ class FakePlanner:
             return OrganResponse(self.organ_id, "", metadata={"type": "fake"}, tool_calls=calls)
         if task == "inbox_select":
             candidates = json.loads(request.prompt.splitlines()[-1])
-            private = [item["id"] for item in candidates if item["kind"] == "private"]
-            groups = [item["id"] for item in candidates if item["kind"] == "group"]
-            plan = json.dumps({"conversations": private[:1] + groups})
+            if candidates:
+                choice = candidates[0]
+                plan = json.dumps(
+                    {
+                        "conversation": choice["id"],
+                        "count": min(choice["unread"], request.context["read_limit"]),
+                    }
+                )
+            else:
+                plan = '{"conversation":null}'
         elif task == "initiative_plan":
             plan = '{"reach_out":false,"reason":"模拟规划建议"}'
         else:

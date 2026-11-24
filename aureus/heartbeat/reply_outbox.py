@@ -14,7 +14,10 @@ from aureus.timeline import TimelineRecord
 
 type _Address = ConversationKey | tuple[str, str]
 type _Part = str | EmojiReplyPart
-type _Send = Callable[[Perception, _Part, TimelineRecord, bool, int | None], bool]
+type _DeliveryGuard = Callable[[], bool]
+type _Send = Callable[
+    [Perception, _Part, TimelineRecord, bool, int | None, _DeliveryGuard | None], bool
+]
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class _Reply:
     parts: deque[tuple[_Part, float]]
     on_delivered: Callable[[], None] | None
     on_failed: Callable[[], None] | None
+    can_deliver: _DeliveryGuard | None
     quote_source: bool = False
     delivered: bool = False
     text_parts: int = 0
@@ -68,7 +72,7 @@ class ReplyOutbox:
 
     def __init__(
         self, clock: Clock, config: HeartbeatConfig, send: _Send,
-        record_discard: Callable[[TimelineRecord], None],
+        record_discard: Callable[[TimelineRecord, int | None], None],
     ) -> None:
         self._clock = clock
         self._config = config
@@ -102,6 +106,7 @@ class ReplyOutbox:
         *,
         emoji: EmojiReplyPart | None = None,
         quote_source: bool = False,
+        can_deliver: _DeliveryGuard | None = None,
     ) -> bool:
         """同一次回复的后续段计入打字时间，并立即投递已到期的段。"""
         address = _address(target)
@@ -116,7 +121,9 @@ class ReplyOutbox:
                 timed_parts.appendleft((emoji, 0.0))
             else:
                 timed_parts.append((emoji, 0.0))
-        reply = _Reply(target, record, timed_parts, on_delivered, on_failed, quote_source)
+        reply = _Reply(
+            target, record, timed_parts, on_delivered, on_failed, can_deliver, quote_source
+        )
         queue.replies.append(reply)
         self._deliver_due(address, queue)
         return reply.delivered
@@ -127,8 +134,17 @@ class ReplyOutbox:
         self._conversations = {}
         for queue in conversations.values():
             for reply in queue.replies:
-                self._record_discard(reply.record)
-                reply.fail()
+                self._discard(reply)
+
+    def _discard(self, reply: _Reply) -> None:
+        text_parts = reply.text_parts
+        for part, _ in reply.parts:
+            segment = None
+            if isinstance(part, str):
+                text_parts += 1
+                segment = text_parts
+            self._record_discard(reply.record, segment)
+        reply.fail()
 
     def deliver_due(self) -> None:
         """每个会话都可独立发送已到时间的内容。"""
@@ -144,14 +160,22 @@ class ReplyOutbox:
         )
 
     def _deliver_due(self, address: _Address, queue: _ConversationOutbox) -> None:
-        while queue.replies and queue.seconds_until_due(self._clock.now()) == 0:
+        while queue.replies:
             reply = queue.replies[0]
+            if reply.can_deliver is not None and not reply.can_deliver():
+                queue.replies.popleft()
+                self._discard(reply)
+                continue
+            if queue.seconds_until_due(self._clock.now()) != 0:
+                break
             content, _ = reply.parts.popleft()
             segment = None
             if isinstance(content, str):
                 reply.text_parts += 1
                 segment = reply.text_parts
-            delivered = self._send(reply.target, content, reply.record, reply.quote_source, segment)
+            delivered = self._send(
+                reply.target, content, reply.record, reply.quote_source, segment, reply.can_deliver
+            )
             reply.quote_source = False
             queue.last_sent_at = self._clock.now()
             if not reply.parts:
