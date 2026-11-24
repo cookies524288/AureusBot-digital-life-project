@@ -36,6 +36,7 @@ from .onebot import (
     read_message_segments,
 )
 from .onebot_transport import OneBotError, OneBotTransport, decode_media_base64
+from .qq_desktop import QQDesktop
 from .web import HeartbeatHandle
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,9 @@ class QQChannel:
         self._allows_emoji_delivery = allows_emoji_delivery
         self._transport = OneBotTransport(
             config, token.get_secret_value() if token else None, self._receive
+        )
+        self.desktop = QQDesktop(
+            self._transport, self.allows_inbox_conversation, self._save_delivered
         )
         self._seen: OrderedDict[tuple[ConversationKey, str], None] = OrderedDict()
         self._sending: set[asyncio.Task[None]] = set()

@@ -6,9 +6,10 @@ from dataclasses import asdict
 from hashlib import sha256
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from aureus.channels import QQAvatars
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.memory import EmojiStore
@@ -43,6 +44,8 @@ def register_inbox_routes(
     archive_account_id: str | None,
     read_attachment: AttachmentReader | None = None,
     emojis: EmojiStore | None = None,
+    avatars: QQAvatars | None = None,
+    is_active: Callable[[str], bool] | None = None,
     *,
     is_replying: Callable[[ConversationKey], bool] | None = None,
 ) -> None:
@@ -167,6 +170,32 @@ def register_inbox_routes(
                 headers={"Cache-Control": "no-store"},
             )
         return Response(media[0], media_type=media[1], headers={
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+
+    @app.get("/api/inbox/messages/{identifier}/avatar")
+    async def read_avatar(
+        request: Request, token: Annotated[str, Depends(require_ready)],
+        key: Annotated[ConversationKey, Depends(_conversation_key)],
+        identifier: Annotated[int, Path(gt=0, le=2**63 - 1)],
+    ) -> Response:
+        def authorized() -> bool:
+            return (
+                allows_conversation is not None and allows_conversation(key)
+                and is_active is not None and is_active(token)
+            )
+
+        unavailable = HTTPException(404, "这条消息没有可读取的 QQ 头像。")
+        if (
+            request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
+            or avatars is None or store is None or not authorized()
+        ):
+            raise unavailable
+        message = await asyncio.to_thread(store.get_visible_message, key, identifier)
+        if message is None or (avatar := await avatars.read(message, authorized)) is None:
+            raise unavailable
+        return Response(avatar[0], media_type=avatar[1], headers={
             "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
             "Cross-Origin-Resource-Policy": "same-origin",
         })

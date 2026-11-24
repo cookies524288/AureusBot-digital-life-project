@@ -431,6 +431,21 @@ class InboxStore:
                 conversation.parameters(),
             ).fetchone()[0])
 
+    def list_read_history(
+        self, conversation: ConversationKey, visibility: VisibilityScope, *,
+        before_id: int | None, keyword: str | None, limit: int,
+    ) -> list[InboxMessage]:
+        """读取同一可见范围内连续已读的来信与实际送达的回信，不改变水位。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            rows = database.execute(
+                f"""{_MESSAGES} WHERE {_KEY} AND {_SUMMARY_MESSAGE} AND NOT ({_UNREAD})
+                    AND m.visibility = ? AND (? IS NULL OR m.id < ?)
+                    AND (? IS NULL OR instr(lower(m.content), lower(?)) > 0)
+                    ORDER BY m.id DESC LIMIT ?""",
+                (*conversation.parameters(), visibility, before_id, before_id, keyword, keyword, limit),
+            )
+            return [_message(row) for row in rows]
+
     def get_visible_message(
         self, conversation: ConversationKey, identifier: int
     ) -> InboxMessage | None:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aureus.channels import WebChannel
+from aureus.channels import QQAvatars, QQDesktop, WebChannel
 from aureus.common import AureusPaths, ManualClock, RuntimeConfig, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import registered_templates
@@ -30,6 +30,9 @@ class ConfigRig:
         inbox_store: InboxStore | None = None,
         allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
         read_inbox_attachment: AttachmentReader | None = None,
+        qq_desktop: QQDesktop | None = None,
+        qq_avatars: QQAvatars | None = None,
+        allows_qq_delivery: Callable[[], bool] | None = None,
         emoji_store: EmojiStore | None = None,
         runtime: RuntimeConfig | None = None,
         planner_tool_definitions: Callable[[], tuple[ToolDefinition, ...]] | None = None,
@@ -76,6 +79,9 @@ class ConfigRig:
             inbox_store=inbox_store,
             allows_inbox_conversation=allows_inbox_conversation,
             read_inbox_attachment=read_inbox_attachment,
+            qq_desktop=qq_desktop,
+            qq_avatars=qq_avatars,
+            allows_qq_delivery=allows_qq_delivery,
             resource_emojis=emoji_store,
             resource_database=self.paths.database_file,
         )
