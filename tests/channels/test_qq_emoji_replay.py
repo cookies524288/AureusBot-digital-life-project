@@ -9,8 +9,9 @@ import pytest
 from aureus.common import ManualClock
 from aureus.heartbeat.inbox_store import InboxMessage
 from aureus.organs import OrganRequest, OrganResponse
-from tests.channels.test_qq_behavior_replay import START, Replay, open_replay
+from tests.channels.test_qq_behavior_replay import START, Replay, ReplayOrgan, open_replay
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, event
+from tests.heartbeat.test_emoji_selection import synthetic_emoji
 
 pytestmark = pytest.mark.asyncio
 
@@ -42,16 +43,20 @@ async def receive_mention(
 
 
 @pytest.mark.parametrize(("before_text", "accepted"), [(True, True), (False, False)])
+@pytest.mark.parametrize("visual", [False, True])
 async def test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, before_text: bool, accepted: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, before_text: bool, accepted: bool, visual: bool
 ) -> None:
     clock = ManualClock(START)
-    async with open_replay(tmp_path, monkeypatch, clock, qq_test_group=str(GROUP)) as replay:
+    vlm = ReplayOrgan("vlm", clock) if visual else None
+    async with open_replay(
+        tmp_path, monkeypatch, clock, qq_test_group=str(GROUP), emoji_vlm=vlm
+    ) as replay:
         store, channel = replay.core.emoji_store, replay.core.qq
         assert store is not None and channel is not None
         assert replay.core.settings.runtime.heartbeat.qq_emoji_selection_enabled
         assert not replay.core.settings.runtime.heartbeat.qq_emoji_semantic_enabled
-        media = b"GIF89a synthetic reply"
+        media = synthetic_emoji("red") if visual else b"GIF89a synthetic reply"
         store.collect(media, description="高兴地挥手", register=True)
         replay.planner.plan = {
             "reply": True,
@@ -67,7 +72,15 @@ async def test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success(
             requests.append(request)
             return OrganResponse("replyer", '{"selected": 1}')
 
+        async def choose_visually(request: OrganRequest) -> OrganResponse:
+            assert request.context["task"] == "emoji_visual_selection"
+            assert request.media_type == "image/png" and request.media_bytes != media
+            requests.append(request)
+            return OrganResponse("vlm", '{"emoji_index": 1}')
+
         monkeypatch.setattr(replay.replyer, "process", reply)
+        if vlm is not None:
+            monkeypatch.setattr(vlm, "process", choose_visually)
         if not accepted:
             replay.fake.reply_with[:] = ["ok", "failed"]
 
@@ -78,7 +91,8 @@ async def test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success(
         await asyncio.gather(*channel._sending)
 
         [selection] = requests
-        assert "合成群友打招呼" in selection.prompt and "高兴地挥手" in selection.prompt
+        assert "合成群友打招呼" in selection.prompt
+        assert ("高兴地挥手" in selection.prompt) is not visual
         image = {
             "type": "image",
             "data": {"file": "base64://" + b64encode(media).decode(), "sub_type": 1},

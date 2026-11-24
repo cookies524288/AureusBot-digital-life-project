@@ -1,8 +1,9 @@
 """从可用表情中选择一张图片，QQ 投递仍由心跳的回复队列处理。"""
 
 import asyncio
+import json
 import sqlite3
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from datetime import datetime, timedelta, tzinfo
 from math import hypot, isfinite, sumprod
 
@@ -13,6 +14,11 @@ from aureus.safety import CallRejectedError
 from aureus.timeline import TimelineRecord
 
 from .context import _dialogue_lines
+from .emoji_visual_selection import (
+    VISUAL_CANDIDATE_LIMIT,
+    build_visual_selection_request,
+    build_visual_sheet,
+)
 from .planning import EmojiIntent, first_json_object
 from .reply_outbox import EmojiReplyPart
 
@@ -61,8 +67,17 @@ class EmojiSelector:
         *,
         has_embedding: bool,
     ) -> EmojiReplyPart | None:
-        """语义选择不可用时，在相同的聊天范围内用文字模型选择。"""
+        """按显式设置选择视觉模式，否则沿用语义与文字路径。"""
         try:
+            if self._config.qq_emoji_visual_enabled:
+                dialogue = _dialogue_lines(history, user_name, self._timezone)
+                digest = await self._visual(intent, dialogue, preference)
+                if (
+                    digest
+                    and await asyncio.to_thread(self._store.read_sendable, digest) is not None
+                ):
+                    return EmojiReplyPart(digest, intent.before_text)
+                return None
             records = await asyncio.to_thread(self._store.candidates)
             candidates: dict[str, str] = {}
             represented_tags: set[str] = set()
@@ -89,6 +104,31 @@ class EmojiSelector:
                 return EmojiReplyPart(digest, intent.before_text)
         except (CallRejectedError, OrganCallError, OSError, sqlite3.Error, ValueError):
             return None
+        return None
+
+    def _visual_images(self) -> Iterator[tuple[str, bytes]]:
+        for entry in self._store.candidates()[:VISUAL_CANDIDATE_LIMIT]:
+            if entry.digest and (data := self._store.read_sendable(entry.digest)) is not None:
+                yield entry.digest, data
+
+    def _visual_sheet(self) -> tuple[tuple[str, ...], bytes]:
+        return build_visual_sheet(self._visual_images())
+
+    async def _visual(
+        self, intent: EmojiIntent, dialogue: str, preference: ModelPreference
+    ) -> str | None:
+        digests, sheet = await asyncio.to_thread(self._visual_sheet)
+        if not digests:
+            return None
+        response = await self._call(
+            build_visual_selection_request(
+                dialogue, intent.emotion, len(digests), preference, sheet=sheet
+            )
+        )
+        output = json.loads(response.suggestion)
+        selection = output.get("emoji_index") if isinstance(output, dict) else None
+        if type(selection) is int and 1 <= selection <= len(digests):
+            return digests[selection - 1]
         return None
 
     async def _text(

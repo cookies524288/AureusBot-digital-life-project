@@ -1,9 +1,12 @@
 """用手动时钟和假器官检查 QQ 表情的文字与语义选择。"""
 
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageChops
 
 from aureus.common import HeartbeatConfig, ManualClock
 from aureus.heartbeat.emoji_selection import EmojiSelector
@@ -14,6 +17,116 @@ from aureus.organs import CallPurpose, ModelPreference, OrganRequest, OrganRespo
 from aureus.safety import CallRejectedError
 
 PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def synthetic_emoji(color: str) -> bytes:
+    with Image.new("RGB", (100, 100), color) as image, BytesIO() as buffer:
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_visual_grid_filters_candidates_and_maps_labels_to_the_same_order(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    store = EmojiStore(tmp_path / "test.db", tmp_path, clock)
+    store.open()
+    colors = {"red": (255, 0, 0), "blue": (0, 0, 255), "green": (0, 128, 0)}
+    entries = {
+        color: store.collect(synthetic_emoji(color), description=color, register=True)
+        for color in colors
+    }
+    red_digest = entries["red"].digest
+    assert red_digest is not None
+    store.record_use(red_digest)
+    banned = store.collect(synthetic_emoji("yellow"), description="禁用", register=True)
+    assert banned.digest is not None
+    store.set_status(banned.digest, is_registered=True, is_banned=True)
+    removed = store.collect(synthetic_emoji("purple"), description="移除", register=True)
+    assert store.set_removed([removed.entry_key], True)
+    store.collect(synthetic_emoji("cyan"), description="未登记", register=False)
+    store.collect(PNG + b"invalid", description="坏图", register=True)
+    ordered = [entry for entry in store.candidates() if entry.description in colors]
+    assert len(ordered) == 3 and ordered[-1].digest == red_digest
+    calls = []
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        calls.append(request)
+        assert request.organ_id == "vlm" and request.purpose is CallPurpose.OPTIONAL
+        assert request.model_preference is ModelPreference.CHEAPEST
+        assert request.context == {"task": "emoji_visual_selection"}
+        assert "2x2" in request.system_context and "范围是 1 到 3" in request.system_context
+        assert "情绪意图：庆祝" in request.prompt and "候选总数: 3" in request.prompt
+        assert request.media_type == "image/png" and request.media_bytes is not None
+        with Image.open(BytesIO(request.media_bytes)) as sheet:
+            assert sheet.size == (524, 524)
+            badges = []
+            for (left, top), entry in zip(((0, 0), (268, 0), (0, 268)), ordered, strict=True):
+                assert sheet.getpixel((left + 128, top + 128)) == colors[entry.description]
+                badge = sheet.crop((left + 14, top + 14, left + 78, top + 78)).convert("L")
+                assert badge.getextrema() == (0, 255)
+                badges.append(badge)
+            assert all(
+                ImageChops.difference(previous, current).getbbox() is not None
+                for previous, current in pairwise(badges)
+            )
+            assert sheet.getpixel((396, 396)) == (255, 255, 255)
+        return OrganResponse(request.organ_id, '{"emoji_index":3,"reason":"合成"}')
+
+    selector = EmojiSelector(store, call, clock, HeartbeatConfig(qq_emoji_visual_enabled=True), UTC)
+    selected = await selector.select(
+        EmojiIntent("庆祝", True), (), "用户", ModelPreference.CHEAPEST, has_embedding=True
+    )
+    assert selected == EmojiReplyPart(red_digest, True)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        '{"emoji_index":0}',
+        '{"emoji_index":-1}',
+        '{"emoji_index":2}',
+        "{}",
+        '{"emoji_index":true}',
+        '{"emoji_index":"1"}',
+        '{"emoji_index":1.0}',
+        "not JSON",
+        '{"emoji_index":1}',
+    ],
+)
+async def test_visual_no_selection_and_late_moderation_do_not_try_text(
+    tmp_path: Path, answer: str
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    store = EmojiStore(tmp_path / "test.db", tmp_path, clock)
+    store.open()
+    entry = store.collect(synthetic_emoji("red"), description="庆祝", register=True)
+    assert entry.digest is not None
+    digest = entry.digest
+    calls = []
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        calls.append(request.organ_id)
+        if answer == '{"emoji_index":1}':
+            store.set_status(digest, is_registered=True, is_banned=True)
+        return OrganResponse(request.organ_id, answer)
+
+    config = HeartbeatConfig(qq_emoji_visual_enabled=True, qq_emoji_semantic_enabled=True)
+    selector = EmojiSelector(store, call, clock, config, UTC)
+    result = await selector.select(
+        EmojiIntent(), (), "用户", ModelPreference.PREFERRED, has_embedding=True
+    )
+    assert result is None
+    assert calls == ["vlm"]
+    store.set_status(digest, is_registered=False, is_banned=False)
+    result = await selector.select(
+        EmojiIntent(), (), "用户", ModelPreference.PREFERRED, has_embedding=True
+    )
+    assert result is None
+    assert calls == ["vlm"]
 
 
 @pytest.mark.asyncio

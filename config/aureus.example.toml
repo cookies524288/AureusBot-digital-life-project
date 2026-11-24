@@ -49,6 +49,8 @@ config_version = 1
 # QQ 表情收集与回复选择。配置 [organs.emoji] 可使用专门的文字模型。
 # qq_emoji_collection_enabled = true
 # qq_emoji_selection_enabled = true
+# 可选视觉选择改用 vlm 查看候选拼图；关闭时保留原来的文字或语义选择。
+# qq_emoji_visual_enabled = false
 # 可选语义匹配优先调用文本向量模型，无有效匹配时继续使用文字模型。
 # qq_emoji_semantic_enabled = false
 # qq_emoji_semantic_refresh_seconds = 300.0

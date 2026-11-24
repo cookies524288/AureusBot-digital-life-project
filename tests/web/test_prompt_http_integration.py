@@ -14,7 +14,14 @@ import pytest
 from PIL import Image
 
 from aureus.channels.onebot import decode_message
-from aureus.common import BudgetCalendar, HeartbeatConfig, ManualClock, MemoryConfig, SafetyConfig
+from aureus.common import (
+    BudgetCalendar,
+    HeartbeatConfig,
+    ManualClock,
+    MemoryConfig,
+    RuntimeConfig,
+    SafetyConfig,
+)
 from aureus.common.language_prompts import (
     LANGUAGE_EXPRESSION_ITEM,
     LANGUAGE_JARGON_ITEM,
@@ -29,12 +36,14 @@ from aureus.heartbeat.context import (
     build_reply_request,
     build_system_context,
 )
+from aureus.heartbeat.emoji_selection import EmojiSelector
 from aureus.heartbeat.inbox_media import InboxMedia
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.language_runner import learn_language
 from aureus.heartbeat.memory_consolidation import _extract
 from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
 from aureus.heartbeat.perception import MessageRoute
+from aureus.heartbeat.planning import EmojiIntent
 from aureus.heartbeat.recall import format_recall
 from aureus.memory import EmojiStore, LanguageSample, LanguageStore, MemoryHit
 from aureus.memory.consolidation import ConsolidationItem
@@ -52,6 +61,7 @@ from aureus.organs.api_keys import KeyResolver
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
 from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 from tests.channels.test_qq_runtime import ACCOUNT, event
+from tests.heartbeat.test_emoji_selection import synthetic_emoji
 from tests.heartbeat.test_recall_flow import CountingIndex, MemoryEnv
 from tests.web.config_rig import ConfigRig
 from tests.web.test_prompt_api import IDENTITY
@@ -123,6 +133,101 @@ def _dialogue(record_id: int, actor: ActorType, content: str) -> TimelineRecord:
         visibility=VisibilityScope.GROUP,
         content=content,
     )
+
+
+@pytest.mark.asyncio
+async def test_emoji_visual_preview_matches_actual_http_request_without_reading_media(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, emoji_store: EmojiStore
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
+
+    config = HeartbeatConfig(qq_emoji_visual_enabled=True)
+    rig = ConfigRig(tmp_path, prompt_identity=IDENTITY, runtime=RuntimeConfig(heartbeat=config))
+    rig.log_in()
+    for color in ("red", "blue", "green"):
+        emoji_store.collect(synthetic_emoji(color), description=color, register=True)
+    actual: list[list[dict[str, Any]]] = []
+
+    def provider_reply(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://prompt-test.invalid/v1/chat/completions"
+        actual.append(json.loads(request.content)["messages"])
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-emoji-selection-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "sample-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"emoji_index":2}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    adapter = LLMOrgan(
+        "vlm",
+        mock_models(vision=True).routes_for("vlm"),
+        KeyResolver(tmp_path / "unused", environ={"AUREUS_KEY_PROMPT_HTTP_TEST": "mock"}),
+        token_counter=lambda _messages: 12,
+        prompts=rig.models.prompts,
+    )
+    selector = EmojiSelector(emoji_store, adapter.process, ManualClock(NOW), config, UTC)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider_reply)) as client:
+            monkeypatch.setattr(litellm, "aclient_session", client)
+            litellm.in_memory_llm_clients_cache.flush_cache()
+            history = [_dialogue(1, ActorType.PERSON, "合成招呼")]
+            result = await selector.select(
+                EmojiIntent("合成情绪"),
+                history,
+                "模拟用户",
+                ModelPreference.PREFERRED,
+                has_embedding=False,
+            )
+            assert result is not None
+
+        def forbid_media(*_args: object) -> None:
+            pytest.fail("预览不可读取表情目录或媒体")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(EmojiStore, "candidates", forbid_media)
+            patch.setattr(EmojiStore, "read_sendable", forbid_media)
+            preview = rig.client.get("/api/organs/vlm/prompt-preview")
+        assert preview.status_code == 200
+        [scene] = [
+            scene for scene in preview.json()["scenes"] if scene["id"] == "emoji_visual_selection"
+        ]
+        assert "预览不读取或发送图片" in scene["note"]
+        [[system, user]] = actual
+        assert user["role"] == "user"
+        text, image = user["content"]
+        assert "合成招呼" in text["text"] and "合成情绪" in text["text"]
+        [_, dialogue, *_] = text["text"].splitlines()
+        expected = scene["messages"]
+        assert expected[0] == system
+        assert expected[1]["role"] == "user"
+        preview_text, placeholder = expected[1]["content"]
+        assert placeholder == {"type": "image", "label": "〔候选表情拼图〕"}
+        assert preview_text["type"] == "text"
+        assert (
+            preview_text["text"]
+            .replace("〔聊天历史〕", dialogue)
+            .replace("〔表情情绪意图〕", "合成情绪")
+            == text["text"]
+        )
+        mime, payload = image["image_url"]["url"].split(",", 1)
+        assert mime == "data:image/png;base64"
+        with Image.open(BytesIO(b64decode(payload, validate=True))) as sheet:
+            assert sheet.size == (524, 524)
+        assert payload not in preview.text and "合成招呼" not in preview.text
+    finally:
+        rig.close()
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.mark.asyncio

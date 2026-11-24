@@ -25,6 +25,7 @@ from aureus.heartbeat.context import (
 )
 from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.emoji_recognition import build_emoji_analysis_request
+from aureus.heartbeat.emoji_visual_selection import build_visual_selection_request
 from aureus.heartbeat.inbox_media import build_image_description_request
 from aureus.heartbeat.language_requests import (
     build_comparison,
@@ -68,6 +69,7 @@ _CONDITIONAL = {
     "image_description": "实际请求会附上来信图片；预览不读取或发送图片。",
     "emoji_static": "仅用于 QQ 标记的静态表情；预览不读取或发送图片。",
     "emoji_gif": "仅用于 QQ 标记的 GIF 表情，实际请求会附上抽帧拼图；预览不读取或发送图片。",
+    "emoji_visual_selection": "仅在显式开启并需要选择 QQ 表情时调用；预览不读取或发送图片。",
 }
 
 
@@ -428,6 +430,16 @@ def build_prompt_scenes(
                     image_label="〔GIF 表情拼图〕",
                 ),
             ]
+        )
+    if "emoji_visual_selection" in tasks:
+        scenes.append(
+            PromptScene(
+                "emoji_visual_selection",
+                "emoji_visual_selection",
+                "QQ 表情视觉选择",
+                build_visual_selection_request(_HISTORY, "〔表情情绪意图〕", 3),
+                image_label="〔候选表情拼图〕",
+            )
         )
     return scenes or [
         PromptScene("custom", "custom", "通用请求", OrganRequest(organ, "〔调用方提示词〕"))

@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from aureus.channels import WebChannel
-from aureus.common import AureusPaths, ManualClock, WebConfig
+from aureus.common import AureusPaths, ManualClock, RuntimeConfig, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import registered_templates
 from aureus.heartbeat.inbox_store import InboxStore
@@ -27,6 +27,7 @@ class ConfigRig:
         prompt_identity: Identity | None = None,
         inbox_store: InboxStore | None = None,
         emoji_store: EmojiStore | None = None,
+        runtime: RuntimeConfig | None = None,
     ) -> None:
         self.paths = AureusPaths(tmp_path)
         self.paths.ensure_directories()
@@ -41,7 +42,7 @@ class ConfigRig:
         self.timeline.open()
         self.auth = WebAuth(passwords, self.sessions, LoginLimiter(config, self.clock))
         self.heartbeat = FakeHeartbeat()
-        self.service = ConfigService(self.paths)
+        self.service = ConfigService(self.paths, runtime)
         self.models = ModelRuntime(
             OrganBus(),
             KeyResolver(self.paths.env_file, environ={}),

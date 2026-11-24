@@ -126,6 +126,7 @@ async def open_replay(
     allowed_group_id: str | None = None,
     initiative: bool = False,
     split_reply: bool = False,
+    emoji_vlm: ReplayOrgan | None = None,
 ) -> AsyncIterator[Replay]:
     paths = AureusPaths(home)
     paths.ensure_directories()
@@ -141,6 +142,8 @@ async def open_replay(
     bus.register(planner)
     bus.register(replyer)
     bus.register(LanguageOrgan("summarizer", learning_requests))
+    if emoji_vlm is not None:
+        bus.register(emoji_vlm)
 
     def build_bus(
         _paths: object, _heartbeat: object, resolver: KeyResolver, **_options: object
@@ -162,6 +165,7 @@ async def open_replay(
 planning_enabled = true
 inbox_debounce_enabled = false
 split_reply_enabled = {str(split_reply).lower()}
+qq_emoji_visual_enabled = {str(emoji_vlm is not None).lower()}
 recent_message_limit = {history_limit}
 [body]
 sleep_enabled = false
