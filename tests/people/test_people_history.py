@@ -1,6 +1,7 @@
 """3.3 人际发布和按账号查询，数据均为合成记录。"""
 
 import json
+import sqlite3
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
@@ -162,6 +163,34 @@ def test_alias_only_change_does_not_revive_an_unanchored_profile_body(
             assert ["只改别名"] in [entry.record.aliases for entry in recalled]
     finally:
         people.close()
+
+
+@pytest.mark.parametrize("operation", ("profile_details", "preview_profile", "change_profile"))
+def test_profile_maintenance_reports_database_errors_as_unavailable(
+    directory: PeopleDirectory, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(PeopleDirectory, operation, broken)
+    app = FastAPI()
+
+    async def ready() -> str:
+        return "synthetic-session"
+
+    register_profile_lifecycle_routes(app, ready, directory, lambda _: True, lambda _: True)
+    endpoint = "/api/resources/profiles/maintenance"
+    source = json.dumps(["old", HistoricalKind.PROFILE_SNAPSHOT, "[1]"])
+    with TestClient(app, raise_server_exceptions=False) as client:
+        if operation == "profile_details":
+            response = client.get(endpoint, params={"source": source})
+        elif operation == "preview_profile":
+            response = client.post(
+                endpoint + "/preview", json={"source": source, "edit": {"aliases": ["别名"]}}
+            )
+        else:
+            response = client.post(f"{endpoint}/synthetic-plan/apply")
+    assert response.status_code == 503, response.text
 
 
 def test_publish_profiles_and_directed_evidence(directory: PeopleDirectory) -> None:

@@ -154,9 +154,12 @@ def register_profile_lifecycle_routes(
         response: Response, token: Annotated[str, Depends(require_ready)],
         source: Annotated[str, Query(min_length=1, max_length=4096)],
     ) -> dict[str, object]:
-        result = await asyncio.to_thread(
-            people.profile_details, location(source), lambda: active_session(token),
-        ) if people is not None else None
+        try:
+            result = await asyncio.to_thread(
+                people.profile_details, location(source), lambda: active_session(token),
+            ) if people is not None else None
+        except sqlite3.Error:
+            raise HTTPException(503, "暂时无法读取人物画像。") from None
         if result is None:
             raise HTTPException(404, "未找到可信画像来源。")
         response.headers["Cache-Control"] = "no-store"
@@ -177,6 +180,8 @@ def register_profile_lifecycle_routes(
             raise HTTPException(409, str(error)) from None
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
+        except sqlite3.Error:
+            raise HTTPException(503, "暂时无法预览画像检修。") from None
         if result is None:
             raise HTTPException(404, "未找到可信画像来源。")
         response.headers["Cache-Control"] = "no-store"
@@ -197,6 +202,8 @@ def register_profile_lifecycle_routes(
             )
         except ProfileChangedError as error:
             raise HTTPException(409, str(error)) from None
+        except sqlite3.Error:
+            raise HTTPException(503, "暂时无法维护人物画像，没有修改。") from None
         if not result:
             raise HTTPException(404, "未找到画像计划。")
         response.headers["Cache-Control"] = "no-store"
