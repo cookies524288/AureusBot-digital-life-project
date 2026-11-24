@@ -15,7 +15,7 @@ from pathlib import Path
 
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
-from aureus.people import history, profile_aliases
+from aureus.people import bundle_profiles, history, profile_aliases
 from aureus.people.history import (
     HistoricalEntry,
     HistoricalKind,
@@ -272,6 +272,12 @@ class PeopleDirectory:
         return history.publish(
             conn, records, lambda platform, account: self._meet_id(conn, platform, account)
         )
+
+    prepare_bundle_profiles = staticmethod(bundle_profiles.prepare)
+    bundle_profiles_occupied = staticmethod(bundle_profiles.occupied)
+    publish_bundle_profiles = staticmethod(bundle_profiles.publish)
+    set_bundle_profiles_installed = staticmethod(bundle_profiles.set_installed)
+    bundle_person_key = staticmethod(bundle_profiles.person_key)
 
     def history_for(
         self, person_id: int, *, limit: int | None = None, use_local_aliases: bool = True

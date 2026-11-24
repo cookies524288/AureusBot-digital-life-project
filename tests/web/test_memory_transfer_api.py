@@ -103,7 +103,11 @@ def _open_memory(path: Path, clock: ManualClock) -> tuple[TimelineDatabase, Memo
     return timeline, memory
 
 
-def _client(memory: MemoryIndex | None, clock: ManualClock | None = None) -> TestClient:
+def _client(
+    memory: MemoryIndex | None,
+    clock: ManualClock | None = None,
+    people: PeopleDirectory | None = None,
+) -> TestClient:
     async def require_ready(request: Request) -> str:
         if request.cookies.get("session") != "test":
             raise HTTPException(401)
@@ -114,7 +118,13 @@ def _client(memory: MemoryIndex | None, clock: ManualClock | None = None) -> Tes
 
     app = FastAPI()
     register_memory_transfer_routes(
-        app, require_ready, same_origin, memory, clock, require_preview_access=require_ready
+        app,
+        require_ready,
+        same_origin,
+        memory,
+        clock,
+        require_preview_access=require_ready,
+        people=people,
     )
     register_resource_routes(app, require_ready, None, memory, same_origin=same_origin)
     return TestClient(app)
@@ -196,7 +206,7 @@ def test_maibot_full_bundle_requires_empty_store_and_rejects_unsupported_members
         "episodes": [{"episode_id": "e1", "title": "旅行情景", "summary": "参观了海岛"}],
         "episode_paragraphs": [{"episode_id": "e1", "paragraph_hash": "p1"}],
     }
-    unsupported_tables: dict[str, list[dict[str, object]]] = {"fact_claims": [{"claim_id": "x"}]}
+    unsupported_tables: dict[str, list[dict[str, object]]] = {"deleted_relations": [{"hash": "x"}]}
     try:
         with _client(memory) as client:
             client.cookies.set("session", "test")
@@ -224,6 +234,125 @@ def test_maibot_full_bundle_requires_empty_store_and_rejects_unsupported_members
                 == 409
             )
     finally:
+        memory.close()
+        timeline.close()
+
+
+def test_maibot_full_bundle_uses_fact_and_people_recall_and_exports_knowledge(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 24, tzinfo=UTC))
+    database = tmp_path / "semantic.db"
+    timeline, memory = _open_memory(database, clock)
+    people = PeopleDirectory(database, clock)
+    people.open()
+    people.publish_history(
+        [
+            HistoricalRecord(
+                instance="source",
+                kind=HistoricalKind.PROFILE,
+                source_key="main",
+                subject_key="person",
+                account=("qq", "10001"),
+                name="合成档案",
+            )
+        ]
+    )
+    person = people.find("qq", "10001")
+    assert person is not None
+    tables: dict[str, list[dict[str, object]]] = {
+        "paragraphs": [{"hash": "p1", "content": "合成海岛旅行日记"}],
+        "external_memory_refs": [{"external_id": "external:p1", "paragraph_hash": "p1"}],
+        "fact_claims": [
+            {
+                "claim_id": "c1",
+                "fact_key": "旅行目的",
+                "value_text": "观察灯塔",
+                "scope_type": "person",
+                "scope_id": "person",
+                "status": "active",
+            }
+        ],
+        "fact_evidence": [
+            {
+                "claim_id": "c1",
+                "evidence_type": "paragraph",
+                "evidence_id": "p1",
+                "stance": "support",
+            }
+        ],
+        "fact_transitions": [
+            {"transition_id": 1, "new_claim_id": "c1", "transition_type": "assert"}
+        ],
+        "person_profile_snapshots": [
+            {
+                "snapshot_id": 1,
+                "person_id": "person",
+                "profile_version": 1,
+                "profile_text": "合成自动画像",
+                "evidence_ids_json": '["p1"]',
+                "fact_claim_ids_json": '["c1"]',
+                "updated_at": clock.now().timestamp(),
+            }
+        ],
+        "person_profile_overrides": [{"person_id": "person", "override_text": "合成人工画像"}],
+        "person_profile_alias_overrides": [{"person_id": "person", "aliases_json": '["合成别名"]'}],
+    }
+    try:
+        with _client(memory, people=people) as client:
+            client.cookies.set("session", "test")
+            result = client.post(
+                BUNDLES + "?mode=restore",
+                content=_maibot_bundle("semantic", state_tables=tables),
+                headers=BUNDLE_HEADERS,
+            )
+            assert result.status_code == 200, result.text
+            facts = memory.browse_history("", "", 0, 10, source_table="fact_claims")
+            assert any(link.reference == "p1" and link.source for link in facts[0].evidence)
+            assert memory.search(
+                ["观察灯塔"], set(), 10, person_key=people.memory_person_keys(person.id)
+            )
+            assert [
+                record.record.summary
+                for record in people.history_for(person.id, limit=10)
+                if record.record.summary
+            ] == ["合成人工画像"]
+            assert any(
+                record.record.aliases == ["合成别名"]
+                for record in people.history_for(person.id, limit=10)
+            )
+            assert any(
+                record.record.evidence == {"memory_ids": ["p1"], "fact_claim_ids": ["c1"]}
+                for record in people.history_for(person.id)
+            )
+            exported = client.get(BUNDLES + "/export")
+            assert exported.status_code == 200
+            checked = client.post(
+                BUNDLES + "/preview", content=exported.content, headers=BUNDLE_HEADERS
+            )
+            assert checked.status_code == 200, checked.text
+            assert (
+                checked.json()["content_level"] == "knowledge"
+                and checked.json()["counts"]["paragraphs"] == 1
+            )
+            installation = result.json()["installation_id"]
+            assert client.post(
+                f"{BUNDLES}/{installation}/uninstall", headers=BUNDLE_HEADERS
+            ).is_success
+            assert not memory.search(["观察灯塔"], set(), 10)
+            assert not any(
+                record.record.summary for record in people.history_for(person.id, limit=10)
+            )
+            assert client.post(
+                f"{BUNDLES}/{installation}/restore", headers=BUNDLE_HEADERS
+            ).is_success
+            assert memory.search(["观察灯塔"], set(), 10)
+            assert any(
+                record.record.summary == "合成人工画像"
+                for record in people.history_for(person.id, limit=10)
+            )
+    finally:
+        people.close()
         memory.close()
         timeline.close()
 

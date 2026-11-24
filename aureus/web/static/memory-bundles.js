@@ -4,7 +4,10 @@ window.createMemoryBundlePanel = () => {
   const path = '/api/resources/memory/bundles';
   const labels = {paragraphs:'段落', entities:'实体', relations:'关系', episodes:'情景',
     paragraph_entities:'段落与实体关联', paragraph_relations:'段落与关系关联',
-    episode_paragraphs:'情景与段落关联'};
+    episode_paragraphs:'情景与段落关联', fact_claims:'事实', fact_evidence:'事实证据',
+    fact_transitions:'事实状态转换', external_memory_refs:'外部引用',
+    person_profile_snapshots:'人物画像', person_profile_overrides:'画像正文覆盖',
+    person_profile_alias_overrides:'画像别名覆盖'};
   const levels = {knowledge:'知识包', full:'完整包'};
   const upload = el('input', {type:'file', accept:'.amembundle'});
   const preview = el('div', {class:'stack', 'aria-live':'polite'});
@@ -102,6 +105,8 @@ window.createMemoryBundlePanel = () => {
   load();
   return el('div', {class:'card stack'}, el('h3', {text:'MaiBot 知识包与完整包'}),
     el('p', {text:'仅支持兼容的 .amembundle 文字包。不支持的图片、向量或状态会在预检时提示；上传后须确认才写入。'}),
+    el('div', {class:'row'}, el('a', {class:'btn small', href:path + '/export', download:true,
+      text:'导出本地知识包'})),
     el('label', {class:'stack'}, '选择 MaiBot 记忆包', upload), preview, message,
     el('h4', {text:'安装记录'}), refresh, listStatus, list, more);
 };

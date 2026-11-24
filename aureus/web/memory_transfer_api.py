@@ -27,6 +27,7 @@ from aureus.memory.transfer import (
     MemoryArchiveError,
     inspect_archive,
 )
+from aureus.people import PeopleDirectory
 
 from .resource_api import DEFAULT_SIZE, MAX_SIZE
 
@@ -74,10 +75,11 @@ def register_memory_transfer_routes(
     clock: Clock | None = None,
     *,
     require_preview_access: Callable[..., Awaitable[str]],
+    people: PeopleDirectory | None = None,
 ) -> None:
     """注册记忆流及文件交换，数据库和文件操作交给后台线程。"""
     flow_clock = clock or SystemClock()
-    _register_bundle_routes(app, require_ready, same_origin, memory, require_preview_access)
+    _register_bundle_routes(app, require_ready, same_origin, memory, require_preview_access, people)
 
     @app.get(_FLOW_PATH)
     async def memory_flow(
@@ -177,6 +179,7 @@ def _register_bundle_routes(
     same_origin: Callable[[Request], bool],
     memory: MemoryIndex | None,
     require_preview_access: Callable[..., Awaitable[str]],
+    people: PeopleDirectory | None,
 ) -> None:
     def index(request: Request | None = None) -> MemoryIndex:
         if request is not None and not same_origin(request):
@@ -191,7 +194,7 @@ def _register_bundle_routes(
     ) -> JSONResponse:
         current = index(request)
         async with _read_upload(request, bundle=True) as file:
-            report = await asyncio.to_thread(current.preview_bundle, file)
+            report = await asyncio.to_thread(current.preview_bundle, file, people)
         return JSONResponse(report, headers={"Cache-Control": "no-store"})
 
     @app.post(_BUNDLE_PATH)
@@ -200,7 +203,7 @@ def _register_bundle_routes(
     ) -> JSONResponse:
         current = index(request)
         async with _read_upload(request, bundle=True) as file:
-            report = await asyncio.to_thread(current.install_bundle, file, mode)
+            report = await asyncio.to_thread(current.install_bundle, file, mode, people)
         return JSONResponse(report, headers={"Cache-Control": "no-store"})
 
     @app.get(_BUNDLE_PATH)
@@ -227,21 +230,24 @@ def _register_bundle_routes(
     ) -> dict[str, bool]:
         installed = action == "restore"
         if not await asyncio.to_thread(
-            index(request).set_bundle_installed, installation_id, installed
+            index(request).set_bundle_installed, installation_id, installed, people
         ):
             raise HTTPException(404, "找不到该包安装记录。")
         return {"installed": installed}
 
+    @app.get(_BUNDLE_PATH + "/export")
     @app.get(_BUNDLE_PATH + "/{installation_id}/download")
     async def download(
-        _token: Annotated[str, Depends(require_ready)], installation_id: str
+        _token: Annotated[str, Depends(require_ready)], installation_id: str = ""
     ) -> StreamingResponse:
         current = index()
 
         def make_file() -> BinaryIO:
             file = cast(BinaryIO, TemporaryFile())  # noqa: SIM115 - 响应完成时关闭。
             try:
-                if not current.export_bundle(installation_id, file):
+                if not installation_id:
+                    current.export_knowledge(file)
+                elif not current.export_bundle(installation_id, file):
                     raise HTTPException(404, "找不到该包安装记录。")
                 file.seek(0)
                 return file
@@ -249,7 +255,10 @@ def _register_bundle_routes(
                 file.close()
                 raise
 
-        file = await asyncio.to_thread(make_file)
+        try:
+            file = await asyncio.to_thread(make_file)
+        except MemoryBundleConflictError as error:
+            raise HTTPException(409, str(error)) from error
         return StreamingResponse(
             _download(file),
             media_type=_BUNDLE_MEDIA_TYPE,
