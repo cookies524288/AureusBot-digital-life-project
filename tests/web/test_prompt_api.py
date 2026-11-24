@@ -74,27 +74,43 @@ def test_emoji_preview_routes_follow_active_selection_mode() -> None:
     assert "emoji_visual_selection" not in organ_tasks(disabled)
 
 
-def test_expression_quality_preview_uses_runtime_builder_and_explicit_route(tmp_path: Path) -> None:
-    assert "expression_quality" not in organ_tasks(RuntimeConfig())
-    missing = RuntimeConfig(language=LanguageConfig(expression_quality_enabled=True))
-    assert "expression_quality" not in organ_tasks(missing, {"judge", "utils"})
-    runtime = RuntimeConfig(language=LanguageConfig(
-        expression_quality_enabled=True, expression_quality_organ="reviewer"
-    ))
-    assert organ_tasks(runtime, {"judge", "utils"})["expression_quality"] == "reviewer"
-    [scene] = build_prompt_scenes("reviewer", {"expression_quality"}, IDENTITY, NOW)
-    assert scene.request == build_expression_quality("reviewer", "〔使用情境〕", "〔候选说法〕")
+@pytest.mark.parametrize(
+    ("enabled", "organ", "assigned"),
+    [
+        (False, "judge", None),
+        (True, None, None),
+        (True, "judge", "judge"),
+        (True, "reviewer", "reviewer"),
+    ],
+)
+def test_expression_quality_preview_uses_runtime_builder_and_explicit_route(
+    tmp_path: Path, enabled: bool, organ: str | None, assigned: str | None
+) -> None:
+    runtime = RuntimeConfig(
+        language=LanguageConfig(expression_quality_enabled=enabled, expression_quality_organ=organ)
+    )
     rig = ConfigRig(tmp_path, prompt_identity=IDENTITY, runtime=runtime)
     try:
         rig.log_in()
-        response = rig.client.get("/api/organs/reviewer/prompt-preview")
+        catalog = rig.client.get("/api/prompts").json()
+        assert any(item["key"] == "expression_quality" for item in catalog["templates"])
+        assert {
+            name for name, keys in catalog["organs"].items() if "expression_quality" in keys
+        } == ({assigned} if assigned else set())
+        response = rig.client.get(f"/api/organs/{assigned or 'judge'}/prompt-preview")
         assert response.status_code == 200
-        [preview] = response.json()["scenes"]
-        assert preview["id"] == "expression_quality"
+        previews = [
+            scene for scene in response.json()["scenes"] if scene["id"] == "expression_quality"
+        ]
+        if assigned is None:
+            assert not previews
+            return
+        [preview] = previews
+        [scene] = build_prompt_scenes(assigned, {"expression_quality"}, IDENTITY, NOW)
+        assert scene.request == build_expression_quality(assigned, "〔使用情境〕", "〔候选说法〕")
         assert json.loads(preview["messages"][1]["content"]) == {
             "situation": "〔使用情境〕", "style": "〔候选说法〕"
         }
-        assert "expression_quality" in rig.client.get("/api/prompts").json()["organs"]["reviewer"]
     finally:
         rig.close()
 
@@ -102,9 +118,10 @@ def test_expression_quality_preview_uses_runtime_builder_and_explicit_route(tmp_
 def test_prompt_access_and_catalog(rig: ConfigRig, tmp_path: Path) -> None:
     listing = rig.client.get("/api/prompts").json()
     assert set(listing["organs"]) == set(BUILTIN_ORGANS)
-    assert set().union(*map(set, listing["organs"].values())) == {
+    assert set().union(*map(set, listing["organs"].values())) | {"expression_quality"} == {
         template["key"] for template in listing["templates"]
     }
+    assert all("expression_quality" not in keys for keys in listing["organs"].values())
     assert rig.client.get("/api/organs/missing/prompt-preview").status_code == 404
     assert rig.client.delete("/api/prompts/missing").status_code == 404
     assert rig.client.put("/api/prompts/plan_format", json={"source": "改格式"}).status_code == 422
