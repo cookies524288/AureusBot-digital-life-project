@@ -5,7 +5,7 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 from math import hypot, sumprod
 from typing import Protocol
 from uuid import uuid4
@@ -36,6 +36,7 @@ from aureus.heartbeat.context import (
 from aureus.heartbeat.diary_runner import DiaryOutcome
 from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.emoji_selection import EMOJI_CONTEXT_LIMIT, EmojiSelector
+from aureus.heartbeat.empathy import EmpathyFocus
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
 )
@@ -72,6 +73,7 @@ from aureus.hormones import (
     HormoneEffects,
     Hormones,
     HormoneTrigger,
+    kind_enabled,
     make_triggers_from_empathy,
     make_triggers_from_judgment,
 )
@@ -157,7 +159,9 @@ class _ReplyJob:
     person_id: int | None
     viewer_is_user: bool
     # 把激素的文字（规划器和合并调用用的、回复器用的）放进系统上下文，返回两份新的上下文。
-    build_contexts: Callable[[str, str], tuple[str, str]]
+    build_contexts: Callable[[str, str, str | None], tuple[str, str]]
+    read_mood: Callable[[datetime, Sequence[HormoneTrigger]], MoodReading] | None = None
+    empathy_detail_for_all: bool = False
     # 此刻激素对这次回复的影响；激素没开时是 None。
     effects: HormoneEffects | None = None
     with_interests: bool = False
@@ -298,6 +302,7 @@ class ConversationFlow:
         hormones: Hormones | None,
         affinity: AffinityBook | None,
         empathy: EmpathyConfig | None,
+        empathy_focus: EmpathyFocus,
         agenda: AgendaStore | None,
         memory: MemoryIndex | None = None,
         emoji_store: EmojiStore | None = None,
@@ -315,7 +320,7 @@ class ConversationFlow:
             call, emoji_store if config.qq_emoji_collection_enabled else None
         )
         self._judge, self._hormones, self._affinity = judge, hormones, affinity
-        self._empathy, self._agenda = empathy, agenda
+        self._empathy, self._empathy_focus, self._agenda = empathy, empathy_focus, agenda
         self._judge_missing_logged = False
         self._memory = memory
         self._emoji_selector = (
@@ -413,7 +418,7 @@ class ConversationFlow:
         interests: InterestStore | None,
         findings: FindingStore | None,
         affinity_for_context: Callable[[int | None], str],
-        read_mood: Callable[[int | None], MoodReading | None],
+        read_mood: Callable[[datetime, Sequence[HormoneTrigger]], MoodReading] | None,
         agenda_for_context: Callable[[int | None], str],
         initiative_note: str = "",
         mood_state: str | None = None,
@@ -448,9 +453,6 @@ class ConversationFlow:
         live_identity_changes.clear()  # 只在刚改完的这一次回复里说
 
         affinity_state = affinity_for_context(person_id)
-        if mood_state is None:
-            mood_reading = read_mood(person_id)
-            mood_state = mood_reading.summary if mood_reading is not None else ""
         if agenda_state is None:
             agenda_state = agenda_for_context(person_id)
         interests_state = interest_changes.interest_context(
@@ -461,7 +463,9 @@ class ConversationFlow:
             timezone=self._timezone,
         )
 
-        def context(*, include_behavior_style: bool, hormone_state: str = "") -> str:
+        def context(
+            *, include_behavior_style: bool, hormone_state: str = "", mood_summary: str = ""
+        ) -> str:
             return build_system_context(
                 identity,
                 now,
@@ -474,16 +478,19 @@ class ConversationFlow:
                 identity_changes_live=live_changes,
                 hormone_state=hormone_state,
                 affinity_state=affinity_state,
-                mood_state=mood_state,
+                mood_state=mood_summary,
                 agenda_state=agenda_state,
                 interests_state=interests_state,
                 initiative_note=initiative_note if not include_behavior_style else "",
             )
 
-        def build_contexts(full_text: str, replyer_text: str) -> tuple[str, str]:
+        def build_contexts(
+            full_text: str, replyer_text: str, mood_summary: str | None
+        ) -> tuple[str, str]:
+            summary = mood_summary if mood_summary is not None else mood_state or ""
             return (
-                context(include_behavior_style=True, hormone_state=full_text),
-                context(include_behavior_style=False, hormone_state=replyer_text),
+                context(include_behavior_style=True, hormone_state=full_text, mood_summary=summary),
+                context(include_behavior_style=False, hormone_state=replyer_text, mood_summary=summary),
             )
 
         judge_count = self._judge.context_messages if self._judge is not None else 0
@@ -516,6 +523,8 @@ class ConversationFlow:
             person_id=person_id,
             viewer_is_user=not contact,
             build_contexts=build_contexts,
+            read_mood=read_mood,
+            empathy_detail_for_all=viewer_is_user and target.visibility is VisibilityScope.USER_ONLY,
             with_interests=bool(interests_state),
             history_ids=history_ids,
             working_context=working_context,
@@ -547,21 +556,34 @@ class ConversationFlow:
                 所以先拿它们临时算，正式写入在收结果的那一拍。
         """
         hormones = self._hormones
-        if hormones is None:
-            return job
-        effects = hormones.effects(
-            self._clock.now(),
-            person_id=job.person_id,
-            viewer_is_user=job.viewer_is_user,
-            extra=extra,
+        now = self._clock.now()
+        empathic = self._empathy_focus.active(trigger for trigger in extra if trigger.is_empathy)
+        if not job.empathy_detail_for_all:
+            visible_ids = set(job.history_ids)
+            empathic = tuple(
+                trigger
+                if trigger.source_record_id in visible_ids
+                else replace(trigger, person_id=None, reason="另一段对话里的事")
+                for trigger in empathic
+            )
+        effects = (
+            hormones.effects(
+                now,
+                person_id=job.person_id,
+                viewer_is_user=job.viewer_is_user,
+                extra=(*empathic, *(trigger for trigger in extra if not trigger.is_empathy)),
+            )
+            if hormones is not None
+            else None
         )
         strategy = job.base_strategy
-        if effects.shorten_reply:
+        if effects is not None and effects.shorten_reply:
             current = strategy.length_limit or ReplyLength.LONG
             strategy = replace(strategy, length_limit=current.lowered())
         full_context, replyer_context = job.build_contexts(
-            effects.context_text(plan_first=strategy.plan_first),
-            effects.context_text(plan_first=False),
+            effects.context_text(plan_first=strategy.plan_first) if effects is not None else "",
+            effects.context_text(plan_first=False) if effects is not None else "",
+            job.read_mood(now, empathic).summary if job.read_mood is not None else None,
         )
         return replace(
             job,
@@ -594,8 +616,8 @@ class ConversationFlow:
             )
             job = replace(job, messages=messages)
         attempt = await self._judge_emotion(job)
-        if attempt is not None and attempt.triggers:
-            job = self._apply_hormones(job, attempt.triggers)
+        if attempt is not None or job.media_sources:
+            job = self._apply_hormones(job, attempt.triggers if attempt is not None else ())
         automatic: _Recall | None = None
         if self._memory_config.heuristic_recall_enabled and self._can_recall():
             words = heuristic_keywords(job.messages)
@@ -754,33 +776,68 @@ class ConversationFlow:
         hormones = self._hormones
         latest = job.messages[-1]
         person_id = job.person_id
-        if hormones is None or person_id is None:
+        if hormones is None:
             return ()
         now = self._clock.now()
-        direct = make_triggers_from_judgment(
-            judgment.toward_me,
-            person_id=person_id,
-            source_record_id=latest.id,
-            source_visibility=latest.visibility,
-            now=now,
-            config=hormones.config,
-            recent_triggers=hormones.triggers,
-        )
-        empathic: list[HormoneTrigger] = []
-        if self._empathy is not None:
-            empathic = make_triggers_from_empathy(
-                judgment.others,
+        direct = (
+            make_triggers_from_judgment(
+                judgment.toward_me,
                 person_id=person_id,
-                affinity_of=lambda subject: self._affinity_of(subject, person_id),
                 source_record_id=latest.id,
                 source_visibility=latest.visibility,
                 now=now,
                 config=hormones.config,
-                empathy=self._empathy,
-                # 同一批里先算出的直接触发也算进去，免得同一条消息重复数
-                recent_triggers=[*hormones.triggers, *direct],
+                recent_triggers=hormones.triggers,
             )
-        return (*direct, *empathic)
+            if person_id is not None
+            else []
+        )
+        return (*direct, *self._empathy_from(judgment, job, hormones, now))
+
+    def _empathy_from(
+        self, judgment: Judgment, job: _ReplyJob, hormones: Hormones, now: datetime
+    ) -> tuple[HormoneTrigger, ...]:
+        empathy = self._empathy
+        if empathy is None or not empathy.enabled or not judgment.others:
+            return ()
+        focus = self._empathy_focus.source_ids()
+        candidates = self._empathy_focus.candidates(focus)
+        sources = {record.id: record for record in job.messages if record.id in focus}
+        used = {
+            (trigger.source_record_id, trigger.empathy_for.casefold())
+            for trigger in candidates
+            if trigger.empathy_for is not None
+        }
+        empathic: list[HormoneTrigger] = []
+        for item in judgment.others:
+            source_id = item.source_record_id
+            if source_id is None and len(job.messages) == 1:
+                source_id = job.messages[0].id
+            source = sources.get(source_id) if source_id is not None else None
+            if source is None or (person_id := _person_id_of(source)) is None:
+                continue
+            key = (source.id, item.subject.casefold())
+            if key in used or (
+                item.subject != SENDER_SUBJECT and key[1] not in source.content.casefold()
+            ):
+                continue
+            triggers = make_triggers_from_empathy(
+                (item,),
+                person_id=person_id,
+                affinity_of=lambda subject, sender_id=person_id: self._affinity_of(
+                    subject, sender_id
+                ),
+                source_record_id=source.id,
+                source_visibility=source.visibility,
+                now=now,
+                config=hormones.config,
+                empathy=empathy,
+                recent_triggers=(*candidates, *empathic),
+            )
+            if triggers and kind_enabled(triggers[0].kind, hormones.config):
+                empathic.extend(triggers)
+                used.add(key)
+        return tuple(empathic)
 
     def _affinity_of(self, subject: str, sender_id: int) -> float:
         """共情对象的好感（D72 第 2 条）。

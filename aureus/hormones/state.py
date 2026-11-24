@@ -69,7 +69,8 @@ class Hormones:
             if trigger is None:
                 logger.warning("看不懂的 hormone_triggered 记录，已跳过：%r", metadata)
                 continue
-            restored.append(trigger)
+            if not trigger.is_empathy:
+                restored.append(trigger)
         self._triggers = []
         self.add(restored, now)
         return len(self._triggers)
@@ -81,10 +82,16 @@ class Hormones:
         person_id: int | None = None,
         *,
         exclude_empathy: bool = False,
+        extra: Sequence[HormoneTrigger] = (),
     ) -> float:
         """某一刻某种激素的浓度；person_id 给了就只算针对这个人的触发。"""
         return level_at(
-            self._triggers, kind, now, self._config, person_id, exclude_empathy=exclude_empathy
+            [*self._triggers, *extra],
+            kind,
+            now,
+            self._config,
+            person_id,
+            exclude_empathy=exclude_empathy,
         )
 
     def _forget_faded(self, now: datetime) -> None:

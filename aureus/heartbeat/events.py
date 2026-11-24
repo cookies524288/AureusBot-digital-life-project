@@ -29,6 +29,7 @@ EVENT_JUDGMENT = "judgment"
 # 激素被触发一次（D69）：只有自己可见，metadata 是 HormoneTrigger.to_metadata() 的样子
 # （种类、上涨量、时刻、对象、原因、来源记录序号和来源的可见范围）。重启时靠它还原浓度。
 EVENT_HORMONE_TRIGGERED = "hormone_triggered"
+EVENT_EMPATHY = "empathy"
 # 日程（D74）：记下一条约定、到期提醒、结束（完成、放弃、过期、取消）。只有自己可见，
 # metadata 里有条目编号、对象和内容。
 EVENT_AGENDA_ADDED = "agenda_added"

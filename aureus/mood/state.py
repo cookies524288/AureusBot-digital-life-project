@@ -4,7 +4,7 @@
 """
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 
 from aureus.common import MoodConfig
@@ -60,7 +60,8 @@ class Mood:
             if trigger is None:
                 logger.warning("心情：看不懂的 hormone_triggered 记录，已跳过：%r", metadata)
                 continue
-            triggers.append(trigger)
+            if not trigger.is_empathy:
+                triggers.append(trigger)
         self._contributions = []
         self.add_triggers(triggers, now)
         return len(self._contributions)
@@ -73,6 +74,7 @@ class Mood:
         stress_level: float = 0.0,
         person_id: int | None = None,
         viewer_is_user: bool = True,
+        extra: Sequence[HormoneTrigger] = (),
     ) -> MoodReading:
         """此刻的心情，顺便更新谨慎状态（低于谨慎线进入，回到恢复线以上才解除）。
 
@@ -82,23 +84,55 @@ class Mood:
             stress_level: 此刻的压力，0 到 1；压力信号关着时传 0。
             person_id: 回复的对象，决定原因能不能写细节。
             viewer_is_user: 回复的对象是用户。
+            extra: 只影响这次读数的临时共情。
         """
-        contributions = [*self._contributions, *from_outcomes(outcomes, self._config)]
-        valence = valence_at(contributions, now, self._config, stress_level)
-        if valence < self._config.cautious_below:
-            self._cautious = True
-        elif valence > self._config.recover_above:
-            self._cautious = False
-        summary = describe_mood(
-            contributions,
+        render = self.prepare_reading(
             now,
-            self._config,
+            outcomes,
             stress_level=stress_level,
-            cautious=self._cautious,
             person_id=person_id,
             viewer_is_user=viewer_is_user,
         )
-        return MoodReading(valence=valence, cautious=self._cautious, summary=summary)
+        return render(now, extra)
+
+    def prepare_reading(
+        self,
+        now: datetime,
+        outcomes: Sequence[FeedbackOutcome],
+        *,
+        stress_level: float,
+        person_id: int | None,
+        viewer_is_user: bool,
+    ) -> Callable[[datetime, Sequence[HormoneTrigger]], MoodReading]:
+        """更新基线的谨慎状态，然后返回不写状态的读数快照。"""
+        contributions = [*self._contributions, *from_outcomes(outcomes, self._config)]
+        valence = valence_at(contributions, now, self._config, stress_level)
+        self._cautious = self._is_cautious(valence, self._cautious)
+        baseline_cautious = self._cautious
+
+        def render(at: datetime, extra: Sequence[HormoneTrigger]) -> MoodReading:
+            effective = [*contributions, *from_triggers(extra, self._config)]
+            valence = valence_at(effective, at, self._config, stress_level)
+            cautious = self._is_cautious(valence, baseline_cautious)
+            summary = describe_mood(
+                effective,
+                at,
+                self._config,
+                stress_level=stress_level,
+                cautious=cautious,
+                person_id=person_id,
+                viewer_is_user=viewer_is_user,
+            )
+            return MoodReading(valence=valence, cautious=cautious, summary=summary)
+
+        return render
+
+    def _is_cautious(self, valence: float, was_cautious: bool) -> bool:
+        if valence < self._config.cautious_below:
+            return True
+        if valence > self._config.recover_above:
+            return False
+        return was_cautious
 
     @property
     def cautious(self) -> bool:

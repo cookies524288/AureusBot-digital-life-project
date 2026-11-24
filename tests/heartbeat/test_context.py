@@ -199,6 +199,8 @@ def test_judge_prompt_has_dialogue_and_the_json_format() -> None:
 
     assert "之前的对话" in prompt and "早上好" in prompt
     assert "刚收到、还没回复的消息" in prompt and "你就是个破程序" in prompt
+    assert "记录序号 2" in prompt and "记录序号 1" not in prompt
+    assert '"source_record_id"' in prompt
     for word in ("others", "toward_me", "anger", "offense", "praise", "rejection"):
         assert word in prompt
     # 判断器官只判断，不写要说的话。
