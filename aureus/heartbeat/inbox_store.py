@@ -362,6 +362,17 @@ class InboxStore:
             ).fetchall()
         return [_message(row) for row in rows]
 
+    def existing_message_ids(self, conversation: ConversationKey, ids: Iterable[str]) -> set[str]:
+        """核对旧消息是否已有同一完整路由的规范原件，不读取正文。"""
+        with closing(open_connection(self._path)) as database:
+            rows = database.execute(
+                f"""SELECT m.message_id FROM inbox_messages m
+                JOIN inbox_conversations c ON c.id = m.conversation_id WHERE {_KEY}
+                AND m.message_id IN (SELECT value FROM json_each(?))""",
+                (*conversation.parameters(), json.dumps(tuple(ids))),
+            ).fetchall()
+        return {row["message_id"] for row in rows}
+
     def list_priority_unread(
         self,
         conversation: ConversationKey,

@@ -1841,8 +1841,8 @@ $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
 PAGES.timeline = { load: () => loadTimeline(false) };
 // ---------- 平台收件箱 ----------
-const inbox = {selected:null, next:null, conversationRequest:0, messageRequest:0};
-const inboxKey = conversation => JSON.stringify(conversation.key);
+const inbox = {selected:null, next:null, nextSource:null, conversationRequest:0, messageRequest:0};
+const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
 
 function selectInboxConversation(conversation) {
   inbox.selected = conversation;
@@ -1854,7 +1854,7 @@ function selectInboxConversation(conversation) {
   return loadInboxMessages();
 }
 
-function renderInboxConversations(conversations) {
+function renderInboxConversations(conversations, archives) {
   const platforms = new Map();
   for (const conversation of conversations) {
     const platform = conversation.key.platform;
@@ -1875,6 +1875,14 @@ function renderInboxConversations(conversations) {
     }
     return section;
   }));
+  if (archives.length) {
+    $('inbox-conversations').append(el('section', {}, el('h3', {text:'未归类历史'}),
+      ...archives.map(item => el('button', {
+        type:'button', class:'btn inbox-conversation', 'aria-pressed':'false',
+        'data-conversation':inboxKey(item), text:item.name,
+        onclick:() => selectInboxConversation(item),
+      }))));
+  }
 }
 
 async function loadInbox() {
@@ -1882,14 +1890,15 @@ async function loadInbox() {
   const res = await api('/api/inbox/conversations');
   if (request !== inbox.conversationRequest || session !== state.loaded) return;
   if (!res.ok) { fail(res); return; }
-  const {enabled, conversations} = res.data;
+  const {enabled, conversations, archives = []} = res.data;
+  const entries = [...conversations, ...archives];
   const empty = $('inbox-empty');
   empty.textContent = enabled ? '还没有收到消息。' : 'QQ 收件箱未启用。';
-  empty.classList.toggle('hidden', !!conversations.length);
-  $('inbox-layout').classList.toggle('hidden', !conversations.length);
-  renderInboxConversations(conversations);
-  const selected = inbox.selected && conversations.find(item => inboxKey(item) === inboxKey(inbox.selected));
-  if (conversations.length) await selectInboxConversation(selected || conversations[0]);
+  empty.classList.toggle('hidden', !!entries.length);
+  $('inbox-layout').classList.toggle('hidden', !entries.length);
+  renderInboxConversations(conversations, archives);
+  const selected = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
+  if (entries.length) await selectInboxConversation(selected || entries[0]);
   else {
     inbox.selected = null;
     ++inbox.messageRequest;
@@ -1901,17 +1910,23 @@ async function loadInboxMessages(more = false) {
   const list = $('inbox-messages'), status = $('inbox-message-status'), button = $('inbox-more');
   if (!inbox.selected || (more && (!inbox.next || button.disabled))) return;
   const request = ++inbox.messageRequest, session = state.loaded;
-  const query = new URLSearchParams(Object.entries(inbox.selected.key).filter(([, value]) => value !== null));
-  if (more) query.set('before_id', String(inbox.next));
+  const archive = inbox.selected.archive;
+  const query = new URLSearchParams(archive ? {source:archive} :
+    Object.entries(inbox.selected.key).filter(([, value]) => value !== null));
+  if (more) {
+    query.set('before_id', String(inbox.next));
+    if (!archive && inbox.nextSource) query.set('before_source', inbox.nextSource);
+  }
   else {
     inbox.next = null;
+    inbox.nextSource = null;
     list.replaceChildren();
     status.textContent = '正在加载消息…';
     status.classList.remove('hidden');
     button.classList.add('hidden');
   }
   button.disabled = true;
-  const res = await api('/api/inbox/messages?' + query);
+  const res = await api('/api/inbox/' + (archive ? 'uncategorized?' : 'messages?') + query);
   if (request !== inbox.messageRequest || session !== state.loaded) return;
   button.disabled = false;
   status.classList.add('hidden');
@@ -1922,16 +1937,18 @@ async function loadInboxMessages(more = false) {
     } else fail(res);
     return;
   }
-  const {messages, next_before_id} = res.data;
+  const {messages, next_before_id, next_before_source} = res.data;
   list.append(...messages.map(message => el('article', {class:'inbox-message'},
-    el('div', {class:'row'}, el('strong', {text:message.sender_name || message.sender_id}),
-      el('time', {class:'muted', datetime:message.timestamp, text:fmtTime(message.timestamp, true)})),
+    el('div', {class:'row'}, el('strong', {text:message.sender_name || message.sender_id || '未知发件人'}),
+      message.timestamp ? el('time', {class:'muted', datetime:message.timestamp, text:fmtTime(message.timestamp, true)}) :
+        el('span', {class:'muted', text:'时间未知'})),
     el('p', {text:message.content}))));
   if (!list.childElementCount) {
     status.textContent = '这个会话暂无消息。';
     status.classList.remove('hidden');
   }
   inbox.next = next_before_id;
+  inbox.nextSource = next_before_source;
   button.classList.toggle('hidden', !inbox.next);
 }
 $('inbox-refresh').addEventListener('click', loadInbox);

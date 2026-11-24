@@ -88,6 +88,9 @@ def open_web(
             allows_inbox_conversation=(
                 core.qq.allows_inbox_conversation if core.qq is not None else None
             ),
+            inbox_archive_account_id=(
+                core.settings.runtime.qq.account_id if core.qq is not None else None
+            ),
             resource_language=core.language,
             resource_memory=core.memory,
             resource_images=core.inbox_images,
