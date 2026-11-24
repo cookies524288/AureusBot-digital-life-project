@@ -240,7 +240,8 @@ def set_resources_removed(
             return False
         connection.executemany(
             """INSERT INTO memory_edits(kind, entry_id, is_removed) VALUES (?, ?, ?)
-               ON CONFLICT(kind, entry_id) DO UPDATE SET is_removed = excluded.is_removed""",
+               ON CONFLICT(kind, entry_id) DO UPDATE SET is_removed = excluded.is_removed,
+                   revision = revision + 1""",
             [(kind, entry_id, removed) for kind, entry_id in targets],
         )
         if record_operation:

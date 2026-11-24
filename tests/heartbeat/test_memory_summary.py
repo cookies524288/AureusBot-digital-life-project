@@ -474,7 +474,16 @@ def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> Non
         assert client.post(f"{endpoint}/{corrected}/apply").status_code == 409
         assert client.post(f"{endpoint}/{race}/apply").status_code == 409
         assert not rig.index.search(["晴桂巷"], (), 5, summary_scope=rig.scope)
-        assert "栖松巷" in rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope)[0].text
+        revised_hits = rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope)
+        assert revised_hits[0].text == "阿青：居住地点是栖松巷。"
+        assert not rig.index.recheck_summary_hits([hit], rig.scope)
+        assert rig.index.recheck_summary_hits(revised_hits, rig.scope) == revised_hits
+        rig.source.allows = lambda _: False
+        assert client.post(f"{endpoint}/{corrected}/undo").status_code == 404
+        assert not rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope)
+        assert not rig.index.recheck_summary_hits(revised_hits, rig.scope)
+        rig.source.allows = lambda candidate: candidate == rig.key
+        assert rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope) == revised_hits
         _start, summaries, facts = rig.index.summary_reference(rig.scope)
         assert summaries == () and [fact.text for fact in facts] == ["阿青：居住地点是栖松巷。"]
         assert client.get(catalog, params={"q": "晴桂巷"}).json()["items"] == []
@@ -628,25 +637,39 @@ def test_corrected_history_does_not_match_original_substring(rig: Rig, table: st
     items, total, counts = rig.index.browse_text_resources("蓝铜片", table, "", "", 0, 10)
     assert total == 1 and counts == {table: 1}
     assert items[0]["text"] == "修订值由蓝铜片制成"
+    assert not rig.index.search(["鸢尾石"], (), 5)
+    [revised] = rig.index.search(["蓝铜片"], (), 5)
+    assert (revised.source, revised.text) == (source, "修订值由蓝铜片制成")
 
 
-def test_history_preview_and_undo_reject_a_value_changed_back_by_legacy_edits(rig: Rig) -> None:
+@pytest.mark.parametrize("legacy", ("edit", "batch"))
+def test_history_preview_and_undo_reject_a_value_changed_back_by_legacy_edits(
+    rig: Rig, legacy: str
+) -> None:
     source = MemorySource("fixture", "formal", "fact_claims", (25,))
     assert rig.index.publish([HistoricalMemory(source, "最初的值")]) == 1
     [item] = rig.index.browse_history("", "", 0, 10)
     assert item.entry_id is not None
     preview = rig.index.preview_lifecycle(source, "correct", "修订值", None, lambda: True)
     assert preview is not None
-    assert rig.index.update_resource("history", item.entry_id, None, False)
-    assert rig.index.update_resource("history", item.entry_id, None, True)
+    if legacy == "edit":
+        assert rig.index.update_resource("history", item.entry_id, None, False)
+        assert rig.index.update_resource("history", item.entry_id, None, True)
+    else:
+        assert rig.index.set_resources_removed([("history", item.entry_id)], True)
+        assert rig.index.set_resources_removed([("history", item.entry_id)], False)
     with pytest.raises(LifecycleConflictError):
         rig.index.apply_lifecycle(str(preview["plan_id"]), None, lambda: True, undo=False)
     current = rig.index.preview_lifecycle(source, "correct", "修订值", None, lambda: True)
     assert current is not None
     current_id = str(current["plan_id"])
     assert rig.index.apply_lifecycle(current_id, None, lambda: True, undo=False)
-    assert rig.index.update_resource("history", item.entry_id, "更新的值", None)
-    assert rig.index.update_resource("history", item.entry_id, "修订值", None)
+    if legacy == "edit":
+        assert rig.index.update_resource("history", item.entry_id, "更新的值", None)
+        assert rig.index.update_resource("history", item.entry_id, "修订值", None)
+    else:
+        assert rig.index.set_resources_removed([("history", item.entry_id)], True)
+        assert rig.index.set_resources_removed([("history", item.entry_id)], False)
     with pytest.raises(LifecycleConflictError):
         rig.index.apply_lifecycle(current_id, None, lambda: True, undo=True)
 
