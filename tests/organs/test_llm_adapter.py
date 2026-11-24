@@ -1,6 +1,7 @@
 """LLMOrgan（真实器官）的测试：全部用假的调用函数，不联网、不花钱。"""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,16 @@ import pytest
 from aureus.common.config import ConfigError
 from aureus.organs import llm_adapter
 from aureus.organs.api_keys import KeyResolver
-from aureus.organs.interface import CallAttempt, OrganCallCancelled, OrganCallError, OrganRequest
+from aureus.organs.interface import (
+    CallAttempt,
+    OrganCallCancelled,
+    OrganCallError,
+    OrganRequest,
+    ToolCall,
+    ToolDefinition,
+    ToolExchange,
+    ToolResult,
+)
 from aureus.organs.llm_adapter import (
     ASSUMED_COMPLETION_TOKENS,
     EMPTY_REPLY_REASON,
@@ -203,6 +213,148 @@ def ask() -> OrganRequest:
     return OrganRequest(organ_id="replyer", prompt="你好")
 
 
+READ_TOOL = ToolDefinition(
+    "read", "查找资料", {"type": "object", "properties": {"query": {"type": "string"}}}
+)
+STOP_TOOL = ToolDefinition("stop", "结束本轮", {"type": "object", "properties": {}})
+
+
+def make_planner(completion: FakeCompletion, keys: KeyResolver) -> LLMOrgan:
+    return LLMOrgan(
+        "planner", make_config().routes_for("replyer"), keys, completion, fixed_counter
+    )
+
+
+def make_tool_fragment(
+    arguments: str, *, call_id: str | None = None, name: str | None = None, index: int = 0
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=call_id,
+        index=index,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
+
+
+@pytest.mark.asyncio
+async def test_planner_transports_tools_and_continues_with_a_correlated_tool_result(
+    keys: KeyResolver,
+) -> None:
+    first = make_response(None, 10, 5, 2)
+    first.choices[0].message.tool_calls = [
+        make_tool_fragment('{"query": "资料"}', call_id="call_read", name="read")
+    ]
+    completion = FakeCompletion(first, make_response("普通文字"))
+    organ = make_planner(completion, keys)
+    request = OrganRequest("planner", "请查看资料", tools=(READ_TOOL,))
+
+    response = await organ.process(request)
+
+    assert response.suggestion == ""
+    assert response.tool_calls == (ToolCall("read", "call_read", {"query": "资料"}),)
+    assert response.attempts == [CallAttempt("big", "cloud", 10, 5, 2, cost=0.000074)]
+    assert completion.calls[0]["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "查找资料",
+                "parameters": READ_TOOL.parameters,
+            },
+        }
+    ]
+
+    request.tool_history = (
+        ToolExchange(response.tool_calls, (ToolResult("call_read", "找到一条合成资料"),)),
+    )
+    followup = await organ.process(request)
+
+    messages = completion.calls[1]["messages"]
+    assert messages[:-2] == completion.calls[0]["messages"]
+    assert messages[-2]["role"] == "assistant"
+    assert messages[-2]["content"] is None
+    assert messages[-2]["tool_calls"][0]["id"] == "call_read"
+    function = messages[-2]["tool_calls"][0]["function"]
+    assert function["name"] == "read"
+    assert json.loads(function["arguments"]) == {"query": "资料"}
+    assert messages[-1] == {
+        "role": "tool",
+        "tool_call_id": "call_read",
+        "content": "找到一条合成资料",
+    }
+    assert followup.suggestion == "普通文字"
+    assert followup.tool_calls == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "arguments"), [("read", "{"), ("read", "[]"), ("read", '{"query": NaN}'), ("unknown", "{}")]
+)
+async def test_malformed_tool_call_disables_the_entire_batch_and_keeps_usage(
+    keys: KeyResolver, name: str, arguments: str
+) -> None:
+    raw = make_response("这不是聊天回复", 10, 5)
+    raw.choices[0].message.tool_calls = [
+        make_tool_fragment("{}", call_id="call_stop", name="stop"),
+        make_tool_fragment(arguments, call_id="call_read", name=name),
+    ]
+    completion = FakeCompletion(raw)
+    response = await make_planner(completion, keys).process(
+        OrganRequest("planner", "规划材料", tools=(STOP_TOOL, READ_TOOL))
+    )
+    assert response.tool_calls == () and response.suggestion == ""
+    assert response.metadata["tool_calls_invalid"] is True
+    assert response.attempts[0].budget_tokens == 15
+    assert len(completion.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_request_without_tools_does_not_forward_schema_or_expose_tool_calls(
+    keys: KeyResolver,
+) -> None:
+    raw = make_response("照常回答")
+    raw.choices[0].message.tool_calls = [
+        make_tool_fragment("{}", call_id="call_stop", name="stop")
+    ]
+    completion = FakeCompletion(raw)
+    response = await make_organ(completion, keys).process(ask())
+    assert "tools" not in completion.calls[0]
+    assert response.suggestion == "照常回答"
+    assert response.tool_calls == ()
+    assert "tool_calls_invalid" not in response.metadata
+
+
+@pytest.mark.asyncio
+async def test_planner_stream_assembles_interleaved_tool_arguments_and_final_usage(
+    keys: KeyResolver,
+) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        for piece in (
+            make_tool_fragment("{", name="stop", call_id="call_stop", index=1),
+            make_tool_fragment('{"query":', name="read", call_id="call_read"),
+            make_tool_fragment("}", index=1),
+            make_tool_fragment('"资料"}'),
+        ):
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=[piece]))]
+            )
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=None, finish_reason="tool_calls")])
+        yield SimpleNamespace(choices=[], usage=make_response(None, 7, 1).usage)
+
+    completion = FakeCompletion(chunks())
+    response = await make_planner(completion, keys).process(
+        OrganRequest("planner", "规划材料", tools=(READ_TOOL, STOP_TOOL), stream=True)
+    )
+    assert completion.calls[0]["stream_options"] == {"include_usage": True}
+    assert response.suggestion == ""
+    assert response.tool_calls == (
+        ToolCall("read", "call_read", {"query": "资料"}),
+        ToolCall("stop", "call_stop", {}),
+    )
+    assert response.attempts[0].budget_tokens == 8
+    assert not response.attempts[0].estimated
+
+
 @pytest.mark.asyncio
 async def test_organ_assembles_stream_chunks_and_uses_final_usage(keys: KeyResolver) -> None:
     async def chunks() -> AsyncIterator[Any]:
@@ -222,22 +374,28 @@ async def test_organ_assembles_stream_chunks_and_uses_final_usage(keys: KeyResol
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (READ_TOOL,)])
 async def test_cancelling_organ_stream_closes_it_and_accounts_for_attempt(
-    keys: KeyResolver,
+    keys: KeyResolver, tools: tuple[ToolDefinition, ...]
 ) -> None:
     started = asyncio.Event()
     closed = asyncio.Event()
 
     async def chunks() -> AsyncIterator[Any]:
         try:
-            yield SimpleNamespace(choices=[])
+            partial = make_tool_fragment("{", call_id="call_read", name="read")
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=[partial]))]
+            )
             started.set()
             await asyncio.Event().wait()
         finally:
             closed.set()
 
     organ = make_organ(FakeCompletion(chunks()), keys)
-    task = asyncio.create_task(organ.process(OrganRequest("replyer", "规划材料", stream=True)))
+    task = asyncio.create_task(
+        organ.process(OrganRequest("replyer", "规划材料", stream=True, tools=tools))
+    )
     await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
     with pytest.raises(OrganCallCancelled) as cancellation:
@@ -245,6 +403,10 @@ async def test_cancelling_organ_stream_closes_it_and_accounts_for_attempt(
     assert closed.is_set()
     [attempt] = cancellation.value.attempts
     assert attempt.estimated and attempt.budget_tokens > 0
+    if tools:
+        assert attempt.prompt_tokens > COUNTED_PROMPT_TOKENS
+    else:
+        assert attempt.prompt_tokens == COUNTED_PROMPT_TOKENS
 
 
 @pytest.mark.asyncio

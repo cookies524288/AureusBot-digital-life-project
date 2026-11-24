@@ -37,8 +37,10 @@ from aureus.organs.interface import (
     OrganCallError,
     OrganRequest,
     OrganResponse,
+    ToolCall,
     sum_costs,
 )
+from aureus.organs.llm_tools import ToolCallCollector, encode_tool_history, encode_tools
 from aureus.organs.llm_usage import TokenUsage, compute_cost, extract_usage
 from aureus.organs.model_config import (
     ModelConfig,
@@ -57,15 +59,19 @@ SleepFunction = Callable[[float], Awaitable[None]]
 TokenCounter = Callable[[list[dict[str, str]]], int]
 
 
-async def _read_stream(stream: Any) -> tuple[str | None, TokenUsage]:
+async def _read_stream(
+    stream: Any, tools: ToolCallCollector | None = None
+) -> tuple[str | None, TokenUsage]:
     pieces: list[str] = []
     usage = TokenUsage(known=False)
     async with aclosing(stream):
         async for chunk in stream:
-            if chunk.choices and isinstance(
-                content := getattr(chunk.choices[0].delta, "content", None), str
-            ):
-                pieces.append(content)
+            if chunk.choices:
+                choice = chunk.choices[0]
+                if isinstance(content := getattr(choice.delta, "content", None), str):
+                    pieces.append(content)
+                if tools is not None:
+                    tools.read_choice(choice, stream=True)
             actual = extract_usage(chunk)
             if actual.known:
                 usage = actual
@@ -840,9 +846,7 @@ class LLMOrgan:
         attempts: list[CallAttempt] = []
         for route in order_routes(self._routes, request.model_preference):
             try:
-                text, attempt = await self._call(
-                    route, messages, attempts, media, media_type, stream=request.stream
-                )
+                text, tool_calls, attempt = await self._call(route, messages, attempts, request)
             except asyncio.CancelledError:
                 if request.stream:
                     raise OrganCallCancelled(attempts) from None
@@ -853,11 +857,11 @@ class LLMOrgan:
                     "器官 {} 的模型 {} 没能用：{}", self.organ_id, route.model.name, failure.reason
                 )
                 continue
-            return self._build_response(route, text, attempt, failures, attempts)
+            return self._build_response(route, text, tool_calls, attempt, failures, attempts)
         raise OrganCallError(self.organ_id, failures, attempts)
 
     def _estimate_usage(
-        self, route: ModelRoute, messages: list[dict[str, str]], requests: int, media_size: int = 0
+        self, route: ModelRoute, messages: list[dict[str, str]], requests: int, extra_bytes: int = 0
     ) -> TokenUsage:
         """服务商没告诉我们用了多少时，按 06 号文档 12.3 节往多里估。
 
@@ -865,7 +869,7 @@ class LLMOrgan:
             route: 这次走的模型路线，取 max_tokens 用。
             messages: 发出去的消息。
             requests: 估计实际发了几次请求。
-            media_size: 附件字节数，只在服务商没有提供用量时保守估算。
+            extra_bytes: 附件及工具协议的字节数，只在服务商没有提供用量时保守估算。
 
         Returns:
             估算的用量，known 为 False。
@@ -881,7 +885,7 @@ class LLMOrgan:
             prompt_tokens = _byte_length(messages)
         completion_tokens = route.max_tokens or ASSUMED_COMPLETION_TOKENS
         return TokenUsage(
-            prompt_tokens=(prompt_tokens + media_size) * requests,
+            prompt_tokens=(prompt_tokens + extra_bytes) * requests,
             completion_tokens=completion_tokens * requests,
             known=False,
         )
@@ -912,11 +916,8 @@ class LLMOrgan:
         route: ModelRoute,
         messages: list[dict[str, str]],
         attempts: list[CallAttempt],
-        media: bytes | None,
-        media_type: str | None,
-        *,
-        stream: bool,
-    ) -> tuple[str, CallAttempt]:
+        request: OrganRequest,
+    ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
         """对一条路线发请求，临时性的失败按 max_retry 重试。
 
         重试由这里自己做，不交给 litellm（num_retries 固定为 0）：litellm 内部重试了
@@ -927,17 +928,17 @@ class LLMOrgan:
             route: 这次走的模型路线。
             messages: 发出去的消息。
             attempts: 失败的请求记在这里；成功的那次由返回值带出。
-            media: 已取得的图片或语音内容（如有）。
-            media_type: 附件的媒体类型（如有）。
-            stream: 是否用服务商流式接口。
+            request: 本轮的附件、工具和流式设置。
 
         Returns:
-            回复文字和成功的那次请求。
+            回复文字、已解析的工具调用，以及成功的那次请求。
 
         Raises:
             _RouteFailureError: 这条路线没能用（重试用完、不值得重试，或密钥缺失）。
         """
         provider = route.provider
+        media = request.media_bytes
+        media_type = request.media_type
         kwargs: dict[str, Any] = {
             **_provider_arguments(provider, self._key_resolver),
             "model": LITELLM_PREFIX_BY_PROTOCOL[provider.protocol] + route.model.identifier,
@@ -959,17 +960,26 @@ class LLMOrgan:
             kwargs["max_tokens"] = route.max_tokens
         if route.reasoning_effort is not None and self.organ_id != "voice":
             kwargs["reasoning_effort"] = route.reasoning_effort
-        if stream:
+        if request.stream:
             kwargs["stream"] = True
             if provider.protocol == "openai":
                 kwargs["stream_options"] = {"include_usage": True}
+        tool_names: set[str] = set()
+        extra_bytes = len(media or b"")
+        if request.tools and self.organ_id != "voice":
+            tools = encode_tools(request.tools)
+            history = encode_tool_history(request.tool_history)
+            kwargs["tools"] = tools
+            kwargs["messages"] = [*kwargs["messages"], *history]
+            tool_names = {tool.name for tool in request.tools}
+            extra_bytes += len(json.dumps((tools, history), ensure_ascii=False).encode("utf-8"))
         requests = 1 + provider.max_retry
         for number in range(1, requests + 1):
             try:
                 if self.organ_id == "voice":
                     assert media is not None
                     kwargs["file"] = _SpeechFile(media)
-                return await self._request(route, kwargs, messages, attempts, len(media or b""))
+                return await self._request(route, kwargs, messages, attempts, extra_bytes, tool_names)
             except _RouteFailureError as failure:
                 if not failure.retryable or number == requests:
                     raise
@@ -990,15 +1000,17 @@ class LLMOrgan:
         kwargs: dict[str, Any],
         messages: list[dict[str, str]],
         attempts: list[CallAttempt],
-        media_size: int,
-    ) -> tuple[str, CallAttempt]:
+        extra_bytes: int,
+        tool_names: set[str],
+    ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
         """真正发出一次请求。失败的这一次先记进 attempts，再抛出。"""
+        tools = ToolCallCollector(tool_names) if tool_names else None
         try:
             completion = self._completion
             assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
             response = await completion(**kwargs)
             if kwargs.get("stream"):
-                text, usage = await _read_stream(response)
+                text, usage = await _read_stream(response, tools)
             else:
                 usage = extract_usage(response)
                 if self.organ_id == "voice":
@@ -1006,9 +1018,11 @@ class LLMOrgan:
                     text = value.strip() if isinstance(value, str) and value.strip() else None
                 else:
                     text = _read_text(response)
+                    if tools is not None and (choices := getattr(response, "choices", None)):
+                        tools.read_choice(choices[0], stream=False)
         except asyncio.CancelledError:
             if kwargs.get("stream"):
-                usage = self._estimate_usage(route, messages, 1, media_size)
+                usage = self._estimate_usage(route, messages, 1, extra_bytes)
                 attempts.append(self._attempt(route, usage, "新消息或运行控制中止流式请求"))
             raise
         except Exception as error:
@@ -1019,24 +1033,27 @@ class LLMOrgan:
             else:
                 # 超时、断线这类失败，对方可能已经算完了：按一次请求估算。
                 attempt = self._attempt(
-                    route, self._estimate_usage(route, messages, 1, media_size), reason
+                    route, self._estimate_usage(route, messages, 1, extra_bytes), reason
                 )
             attempts.append(attempt)
             # from None：不带上原始异常，免得追踪信息里带出请求头里的密钥。
             raise _RouteFailureError(reason, retryable=_retryable(error)) from None
         if not usage.known:
-            usage = self._estimate_usage(route, messages, 1, media_size)
-        if text is None:
+            usage = self._estimate_usage(route, messages, 1, extra_bytes)
+        tool_calls = tools.finish() if tools is not None else ()
+        if text is None and tool_calls == ():
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
             # 思考上），这次请求照样要记账。重试只会再花一次钱，所以不重试。
             attempts.append(self._attempt(route, usage, EMPTY_REPLY_REASON))
             raise _RouteFailureError(EMPTY_REPLY_REASON)
-        return text, self._attempt(route, usage)
+        suggestion = (text or "") if tool_calls is not None else ""
+        return suggestion, tool_calls, self._attempt(route, usage)
 
     def _build_response(
         self,
         route: ModelRoute,
         text: str,
+        tool_calls: tuple[ToolCall, ...] | None,
         attempt: CallAttempt,
         failures: list[str],
         failed_attempts: list[CallAttempt],
@@ -1045,6 +1062,7 @@ class LLMOrgan:
             organ_id=self.organ_id,
             suggestion=text,
             attempts=[*failed_attempts, attempt],
+            tool_calls=tool_calls or (),
             metadata={
                 "type": "llm",
                 "model": route.model.name,
@@ -1059,5 +1077,6 @@ class LLMOrgan:
                 "cost": attempt.cost,
                 "wasted_cost": sum_costs(failed.cost for failed in failed_attempts),
                 "failures_before_success": failures,
+                **({"tool_calls_invalid": True} if tool_calls is None else {}),
             },
         )

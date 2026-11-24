@@ -36,6 +36,40 @@ class ModelPreference(StrEnum):
     CHEAPEST = "最便宜"
 
 
+@dataclass(frozen=True)
+class ToolDefinition:
+    """调用方开放的一个函数工具；parameters 是参数的 JSON Schema。"""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """模型建议调用的工具；arguments 是已解码、尚未按工具规则校验的参数对象。"""
+
+    name: str
+    call_id: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    """调用方交回模型的工具结果；call_id 必须与同一批的助手调用对应。"""
+
+    call_id: str
+    content: str
+
+
+@dataclass(frozen=True)
+class ToolExchange:
+    """同一规划轮的工具往返；results 为 calls 中每个调用提供一个结果。"""
+
+    calls: tuple[ToolCall, ...]
+    results: tuple[ToolResult, ...]
+
+
 @dataclass
 class OrganRequest:
     """发送给器官的请求"""
@@ -56,6 +90,8 @@ class OrganRequest:
     media_type: str | None = None
     stream: bool = False
     preceding_messages: tuple[tuple[Literal["user", "assistant"], str], ...] = ()
+    tools: tuple[ToolDefinition, ...] = ()
+    tool_history: tuple[ToolExchange, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,6 +156,7 @@ class OrganResponse:
     # 这次调用里真正发出去的每一次模型请求，包括成功之前失败的那些。不调用模型的器官留空。
     attempts: list[CallAttempt] = field(default_factory=list)
     embeddings: tuple[tuple[float, ...], ...] = ()
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 class OrganCallError(Exception):
