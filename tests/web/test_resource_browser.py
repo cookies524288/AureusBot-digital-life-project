@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import partial
 from hashlib import sha256
 from http.client import HTTPConnection
@@ -19,8 +20,15 @@ from typing import cast
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 from websockets.sync.client import ClientConnection, connect
+
+from aureus.channels import WebChannel
+from aureus.memory import HistoricalMemory, MemoryIndex, MemorySource
+from aureus.web import create_app
+from aureus.web.server import SESSION_COOKIE
+from tests.web.test_server import FakeHeartbeat, Rig, set_password
 
 STATIC = Path(__file__).resolve().parents[2] / "aureus" / "web" / "static"
 STAMP = "2026-11-23T00:00:00Z"
@@ -29,6 +37,7 @@ MEMORY_BATCH_TOTAL = 15
 REVIEW_ENDPOINT = "/api/resources/learning/reviews"
 SCOPE_ENDPOINT = "/api/resources/learning/scope"
 ORIGINS_ENDPOINT = "/api/resources/learning/origins"
+MEMORY_TRANSFER_ENDPOINT = "/api/resources/memory/transfer"
 
 
 def _items(path: str, kind: str) -> list[dict[str, object]]:
@@ -112,6 +121,7 @@ class ResourceServer(ThreadingHTTPServer):
     removed_memories: set[tuple[str, int]]
     expression_reviews: dict[str, list[dict[str, str]]]
     recall_rating: str | None
+    memory_transfer: TestClient | None
 
 
 class ResourceFixture(SimpleHTTPRequestHandler):
@@ -234,6 +244,16 @@ class ResourceFixture(SimpleHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self) -> None:
+        if self.path in (MEMORY_TRANSFER_ENDPOINT, MEMORY_TRANSFER_ENDPOINT + "/preview"):
+            client = cast(ResourceServer, self.server).memory_transfer
+            if client is not None:
+                response = client.post(
+                    f"http://{self.headers['Host']}{self.path}",
+                    content=self.rfile.read(int(self.headers["Content-Length"])),
+                    headers={name: self.headers[name] for name in ("Origin", "Content-Type")},
+                )
+                self._send("application/json", response.content, status=response.status_code)
+                return
         if self.path != "/api/resources/emoji":
             self.send_error(404)
             return
@@ -309,8 +329,8 @@ class ResourceFixture(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
 
-    def _send(self, content_type: str, data: bytes) -> None:
-        self.send_response(200)
+    def _send(self, content_type: str, data: bytes, *, status: int = 200) -> None:
+        self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -500,17 +520,22 @@ def _debug_socket(profile: Path) -> str:
 
 @pytest.fixture(scope="module")
 def browser() -> Iterator[Browser]:
-    with TemporaryDirectory(prefix="aureus-resource-chrome-") as directory:
-        yield from _open_browser(Path(directory))
+    with (
+        TemporaryDirectory(prefix="aureus-resource-chrome-") as directory,
+        _open_browser(Path(directory)) as instance,
+    ):
+        yield instance
 
 
-def _open_browser(profile: Path) -> Iterator[Browser]:
+@contextmanager
+def _open_browser(profile: Path, memory_transfer: TestClient | None = None) -> Iterator[Browser]:
     chrome = _chrome()
     server = ResourceServer(("127.0.0.1", 0), partial(ResourceFixture, directory=STATIC))
     server.emoji_uploads = {}
     server.removed_memories = set()
     server.expression_reviews = {}
     server.recall_rating = None
+    server.memory_transfer = memory_transfer
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     process = subprocess.Popen(
@@ -1523,6 +1548,145 @@ def test_memory_inspection_shows_counts_and_limits(browser: Browser) -> None:
     )
 
 
+def test_memory_package_preview_requires_current_file_confirmation_at_390px(
+    browser: Browser,
+) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        """
+      const transferPath = '/api/resources/memory/transfer';
+      const requests = [];
+      const imports = [];
+      const upstreamFetch = window.fetch;
+      window.fetch = async (path, options) => {
+        if (path === transferPath + '/preview') {
+          return new Promise(resolve => requests.push({file:options.body, resolve}));
+        }
+        if (path === transferPath) {
+          imports.push(options.body);
+          return Response.json({added:1, skipped:1});
+        }
+        return upstreamFetch(path, options);
+      };
+      const summary = (total, counts = {}) => Response.json({version:1, total, counts});
+      await waitFor(() => find('[data-memory-tab="transfer"]'), '长期记忆页就绪');
+      click('[data-memory-tab="transfer"]');
+      const input = find('input[type="file"]');
+      const confirm = () => button('确认追加导入');
+      const select = (name, body) => {
+        const selection = new DataTransfer();
+        selection.items.add(new File([body], name));
+        input.files = selection.files;
+        input.dispatchEvent(new Event('change', {bubbles:true}));
+      };
+      select('原来的包.jsonl', '第一份文件');
+      await waitFor(() => requests.length === 1 && text('正在检视'), '选文件后开始检视');
+      check(confirm().disabled && !imports.length, '等待检视时不可导入');
+      press('取消');
+      requests[0].resolve(summary(99));
+      await waitFor(() => text('已取消'), '取消可见');
+      check(!input.files.length && confirm().disabled, '取消后清空选件');
+
+      select('拖延的包.jsonl', '第二份文件');
+      await waitFor(() => requests.length === 2, '第二份检视开始');
+      select('有坏尾的包.jsonl', '第三份文件');
+      await waitFor(() => requests.length === 3, '更换文件重新检视');
+      requests[2].resolve(Response.json({detail:'记忆包记录数或结束行有误。'}, {status:422}));
+      await waitFor(() => text('结束行有误'), '坏包提示');
+      requests[1].resolve(summary(77));
+      await new Promise(resolve => setTimeout(resolve, 30));
+      check(!text('77 条') && !text('99 条') && confirm().disabled, '迟到结果不能覆盖取消或坏包');
+      check(imports.length === 0, '没有写请求');
+
+      select('完整的包.jsonl', '确认后必须导入这份文件');
+      await waitFor(() => requests.length === 4, '完整包检视开始');
+      requests[3].resolve(summary(2, {messages:1, paragraphs:1}));
+      await waitFor(() => !confirm().disabled, '检视完成才可确认');
+      check(text('版本 1') && text('包内共 2 条') && text('不是预计新增') &&
+        text('消息 1 条') && text('段落 1 条'), '显示包内版本、分类与计数边界');
+      check(document.documentElement.scrollWidth === 390 && !button('下一页'),
+        '390 px 无横向溢出或长列表分页');
+      check(imports.length === 0, '检视成功也不自动导入');
+
+      select('实际要导入的包.jsonl', '确认使用这一份');
+      await waitFor(() => requests.length === 5, '换文件清除已通过的报告');
+      check(!text('包内共 2 条') && confirm().disabled, '旧报告不能确认新文件');
+      requests[4].resolve(summary(2, {messages:2}));
+      await waitFor(() => !confirm().disabled, '新报告可以取消');
+      input.dispatchEvent(new Event('cancel'));
+      check(confirm().disabled && !input.files.length && !imports.length, '取消文件选择清空确认');
+
+      select('实际要导入的包.jsonl', '确认使用这一份');
+      await waitFor(() => requests.length === 6, '再次选择需要重新检视');
+      requests[5].resolve(summary(2, {messages:2}));
+      await waitFor(() => !confirm().disabled, '确认当前包');
+      press('确认追加导入');
+      await waitFor(() => text('新增 1 条，跳过相同记录 1 条'), '实际结果与检视计数分开');
+      check(imports.length === 1 && imports[0] === requests[5].file &&
+        await imports[0].text() === '确认使用这一份', '只上传刚通过检视的文件');
+      check(confirm().disabled && !input.files.length, '成功后不能再次确认旧包');
+    """,
+    )
+
+
+def test_memory_package_browser_confirm_uses_real_transfer(tmp_path: Path) -> None:
+    rig = Rig(tmp_path)
+    source = MemoryIndex(tmp_path / "source.db", rig.timeline, rig.clock)
+    target = MemoryIndex(tmp_path / "aureus.db", rig.timeline, rig.clock)
+    original = HistoricalMemory(MemorySource("test", "memory", "episodes", (1,)), "合成原件")
+    source.open()
+    target.open()
+    try:
+        set_password(rig)
+        source.publish([original])
+        package = BytesIO()
+        source.export_archive(package)
+        payload = json.dumps(package.getvalue().decode("utf-8"))
+        app = create_app(
+            config=rig.config,
+            auth=rig.auth,
+            sessions=rig.sessions,
+            channel=WebChannel(FakeHeartbeat()),
+            timeline=rig.timeline,
+            resource_memory=target,
+        )
+        with (
+            TestClient(app) as client,
+            TemporaryDirectory(prefix="aureus-package-chrome-") as directory,
+            _open_browser(Path(directory), client) as browser_instance,
+        ):
+            client.cookies.set(SESSION_COOKIE, rig.sessions.create())
+            browser_instance.open("memory", 390, 740)
+            _run(
+                browser_instance,
+                f"""
+              await waitFor(() => find('[data-memory-tab="transfer"]'), '长期记忆页');
+              click('[data-memory-tab="transfer"]');
+              const input = find('input[type="file"]');
+              const selection = new DataTransfer();
+              selection.items.add(new File([{payload}], '合成记忆包.jsonl'));
+              input.files = selection.files;
+              input.dispatchEvent(new Event('change', {{bubbles:true}}));
+              await waitFor(() => text('情景记忆 1 条'), '真实检视接口回报');
+              check(!text('合成原件'), '不回显正文');
+            """,
+            )
+            assert target.get_history(original.source) is None
+            _run(
+                browser_instance,
+                """
+              press('确认追加导入');
+              await waitFor(() => text('新增 1 条，跳过相同记录 0 条'), '真实导入结果');
+            """,
+            )
+            assert target.get_history(original.source) == original
+    finally:
+        target.close()
+        source.close()
+        rig.close()
+
+
 def test_memory_batch_remove_and_restore(browser: Browser) -> None:
     browser.open("memory", 390, 740)
     _run(
@@ -2094,8 +2258,8 @@ def test_memory_image_bookmark_filter_and_flow(browser: Browser) -> None:
       press('最近24小时');
       await waitFor(() => text('合成事件000') && button('上一页').disabled, '时间筛选回到首页');
       click('[data-memory-tab="transfer"]');
-      await waitFor(() => button('追加导入'), '导入导出页可见');
-      check(button('追加导入').disabled, '未选择文件不可导入');
+      await waitFor(() => button('确认追加导入'), '导入导出页可见');
+      check(button('确认追加导入').disabled, '未选择文件不可导入');
       check(!button('下一页'), '导入导出不是分页列表');
     """,
     )
