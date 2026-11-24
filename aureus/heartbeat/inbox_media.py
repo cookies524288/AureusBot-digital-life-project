@@ -114,7 +114,7 @@ class InboxMedia:
     async def _recognize_emoji(
         self, store: EmojiStore | None, preference: ModelPreference, data: bytes, mime: str
     ) -> str:
-        digest = None
+        registration_digest = None
         if store is not None:
             try:
                 entry = await asyncio.to_thread(store.collect, data)
@@ -123,11 +123,13 @@ class InboxMedia:
                 return ""
             if entry.is_banned or entry.is_removed:
                 return ""
-            if entry.is_registered or entry.description or entry.tags:
-                return (
-                    "，".join(entry.tags) if entry.is_registered and "vlm" in self.available else ""
-                )
-            digest = entry.digest
+            if entry.is_registered:
+                if entry.tags:
+                    return "，".join(entry.tags) if "vlm" in self.available else ""
+            elif entry.description or entry.tags:
+                return ""
+            else:
+                registration_digest = entry.digest
 
         if "vlm" not in self.available:
             return ""
@@ -143,9 +145,12 @@ class InboxMedia:
         )
         if not (tags := parse_emoji_tags(await self._suggest(request))):
             return ""
-        if store is not None and digest is not None:
+        if store is not None and registration_digest is not None:
             try:
-                if not await asyncio.to_thread(store.register_recognition, digest, tags):
+                registered = await asyncio.to_thread(
+                    store.register_recognition, registration_digest, tags
+                )
+                if not registered:
                     return ""
             except (OSError, sqlite3.Error, ValueError):
                 logger.warning("QQ 表情登记未完成")

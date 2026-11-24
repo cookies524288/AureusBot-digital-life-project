@@ -4,6 +4,7 @@ import asyncio
 import json
 from base64 import b64encode
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -106,6 +107,77 @@ async def test_qq_collects_marked_emoji_and_preserves_moderation(tmp_path: Path)
     [entry] = store.browse("", 0, 10)
     assert entry.collection_count == 3 and entry.is_banned and not entry.is_registered
     assert sum(prompt.startswith("输入类型：STATIC\n") for prompt in prompts) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["active", "vlm_off", "banned", "removed"])
+async def test_qq_legacy_emoji_uses_only_this_incoming_image(tmp_path: Path, state: str) -> None:
+    now = datetime(2026, 11, 23, tzinfo=UTC)
+    clock = ManualClock(now)
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path, clock)
+    store.open()
+    with BytesIO() as buffer:
+        Image.new("RGB", (4, 4), "red").save(buffer, "PNG")
+        image = buffer.getvalue()
+    private_description = "另一会话中的私人说明"
+    entry = store.collect(image, description=private_description, register=True)
+    assert entry.digest is not None and entry.is_registered and not entry.tags
+    store.record_use(entry.digest)
+    if state == "banned":
+        store.set_status(entry.digest, is_registered=True, is_banned=True)
+    if state == "removed":
+        assert store.set_removed([entry.entry_key], True)
+    [before] = store.browse_page("", 0, 10, removed=state == "removed")[0]
+
+    inbox = InboxStore(tmp_path / "inbox.db", clock)
+    incoming = decode_message(
+        event(
+            51,
+            2100,
+            "",
+            group=GROUP,
+            message=[{"type": "image", "data": {"file": "legacy.png", "sub_type": 1}}],
+        ),
+        str(ACCOUNT),
+    )
+    assert incoming is not None
+    saved = inbox.add(incoming)
+    assert saved is not None
+    [message] = inbox.list_unread(saved.conversation)
+    source = message.perception
+
+    async def read(received: object, attachment: MediaReference) -> tuple[bytes, str]:
+        assert received is source and attachment == MediaReference("image", "legacy.png", True)
+        return image, "image/png"
+
+    calls: list[OrganRequest] = []
+
+    async def recognize(request: OrganRequest) -> OrganResponse:
+        calls.append(request)
+        assert private_description not in request.prompt
+        assert request.organ_id == "vlm" and request.prompt.startswith("输入类型：STATIC\n")
+        assert request.media_bytes == image and request.media_type == "image/png"
+        return OrganResponse(request.organ_id, "惊讶，庆祝")
+
+    flow = InboxMedia(recognize, store)
+    flow.read = read
+    if state != "vlm_off":
+        flow.available = frozenset({"vlm"})
+    record = TimelineRecord(
+        id=1,
+        timestamp=now,
+        actor_type=ActorType.PERSON,
+        event_type="message",
+        content=source.content,
+        visibility=source.visibility,
+    )
+    [current] = await flow.enrich([record], [source], ModelPreference.PREFERRED)
+    expected_note = "\n[表情识别] 惊讶，庆祝" if state == "active" else ""
+    assert current.content == record.content + expected_note
+    assert len(calls) == int(state == "active")
+    [after] = store.browse_page("", 0, 10, removed=state == "removed")[0]
+    assert after == replace(before, collection_count=before.collection_count + 1)
+    assert store.read_media(entry.digest) == image
 
 
 @pytest.mark.asyncio
