@@ -399,20 +399,21 @@ def test_memory_package_preview_counts_all_rows_before_confirming_real_import(
             assert preview.headers["cache-control"] == "no-store"
             assert preview.json() == {
                 "version": 1,
-                "total": 7,
-                "counts": {key: 2 if key == "messages" else 1 for key in EMPTY_COUNTS},
+                "total": 5,
+                "counts": {key: int(key != "messages") for key in EMPTY_COUNTS},
             }
             assert not target.browse_history("", "", 0, 20)
             assert client.post(TRANSFER, content=data, headers=HEADERS).json() == {
-                "added": 7,
+                "added": 5,
                 "skipped": 0,
             }
             assert client.post(PREVIEW, content=data, headers=HEADERS).json() == preview.json()
             assert client.post(TRANSFER, content=data, headers=HEADERS).json() == {
                 "added": 0,
-                "skipped": 7,
+                "skipped": 5,
             }
-        assert target.get_history(records[0].source) == records[0]
+        assert target.get_history(records[0].source) is None
+        assert target.get_history(records[2].source) == records[2]
     finally:
         target.close()
         target_timeline.close()

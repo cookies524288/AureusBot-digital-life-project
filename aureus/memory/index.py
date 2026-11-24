@@ -54,6 +54,7 @@ from aureus.memory.history import (
     search_history,
 )
 from aureus.memory.inspection import LiveMemoryInspection, inspect_live_memory
+from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE, is_message_excerpt
 from aureus.memory.removal_operations import (
     MemoryRemovalOperation,
     browse_removal_operations,
@@ -138,6 +139,63 @@ class MemoryHit:
     original_text: str | None = None
 
 
+def _search_extracted(
+    conn: sqlite3.Connection,
+    keywords: Sequence[str],
+    filters: Sequence[str],
+    filter_parameters: Sequence[str | int | float],
+    now: datetime,
+    half_life_days: float,
+    limit: int,
+) -> list[MemoryHit]:
+    """查询旧版已提取的事实正文；时间线只判定来源资格并提供定位。"""
+    aliases, terms = keyword_conditions(keywords, "memory_extracted_fts", "rowid")
+    conn.create_function("retention_weight", 3, retention_weight, deterministic=True)
+    conn.create_function("is_message_excerpt", 2, is_message_excerpt, deterministic=True)
+    rows = conn.execute(
+        "WITH matches AS (SELECT rowid, "
+        + relevance_expression(aliases)
+        + " AS words FROM memory_extracted_fts WHERE "
+        + " OR ".join(aliases)
+        + f"""), eligible AS (
+            SELECT c.content, c.fingerprint, c.last_seen, matches.words,
+                   t.id AS record_id, t.timestamp AS recorded_at,
+                   CASE WHEN json_type(t.metadata, '$.person_id') = 'integer'
+                        THEN 'aureus:' || json_extract(t.metadata, '$.person_id') END AS person_key
+            FROM matches JOIN memory_candidates c ON c.rowid = matches.rowid
+            JOIN memory_candidate_evidence e ON e.fingerprint = c.fingerprint
+            JOIN timeline t ON t.id = CAST(substr(e.reference, 10) AS INTEGER)
+            WHERE e.reference = 'timeline:' || t.id AND t.actor_type = 'user'
+              AND t.visibility = 'user_only' AND t.event_type = '{MESSAGE_EVENT_TYPE}'
+              AND c.kind IN ('fact', 'preference') AND NOT is_message_excerpt(c.content, t.content)
+        )
+        SELECT eligible.*, words * retention_weight(?, last_seen, ?) AS relevance
+        FROM eligible LEFT JOIN memory_edits edit ON edit.kind = 'live'
+             AND edit.entry_id = eligible.record_id
+        WHERE edit.edited_content IS NULL AND """
+        + " AND ".join(filters)
+        + " ORDER BY relevance DESC, recorded_at DESC, record_id DESC, fingerprint",
+        [*terms, *terms, now.timestamp(), half_life_days, *filter_parameters],
+    )
+    hits: dict[str, MemoryHit] = {}
+    for row in rows:
+        fingerprint = row["fingerprint"]
+        if fingerprint in hits:
+            continue
+        hits[fingerprint] = MemoryHit(
+            None,
+            datetime.fromisoformat(row["recorded_at"]),
+            "用户",
+            row["content"][:MAX_HIT_CHARS],
+            source=MemorySource("aureus", "memory", "extracted_facts", (fingerprint,)),
+            evidence=(MemoryEvidence("platform_message", f"timeline:{row['record_id']}"),),
+            relevance=row["relevance"],
+        )
+        if len(hits) == limit:
+            break
+    return list(hits.values())
+
+
 class MemoryIndex:
     """可重建的 FTS5 trigram 索引；不解释事件、不改时间线。"""
 
@@ -192,6 +250,8 @@ class MemoryIndex:
             return 0
         with conn:
             for record in records:
+                if record.event_type == MESSAGE_EVENT_TYPE:
+                    continue
                 entry = describe(record)
                 if entry is not None:
                     conn.execute(
@@ -275,7 +335,7 @@ class MemoryIndex:
         ]
 
     def get_history(self, source: MemorySource) -> HistoricalMemory | None:
-        """读指定来源的原文及证据，包括归档记录。"""
+        """读指定记忆原件及证据，包括归档记录但不读取平台消息。"""
         if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
         return read_history(self._conn, source)
@@ -488,10 +548,13 @@ class MemoryIndex:
         """浏览已索引的本地经历，返回时间线来源和筛选总条数。"""
         with closing(open_connection(self._db_path)) as conn:
             conn.execute("BEGIN")
-            filtered = """FROM memory_index
+            filtered = f"""FROM memory_index
                    LEFT JOIN memory_edits AS edit
                      ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid
                    WHERE NOT coalesce(edit.is_removed, 0)
+                     AND EXISTS (SELECT 1 FROM timeline event
+                                 WHERE event.id = memory_index.record_id
+                                   AND event.event_type != '{MESSAGE_EVENT_TYPE}')
                      AND (? = '' OR coalesce(edit.is_enabled, 1) = (? = 'enabled'))
                      AND (? = '' OR instr(lower(edit.edited_content), lower(?)) > 0
                                    OR instr(lower(content), lower(?)) > 0
@@ -592,88 +655,58 @@ class MemoryIndex:
         try:
             conn.execute("BEGIN")
             now = self._clock.now()
-            rows = conn.execute(
-                rank_prefix
-                + "SELECT record_id, recorded_at, actor_label, "
-                + "coalesce(edit.edited_content, content) AS content, "
-                + relevance_expression(clauses)
-                + f" AS relevance, {score} AS sparse_score "
-                + "FROM memory_index LEFT JOIN memory_edits AS edit "
-                + "ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid WHERE "
-                + " AND ".join(where)
-                + " ORDER BY relevance DESC, recorded_at DESC, sparse_score, "
-                + "CAST(record_id AS INTEGER) DESC LIMIT ?",
-                [*rank_parameters, *terms, *parameters],
-            ).fetchall()
+            has_timeline = conn.execute(
+                "SELECT 1 FROM sqlite_schema WHERE name = 'timeline' AND type = 'table'"
+            ).fetchone()
+            rows = (
+                conn.execute(
+                    rank_prefix
+                    + "SELECT record_id, recorded_at, actor_label, "
+                    + "coalesce(edit.edited_content, content) AS content, "
+                    + relevance_expression(clauses)
+                    + f" AS relevance, {score} AS sparse_score "
+                    + "FROM memory_index LEFT JOIN memory_edits AS edit "
+                    + "ON edit.kind = 'live' AND edit.entry_id = memory_index.rowid WHERE "
+                    + "EXISTS (SELECT 1 FROM timeline event "
+                    + "WHERE event.id = memory_index.record_id "
+                    + f"AND event.event_type != '{MESSAGE_EVENT_TYPE}') AND "
+                    + " AND ".join(where)
+                    + " ORDER BY relevance DESC, recorded_at DESC, sparse_score, "
+                    + "CAST(record_id AS INTEGER) DESC LIMIT ?",
+                    [*rank_parameters, *terms, *parameters],
+                ).fetchall()
+                if has_timeline
+                else []
+            )
+            hits = [
+                MemoryHit(
+                    int(row["record_id"]),
+                    datetime.fromisoformat(row["recorded_at"]),
+                    row["actor_label"],
+                    row["content"][:MAX_HIT_CHARS],
+                    relevance=row["relevance"],
+                    sparse_score=row["sparse_score"],
+                )
+                for row in rows
+            ]
             if (
-                clauses
+                has_timeline
+                and clauses
                 and include_user_extractions
                 and self._config.consolidation_enabled
                 and self._config.consolidation_extract_enabled
             ):
-                aliases, alias_terms = keyword_conditions(keywords, "memory_extracted_fts", "rowid")
-                conn.create_function("retention_weight", 3, retention_weight, deterministic=True)
-                # 派生词只扩大匹配入口，返回的编号、内容、人物和时间全部取自证据。
-                # 先在有效原件中取每个来源的最高分，再与直接命中共同裁剪。
-                rows.extend(
-                    conn.execute(
-                        "WITH matches AS (SELECT rowid, "
-                        + relevance_expression(aliases)
-                        + " AS words FROM memory_extracted_fts WHERE "
-                        + " OR ".join(aliases)
-                        + ") "
-                        + "SELECT m.record_id, m.recorded_at, m.actor_label, "
-                        + "coalesce(edit.edited_content, m.content) AS content, "
-                        + "max(words * retention_weight(?, c.last_seen, ?)) AS relevance, "
-                        + "0.0 AS sparse_score FROM matches JOIN memory_candidates c "
-                        + "ON c.rowid = matches.rowid JOIN memory_candidate_evidence e "
-                        + "ON e.fingerprint = c.fingerprint JOIN memory_index m "
-                        + "ON m.rowid = CAST(substr(e.reference, 10) AS INTEGER) "
-                        + "LEFT JOIN memory_edits edit ON edit.kind = 'live' "
-                        + "AND edit.entry_id = m.rowid "
-                        + "JOIN timeline t ON t.id = m.rowid AND t.content = m.content "
-                        + "WHERE e.reference = 'timeline:' || m.rowid AND t.actor_type='user' "
-                        + "AND t.visibility='user_only' AND t.event_type='message' "
-                        + "AND edit.edited_content IS NULL "
-                        + "AND c.kind IN ('fact', 'preference') "
-                        + "".join(" AND " + clause for clause in evidence_where)
-                        + " GROUP BY m.rowid ORDER BY relevance DESC, "
-                        "m.recorded_at DESC, m.rowid DESC LIMIT ?",
-                        [
-                            *alias_terms,
-                            *alias_terms,
-                            now.timestamp(),
-                            self._config.consolidation_half_life_days,
-                            *evidence_parameters,
-                            limit,
-                        ],
-                    ).fetchall()
+                hits.extend(
+                    _search_extracted(
+                        conn,
+                        keywords,
+                        evidence_where,
+                        evidence_parameters,
+                        now,
+                        self._config.consolidation_half_life_days,
+                        limit,
+                    )
                 )
-                rows.sort(
-                    key=lambda r: (
-                        r["relevance"],
-                        r["recorded_at"],
-                        -r["sparse_score"],
-                        int(r["record_id"]),
-                    ),
-                    reverse=True,
-                )
-                # 同一原件可由多个词、建议及原文命中，只占一个位置。
-                distinct = {}
-                for row in rows:
-                    distinct.setdefault(int(row["record_id"]), row)
-                rows = list(distinct.values())[:limit]
-            hits = [
-                MemoryHit(
-                    int(r["record_id"]),
-                    datetime.fromisoformat(r["recorded_at"]),
-                    r["actor_label"],
-                    r["content"][:MAX_HIT_CHARS],
-                    relevance=r["relevance"],
-                    sparse_score=r["sparse_score"],
-                )
-                for r in rows
-            ]
             history = search_history(
                 conn,
                 keywords,
@@ -685,8 +718,6 @@ class MemoryIndex:
             )
         finally:
             conn.close()
-        if not history:
-            return hits
         hits.extend(
             MemoryHit(
                 None,

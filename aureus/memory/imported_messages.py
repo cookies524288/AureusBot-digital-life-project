@@ -7,6 +7,7 @@ from pathlib import Path
 from aureus.common.sqlite import open_connection
 
 from .history import HistoricalMemory, decode_history_row
+from .message_boundary import is_message_source
 
 
 class ImportedPlatformHistory:
@@ -19,18 +20,21 @@ class ImportedPlatformHistory:
         """按导入序号分页读仍获准使用的原文，不用记忆编辑内容代替原文。"""
         with closing(open_connection(self._path)) as database:
             tables = {
-                row["name"] for row in database.execute(
+                row["name"]
+                for row in database.execute(
                     "SELECT name FROM sqlite_master WHERE name IN ('memory_history','memory_edits')"
                 )
             }
             if "memory_history" not in tables or "memory_edits" not in tables:
                 return []
             rows = database.execute(
-                """SELECT history.* FROM memory_history AS history
-                   LEFT JOIN memory_edits AS edit ON edit.kind = 'history' AND edit.entry_id = history.id
-                   WHERE json_extract(history.source_key, '$[2]') IN ('mai_messages', 'messages')
+                f"""SELECT history.* FROM memory_history AS history
+                   LEFT JOIN memory_edits AS edit
+                     ON edit.kind = 'history' AND edit.entry_id = history.id
+                   WHERE {is_message_source("history.source_key")}
                      AND history.status = 'active' AND coalesce(edit.is_enabled, 1)
-                     AND NOT coalesce(edit.is_removed, 0) AND NOT coalesce(edit.is_bundle_removed, 0)
+                     AND NOT coalesce(edit.is_removed, 0)
+                     AND NOT coalesce(edit.is_bundle_removed, 0)
                      AND (? IS NULL OR history.id < ?)
                    ORDER BY history.id DESC LIMIT ?""",
                 (before_id, before_id, limit),

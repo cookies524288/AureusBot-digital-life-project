@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aureus.common.sqlite import SQLITE_BUSY_TIMEOUT_SECONDS
+from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE
 from aureus.timeline import VisibilityScope
 
 
@@ -24,14 +25,14 @@ def inspect_live_memory(database: Path, visibility: VisibilityScope) -> LiveMemo
     uri = database.resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=SQLITE_BUSY_TIMEOUT_SECONDS)) as connection:
         row = connection.execute(
-            """SELECT count(*),
+            f"""SELECT count(*),
                       count(*) FILTER (WHERE edit.is_enabled = 0),
                       count(*) FILTER (WHERE edit.is_removed = 1),
                       count(*) FILTER (WHERE entry.visibility IS NOT event.visibility)
                FROM memory_index entry
                JOIN timeline event ON event.id = entry.record_id AND event.id = entry.rowid
                LEFT JOIN memory_edits edit ON edit.kind = 'live' AND edit.entry_id = event.id
-               WHERE event.visibility = ?""",
+               WHERE event.visibility = ? AND event.event_type != '{MESSAGE_EVENT_TYPE}'""",
             (visibility.value,),
         ).fetchone()
     return LiveMemoryInspection(*row)

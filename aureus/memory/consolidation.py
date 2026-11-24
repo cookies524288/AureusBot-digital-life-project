@@ -14,6 +14,8 @@ from hashlib import sha256
 from itertools import chain, groupby
 from typing import Literal
 
+from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE, is_message_excerpt, is_message_source
+
 type CandidateKind = Literal["experience", "fact", "preference"]
 
 
@@ -107,23 +109,23 @@ def read_batch(conn: sqlite3.Connection, size: int) -> ConsolidationBatch | None
     conn.execute("BEGIN")
     start = _cursor(conn)
     timeline = conn.execute(
-        """
-        SELECT m.rowid, t.id, t.timestamp, t.actor_type, t.actor_id, t.event_type,
+        f"""
+        SELECT m.rowid, t.id, t.timestamp, t.actor_type, t.actor_id,
                t.visibility, m.person_key, m.content,
                CASE WHEN json_valid(t.metadata) THEN json_extract(t.metadata, '$.channel') END
                    AS channel,
                CASE WHEN json_valid(t.metadata)
                     THEN json_extract(t.metadata, '$.conversation_id') END AS conversation
         FROM memory_index m JOIN timeline t ON t.id = m.record_id
-        WHERE m.rowid > ? ORDER BY m.rowid LIMIT ?
+        WHERE m.rowid > ? AND t.event_type != '{MESSAGE_EVENT_TYPE}' ORDER BY m.rowid LIMIT ?
         """,
         (start[1], size),
     ).fetchall()
     history = conn.execute(
-        """
+        f"""
         SELECT id, source_key, person_key, recorded_at, content
         FROM memory_history
-        WHERE id > ? AND status = 'active'
+        WHERE id > ? AND status = 'active' AND NOT ({is_message_source("source_key")})
         ORDER BY id LIMIT ?
         """,
         (start[0], size - len(timeline)),
@@ -146,9 +148,6 @@ def read_batch(conn: sqlite3.Connection, size: int) -> ConsolidationBatch | None
                 scope,
                 row["content"],
                 datetime.fromisoformat(row["timestamp"]).timestamp(),
-                row["visibility"] == "user_only"
-                and row["actor_type"] == "user"
-                and row["event_type"] == "message",
             )
         )
     for row in history:
@@ -179,19 +178,42 @@ def save_batch(
         conn.execute("BEGIN IMMEDIATE")
         if _cursor(conn) != batch.start:
             return False
-        experiences: Iterable[tuple[CandidateKind, str, ConsolidationItem]] = (
-            ("experience", item.text, item) for item in batch.items
-        )
-        for candidates in (experiences, extracted):
-            for kind, text, item in candidates:
-                normalized = " ".join(text.split())
-                if normalized:
-                    _merge(conn, kind, normalized, item, now)
+        material = {item.reference: _source_is_memory(conn, item.reference) for item in batch.items}
+        for item in batch.items:
+            if material[item.reference] and (text := " ".join(item.text.split())):
+                _merge(conn, "experience", text, item, now)
+        for kind, text, item in extracted:
+            if (
+                kind != "experience"
+                and material.get(item.reference)
+                and (normalized := " ".join(text.split()))
+            ):
+                _merge(conn, kind, normalized, item, now)
         conn.execute(
             "UPDATE memory_consolidation_state SET history_cursor=?, timeline_cursor=? WHERE id=1",
             batch.end,
         )
         return True
+
+
+def _source_is_memory(conn: sqlite3.Connection, reference: str) -> bool:
+    prefix, separator, identifier = reference.partition(":")
+    if prefix == "timeline" and separator:
+        return (
+            conn.execute(
+                "SELECT 1 FROM timeline WHERE id = ? AND event_type != ?",
+                (identifier, MESSAGE_EVENT_TYPE),
+            ).fetchone()
+            is not None
+        )
+    return (
+        conn.execute(
+            "SELECT 1 FROM memory_history WHERE source_key = ? "
+            f"AND NOT ({is_message_source('source_key')})",
+            (reference,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _merge(
@@ -222,20 +244,26 @@ def read_candidates(
     """读取最近的派生候选并按证据时间计算当前权重。"""
     if limit <= 0:
         return []
+    conn.create_function("is_message_excerpt", 2, is_message_excerpt, deterministic=True)
     rows = conn.execute(
-        """
+        f"""
         SELECT c.*, e.reference, h.content AS history_content
         FROM memory_candidates c
         JOIN memory_candidate_evidence e USING (fingerprint)
         LEFT JOIN memory_history h ON h.source_key = e.reference
         LEFT JOIN memory_edits history_edit
             ON history_edit.kind = 'history' AND history_edit.entry_id = h.id
-        LEFT JOIN memory_edits live_edit ON live_edit.kind = 'live'
-            AND e.reference = 'timeline:' || live_edit.entry_id
-        WHERE (e.reference LIKE 'timeline:%' AND coalesce(live_edit.is_enabled, 1)
+        LEFT JOIN timeline t ON t.id = CAST(substr(e.reference, 10) AS INTEGER)
+            AND e.reference = 'timeline:' || t.id
+        LEFT JOIN memory_edits live_edit ON live_edit.kind = 'live' AND live_edit.entry_id = t.id
+        WHERE (t.id IS NOT NULL AND coalesce(live_edit.is_enabled, 1)
                AND NOT coalesce(live_edit.is_removed, 0)
-               AND live_edit.edited_content IS NULL)
-           OR (h.status = 'active' AND coalesce(history_edit.is_enabled, 1)
+               AND live_edit.edited_content IS NULL
+               AND (t.event_type != '{MESSAGE_EVENT_TYPE}' OR (
+                   c.kind IN ('fact', 'preference') AND t.visibility = 'user_only'
+                   AND t.actor_type = 'user' AND NOT is_message_excerpt(c.content, t.content))))
+           OR (h.status = 'active' AND NOT ({is_message_source("h.source_key")})
+               AND coalesce(history_edit.is_enabled, 1)
                AND NOT coalesce(history_edit.is_removed, 0)
                AND NOT coalesce(history_edit.is_bundle_removed, 0)
                AND history_edit.edited_content IS NULL

@@ -21,6 +21,7 @@ from aureus.memory.history import (
     put_history_record,
     read_history,
 )
+from aureus.memory.message_boundary import MESSAGE_SOURCE_TABLES, is_message_source
 
 _ARCHIVE_VERSION = 1
 ARCHIVE_HEADER = {"format": "aureus-memory", "version": _ARCHIVE_VERSION}
@@ -104,10 +105,11 @@ def export_archive(db_path: Path, output: BinaryIO) -> None:
     conn = open_connection(db_path)
     try:
         rows = conn.execute(
-            """SELECT history.*, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled
+            f"""SELECT history.*, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled
                FROM memory_history history LEFT JOIN memory_edits edit
                  ON edit.kind = 'history' AND edit.entry_id = history.id
                WHERE json_extract(source_key, '$[2]') NOT IN (?, ?, ?, ?)
+                 AND NOT ({is_message_source("history.source_key")})
                  AND NOT coalesce(edit.is_removed, 0)
                  AND NOT coalesce(edit.is_bundle_removed, 0)
                ORDER BY history.id""",
@@ -167,6 +169,9 @@ def import_archive(db_path: Path, file: BinaryIO) -> tuple[int, int]:
         with conn:
             conn.execute("BEGIN IMMEDIATE")
             for line_number, entry in _parse_archive(file):
+                if entry.source.table in MESSAGE_SOURCE_TABLES:
+                    skipped += 1
+                    continue
                 record = entry.record()
                 current = read_history(conn, record.source)
                 if current is not None:

@@ -11,6 +11,7 @@ from typing import Literal
 
 from aureus.common.sqlite import SQLITE_BUSY_TIMEOUT_SECONDS
 from aureus.memory.history import MemorySource, MemoryStatus
+from aureus.memory.message_boundary import is_message_source
 
 
 @dataclass(frozen=True)
@@ -203,13 +204,14 @@ def read_graph(
         if not has_graph_sources(connection):
             return MemoryGraph()
         rows = connection.execute(
-            """SELECT history.source_key, graph.kind, graph.status AS graph_status, graph.name,
+            f"""SELECT history.source_key, graph.kind, graph.status AS graph_status, graph.name,
                       graph.subject_source, graph.object_source, graph.predicate,
                       graph.confidence, graph.evidence
                FROM memory_history history
                LEFT JOIN memory_graph_sources graph ON graph.source_key = history.source_key
                LEFT JOIN memory_edits edit ON edit.kind = 'history' AND edit.entry_id = history.id
                WHERE history.source_key IN (SELECT value FROM json_each(?))
+                 AND NOT ({is_message_source("history.source_key")})
                  AND (history.status = 'active' OR (history.status = 'missing' AND (
                      graph.kind = 'entity' OR json_extract(history.source_key, '$[2]') IN
                          ('paragraph_entities', 'paragraph_relations'))))
