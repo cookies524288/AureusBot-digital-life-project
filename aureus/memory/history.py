@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from aureus.memory.edits import effective_keyword_conditions, effective_ranked_matches
+from aureus.memory.message_boundary import MESSAGE_SOURCE_TABLES, is_message_source
 from aureus.memory.sparse import relevance_expression
 
 type SourceValue = str | int | float | dict[str, str]
@@ -153,26 +154,37 @@ def open_history(conn: sqlite3.Connection) -> None:
                 instance TEXT PRIMARY KEY, fingerprint TEXT NOT NULL
             )
         """)
-        if (
-            conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'memory_history_fts'").fetchone()
-            is None
-        ):
+        fts = conn.execute(
+            "SELECT sql FROM sqlite_schema WHERE name = 'memory_history_fts'"
+        ).fetchone()
+        if fts is None or "memory_history_indexable" not in fts["sql"]:
+            conn.execute("DROP TRIGGER IF EXISTS memory_history_insert")
+            conn.execute("DROP TRIGGER IF EXISTS memory_history_update")
+            conn.execute("DROP TABLE IF EXISTS memory_history_fts")
+            conn.execute(f"""
+                CREATE VIEW IF NOT EXISTS memory_history_indexable AS
+                SELECT id, content FROM memory_history WHERE NOT ({is_message_source("source_key")})
+            """)
             conn.execute("""
                 CREATE VIRTUAL TABLE memory_history_fts USING fts5(
-                    content, content = 'memory_history', content_rowid = 'id', tokenize = 'trigram'
+                    content, content = 'memory_history_indexable',
+                    content_rowid = 'id', tokenize = 'trigram'
                 )
             """)
             conn.execute("INSERT INTO memory_history_fts(memory_history_fts) VALUES ('rebuild')")
-        conn.execute("""
-            CREATE TRIGGER IF NOT EXISTS memory_history_insert AFTER INSERT ON memory_history BEGIN
+        conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS memory_history_insert AFTER INSERT ON memory_history
+            WHEN NOT ({is_message_source("new.source_key")}) BEGIN
                 INSERT INTO memory_history_fts(rowid, content) VALUES (new.id, new.content);
             END
         """)
-        conn.execute("""
+        conn.execute(f"""
             CREATE TRIGGER IF NOT EXISTS memory_history_update AFTER UPDATE ON memory_history BEGIN
                 INSERT INTO memory_history_fts(memory_history_fts, rowid, content)
-                    VALUES ('delete', old.id, old.content);
-                INSERT INTO memory_history_fts(rowid, content) VALUES (new.id, new.content);
+                    SELECT 'delete', old.id, old.content
+                    WHERE NOT ({is_message_source("old.source_key")});
+                INSERT INTO memory_history_fts(rowid, content)
+                    SELECT new.id, new.content WHERE NOT ({is_message_source("new.source_key")});
             END
         """)
 
@@ -237,6 +249,8 @@ def put_history_record(conn: sqlite3.Connection, record: HistoricalMemory) -> in
 
 def read_history(conn: sqlite3.Connection, source: MemorySource) -> HistoricalMemory | None:
     """按来源读原件，包含已归档状态。"""
+    if source.table in MESSAGE_SOURCE_TABLES:
+        return None
     row = conn.execute(
         "SELECT * FROM memory_history WHERE source_key = ?", (source.encode(),)
     ).fetchone()
@@ -257,7 +271,7 @@ def browse_history(
 ) -> tuple[list[HistoricalMemory], int]:
     """返回一页记录、维护覆盖和筛选总数，包括被归档的记录。"""
     conn.execute("BEGIN")
-    filtered = """WITH annotated AS (
+    filtered = f"""WITH annotated AS (
            SELECT history.*, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled,
                   (status = 'active' AND (valid_from IS NULL OR valid_from <= ?)
                    AND (valid_to IS NULL OR valid_to > ?) AND coalesce(edit.is_enabled, 1))
@@ -265,11 +279,12 @@ def browse_history(
            FROM memory_history AS history
            LEFT JOIN memory_edits AS edit ON edit.kind = 'history' AND edit.entry_id = history.id
            WHERE NOT coalesce(edit.is_removed, 0) AND NOT coalesce(edit.is_bundle_removed, 0)
+             AND NOT ({is_message_source("history.source_key")})
            ), filtered AS (SELECT * FROM annotated AS history
            WHERE (? = '' OR status = ?)
              AND (? = '' OR json_extract(source_key, '$[2]') = ?
                   OR (? = 'text' AND json_extract(source_key, '$[2]') IN
-                      ('paragraphs', 'relations', 'fact_claims', 'episodes', 'mai_messages')))
+                      ('paragraphs', 'relations', 'fact_claims', 'episodes')))
              AND (? = '' OR is_recallable = (? = 'enabled'))
              AND (? = '' OR NOT EXISTS (
                   SELECT 1 FROM json_each(history.evidence) evidence_item
@@ -318,8 +333,9 @@ def browse_history(
 def count_history_sources(conn: sqlite3.Connection) -> dict[str, int]:
     """按来源表汇总已迁入的记录。"""
     return dict(
-        conn.execute("""
-        SELECT json_extract(source_key, '$[2]'), count(*) FROM memory_history GROUP BY 1
+        conn.execute(f"""
+        SELECT json_extract(source_key, '$[2]'), count(*) FROM memory_history
+        WHERE NOT ({is_message_source("source_key")}) GROUP BY 1
     """).fetchall()
     )
 
@@ -348,6 +364,7 @@ def search_history(
         "coalesce(edit.is_enabled, 1) = 1",
         "NOT coalesce(edit.is_removed, 0)",
         "NOT coalesce(edit.is_bundle_removed, 0)",
+        f"NOT ({is_message_source('memory_history.source_key')})",
     ]
     point = now.timestamp()
     parameters: list[str | int | float] = [point, point]

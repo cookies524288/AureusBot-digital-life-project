@@ -8,6 +8,7 @@ from typing import Any
 
 from aureus.memory.edits import MemoryKind
 from aureus.memory.history import decode_history_row
+from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE, is_message_source
 from aureus.memory.removal_operations import append_removal_operation
 
 PICTURE_ARCHIVE = """
@@ -24,7 +25,7 @@ PICTURE_ARCHIVE = """
     WHERE json_extract(history.source_key, '$[2]') = 'image_assets'
 """
 
-_TEXT_CATALOG = """
+_TEXT_CATALOG = f"""
 WITH catalog AS (
     SELECT 'history' AS kind, history.id AS entry_id, history.content, history.actor_label,
            history.recorded_at, history.source_key,
@@ -32,8 +33,6 @@ WITH catalog AS (
                WHEN json_extract(history.source_key, '$[2]') IN ('paragraphs', 'relations',
                     'fact_claims', 'episodes')
                THEN json_extract(history.source_key, '$[2]')
-               WHEN json_extract(history.source_key, '$[2]') IN ('mai_messages', 'messages')
-               THEN 'messages'
            END AS category,
            history.status, edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled,
            coalesce(edit.is_removed, 0) AS is_removed, NULL AS original_id,
@@ -44,16 +43,18 @@ WITH catalog AS (
     FROM memory_history history
     LEFT JOIN memory_edits edit ON edit.kind = 'history' AND edit.entry_id = history.id
     WHERE NOT coalesce(edit.is_bundle_removed, 0)
+      AND NOT ({is_message_source("history.source_key")})
     UNION ALL
     SELECT 'live', live.rowid, live.content, live.actor_label,
            unixepoch(live.recorded_at, 'subsec'), NULL,
-           CASE event.event_type WHEN 'message' THEN 'messages' ELSE 'experiences' END,
+           'experiences',
            'active', edit.edited_content, coalesce(edit.is_enabled, 1),
            coalesce(edit.is_removed, 0), CASE WHEN live.rowid = event.id THEN event.id END,
            (coalesce(edit.is_enabled, 1) AND NOT coalesce(edit.is_removed, 0))
     FROM memory_index live
     JOIN timeline event ON event.id = live.record_id
     LEFT JOIN memory_edits edit ON edit.kind = 'live' AND edit.entry_id = live.rowid
+    WHERE event.event_type != '{MESSAGE_EVENT_TYPE}'
 )
 """
 _MATCHING = (

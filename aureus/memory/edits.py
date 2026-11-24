@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from sqlite3 import Connection
 from typing import Literal
 
+from aureus.memory.message_boundary import MESSAGE_EVENT_TYPE, is_message_source
 from aureus.memory.sparse import keyword_conditions, ranked_matches
 
 type MemoryKind = Literal["history", "live"]
@@ -77,13 +78,15 @@ def write_edit(
         text = text.strip()
         if not text or len(text) > MAX_MEMORY_TEXT:
             raise ValueError(f"请填写正文，最多 {MAX_MEMORY_TEXT} 字。")
-    table = "memory_history" if kind == "history" else "memory_index"
+    target = (
+        f"SELECT 1 FROM memory_history WHERE id = ? AND NOT ({is_message_source('source_key')})"
+        if kind == "history"
+        else "SELECT 1 FROM memory_index entry JOIN timeline event ON event.id = entry.record_id "
+        f"WHERE entry.rowid = ? AND event.event_type != '{MESSAGE_EVENT_TYPE}'"
+    )
     with connection:
         connection.execute("BEGIN IMMEDIATE")
-        if (
-            connection.execute(f"SELECT 1 FROM {table} WHERE rowid = ?", (entry_id,)).fetchone()
-            is None
-        ):
+        if connection.execute(target, (entry_id,)).fetchone() is None:
             return False
         connection.execute(
             """INSERT INTO memory_edits(kind, entry_id, edited_content, is_enabled)

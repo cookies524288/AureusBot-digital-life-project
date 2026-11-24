@@ -13,7 +13,7 @@ NOW = datetime(2026, 11, 22, tzinfo=UTC)
 THEN = NOW - timedelta(days=31)
 
 
-def source(key: int, table: str = "mai_messages") -> MemorySource:
+def source(key: int, table: str = "paragraphs") -> MemorySource:
     return MemorySource("fixture", "main", table, (key,))
 
 
@@ -24,7 +24,7 @@ def test_shared_history_person_date_active_status_and_rebuild(tmp_path: Path) ->
     timeline.open()
     index = MemoryIndex(path, timeline, clock)
     index.open()
-    linked = MemoryEvidence("message", "1", source(1))
+    linked = MemoryEvidence("message", "1", source(1, "mai_messages"))
     orphan = MemoryEvidence("message", "missing")
     records = [
         HistoricalMemory(source(1), "群聊约定木卫二", "阿明", "qq:one", THEN, "秒"),
@@ -44,7 +44,7 @@ def test_shared_history_person_date_active_status_and_rebuild(tmp_path: Path) ->
     assert index.publish(records) == 0
     assert index.get_history(source(3)) == records[2]
     assert index.get_history(source(5)) == records[4]
-    live = timeline.append("message", "新的木卫二计划", ActorType.USER)
+    live = timeline.append("diary_written", "新的木卫二计划", ActorType.USER)
     index.index_more(10, lambda row: MemoryEntry("阿明", row.content, "qq:one"))
     assert [hit.record_id for hit in index.search(["木卫二"], (), 10)] == [
         live.id,

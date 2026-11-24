@@ -28,14 +28,14 @@ def opened(tmp_path: Path) -> Iterator[tuple[TimelineDatabase, MemoryIndex]]:
 
 
 def describe(record: TimelineRecord) -> MemoryEntry | None:
-    return MemoryEntry("用户", record.content) if record.event_type == "message" else None
+    return MemoryEntry("用户", record.content) if record.event_type == "diary_written" else None
 
 
 def test_incremental_batches_skip_and_resume_cursor(
     opened: tuple[TimelineDatabase, MemoryIndex],
 ) -> None:
     timeline, index = opened
-    first = timeline.append("message", "木卫二有冰下海洋", ActorType.USER)
+    first = timeline.append("diary_written", "木卫二有冰下海洋", ActorType.USER)
     skipped = timeline.append("state", "不收", ActorType.SYSTEM)
     assert index.index_more(1, describe) == 1
     assert [h.record_id for h in index.search(["冰下海洋"], (), 5)] == [first.id]
@@ -48,7 +48,7 @@ def test_incremental_batches_skip_and_resume_cursor(
         seen.append(record.id)
         return describe(record)
 
-    second = timeline.append("message", "今晚看海洋纪录片", ActorType.USER)
+    second = timeline.append("diary_written", "今晚看海洋纪录片", ActorType.USER)
     assert index.index_more(10, counted) == 1
     assert seen == [second.id] and skipped.id not in seen
     assert [h.record_id for h in index.search(["海洋"], (), 5)] == [second.id, first.id]
@@ -61,8 +61,8 @@ def test_keywords_are_literal_and_searchable(
     opened: tuple[TimelineDatabase, MemoryIndex], keyword: str
 ) -> None:
     timeline, index = opened
-    expected = timeline.append("message", f"只有这里含有{keyword}字样", ActorType.USER)
-    timeline.append("message", "假木和别的字样", ActorType.USER)
+    expected = timeline.append("diary_written", f"只有这里含有{keyword}字样", ActorType.USER)
+    timeline.append("diary_written", "假木和别的字样", ActorType.USER)
     index.index_more(20, describe)
     hits = index.search([keyword], (), 5)
     assert [h.record_id for h in hits] == [expected.id]
@@ -72,9 +72,9 @@ def test_or_exclusion_newest_limit_and_truncation(
     opened: tuple[TimelineDatabase, MemoryIndex],
 ) -> None:
     timeline, index = opened
-    first = timeline.append("message", "木卫二" + "长" * 250, ActorType.USER)
-    second = timeline.append("message", "晚上海洋", ActorType.USER)
-    third = timeline.append("message", "海洋木卫二", ActorType.USER)
+    first = timeline.append("diary_written", "木卫二" + "长" * 250, ActorType.USER)
+    second = timeline.append("diary_written", "晚上海洋", ActorType.USER)
+    third = timeline.append("diary_written", "海洋木卫二", ActorType.USER)
     index.index_more(100, describe)
     assert [h.record_id for h in index.search(["木卫二", "海洋"], (), 10)] == [
         third.id,
@@ -92,8 +92,8 @@ def test_failed_description_rolls_back_entries_and_cursor(
     opened: tuple[TimelineDatabase, MemoryIndex],
 ) -> None:
     timeline, index = opened
-    first = timeline.append("message", "第一次木卫二", ActorType.USER)
-    timeline.append("message", "第二次木卫二", ActorType.USER)
+    first = timeline.append("diary_written", "第一次木卫二", ActorType.USER)
+    timeline.append("diary_written", "第二次木卫二", ActorType.USER)
 
     def broken(record: TimelineRecord) -> MemoryEntry:
         if record.id != first.id:
@@ -112,7 +112,7 @@ async def test_search_opens_connection_in_worker(
     opened: tuple[TimelineDatabase, MemoryIndex],
 ) -> None:
     timeline, index = opened
-    timeline.append("message", "后台查木卫二", ActorType.USER)
+    timeline.append("diary_written", "后台查木卫二", ActorType.USER)
     index.index_more(20, describe)
     assert len(await asyncio.to_thread(index.search, ["木卫二"], (), 5)) == 1
 
@@ -122,7 +122,7 @@ def test_old_index_migration_and_rebuild_preserve_consolidation_progress(
 ) -> None:
     timeline, index = opened
     timeline.append("state", "未索引事件", ActorType.SYSTEM)
-    first = timeline.append("message", "第一条经历", ActorType.USER)
+    first = timeline.append("diary_written", "第一条经历", ActorType.USER)
     index.index_more(10, describe)
     index.close()
     with closing(sqlite3.connect(tmp_path / "aureus.db")) as conn, conn:
@@ -140,7 +140,7 @@ def test_old_index_migration_and_rebuild_preserve_consolidation_progress(
     index.open()
     assert index.index_more(10, describe) == 2
     assert index.consolidation_batch(1) is None
-    second = timeline.append("message", "第二条经历", ActorType.USER)
+    second = timeline.append("diary_written", "第二条经历", ActorType.USER)
     assert index.index_more(10, describe) == 1
     batch = index.consolidation_batch(1)
     assert batch is not None

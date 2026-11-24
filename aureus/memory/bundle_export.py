@@ -14,6 +14,7 @@ from aureus.memory.bundle_format import (
     write_bundle,
 )
 from aureus.memory.history import decode_history_row
+from aureus.memory.message_boundary import is_message_source
 
 
 def _paragraph_docs(
@@ -91,11 +92,12 @@ def _attach_graph(
     ):
         return
     rows = connection.execute(
-        """
+        f"""
         SELECT graph.* FROM memory_graph_sources graph
         JOIN memory_history original USING (source_key)
         LEFT JOIN memory_edits edit ON edit.kind = 'history' AND edit.entry_id = original.id
         WHERE graph.status = 'active'
+            AND NOT ({is_message_source("original.source_key")})
             AND original.status IN ('active', 'missing')
             AND (original.valid_from IS NULL OR original.valid_from <= ?)
             AND (original.valid_to IS NULL OR original.valid_to > ?)
