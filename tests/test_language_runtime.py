@@ -17,7 +17,7 @@ from aureus.heartbeat.language_runner import learn_language
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore
 from aureus.memory.language import LanguageContent, LanguagePackageRow
 from aureus.memory.language_matching import JargonStatus
-from aureus.organs import CallPurpose, KeyResolver, OrganBus, OrganRequest, OrganResponse
+from aureus.organs import CallPurpose, KeyResolver, OrganBus, OrganRequest, OrganResponse, ToolCall
 from aureus.timeline import ActorType, TimelineQuery, VisibilityScope
 from aureus.web.language_package_api import register_language_package_routes
 from aureus.web.resource_api import register_resource_routes
@@ -66,15 +66,19 @@ class LanguageOrgan:
         elif task == "jargon_compare_inference":
             text = '{"is_similar":false,"reason":"含义不同"}'
         elif task == "plan":
-            text = '{"reply":true,"intent":"回应消息","expression_intent":{"scene":"庆祝跑步成绩"}}'
-            if "陌生主题" in request.prompt:
-                text = '{"reply":true,"intent":"问好"}'
+            [reply] = [tool for tool in request.tools if tool.name == "reply"]
+            unknown_topic = "陌生主题" in request.prompt
+            arguments: dict[str, str | dict[str, str]] = {
+                "addressed_to_me": "yes",
+                "reply_reference": "问好" if unknown_topic else "回应消息",
+            }
+            if not unknown_topic and "expression_intent" in reply.parameters["properties"]:
+                arguments["expression_intent"] = {"scene": "庆祝跑步成绩"}
+            return OrganResponse(
+                self.organ_id, "", tool_calls=(ToolCall("reply", "language_reply", arguments),)
+            )
         else:
             text = "收到。"
-        if request.context.get("task") == "plan":
-            from tests.planner_fixtures import plan_response
-
-            return plan_response(request, text)
         return OrganResponse(organ_id=self.organ_id, suggestion=text)
 
 
@@ -748,6 +752,9 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
             injected = learning and budget > 0
+            [reply_tool] = [tool for tool in plan.tools if tool.name == "reply"]
+            assert ("expression_intent" in reply_tool.parameters["properties"]) is (budget > 0)
+            assert ('"expression_intent"' in plan.prompt) is (budget > 0)
             assert ("GG：抵达终点" in plan.prompt) is injected
             assert ("GG：等候开局" in plan.prompt) is injected
             assert ("当「庆祝跑步成绩」时，可用「月兔冲线」" in dialogue_text(reply)) is (injected)

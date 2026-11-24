@@ -101,7 +101,9 @@ class Env:
             permissions=PermissionChecker(stop),
             emergency_stop=stop,
             timezone=UTC,
-            body=Body(BodyConfig(stress_enabled=False), MONTHLY_LIMIT, ledger, self.clock, CALENDAR),
+            body=Body(
+                BodyConfig(stress_enabled=False), MONTHLY_LIMIT, ledger, self.clock, CALENDAR
+            ),
             judge=JudgeConfig(enabled=True),
             people=people,
             hormones=hormones,
@@ -190,11 +192,21 @@ async def test_spamming_sadness_cannot_flood_the_mood(env: Env) -> None:
 
 async def test_mentioned_animal_uses_the_stranger_default_affinity(env: Env) -> None:
     rig, _, _ = env.build([SAD_CAT])
-    await env.say(rig, "我家猫病了，蔫蔫的")
+    await env.say(rig, "我家猫小橘病了，蔫蔫的")
     [record] = rig.records(EVENT_EMPATHY)
     assert record.metadata["empathy_for"] == "小橘"
     assert record.metadata["empathy_affinity"] == PeopleConfig().stranger_affinity
     assert record.metadata["reason"] == "替小橘难过"
+
+
+async def test_unmentioned_animal_does_not_contribute_empathy(env: Env) -> None:
+    rig, hormones, _ = env.build([SAD_CAT])
+    await env.say(rig, "我家猫病了，蔫蔫的")
+
+    assert any(request.organ_id == "judge" for request in rig.organs.requests)
+    assert rig.records(EVENT_EMPATHY) == []
+    assert hormones.level(HormoneKind.HURT, env.clock.now()) == 0
+    assert "低落 0.00" in rig.heartbeat.describe_state()
 
 
 async def test_empathic_anger_is_felt_but_does_not_start_a_fight(env: Env) -> None:

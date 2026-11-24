@@ -11,8 +11,10 @@ from aureus.common import ManualClock
 from aureus.common.sqlite import open_connection
 from aureus.memory import MemoryEntry, MemoryIndex
 from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource
+from aureus.memory.imported_messages import ImportedPlatformHistory
 from aureus.people import HistoricalKind, HistoricalRecord, PeopleDirectory
-from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
+from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord, VisibilityScope
+from aureus.timeline.platform_history import LegacyPlatformHistory
 from aureus.web.resource_api import register_resource_routes
 
 
@@ -22,7 +24,7 @@ async def _require_session(request: Request) -> str:
     return "test"
 
 
-def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: Path) -> None:
+def test_memory_catalog_keeps_non_message_categories_and_edit_ids_separate(tmp_path: Path) -> None:
     path = tmp_path / "memory.db"
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     timeline = TimelineDatabase(path, clock)
@@ -30,20 +32,33 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
     memory = MemoryIndex(path, timeline, clock)
     memory.open()
     stamp = clock.now()
-    source = MemorySource("demo", "main", "mai_messages", (71,))
-    evidence = (MemoryEvidence("message", "sample:71"),)
-    live = timeline.append("message", "同期现场消息", ActorType.USER)
-    timeline.append("diary_written", "同期日记条目", ActorType.ME)
-    unindexed = timeline.append("message", "同期未入索引消息", ActorType.USER)
+    source = MemorySource("demo", "memory", "paragraphs", (1,))
+    message_source = MemorySource("demo", "main", "mai_messages", (71,))
+    evidence = (MemoryEvidence("message", "sample:71", message_source),)
+    live = timeline.append("diary_written", "同期现场日记", ActorType.ME)
+    excluded = timeline.append("diary_written", "同期未入索引日记", ActorType.ME)
+    message = timeline.append(
+        "message",
+        "同期现场消息",
+        ActorType.USER,
+        visibility=VisibilityScope.GROUP,
+        metadata={
+            "channel": "qq",
+            "account_id": "sample-account",
+            "message_type": "group",
+            "recipient_id": "sample-group",
+        },
+    )
 
     def describe(record: TimelineRecord) -> MemoryEntry | None:
-        return None if record.id == unindexed.id else MemoryEntry("合成人物", record.content)
+        return None if record.id == excluded.id else MemoryEntry("合成人物", record.content)
 
     try:
         memory.index_more(10, describe)
         memory.publish(
             [
-                HistoricalMemory(source, "同期迁入消息", recorded_at=stamp, evidence=evidence),
+                HistoricalMemory(source, "同期迁入总结", recorded_at=stamp, evidence=evidence),
+                HistoricalMemory(message_source, "同期迁入消息", recorded_at=stamp),
                 HistoricalMemory(
                     MemorySource("demo", "memory", "fact_claims", (1,)),
                     "过期事实原件",
@@ -57,17 +72,17 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
             ]
         )
         app = FastAPI()
-        register_resource_routes(app, _require_session, None, memory)
+        register_resource_routes(app, _require_session, None, memory, same_origin=lambda _: True)
         with TestClient(app) as client:
             endpoint = "/api/resources/memory"
-            params = {"q": "同期", "category": "messages", "limit": 1}
+            params = {"q": "同期", "limit": 1}
             assert client.get(endpoint, params=params).status_code == 401
             client.cookies.set("session", "test")
             first = client.get(endpoint, params=params).json()
             assert first == client.get(endpoint, params={**params, "kind": "all"}).json()
             [history] = first["items"]
-            assert first["total"] == 2 and first["counts"] == {"messages": 2}
-            assert first["next_offset"] == 1 and history["labels"] == ["messages"]
+            assert first["total"] == 2 and first["counts"] == {"paragraphs": 1, "experiences": 1}
+            assert first["next_offset"] == 1 and history["labels"] == ["paragraphs"]
             assert (
                 history["kind"] == "history" and history["evidence"][0]["reference"] == "sample:71"
             )
@@ -78,35 +93,70 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
             )
             [local] = second["items"]
             assert second["total"] == 2 and second["next_offset"] is None
-            assert local["kind"] == "live" and local["labels"] == ["messages"]
+            assert local["kind"] == "live" and local["labels"] == ["experiences"]
             assert local["entry_id"] == history["entry_id"] == live.id
+            for item in (history, local):
+                category = client.get(endpoint, params={**params, "category": item["labels"][0]})
+                assert category.json()["items"] == [item]
             legacy_history = client.get(
-                endpoint, params={"kind": "history", "source_table": "mai_messages", "q": "同期"}
+                endpoint, params={"kind": "history", "source_table": "paragraphs", "q": "同期"}
             ).json()
             assert legacy_history["total"] == 1 and not legacy_history["next_offset"]
-            assert [item["text"] for item in legacy_history["items"]] == ["同期迁入消息"]
+            assert [item["text"] for item in legacy_history["items"]] == ["同期迁入总结"]
             legacy_live = client.get(endpoint, params={"kind": "live", "q": "现场"}).json()
             assert legacy_live["total"] == 1 and not legacy_live["next_offset"]
-            assert [item["text"] for item in legacy_live["items"]] == ["同期现场消息"]
-            for excluded in ("同期未入索引消息", "同期图片原件"):
-                assert client.get(endpoint, params={"q": excluded}).json()["total"] == 0
+            assert [item["text"] for item in legacy_live["items"]] == ["同期现场日记"]
+            for text in (excluded.content, "同期图片原件"):
+                assert client.get(endpoint, params={"q": text}).json()["total"] == 0
             assert client.get(endpoint, params={"kind": "all"}).json()["counts"] == {
-                "messages": 2,
+                "paragraphs": 1,
                 "experiences": 1,
                 "fact_claims": 1,
             }
+            [platform_live] = LegacyPlatformHistory(path).page(
+                ("qq", "sample-account", "group", "sample-group", None), before_id=None, limit=10
+            )
+            [platform_imported] = ImportedPlatformHistory(path).page(before_id=None, limit=10)
+            assert platform_live == message
+            assert platform_imported.source == message_source
+            assert platform_imported.entry_id is not None
+            assert platform_imported.text == "同期迁入消息"
+            assert client.get(endpoint, params={"category": "messages"}).json()["items"] == []
+            hidden_history = client.get(
+                endpoint, params={"kind": "history", "source_table": "mai_messages"}
+            ).json()
+            assert hidden_history["items"] == []
+            for kind, entry_id, original_text in (
+                ("live", message.id, message.content),
+                ("history", platform_imported.entry_id, platform_imported.text),
+            ):
+                for browse in ("all", kind):
+                    page = client.get(endpoint, params={"kind": browse, "q": original_text}).json()
+                    assert page["items"] == []
+                assert not memory.search([original_text], (), 5)
+                message_target = {"kind": kind, "entry_id": entry_id}
+                edit = client.patch(endpoint, json={**message_target, "text": "不可修改"})
+                removal = client.patch(
+                    f"{endpoint}/batch", json={"targets": [message_target], "removed": True}
+                )
+                assert edit.status_code == 404 and removal.status_code == 409
+            assert memory.get_history(message_source) is None
+            assert timeline.get(message.id) == message
+            assert ImportedPlatformHistory(path).page(before_id=None, limit=10) == [
+                platform_imported
+            ]
 
             target = {"kind": local["kind"], "entry_id": local["entry_id"]}
             assert client.patch(
                 endpoint, json={**target, "text": "正文已修订", "is_enabled": False}
             ).is_success
             active = client.get(endpoint, params={**params, "recall": "enabled"}).json()
-            assert active["total"] == 1 and active["items"][0]["text"] == "同期迁入消息"
+            assert active["total"] == 1 and active["items"][0]["text"] == "同期迁入总结"
             disabled = client.get(
                 endpoint, params={**params, "q": "正文已修订", "recall": "disabled"}
             ).json()
             [item] = disabled["items"]
-            assert item["text"] == "正文已修订" and item["original_text"] == "同期现场消息"
+            assert item["text"] == "正文已修订" and item["original_text"] == live.content
             assert not memory.search(["正文已修订"], set(), 5)
             assert client.patch(endpoint, json={**target, "is_enabled": True}).is_success
 
@@ -117,9 +167,10 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
             memory.open()
             memory.index_more(10, describe)
             assert [hit.text for hit in memory.search(["正文已修订"], set(), 5)] == ["正文已修订"]
-            assert not memory.search(["同期现场消息"], set(), 5)
+            assert not memory.search([live.content], set(), 5)
+            assert not memory.search([message.content, platform_imported.text], (), 5)
             original = memory.get_history(source)
-            assert original is not None and original.text == "同期迁入消息"
+            assert original is not None and original.text == "同期迁入总结"
             assert original.evidence == evidence
             facts = client.get(endpoint, params={"kind": "all", "category": "fact_claims"}).json()
             assert facts["items"][0]["is_recallable"] is False
