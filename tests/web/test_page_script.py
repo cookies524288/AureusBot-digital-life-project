@@ -19,6 +19,11 @@ function element(tag = 'div') {
     nodeType: 1, tagName: tag.toUpperCase(), dataset: {}, style: {}, value: '', textContent: '',
     children: [], listeners: {}, attributes: {},
     get lastChild() { return this.children.at(-1) ?? null; },
+    get firstElementChild() { return this.children.find(child => child.nodeType === 1) ?? null; },
+    get nextElementSibling() {
+      const siblings = this.parentElement?.children ?? [];
+      return siblings.slice(siblings.indexOf(this) + 1).find(child => child.nodeType === 1) ?? null;
+    },
     get elements() {
       if (this.tagName !== 'FORM') return undefined;
       const controls = {};

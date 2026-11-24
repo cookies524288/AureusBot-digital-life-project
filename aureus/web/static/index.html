@@ -1793,12 +1793,16 @@ const PLANNER_ACTION_NAMES = {
 };
 const PLANNER_ACTION_STATES = {requested:'已请求', rejected:'已拒绝', not_run:'未执行', failed:'失败', completed:'完成'};
 
-function timelineItem(rec, inContext, feedbackId = rec.recall_feedback_reply_id || (rec.recall_feedback_available ? rec.id : null)) {
+function timelineItem(rec, inContext, {
+  feedbackId = rec.recall_feedback_reply_id || (rec.recall_feedback_available ? rec.id : null),
+  visibilityNames = VISIBILITY_NAMES,
+} = {}) {
   const actor = { user: '你', me: '它', person: '对方', system: '系统' }[rec.actor] || rec.actor;
   const event = rec.event_type === 'message' && rec.actor === 'me' ? '历史回复 · 未标投递' : EVENT_NAMES[rec.event_type] || rec.event_type;
+  const visibility = visibilityNames[rec.visibility];
   const top = el('div', { class: 'tl-top' },
     el('strong', { class: 'tl-event', text: event }),
-    VISIBILITY_NAMES[rec.visibility] ? el('span', { class: 'tag', text: VISIBILITY_NAMES[rec.visibility] }) : null,
+    visibility ? el('span', { class: 'tag', text: visibility }) : null,
     el('div', { class: 'tl-meta' },
       el('time', { datetime: rec.time, text: fmtTime(rec.time, true) }),
       el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
@@ -1832,7 +1836,7 @@ function renderTimeline() {
       const id = record.recall_feedback_reply_id || (record.recall_feedback_available ? record.id : null);
       const showFeedback = id && !feedback.has(id);
       if (showFeedback) feedback.add(id);
-      return timelineItem(record, inContext, showFeedback ? id : null);
+      return timelineItem(record, inContext, {feedbackId: showFeedback ? id : null});
     }
     for (const record of records) {
       if (record.round_id && !groups.has(record.round_id)) groups.set(record.round_id, []);
@@ -3627,6 +3631,7 @@ $('cf-restore-all-form').addEventListener('submit', async event => {
 });
 // ---------- 观察：只读，用 /api/overview 和 /api/timeline（D85）；曲线和花费没有网页接口，不假造 ----------
 const MONITOR_REFRESH_MS = 10000;
+const MONITOR_VISIBILITY_NAMES = {private:'仅用户可见', user_only:'仅用户可见'};
 function monitorList(id, res, emptyText) {
   const box = $(id);
   const records = res.ok ? res.data.records.slice().reverse() : [];
@@ -3642,7 +3647,7 @@ function monitorList(id, res, emptyText) {
     let next = box.firstElementChild;
     for (const record of records) {
       const key = String(record.id);
-      const row = rows.get(key) || timelineItem(record, false);
+      const row = rows.get(key) || timelineItem(record, false, {visibilityNames: MONITOR_VISIBILITY_NAMES});
       if (row !== next) { row.dataset.recordId = key; box.insertBefore(row, next); }
       next = row.nextElementSibling;
     }

@@ -159,6 +159,41 @@ def test_timeline_details_translate_fields_and_preserve_plain_text() -> None:
     )
 
 
+def test_monitor_visibility_tags_do_not_change_timeline_or_overview_labels() -> None:
+    run_page_script(
+        r"""
+        const scopes = ['private', 'user_only', 'group', 'public'];
+        const originalLabels = ['仅自己可见', '仅用户可见', '群聊', '公开'];
+        const records = scopes.map((visibility, index) => ({
+          id:index + 1, actor:'system', event_type:'judgment', visibility,
+          content:'合成记录 ' + visibility, time:'2026-11-24T10:00:00Z',
+        }));
+        const badge = card => card.children[0].children.find(node => node.className === 'tag')?.textContent;
+        api = async path => ({ok:true, data:path === '/api/overview' ? {} : {records}});
+        state.loggedIn = true;
+        state.page = 'monitor';
+        await PAGES.monitor.load();
+        for (const id of ['mo-hormones', 'mo-recent', 'mo-persona']) {
+          const rows = $(id).children;
+          assert.equal(rows.length, records.length);
+          for (const [index, record] of records.entries()) {
+            const row = rows.find(node => node.dataset.recordId === String(record.id));
+            assert.equal(row.children[1].textContent, record.content);
+            assert.equal(badge(row), index < 2 ? '仅用户可见' : undefined);
+          }
+        }
+        tl.records = records;
+        renderTimeline();
+        for (const [index, record] of records.entries()) {
+          assert.equal(record.visibility, scopes[index]);
+          assert.equal(badge($('tl-list').children.at(-1 - index)), originalLabels[index]);
+          showOverviewReference({reply_reference:record});
+          assert.ok($('ov-reference-source').textContent.endsWith(originalLabels[index]));
+        }
+        """
+    )
+
+
 def test_model_probe_details_describe_media_and_embedding_dimensions() -> None:
     run_page_script(
         r"""
