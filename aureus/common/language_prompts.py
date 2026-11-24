@@ -1,4 +1,8 @@
-"""习得语言的提示词和输出格式（D89、D90）。"""
+"""习得语言的提示词和输出格式（D89、D90）。
+
+表达输出要求原样取自 MaiBot 1.3.15（GPL-3.0），保留本地示例和编号：
+https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/prompts/zh-CN/learn_style.prompt
+"""
 
 from collections.abc import Sequence
 
@@ -48,8 +52,9 @@ LEARN_STYLE = PromptTemplate(
     "抽取表达方式",
     "从逐条聊天样本总结用户的语言风格、特定句式、说话方式和语境梗。"
     "把规律总结成‘当 situation 时，可以 style’，不包含具体人名或事物。"
-    "两个字段尽量各不超过 20 字，取 3–5 条，最多 10 条。"
-    '仅输出 JSON 数组 [{"situation":"情景","style":"表达方式","id":"1"}]。'
+    "两个字段尽量各不超过 20 字，取 3–5 条，最多 10 条。\n"
+    "请仅输出 JSON 数组，不要输出重复内容。每个元素为一个对象，字段名如下：\n"
+    '[{"situation":"情景","style":"表达方式","id":"1"}]。'
     "id 必须是展示的来源编号，只填数字；没有则输出 []。",
 )
 LEARN_JARGON = PromptTemplate(
