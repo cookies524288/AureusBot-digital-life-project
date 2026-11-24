@@ -1,6 +1,8 @@
 # 路线图 3.11 补充：默认使用统一文字记忆目录
 
-状态：待评审
+状态：完成
+
+复审：`eeaa38a` 仅将默认 `kind` 改为 `all`，复用原授权与统一分页路径。主审独立复跑 `tests/web/test_unified_resources.py` 两项通过，开发专项 30 项通过。未通过正式记忆内容验证，不为测试读取私人资料。
 基线：`f9c8239`；延续[资源管理](resource-management.md)与[长期记忆行为核对](maibot-memory-parity.md)。
 
 ## 先读
