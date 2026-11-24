@@ -450,6 +450,7 @@ class PeopleConfig(BaseModel):
 
     # 3.3 的迁移人物资料只影响正常回复，关掉后仍可查询来源。
     history_in_reply_enabled: bool = True
+    profile_alias_maintenance_in_reply_enabled: bool = True
     # 好感的总开关（D5）；关掉后不记变化、不进上下文。
     affinity_enabled: bool = True
     # 好感满分 100。初值只在第一次用到时采用，之后改配置不会回头改已有的好感（D71 第 3 条）。

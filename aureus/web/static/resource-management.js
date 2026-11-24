@@ -858,6 +858,50 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   const profilePanel = $('memory-query-profiles');
   const profileForm = searchForm('搜索人物画像', '搜索人物、画像或来源 ID');
   profilePanel.append(profileForm);
+  async function openProfileAliases(item, button) {
+    const endpoint = `/api/resources/profiles/${item.id}/aliases`;
+    const generation = editorGeneration;
+    button.disabled = true;
+    try {
+      const response = await api(endpoint);
+      if (!response.ok) { fail(response); return; }
+      if (button.isConnected && $('editor-dialog').open && generation === editorGeneration) {
+        editProfileAliases(item, endpoint, response.data);
+      }
+    } finally { button.disabled = false; }
+  }
+  function editProfileAliases(item, endpoint, aliases) {
+    const editor = el('textarea', {rows:4, required:true});
+    editor.value = aliases.effective_aliases.join('\n');
+    const save = el('button', {class:'btn primary small', text:'保存别名'});
+    const undo = action('撤销本机别名', () => write(null));
+    const form = el('form', {class:'stack resource-detail'},
+      field('人物编号', item.person_id), field('画像来源', sourceText(item.record)),
+      field('原有别名', aliases.original_aliases.join('、') || '无'),
+      field('当前别名', aliases.effective_aliases.join('、') || '无'),
+      field('本机维护', aliases.local_aliases === null ? '未覆盖' : '已覆盖'),
+      el('label', {class:'stack'}, '人工别名（每行一个）', editor),
+      el('p', {text:'保存会替换当前别名。撤销只移除本机覆盖，原画像和证据均保留。'}),
+      el('div', {class:'row'}, save, undo, action('关闭', () => $('editor-dialog').close())));
+    undo.disabled = aliases.local_aliases === null;
+    async function write(value) {
+      editor.disabled = undo.disabled = save.disabled = true;
+      try {
+        const response = await api(endpoint, 'PATCH', {aliases:value});
+        if (!response.ok) { fail(response); return; }
+        toast(value === null ? '已撤销本机别名' : '已保存别名');
+        if (form.isConnected && $('editor-dialog').open) editProfileAliases(item, endpoint, response.data);
+      } finally {
+        editor.disabled = save.disabled = false;
+        undo.disabled = aliases.local_aliases === null;
+      }
+    }
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      write(editor.value.split('\n'));
+    });
+    openEditor('维护人物别名', form);
+  }
   const profiles = searchable({panel:profilePanel, id:'profiles', render:item => {
     if (item.entry_type === 'person') {
       const title = item.name || `人物 #${item.person_id}`;
@@ -866,9 +910,11 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }
     const profile = item.record;
     const title = item.name || profile.name || profile.nickname || profile.subject_key || '待关联人物';
-    return record(title, () => detail(title, field('画像', profile.summary || profile.impression),
-      field('人物', item.person_id), field('别名', profile.aliases?.join('、')),
-      field('关联状态', item.pending_reason), field('证据', readable(profile.evidence)), field('来源', sourceText(profile))));
+    const caption = item.person_id == null ? title : `${title} · 人物 #${item.person_id}`;
+    return record(caption, () => detail(title, field('画像', profile.summary || profile.impression),
+      field('人物', item.person_id), field('原件别名', profile.aliases?.join('、')),
+      field('关联状态', item.pending_reason), field('证据', readable(profile.evidence)), field('来源', sourceText(profile)),
+      item.can_edit_aliases ? action('维护别名', event => openProfileAliases(item, event.currentTarget)) : null));
   }}, profileForm, '/api/resources/profiles', fields => ({q:fields.q.value}));
 
   const picturePanel = $('memory-pictures');

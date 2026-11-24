@@ -7,8 +7,19 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from aureus.people import profile_aliases
+from aureus.people.profile_aliases import ProfileAliases
+
 # A_Memorix query_person_profile 对未设 expires_at 的快照使用此默认期限。
 _AUTOMATIC_PROFILE_TTL_SECONDS = 6 * 60 * 60
+_EDITABLE_PROFILE = """
+    history.pending_reason IS NULL AND EXISTS (
+        SELECT 1 FROM historical_person_keys keys
+        JOIN accounts ON accounts.person_id = keys.person_id
+        WHERE keys.instance = history.instance AND keys.person_id = history.person_id
+            AND keys.person_key = json_extract(history.record, '$.subject_key')
+    )
+"""
 
 
 class PeopleError(Exception):
@@ -26,6 +37,7 @@ class HistoricalKind(StrEnum):
     PROFILE_SNAPSHOT = "person_profile_snapshots"
     PROFILE_OVERRIDE = "person_profile_overrides"
     ALIAS_OVERRIDE = "person_profile_alias_overrides"
+    LOCAL_ALIAS_OVERRIDE = "local_profile_aliases"
 
     @property
     def is_profile(self) -> bool:
@@ -210,18 +222,19 @@ def browse_profile_resources(
 ) -> tuple[list[dict[str, object]], int]:
     """浏览人物档案索引及画像原件，区分未关联画像和没有画像正文的人物。"""
     conn.execute("BEGIN")
-    catalog = """
+    catalog = f"""
         WITH entries AS (
             SELECT 'person' AS entry_type, person.id, person.name,
                    person.id AS person_id, NULL AS other_person_id, NULL AS pending_reason,
                    person.first_seen, NULL AS record,
-                   unixepoch(person.first_seen, 'subsec') AS happened
+                   unixepoch(person.first_seen, 'subsec') AS happened, 0 AS can_edit_aliases
             FROM people person
             UNION ALL
             SELECT 'profile', history.id, person.name, history.person_id, history.other_person_id,
                    history.pending_reason, NULL, history.record,
                    CASE WHEN json_type(history.record, '$.occurred_at') IN ('real', 'integer')
-                        THEN json_extract(history.record, '$.occurred_at') END
+                        THEN json_extract(history.record, '$.occurred_at') END,
+                   ({_EDITABLE_PROFILE})
             FROM people_history history LEFT JOIN people person ON person.id = history.person_id
             WHERE history.kind IN ('person_profile_snapshots', 'person_profile_overrides',
                                    'person_profile_alias_overrides')
@@ -246,7 +259,12 @@ def browse_profile_resources(
             "first_seen": row["first_seen"],
         }
         if row["entry_type"] == "person"
-        else {"entry_type": "profile", "name": row["name"], **asdict(_entry(row))}
+        else {
+            "entry_type": "profile",
+            "name": row["name"],
+            "can_edit_aliases": bool(row["can_edit_aliases"]),
+            **asdict(_entry(row)),
+        }
         for row in rows
     ]
     return items, total
@@ -264,9 +282,9 @@ def _snapshot_is_current(record: HistoricalRecord, now: float) -> bool:
     )
 
 
-def _profiles_for_recall(
-    conn: sqlite3.Connection, person_id: int, now: float
-) -> list[HistoricalEntry]:
+def _latest_profiles(
+    conn: sqlite3.Connection, person_id: int
+) -> dict[tuple[str, str | None], dict[HistoricalKind, HistoricalEntry]]:
     rows = conn.execute(
         """
         WITH revisions AS (
@@ -289,23 +307,84 @@ def _profiles_for_recall(
         entry = _entry(row)
         record = entry.record
         profiles.setdefault((record.instance, record.subject_key), {})[record.kind] = entry
+    return profiles
+
+
+def profile_alias_details(
+    conn: sqlite3.Connection,
+    profile_id: int,
+    now: float,
+    *,
+    write: bool = False,
+    aliases: list[str] | None = None,
+) -> ProfileAliases | None:
+    """定位已有画像来源，按需写入本机别名，并返回当前生效集合。"""
+    target = conn.execute(
+        f"""SELECT instance, person_id, json_extract(record, '$.subject_key') AS person_key
+            FROM people_history history WHERE id = ? AND {_EDITABLE_PROFILE}
+            AND kind IN ('person_profile_snapshots', 'person_profile_overrides',
+                         'person_profile_alias_overrides')""",
+        (profile_id,),
+    ).fetchone()
+    if target is None:
+        return None
+    person_id = int(target["person_id"])
+    source = (str(target["instance"]), str(target["person_key"]))
+    if write:
+        profile_aliases.write(conn, source, aliases)
+    group = _latest_profiles(conn, person_id)[source]
+    manual = group.get(HistoricalKind.ALIAS_OVERRIDE)
+    snapshot = group.get(HistoricalKind.PROFILE_SNAPSHOT)
+    if manual is not None and manual.record.aliases is not None:
+        original = manual.record.aliases
+    elif snapshot is not None and _snapshot_is_current(snapshot.record, now):
+        original = snapshot.record.aliases or []
+    else:
+        original = []
+    return ProfileAliases(original, profile_aliases.for_person(conn, person_id).get(source))
+
+
+def _profiles_for_recall(
+    conn: sqlite3.Connection,
+    person_id: int,
+    now: float,
+    *,
+    use_local_aliases: bool,
+) -> list[HistoricalEntry]:
+    local = profile_aliases.for_person(conn, person_id) if use_local_aliases else {}
 
     selected: list[HistoricalEntry] = []
-    for group in profiles.values():
+    for source, group in _latest_profiles(conn, person_id).items():
         manual = group.get(HistoricalKind.PROFILE_OVERRIDE)
         manual_alias = group.get(HistoricalKind.ALIAS_OVERRIDE)
         has_manual_text = manual is not None and bool(manual.record.summary)
         has_manual_alias = manual_alias is not None and manual_alias.record.aliases is not None
         if manual is not None and has_manual_text:
             selected.append(manual)
-        if manual_alias is not None and manual_alias.record.aliases:
-            selected.append(manual_alias)
         snapshot = group.get(HistoricalKind.PROFILE_SNAPSHOT)
+        instance, subject_key = source
+        aliases = local.get((instance, subject_key)) if subject_key is not None else None
+        if aliases is not None:
+            anchor = next(iter(group.values()))
+            selected.append(
+                replace(
+                    anchor,
+                    record=HistoricalRecord(
+                        instance=instance,
+                        kind=HistoricalKind.LOCAL_ALIAS_OVERRIDE,
+                        source_key=subject_key or "",
+                        subject_key=subject_key,
+                        aliases=aliases,
+                    ),
+                )
+            )
+        elif manual_alias is not None and manual_alias.record.aliases:
+            selected.append(manual_alias)
         if snapshot is None or not _snapshot_is_current(snapshot.record, now):
             continue
         record = snapshot.record
         summary = None if has_manual_text else record.summary
-        aliases = None if has_manual_alias else record.aliases
+        aliases = None if has_manual_alias or aliases is not None else record.aliases
         if summary or aliases:
             selected.append(
                 replace(
@@ -322,10 +401,10 @@ def _profiles_for_recall(
 
 
 def for_recall(
-    conn: sqlite3.Connection, person_id: int, limit: int, now: float
+    conn: sqlite3.Connection, person_id: int, limit: int, now: float, *, use_local_aliases: bool
 ) -> list[HistoricalEntry]:
     """选有效画像和普通人际资料，避免旧画像占用召回预算。"""
-    profiles = _profiles_for_recall(conn, person_id, now)
+    profiles = _profiles_for_recall(conn, person_id, now, use_local_aliases=use_local_aliases)
     if 0 <= limit <= len(profiles):
         return profiles[:limit]
     rows = conn.execute(

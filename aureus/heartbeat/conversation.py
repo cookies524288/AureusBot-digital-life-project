@@ -480,7 +480,13 @@ class ConversationFlow:
         judge_count = self._judge.context_messages if self._judge is not None else 0
         judge_history = list(history)[-judge_count:] if judge_count > 0 else []
         people_history = (
-            tuple(self._people.history_for(person_id, limit=self._memory_config.max_results))
+            tuple(
+                self._people.history_for(
+                    person_id,
+                    limit=self._memory_config.max_results,
+                    use_local_aliases=self._people_config.profile_alias_maintenance_in_reply_enabled,
+                )
+            )
             if messages
             and person_id is not None
             and self._people is not None
