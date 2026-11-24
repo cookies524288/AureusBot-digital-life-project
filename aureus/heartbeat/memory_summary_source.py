@@ -11,6 +11,7 @@ from aureus.memory import MemoryIndex, SummaryMessage, SummaryScope, SummaryWind
 from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
 
 WEB_PRIVATE_SCOPE: SummaryScope = (f"{WEB_CHANNEL_NAME}:{WEB_USER_ID}", VisibilityScope.USER_ONLY)
+VISIBLE_SUMMARY_SCOPES = (VisibilityScope.USER_ONLY, VisibilityScope.GROUP, VisibilityScope.PUBLIC)
 
 
 def summary_scope_for(
@@ -21,7 +22,10 @@ def summary_scope_for(
     route_key: str | None,
 ) -> SummaryScope | None:
     """平台召回需要真实的目标路由；网页私聊要求固定的经验证账号。"""
-    if route_key is not None and channel == "qq":
+    if (
+        route_key is not None and channel == "qq" and visibility in VISIBLE_SUMMARY_SCOPES
+        and trust in (TrustLevel.VERIFIED_USER, TrustLevel.VERIFIED_CONTACT)
+    ):
         return route_key, visibility
     if (channel, sender_id, trust, visibility) == (
         WEB_CHANNEL_NAME,
@@ -111,10 +115,9 @@ class PlatformSummarySource:
         """授权随通道改变，不能以曾经成功的窗口代替。"""
         if scope == WEB_PRIVATE_SCOPE:
             return self.timeline is not None and self.web_enabled is not None and self.web_enabled()
-        visible = (VisibilityScope.USER_ONLY, VisibilityScope.GROUP, VisibilityScope.PUBLIC)
         if (
             self.allows is None or self.store is None
-            or not scope[0].startswith("[") or scope[1] not in visible
+            or not scope[0].startswith("[") or scope[1] not in VISIBLE_SUMMARY_SCOPES
         ):
             return False
         return self.allows(ConversationKey.from_scope_key(scope[0]))

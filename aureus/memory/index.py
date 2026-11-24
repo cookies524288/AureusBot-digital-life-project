@@ -486,6 +486,7 @@ class MemoryIndex:
         limit: int,
         *,
         removed: bool = False,
+        can_show_summary: ScopeCheck | None = None,
     ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
         """浏览同一目录下的新旧文字原件，保留各自的维护定位键。"""
         with closing(open_connection(self._db_path)) as conn:
@@ -499,29 +500,37 @@ class MemoryIndex:
                 limit,
                 self._clock.now(),
                 removed=removed,
-                summary_access=self._summary_access(),
+                summary_access=self._summary_access(can_show_summary),
             )
 
-    def _summary_access(self) -> tuple[ScopeCheck, EvidenceCheck] | None:
+    def _summary_access(
+        self, permission: ScopeCheck | None
+    ) -> tuple[ScopeCheck, EvidenceCheck] | None:
         allows, check = self.summary_scope_allowed, self.summary_evidence
-        if allows is None or check is None:
+        if allows is None or check is None or permission is None:
             return None
-        return allows, check
+        return lambda scope: allows(scope) and permission(scope), check
 
-    def summary_resource(self, source: MemorySource) -> HistoricalMemory | None:
+    def summary_resource(
+        self, source: MemorySource, can_show_summary: ScopeCheck
+    ) -> HistoricalMemory | None:
         """读取当前管理者可知的派生事实详情，不查原文正文。"""
-        access = self._summary_access()
+        access = self._summary_access(can_show_summary)
         if access is None:
             return None
         with closing(open_connection(self._db_path)) as conn:
             conn.execute("BEGIN")
             return summary_detail(conn, source, *access)
 
-    def recheck_summary_hits(self, hits: Sequence[MemoryHit]) -> list[MemoryHit]:
+    def recheck_summary_hits(
+        self, hits: Sequence[MemoryHit], target: SummaryScope | None
+    ) -> list[MemoryHit]:
         """规划之后再次核对已选会话事实，不把撤权的材料送给回复器。"""
-        access = self._summary_access()
-        if access is None or not any(_is_summary_hit(hit) for hit in hits):
+        if not any(_is_summary_hit(hit) for hit in hits):
             return list(hits)
+        allows, check = self.summary_scope_allowed, self.summary_evidence
+        if allows is None or check is None or target is None or not allows(target):
+            return [hit for hit in hits if not _is_summary_hit(hit)]
         with closing(open_connection(self._db_path)) as conn:
             conn.execute("BEGIN")
             verified = []
@@ -529,9 +538,11 @@ class MemoryIndex:
                 if not _is_summary_hit(hit) or hit.source is None:
                     verified.append(hit)
                     continue
-                row = summary_detail(conn, hit.source, *access)
+                row = summary_detail(conn, hit.source, allows, check)
                 if row is not None and row.is_recallable and row.text[:MAX_HIT_CHARS] == hit.text:
                     verified.append(hit)
+            if not allows(target):
+                return [hit for hit in verified if not _is_summary_hit(hit)]
             return verified
 
     def set_resources_removed(
@@ -821,16 +832,20 @@ class MemoryIndex:
                 and self._config.consolidation_enabled
                 and self._config.consolidation_extract_enabled
             ):
-                if self.summary_scope_allowed is not None:
+                if self.summary_scope_allowed is not None and self.summary_scope_allowed(summary_scope):
                     facts = search_authorized_summaries(
                         conn, keywords, self.summary_evidence, self.summary_scope_allowed, limit,
                         since=since, before=before,
                     )
-                else:
+                    if not self.summary_scope_allowed(summary_scope):
+                        facts = []
+                elif self.summary_scope_allowed is None:
                     facts = search_summaries(
                         conn, summary_scope, keywords, self.summary_evidence, limit,
                         since=since, before=before,
                     )
+                else:
+                    facts = []
                 hits.extend(
                     MemoryHit(
                         None, item.recorded_at, "会话事实", item.text[:MAX_HIT_CHARS], item.source,

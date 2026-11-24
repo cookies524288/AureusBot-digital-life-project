@@ -1030,11 +1030,14 @@ class ConversationFlow:
             platform_cleanup=job.round_trace is not None and not review_reason,
         )
         tools = planner_tools(options)
-        heuristic_recall = (
-            format_recall(*automatic, self._timezone, heuristic=True)
-            if automatic is not None
-            else ""
-        )
+        heuristic_recall = ""
+        if automatic is not None and self._memory is not None:
+            words, hits = automatic
+            verified = await asyncio.to_thread(
+                self._memory.recheck_summary_hits, hits, job.summary_scope
+            )
+            if verified:
+                heuristic_recall = format_recall(words, verified, self._timezone, heuristic=True)
         prompt = build_plan_prompt(
             job.history,
             job.messages,
@@ -1065,6 +1068,10 @@ class ConversationFlow:
             hits = await self._retrieve(job, words)
             if hits is None:
                 return None
+            if self._memory is not None:
+                hits = await asyncio.to_thread(
+                    self._memory.recheck_summary_hits, hits, job.summary_scope
+                )
             return format_recall(words, hits, self._timezone), (words, hits)
 
         async def read_history(query: HistoryQuery) -> str:
@@ -1251,7 +1258,9 @@ class ConversationFlow:
         strategy = job.strategy
         recall = recalled if recalled is not None else automatic
         if recall is not None and self._memory is not None:
-            verified = await asyncio.to_thread(self._memory.recheck_summary_hits, recall[1])
+            verified = await asyncio.to_thread(
+                self._memory.recheck_summary_hits, recall[1], job.summary_scope
+            )
             if len(verified) != len(recall[1]):
                 return _ThoughtOutcome(declined=True)
         length = (

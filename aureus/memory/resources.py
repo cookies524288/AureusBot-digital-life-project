@@ -11,7 +11,14 @@ from aureus.memory.edits import MemoryKind
 from aureus.memory.history import MemorySource, decode_history_row
 from aureus.memory.message_boundary import is_message_event, is_message_source
 from aureus.memory.removal_operations import append_removal_operation
-from aureus.memory.summary_store import EvidenceCheck, ScopeCheck, summary_catalog, summary_detail
+from aureus.memory.summary_store import (
+    EvidenceCheck,
+    ScopeCheck,
+    SummaryVisibilityChangedError,
+    authorized_summary_scopes,
+    summary_catalog,
+    summary_detail,
+)
 
 PICTURE_ARCHIVE = """
     SELECT 'archive', history.id, history.recorded_at, history.content, history.source_key,
@@ -113,10 +120,10 @@ def browse_text_resources(
     }
     with connection:
         connection.execute("BEGIN")
+        access = summary_access if not removed and category in ("", "fact_claims") else None
+        scopes = authorized_summary_scopes(connection, access[0]) if access else set()
         params["summaries"] = json.dumps(
-            summary_catalog(connection, *summary_access)
-            if summary_access and not removed and category in ("", "fact_claims")
-            else []
+            summary_catalog(connection, scopes, access[1]) if access else []
         )
         counts = dict(
             connection.execute(
@@ -133,6 +140,11 @@ def browse_text_resources(
             resource for row in rows
             if (resource := _text_resource(connection, row, summary_access)) is not None
         ]
+        if access and (
+            len(resources) != len(rows)
+            or authorized_summary_scopes(connection, access[0]) != scopes
+        ):
+            raise SummaryVisibilityChangedError
         return resources, sum(counts.values()), counts
 
 

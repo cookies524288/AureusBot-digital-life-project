@@ -56,6 +56,7 @@ from aureus.memory.summary_protocol import (
     SummaryWindow,
     parse_delta,
 )
+from aureus.memory.summary_store import SummaryVisibilityChangedError
 
 __all__ = [
     "BATCH_SIZE",
@@ -109,6 +110,7 @@ __all__ = [
     "SummaryDelta",
     "SummaryMessage",
     "SummaryScope",
+    "SummaryVisibilityChangedError",
     "SummaryWindow",
     "VisibleExpressionCluster",
     "parse_delta",

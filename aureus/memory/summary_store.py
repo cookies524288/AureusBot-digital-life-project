@@ -97,18 +97,30 @@ def _scope(row: Row) -> SummaryScope:
     return row["route"], row["visibility"]
 
 
+class SummaryVisibilityChangedError(RuntimeError):
+    """管理查询期间授权变化，不能披露本次统计。"""
+
+
+def authorized_summary_scopes(connection: Connection, allows: ScopeCheck) -> set[SummaryScope]:
+    """从同一数据库快照复核目前管理或召回可见的完整来源范围。"""
+    rows = connection.execute("SELECT DISTINCT route, visibility FROM memory_summary_deltas")
+    return {
+        scope for row in rows if allows(scope := _scope(row))
+    }
+
+
 _RESOURCE_ROWS = """SELECT fact.*, delta.route, delta.visibility, delta.recorded_at
     FROM memory_summary_facts fact JOIN memory_summary_deltas delta ON delta.id=fact.delta_id"""
 
 
 def summary_catalog(
-    connection: Connection, allow_scope: ScopeCheck, check: EvidenceCheck
+    connection: Connection, scopes: set[SummaryScope], check: EvidenceCheck
 ) -> list[tuple[int, str]]:
     """列出当前管理者可知的键与状态；授权范围外不返回键或计数。"""
     return [
         (row["id"], _resource_status(connection, row, check))
         for row in connection.execute(_RESOURCE_ROWS)
-        if allow_scope(_scope(row))
+        if _scope(row) in scopes
     ]
 
 
@@ -124,8 +136,10 @@ def summary_detail(
     connection: Connection, source: MemorySource, allow_scope: ScopeCheck, check: EvidenceCheck
 ) -> HistoricalMemory | None:
     """只返回对当前管理者可知的派生值，绝不返回平台证据正文。"""
-    if (len(source.key) != 1 or type(source.key[0]) is not int
-        or source != _summary_source(source.key[0])):
+    if (
+        len(source.key) != 1 or type(source.key[0]) is not int or not 0 < source.key[0] < 2**63
+        or source != _summary_source(source.key[0])
+    ):
         return None
     row = connection.execute(_RESOURCE_ROWS + " WHERE fact.id=?", source.key).fetchone()
     if row is None or not allow_scope(_scope(row)):
@@ -317,12 +331,7 @@ def search_authorized_summaries(
     before: datetime | None,
 ) -> list[SummaryHit]:
     """跨会话读取获准的派生事实，不开放平台原文。"""
-    scopes = [
-        (row["route"], row["visibility"])
-        for row in connection.execute(
-            "SELECT DISTINCT route, visibility FROM memory_summary_deltas"
-        )
-    ]
+    scopes = authorized_summary_scopes(connection, allow_scope)
     hits: list[SummaryHit] = []
     for scope in scopes:
         if allow_scope(scope):
@@ -337,5 +346,8 @@ def search_authorized_summaries(
                     before=before,
                 )
             )
-    hits.sort(key=lambda hit: (hit.relevance, hit.recorded_at), reverse=True)
+    current = authorized_summary_scopes(connection, allow_scope)
+    if scopes != current:
+        return []
+    hits.sort(key=lambda hit: (hit.relevance, hit.recorded_at, hit.source.key), reverse=True)
     return hits[:limit]

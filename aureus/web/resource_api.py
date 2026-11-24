@@ -28,6 +28,8 @@ from aureus.memory import (
     MemoryIndex,
     MemoryKind,
     MemorySource,
+    SummaryScope,
+    SummaryVisibilityChangedError,
 )
 from aureus.memory.emoji import (
     MAX_EMOJI_BYTES,
@@ -188,6 +190,7 @@ def register_resource_routes(
     database: Path | None = None,
     clock: Clock | None = None,
     inbox: InboxStore | None = None,
+    can_show_summary: Callable[[SummaryScope], bool] | None = None,
 ) -> None:
     """注册资源浏览和维护，使用工作线程里的独立数据库连接。"""
     review_clock = clock if clock is not None else SystemClock()
@@ -650,20 +653,19 @@ def register_resource_routes(
         if removed and kind != "all":
             raise HTTPException(422, "请在统一文字记忆目录查看已移除项。")
         if kind == "all":
-            rows, total, counts = (
-                await asyncio.to_thread(
-                    memory.browse_text_resources,
-                    q.strip(),
-                    category,
-                    status,
-                    recall,
-                    offset,
-                    limit,
-                    removed=removed,
+            try:
+                rows, total, counts = (
+                    await asyncio.to_thread(
+                        memory.browse_text_resources,
+                        q.strip(), category, status, recall, offset, limit,
+                        removed=removed, can_show_summary=can_show_summary,
+                    )
+                    if memory else ([], 0, {})
                 )
-                if memory
-                else ([], 0, {})
-            )
+            except SummaryVisibilityChangedError:
+                raise HTTPException(
+                    409, "资料的展示授权已变化，请刷新。", headers={"Cache-Control": "no-store"}
+                ) from None
             return {
                 "enabled": memory is not None,
                 "items": rows,
@@ -704,13 +706,13 @@ def register_resource_routes(
         source: Annotated[str, Query(min_length=1, max_length=4096)],
     ) -> dict[str, Any]:
         row = None
-        if memory is not None:
+        if memory is not None and can_show_summary is not None:
             try:
                 location = MemorySource.decode(source)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RecursionError):
                 location = None
             if location is not None:
-                row = await asyncio.to_thread(memory.summary_resource, location)
+                row = await asyncio.to_thread(memory.summary_resource, location, can_show_summary)
         if row is None:
             raise HTTPException(404, "未找到事实。", headers={"Cache-Control": "no-store"})
         response.headers["Cache-Control"] = "no-store"
