@@ -7,7 +7,7 @@
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 
-from aureus.channels import WEB_CHANNEL_NAME, WebChannel
+from aureus.channels import WEB_CHANNEL_NAME, QQAvatars, WebChannel
 from aureus.common import Clock
 from aureus.core.runtime import Core
 from aureus.identity import IdentityEditor
@@ -93,6 +93,12 @@ def open_web(
                 core.settings.runtime.qq.account_id if core.qq is not None else None
             ),
             read_inbox_attachment=core.qq.read_inbox_attachment if core.qq is not None else None,
+            qq_desktop=core.qq.desktop if core.qq is not None else None,
+            qq_avatars=(
+                QQAvatars(core.qq.desktop, clock)
+                if core.qq is not None and config.qq_avatars_enabled else None
+            ),
+            allows_qq_delivery=core.heartbeat.allows_emoji_delivery,
             resource_language=core.language,
             resource_memory=core.memory,
             memory_graph_display=core.memory.graph_display if core.memory is not None else None,

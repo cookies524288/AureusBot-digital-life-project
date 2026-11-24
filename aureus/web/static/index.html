@@ -493,8 +493,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-messages{display:grid;gap:12px}
 .inbox-message{display:flex;gap:8px;align-items:flex-start}
 .inbox-message.outgoing{flex-direction:row-reverse;text-align:right}
-.inbox-avatar{display:grid;flex:none;place-items:center;width:32px;height:32px;background:var(--bg);border:1px solid var(--border)}
+.inbox-avatar{position:relative;display:grid;flex:none;place-items:center;width:32px;height:32px;background:var(--bg);border:1px solid var(--border)}
 .inbox-avatar .ico{width:22px;height:22px;shape-rendering:crispEdges}
+.inbox-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0}
+.inbox-avatar img.loaded{opacity:1}
 .inbox-message-body{min-width:0;max-width:88%;display:grid;justify-items:start;gap:5px}
 .inbox-message.outgoing .inbox-message-body{justify-items:end}
 .inbox-message-meta{display:flex;gap:6px 12px;align-items:baseline;flex-wrap:wrap;font-size:12px}
@@ -508,12 +510,22 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-pagination{margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .inbox-pagination form{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .inbox-pagination input{width:6rem}
+.inbox-compose{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:grid;gap:8px}
+.inbox-compose textarea{width:100%;min-height:70px;resize:vertical}
+.inbox-compose input[type=file]{max-width:100%;min-width:0}
+.inbox-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.inbox-layout:not([data-can-operate="true"]) .inbox-row-actions{display:none}
 .resource-page .stack{gap:10px}
 .resource-page>.page-body,.resource-panel{flex:1;min-width:0}
+.resource-navigation,.resource-actions{gap:6px}
+.resource-navigation .row{gap:6px}
+.resource-navigation>.row+.row{border-inline-start:1px solid var(--stitch);padding-inline-start:8px}
+@media(max-width:640px){.resource-navigation>.row+.row{border-inline-start:0;padding-inline-start:0;flex-basis:100%}}
 .resource-filters input[type=search]{flex:1 1 180px;min-width:0}
 .resource-filters select{width:auto;max-width:100%}
 .resource-filters select[name=conversation_key]{width:min(100%,15rem);min-width:0}
 .resource-filters label{font-size:13px}
+.resource-counts{min-height:1.5em;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .resource-list{display:grid;gap:6px;--resource-row:42px;flex:1;align-content:start;contain:size;min-height:var(--resource-row)}
 .resource-record{display:flex;align-items:center;min-width:0;gap:8px;height:var(--resource-row)}
 .resource-record .btn{height:100%;flex:1;justify-content:flex-start;min-width:0}
@@ -780,60 +792,81 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-learning" class="page wide resource-page">
   <div class="page-head"><h2>学习</h2></div>
   <div class="page-body stack">
-    <div class="row" role="group" aria-label="学习类型">
-      <button class="btn small primary" data-learning-tab="jargon" aria-pressed="true">黑话</button>
-      <button class="btn small" data-learning-tab="expression" aria-pressed="false">表达方式</button>
-      <button class="btn small" data-learning-tab="clusters" aria-pressed="false">表达簇</button>
-      <button class="btn small" data-learning-tab="emoji" aria-pressed="false">表情包</button>
+    <div class="row resource-navigation" role="group" aria-label="学习类型">
+      <button class="btn small primary" type="button" data-learning-tab="expression" aria-pressed="true" aria-disabled="true" aria-controls="learning-panel-expression">表达方式</button>
+      <button class="btn small" type="button" data-learning-tab="jargon" aria-pressed="false" aria-controls="learning-panel-jargon">黑话</button>
+      <button class="btn small" type="button" data-learning-tab="emoji" aria-pressed="false" aria-controls="learning-panel-emoji">表情包</button>
     </div>
-    <div id="learning-panel-jargon" class="stack resource-panel"></div>
-    <div id="learning-panel-expression" class="stack resource-panel hidden"></div>
-    <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
+    <div id="learning-panel-expression" class="stack resource-panel">
+      <div class="row resource-navigation" role="group" aria-label="表达浏览">
+        <button class="btn small primary" type="button" data-expression-view="list" aria-pressed="true" aria-disabled="true" aria-controls="learning-expression-list">表达列表</button>
+        <button class="btn small" type="button" data-expression-view="clusters" aria-pressed="false" aria-controls="learning-panel-clusters">表达簇</button>
+      </div>
+      <div id="learning-expression-list" class="stack resource-panel"></div>
+      <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
+    </div>
+    <div id="learning-panel-jargon" class="stack resource-panel hidden"></div>
     <div id="learning-panel-emoji" class="stack resource-panel hidden"></div>
   </div>
 </section>
 <section id="page-memory" class="page wide resource-page">
   <div class="page-head"><h2>长期记忆</h2></div>
   <div class="page-body stack">
-    <div class="row" role="group" aria-label="长期记忆功能" style="flex-wrap:wrap">
-      <button class="btn small primary" data-memory-tab="query" aria-pressed="true">记忆查询</button>
-      <button class="btn small" data-memory-tab="graph" aria-pressed="false">关系图</button>
-      <button class="btn small" data-memory-tab="images" aria-pressed="false">图片记忆</button>
-      <button class="btn small" data-memory-tab="flow" aria-pressed="false">记忆流</button>
-      <button class="btn small" data-memory-tab="operations" aria-pressed="false">操作记录</button>
-      <button class="btn small" data-memory-tab="transfer" aria-pressed="false">导入导出</button>
+    <div class="row resource-navigation" role="group" aria-label="长期记忆工作台">
+      <div class="row" role="group" aria-label="记忆浏览">
+        <button class="btn small primary" type="button" data-memory-tab="query" aria-pressed="true" aria-disabled="true" aria-controls="memory-panel-query">记忆查询</button>
+        <button class="btn small" type="button" data-memory-tab="images" aria-pressed="false" aria-controls="memory-panel-images">图片记忆</button>
+        <button class="btn small" type="button" data-memory-tab="flow" aria-pressed="false" aria-controls="memory-panel-flow">记忆流</button>
+      </div>
+      <div class="row" role="group" aria-label="记忆管理">
+        <button class="btn small" type="button" data-memory-tab="transfer" aria-pressed="false" aria-controls="memory-panel-transfer">导入导出</button>
+        <button class="btn small" type="button" data-memory-tab="inspection" aria-pressed="false" aria-controls="memory-panel-inspection">记忆检修</button>
+        <button class="btn small" type="button" data-memory-tab="operations" aria-pressed="false" aria-controls="memory-panel-operations">记忆移除</button>
+      </div>
     </div>
     <div id="memory-panel-query" class="stack resource-panel">
-      <div class="row" role="group" aria-label="查询内容">
-        <button class="btn small primary" data-memory-query="text" aria-pressed="true">文字记录</button>
-        <button class="btn small" data-memory-query="profiles" aria-pressed="false">人物画像</button>
+      <div class="row resource-navigation" role="group" aria-label="查询内容">
+        <button class="btn small primary" type="button" data-memory-query="text" aria-pressed="true" aria-disabled="true" aria-controls="memory-query-text">文字记录</button>
+        <button class="btn small" type="button" data-memory-query="profiles" aria-pressed="false" aria-controls="memory-query-profiles">人物画像</button>
+        <button class="btn small" type="button" data-memory-query="graph" aria-pressed="false" aria-controls="memory-panel-graph">关系图</button>
       </div>
       <div id="memory-query-text" class="stack resource-panel">
         <form id="memory-search" class="row resource-filters">
           <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索正文或来源 ID" maxlength="200">
           <select name="type" aria-label="记忆类型">
-            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="messages">消息</option><option value="experiences">其他经历</option>
+            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="experiences">其他经历</option>
           </select>
           <label id="memory-show-disabled"><input name="disabled" type="checkbox"> 显示停用</label>
           <label><input name="removed" type="checkbox"> 查看已移除</label>
           <button class="btn small primary">查询</button><button id="memory-refresh" type="button" class="btn small">刷新</button>
         </form>
-        <div id="memory-selection" class="row">
+        <div id="memory-selection" class="row resource-actions" role="group" aria-label="所选文字记忆">
           <label><input id="memory-select-all" type="checkbox" disabled> 全选本页</label>
           <button id="memory-correct" class="btn small" disabled>修正所选</button>
           <button id="memory-toggle-removed" type="button" class="btn small" disabled>移除所选</button>
-          <button id="memory-inspection" type="button" class="btn small">只读检修</button>
-          <span id="memory-counts" class="muted" aria-live="polite" style="margin-left:auto"></span>
         </div>
+        <p id="memory-counts" class="muted resource-counts" aria-live="polite"></p>
       </div>
       <div id="memory-query-profiles" class="stack resource-panel hidden"></div>
+      <div id="memory-panel-graph" class="stack resource-panel hidden"></div>
     </div>
     <div id="memory-panel-images" class="stack resource-panel hidden">
       <div id="memory-pictures" class="stack resource-panel"></div>
     </div>
-    <div id="memory-panel-graph" class="stack resource-panel hidden"></div>
     <div id="memory-panel-flow" class="stack resource-panel hidden"></div>
+    <div id="memory-panel-inspection" class="stack resource-panel hidden">
+      <p class="muted">核对本地文字索引；内容、召回状态和人物别名在对应记录上维护。</p>
+      <div class="row resource-actions" role="group" aria-label="检修操作">
+        <button id="memory-inspection" type="button" class="btn small">只读检修</button>
+        <button id="memory-inspect-text" type="button" class="btn small">维护文字记录</button>
+        <button id="memory-inspect-profiles" type="button" class="btn small">维护人物别名</button>
+      </div>
+      <p class="muted">如需查看原始聊天，请前往 <a href="#inbox">平台会话</a>。</p>
+    </div>
     <div id="memory-panel-operations" class="stack resource-panel hidden">
+      <p class="muted">在文字查询中选中本页记录后移除，或查看已移除记录并恢复。不永久删除原件。</p>
+      <div class="row"><button id="memory-removal-query" type="button" class="btn small">选择文字记忆</button></div>
+      <h3>操作记录</h3>
       <p class="muted">仅显示启用后成功移除或恢复的、在当前可见范围内的本地文字记忆。不含迁入记录或旧历史。</p>
     </div>
     <div id="memory-panel-transfer" class="stack hidden"></div>
@@ -866,6 +899,17 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </nav>
 <p id="inbox-message-status" class="empty hidden" role="status"></p>
 <div id="inbox-messages" class="inbox-messages"></div>
+<section id="inbox-operations" class="inbox-compose hidden" aria-label="QQ 会话操作">
+<p id="inbox-operation-status" class="muted hidden" role="status"></p>
+<form id="inbox-send-text" class="stack hidden">
+<label for="inbox-text">发送 QQ 文字</label><textarea id="inbox-text" rows="3" maxlength="2000" required></textarea>
+<div id="inbox-send-anchors" class="inbox-actions"></div>
+<div class="inbox-actions"><button id="inbox-send" type="submit" class="btn primary">发送文字</button><button id="inbox-direct-poke" type="button" class="btn hidden">戳一戳对方</button></div>
+</form>
+<form id="inbox-send-file" class="stack hidden">
+<label for="inbox-file">选择图片或 UTF‑8 文本（最多 700 KiB）</label>
+<div class="inbox-actions"><input id="inbox-file" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.txt" required><button id="inbox-upload" type="submit" class="btn">上传文件</button></div>
+</form></section>
 </div>
 </div></div></section>
 <section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2></div></div>
@@ -1053,7 +1097,9 @@ function el(tag, props, ...kids) {
 async function api(path, method, body, headers = {}, signal) {
   const session = state.loaded;
   const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin', signal };
-  if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
+  if (path.startsWith('/api/inbox/operations/file?') && method === 'POST' && body instanceof Blob) {
+    opt.body = body;
+  } else if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/octet-stream'; opt.body = body;
   } else if (path.startsWith('/api/resources/learning/package/') && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/json'; opt.body = body;
@@ -2039,7 +2085,8 @@ PAGES.timeline = { load: () => loadTimeline(false) };
 // ---------- 平台收件箱 ----------
 const INBOX_MAX_PAGE = 2147483647;
 const inbox = {view:null, enabled:false, conversations:[], archives:[], selected:null,
-  page:1, lastPage:null, conversationRequest:0, messageRequest:0};
+  page:1, lastPage:null, conversationRequest:0, messageRequest:0, operationRequest:0,
+  selectionGeneration:0, canOperate:false, operating:false, quote:null, mention:null};
 const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
 const inboxScope = key => new URLSearchParams(Object.entries(key).filter(([, value]) => value !== null));
 
@@ -2059,6 +2106,7 @@ function renderInboxPager() {
 function clearInboxThread() {
   ++inbox.messageRequest;
   clearInboxRetention();
+  clearInboxOperations();
   inbox.selected = null;
   inbox.page = 1;
   inbox.lastPage = null;
@@ -2070,6 +2118,7 @@ function clearInboxThread() {
 }
 
 function selectInboxConversation(conversation, page = 1) {
+  if (!inbox.selected || inboxKey(inbox.selected) !== inboxKey(conversation)) clearInboxOperations();
   inbox.selected = conversation;
   inbox.lastPage = null;
   const selected = inboxKey(conversation);
@@ -2077,9 +2126,115 @@ function selectInboxConversation(conversation, page = 1) {
     button.setAttribute('aria-pressed', String(button.dataset.conversation === selected));
   }
   $('inbox-thread-name').textContent = conversation.name;
-  showInboxRetention(conversation.archive ? null : conversation.key);
-  return loadInboxMessages(page);
+  return Promise.all([loadInboxMessages(page), loadInboxOperations(),
+    showInboxRetention(conversation.archive ? null : conversation.key)]);
 }
+
+function clearInboxOperations() {
+  ++inbox.operationRequest;
+  ++inbox.selectionGeneration;
+  inbox.canOperate = false;
+  inbox.quote = inbox.mention = null;
+  $('inbox-text').value = '';
+  $('inbox-file').value = '';
+  $('inbox-operations').classList.add('hidden');
+  $('inbox-send-text').classList.add('hidden');
+  $('inbox-send-file').classList.add('hidden');
+  inboxStatus('inbox-operation-status', '');
+  renderInboxOperationControls();
+}
+
+function renderInboxOperationControls() {
+  $('inbox-layout').dataset.canOperate = String(inbox.canOperate);
+  $('inbox-send').disabled = inbox.operating || !inbox.canOperate;
+  $('inbox-direct-poke').disabled = inbox.operating || !inbox.canOperate;
+  $('inbox-upload').disabled = inbox.operating || !inbox.canOperate;
+  $('inbox-send-anchors').replaceChildren(...['quote', 'mention'].flatMap(kind => {
+    const message = inbox[kind];
+    if (!message) return [];
+    return [el('button', {type:'button', class:'btn small',
+      text:kind === 'quote' ? `取消引用 ${message.platform_message_id}` : `取消 @QQ ${message.sender_id}`,
+      onclick:() => { inbox[kind] = null; renderInboxOperationControls(); },
+    })];
+  }));
+}
+
+async function loadInboxOperations() {
+  const selection = inbox.selected, token = ++inbox.operationRequest, session = state.loaded;
+  if (!selection?.key || selection.key.platform !== 'qq') return;
+  const res = await api(`/api/inbox/operations?${inboxScope(selection.key)}`);
+  if (token !== inbox.operationRequest || session !== state.loaded) return;
+  inbox.canOperate = res.ok && res.data.enabled === true;
+  $('inbox-operations').classList.remove('hidden');
+  $('inbox-send-text').classList.toggle('hidden', !inbox.canOperate);
+  $('inbox-send-file').classList.toggle('hidden', !inbox.canOperate);
+  $('inbox-direct-poke').classList.toggle('hidden', selection.key.kind !== 'private');
+  if (!inbox.canOperate) inboxStatus('inbox-operation-status', res.ok ? res.data.reason : errorText(res));
+  renderInboxOperationControls();
+}
+
+async function executeInboxOperation(kind, target, body, completed) {
+  const selected = inbox.selected, session = state.loaded;
+  if (!selected?.key || !inbox.canOperate || inbox.operating) return;
+  const generation = inbox.selectionGeneration;
+  const stillSelected = () => state.loaded === session && inbox.selectionGeneration === generation;
+  inbox.operating = true;
+  renderInboxOperationControls();
+  try {
+    if (!await confirmAction(`${target}？目的地：${selected.name}（QQ ${selected.key.recipient_id}）`)
+        || !stillSelected()) return;
+    inboxStatus('inbox-operation-status', '等待 QQ 回执…');
+    const query = inboxScope(selected.key);
+    let payload = {confirmed:true, ...body}, headers = {};
+    if (kind === 'file') {
+      query.set('confirmed', 'yes');
+      query.set('name', body.file.name);
+      payload = body.file;
+      headers = {'Content-Type':body.type};
+    }
+    const result = await api(`/api/inbox/operations/${kind}?${query}`, 'POST', payload, headers);
+    if (!stillSelected()) return;
+    if (result.ok) await completed(result.data);
+    else inboxStatus('inbox-operation-status', result.status ? errorText(result) : '没有收到回执；请先检查 QQ，不要直接重试。');
+  } finally {
+    inbox.operating = false;
+    renderInboxOperationControls();
+  }
+}
+
+function pokeInboxMember(message = null) {
+  return executeInboxOperation('poke', message ? `戳一戳 QQ ${message.sender_id}` : '戳一戳对方',
+    {member:message?.id ?? null}, () => inboxStatus('inbox-operation-status', 'QQ 已确认戳一戳请求；没有消息编号。'));
+}
+
+$('inbox-send-text').addEventListener('submit', event => {
+  event.preventDefault();
+  const text = $('inbox-text').value.trim(), {quote, mention} = inbox;
+  if (!text) return;
+  const labels = ['发送文字', quote && `引用消息 ${quote.platform_message_id}`, mention && `@QQ ${mention.sender_id}`];
+  executeInboxOperation('text', labels.filter(Boolean).join('、'), {text, quote:quote?.id ?? null, mention:mention?.id ?? null}, data => {
+    if ($('inbox-text').value.trim() === text) $('inbox-text').value = '';
+    if (inbox.quote === quote) inbox.quote = null;
+    if (inbox.mention === mention) inbox.mention = null;
+    inboxStatus('inbox-operation-status', `QQ 已确认发送 · 消息 ${data.message_id}`);
+    return loadInboxMessages(1);
+  });
+});
+$('inbox-direct-poke').addEventListener('click', () => pokeInboxMember());
+$('inbox-send-file').addEventListener('submit', event => {
+  event.preventDefault();
+  const input = $('inbox-file'), file = input.files[0];
+  if (!file) return;
+  const type = {txt:'text/plain',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp'}[file.name.split('.').pop()?.toLowerCase()];
+  if (!type || !file.size || file.size > 700 * 1024) {
+    inboxStatus('inbox-operation-status', '请选择 700 KiB 以内的 PNG、JPEG、GIF、WebP 或 TXT 文件。');
+    return;
+  }
+  executeInboxOperation('file', `上传「${file.name}」`, {file, type}, data => {
+    if (input.files[0] === file) input.value = '';
+    inboxStatus('inbox-operation-status', `QQ 已确认上传 · 文件 ${data.file_id}`);
+  });
+});
 
 function renderInboxView() {
   const isDesktop = !inbox.view;
@@ -2220,6 +2375,16 @@ function renderInboxMessage(message) {
   glyph.setAttribute('href', '#i-inbox-person');
   icon.append(glyph);
   avatar.append(icon);
+  if (message.source === 'inbox' && message.conversation?.platform === 'qq' && message.sender_id
+      && message.event_type !== 'poke_notice' && !message.conversation.temporary_group_id
+      && Number.isSafeInteger(message.id)) {
+    const picture = el('img', {alt:'', loading:'lazy', referrerpolicy:'no-referrer',
+      onload:() => { icon.classList.add('hidden'); picture.classList.add('loaded'); },
+      onerror:() => picture.remove(),
+    });
+    picture.src = `/api/inbox/messages/${message.id}/avatar?${inboxScope(message.conversation)}`;
+    avatar.append(picture);
+  }
   return el('article', {class:'inbox-message ' + direction}, avatar,
     el('div', {class:'inbox-message-body'}, el('div', {class:'inbox-message-meta'},
       el('strong', {text:message.sender_name || message.sender_id || '未知发件人'}),
@@ -2229,7 +2394,26 @@ function renderInboxMessage(message) {
         el('span', {class:'muted', text:'时间未知'}),
       message.components?.some(item => ['at', 'reply', 'poke'].includes(item.kind)) && message.conversation &&
         el('span', {class:'muted', text:`收发账号 ${message.conversation.account_id} · 会话 ${message.conversation.recipient_id}${message.platform_message_id ? ` · 消息 ${message.platform_message_id}` : ''}`})),
-      el('div', {class:'inbox-bubble'}, ...renderInboxContents(message))));
+      el('div', {class:'inbox-bubble'}, ...renderInboxContents(message)), renderInboxMessageActions(message)));
+}
+
+function renderInboxMessageActions(message) {
+  if (message.source !== 'inbox' || !message.conversation || !Number.isSafeInteger(message.id)
+      || message.conversation.temporary_group_id || !message.platform_message_id) return null;
+  const scope = JSON.stringify(message.conversation);
+  const choose = kind => {
+    if (!inbox.canOperate || inbox.operating || JSON.stringify(inbox.selected?.key) !== scope) return;
+    inbox[kind] = message;
+    renderInboxOperationControls();
+    $('inbox-text').focus();
+  };
+  const canTarget = message.conversation.kind === 'group' && message.direction === 'incoming' && message.sender_id;
+  return el('div', {class:'inbox-actions inbox-row-actions'},
+    el('button', {type:'button', class:'btn small', text:'引用', onclick:() => choose('quote')}),
+    canTarget && el('button', {type:'button', class:'btn small', text:'@ 此人', onclick:() => choose('mention')}),
+    canTarget && el('button', {type:'button', class:'btn small', text:'戳一戳', onclick:() => {
+      if (JSON.stringify(inbox.selected?.key) === scope) pokeInboxMember(message);
+    }}));
 }
 
 async function loadInboxMessages(page) {
@@ -3612,6 +3796,7 @@ const CFG_FIELDS = {
   'qq.endpoint': ['QQ 网关地址', '程序主动连接的 QQ 网关 WebSocket 服务地址。'],
   'qq.account_id': ['QQ 机器人账号', '用于确认网关登录账号与当前配置一致的 QQ 号。'],
   'qq.allowed_group_id': ['唯一允许的 QQ 群', '填写后限制到指定的 QQ 群，同时保留本人的普通私聊。'],
+  'web.qq_avatars_enabled': ['平台会话 QQ 头像', '只通过服务端读取获准会话的 QQ 头像；关闭后显示像素头像。'],
   'qq.action_timeout_seconds': ['QQ 操作超时（秒）', '向 QQ 网关发起一次操作后，最多等待多少秒取得响应。'],
   'qq.reconnect_seconds': ['QQ 重连等待（秒）', '与 QQ 网关断开或连接失败后，等待多久再连接。'],
 };

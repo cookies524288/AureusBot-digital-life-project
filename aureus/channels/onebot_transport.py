@@ -33,6 +33,10 @@ class OneBotError(RuntimeError):
     """OneBot 动作失败或连接不可用"""
 
 
+class OneBotUnsupportedError(OneBotError):
+    """连接明确返回未知动作。"""
+
+
 def decode_media_base64(value: object, limit: int) -> bytes | None:
     """在解码前后检查附件长度，拒绝畸形数据。"""
     if not isinstance(value, str) or len(value) > (limit + 2) // 3 * 4:
@@ -223,6 +227,8 @@ class OneBotTransport:
         if not response:
             raise OneBotError("OneBot 连接已断开")
         if response.get("status") != "ok" or response.get("retcode") != 0:
+            if response.get("retcode") == 1404:
+                raise OneBotUnsupportedError("当前 OneBot 连接不支持此操作")
             raise OneBotError("OneBot 拒绝了动作")
         data = response.get("data")
         return data if isinstance(data, dict) else {}
