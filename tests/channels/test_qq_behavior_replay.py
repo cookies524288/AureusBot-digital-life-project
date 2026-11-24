@@ -19,7 +19,15 @@ from aureus.feedback import COMMITMENT_KEPT, Outcome
 from aureus.heartbeat import build_prompt_scenes, registered_templates
 from aureus.heartbeat.events import EVENT_RECALL_REPLY_DELIVERED
 from aureus.heartbeat.inbox_store import InboxMessage
-from aureus.memory import HistoricalMemory, LanguageKind, LanguageStore, MemoryIndex, MemorySource
+from aureus.memory import (
+    HistoricalMemory,
+    LanguageKind,
+    LanguageStore,
+    MemoryGraphEvidence,
+    MemoryGraphSource,
+    MemoryIndex,
+    MemorySource,
+)
 from aureus.organs import (
     CallAttempt,
     KeyResolver,
@@ -635,6 +643,114 @@ async def test_imported_memory_and_edited_prompts_in_group_replay(
                 assert ("启发式记忆" in content) is hits
             else:
                 assert f"查询：{topic}\n命中：{int(hits)} 条" in content
+
+
+async def test_published_graph_relations_reach_group_replyer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = ManualClock(START)
+    async with open_replay(tmp_path, monkeypatch, clock, history_limit=1) as replay:
+        memory = replay.core.memory
+        assert memory is not None
+
+        def source(table: str, key: str, instance: str = "migrated") -> MemorySource:
+            return MemorySource(instance, "memory", table, (key,))
+
+        def entity(instance: str, name: str) -> MemoryGraphSource:
+            return MemoryGraphSource(source("entities", name, instance), "entity", "active", name)
+
+        first, middle, last = (entity("migrated", name) for name in ("流沙站", "天枢塔", "穹顶馆"))
+        visible, removed, expired = (source("paragraphs", key) for key in ("ok", "gone", "old"))
+        relation, bridge = (source("relations", key) for key in ("first", "second"))
+        records = (
+            *(
+                HistoricalMemory(node.source, "", status="missing")
+                for node in (first, middle, last)
+            ),
+            HistoricalMemory(relation, "一条原关系的文字索引"),
+            HistoricalMemory(bridge, "另一条原关系的文字索引"),
+            HistoricalMemory(visible, "维护交接留下了蓝色门牌。"),
+            HistoricalMemory(removed, "已移除的内部材料。"),
+            HistoricalMemory(expired, "已过期的内部材料。", valid_to=clock.now()),
+        )
+        memory.publish(
+            records,
+            snapshot=("migrated", "synthetic-migration"),
+            graph_sources=(
+                first,
+                middle,
+                last,
+                MemoryGraphSource(
+                    relation,
+                    "relation",
+                    "active",
+                    predicate="运营",
+                    subject_source=middle.source,
+                    object_source=first.source,
+                    evidence=tuple(
+                        MemoryGraphEvidence(item.encode(), item)
+                        for item in (removed, expired, visible)
+                    ),
+                ),
+                MemoryGraphSource(
+                    bridge,
+                    "relation",
+                    "active",
+                    predicate="联络",
+                    subject_source=middle.source,
+                    object_source=last.source,
+                ),
+            ),
+        )
+        removed_id = next(
+            item.entry_id for item in memory.browse_history("", "", 0, 20) if item.source == removed
+        )
+        assert removed_id is not None
+        assert memory.set_resources_removed([("history", removed_id)], True)
+        other_first, other_last = (entity("unpublished", name) for name in (first.name, last.name))
+        other_relation = source("relations", "fake", "unpublished")
+        memory.publish(
+            (
+                HistoricalMemory(other_first.source, "", status="missing"),
+                HistoricalMemory(other_last.source, "", status="missing"),
+                HistoricalMemory(other_relation, "无发布快照的文字原件"),
+            ),
+            graph_sources=(
+                other_first,
+                other_last,
+                MemoryGraphSource(
+                    other_relation,
+                    "relation",
+                    "active",
+                    predicate="无发布图关系",
+                    subject_source=other_first.source,
+                    object_source=other_last.source,
+                ),
+            ),
+        )
+        assert not memory.read_graph(allowed_sources=()).covered
+
+        replay.planner.plan = {
+            "reply": True,
+            "intent": "回答关联",
+            "recall": [first.name, last.name],
+        }
+        await replay.receive(event(703, 2200, "还记得流沙站和穹顶馆怎么联系吗？", group=GROUP))
+        await replay.step()
+        await replay.assert_sent()
+        [(_, request, _)] = replay.replyer.calls
+        prompt = "\n".join(row["content"] for row in assemble_messages(request))
+        assert "天枢塔 —[运营]→ 流沙站；证据：维护交接留下了蓝色门牌。" in prompt
+        assert "天枢塔 —[联络]→ 穹顶馆" in prompt
+        assert "只供参考，不要原样念出来" in prompt
+        assert "不要向对方透露用户的称呼、聊天内容" in prompt
+        assert "已移除的内部材料" not in prompt
+        assert "已过期的内部材料" not in prompt
+        assert "无发布图关系" not in prompt
+        assert replay.records()[-1].metadata["recall_source_keys"] == [
+            relation.encode(),
+            bridge.encode(),
+        ]
 
 
 @pytest.mark.parametrize("heuristic", [False, True], ids=["explicit", "heuristic"])

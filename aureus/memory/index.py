@@ -39,6 +39,7 @@ from aureus.memory.graph_query import (
     graph_detail,
     query_graph,
 )
+from aureus.memory.graph_recall import search_graph_relations
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -63,6 +64,7 @@ from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord, Vis
 
 # D80 第 4 条：单条记忆交给回复器时的正文上限。
 MAX_HIT_CHARS = 180
+_MAX_GRAPH_REPLY_HITS = 2
 _LIVE_INDEX_SCHEMA = """
     CREATE VIRTUAL TABLE IF NOT EXISTS memory_index USING fts5(
         content, actor_label UNINDEXED, record_id UNINDEXED,
@@ -251,6 +253,24 @@ class MemoryIndex:
     ) -> MemoryGraphItem | None:
         """只读获准原件的图详情；未授权、失效或未知来源均返回 None。"""
         return graph_detail(self.read_graph(allowed_sources=allowed_sources), source)
+
+    def search_graph_recall(self, keywords: Sequence[str], limit: int) -> list[MemoryHit]:
+        """后台读取有限的内部关系和证据，不初始化任何图表。"""
+        if not self._config.graph_recall_enabled or limit <= 0:
+            return []
+        with closing(open_connection(self._db_path)) as conn:
+            conn.execute("BEGIN")
+            records = search_graph_relations(
+                conn,
+                keywords,
+                min(limit, _MAX_GRAPH_REPLY_HITS),
+                now=self._clock.now(),
+                max_chars=MAX_HIT_CHARS,
+            )
+        return [
+            MemoryHit(None, None, item.actor_label, item.text, item.source, evidence=item.evidence)
+            for item in records
+        ]
 
     def get_history(self, source: MemorySource) -> HistoricalMemory | None:
         """读指定来源的原文及证据，包括归档记录。"""
