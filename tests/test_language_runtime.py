@@ -812,6 +812,26 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             assert ("GG：抵达终点" in plan.prompt) is injected
             assert ("GG：等候开局" in plan.prompt) is injected
             assert ("当「庆祝跑步成绩」时，可用「月兔冲线」" in dialogue_text(reply)) is (injected)
+
+        for number, allowed, removed in (
+            ("105", False, False), ("106", True, True), ("107", True, False)
+        ):
+            heart.set_inbox_route_filter(
+                lambda route, allowed=allowed: allowed or route.recipient_id != "10"
+            )
+            assert store.set_removed(LanguageKind.EXPRESSION, [entries[0].entry_key], removed)
+            assert store.set_removed(LanguageKind.JARGON, [jargon[0].entry_key], removed)
+            requests.clear()
+            submit("group", "20", "gg，来聊跑步。", number)
+            for _ in range(3):
+                heart.beat()
+                await heart.wait_for_thought()
+            plan = next(request for request in requests if request.context["task"] == "plan")
+            reply = next(request for request in requests if request.context["task"] == "reply")
+            expected = budget > 0 and allowed and not removed
+            assert ("GG：抵达终点" in plan.prompt) is expected
+            assert ("GG：抵达终点" in dialogue_text(reply)) is expected
+            assert ("月兔冲线" in dialogue_text(reply)) is expected
         submit("group", "10", "陌生主题。", "104")
         requests.clear()
         heart.beat()

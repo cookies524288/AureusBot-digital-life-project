@@ -612,6 +612,10 @@ class Heartbeat:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
+        if self._language is not None:
+            self._language.set_learning_source_filter(
+                lambda scope: language_runner.allows_learning_scope(scope, allows)
+            )
         if self._conversation.platform_history is not None:
             self._conversation.platform_history.allows = allows
         if (consolidator := self._memory_consolidator) is not None and consolidator.source:

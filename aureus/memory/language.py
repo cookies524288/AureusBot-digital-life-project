@@ -291,6 +291,15 @@ class LanguageStore:
     ) -> None:
         self._path = path
         self._old_source_scope = old_source_scope
+        self._allows_learning_source: Callable[[str], bool] | None = None
+
+    def set_learning_source_filter(self, allows: Callable[[str], bool]) -> None:
+        """绑定宿主现行的来源授权；来源会话不是候选的目标范围。"""
+        self._allows_learning_source = allows
+
+    def learning_source_allowed(self, scope: str) -> bool:
+        """判断该来源现在是否允许用于学习或内部召回。"""
+        return self._allows_learning_source is None or self._allows_learning_source(scope)
 
     def _observation(
         self, connection: Connection, sample: LanguageSample
@@ -425,6 +434,8 @@ class LanguageStore:
         """独立消费成功的抽取，并返回本轮达到门槛的黑话候选。"""
         with closing(open_connection(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
+            if not self.learning_source_allowed(scope):
+                return []
             accepted: dict[int, tuple[str, str]] = {}
             for sample in samples:
                 fragment = presented.get(sample.record_id, "")
@@ -513,6 +524,12 @@ class LanguageStore:
         ):
             outcome, meaning = "insufficient", ""
         with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT scope FROM language_online_terms WHERE id = ?", (attempt.term_id,)
+            ).fetchone()
+            if row is None or not self.learning_source_allowed(row["scope"]):
+                return
             connection.execute(
                 "INSERT OR IGNORE INTO language_jargon_decisions VALUES (?, ?, ?, ?)",
                 (attempt.term_id, attempt.evidence_count, outcome, meaning),
@@ -890,6 +907,11 @@ class LanguageStore:
         ]
         if include_disabled:
             return entries
+        entries = [
+            entry
+            for entry in entries
+            if entry.learning_source is None or self.learning_source_allowed(entry.learning_source)
+        ]
         if kind == LanguageKind.JARGON:
             return [entry for entry in entries if entry.can_reference_jargon()]
         return [entry for entry in entries if entry.is_enabled]

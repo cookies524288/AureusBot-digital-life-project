@@ -132,6 +132,21 @@ def local_language_scope(perception: Perception) -> str | None:
     return None
 
 
+def allows_learning_scope(scope: str, allows: Callable[[ConversationKey], bool]) -> bool:
+    """复核平台完整地址；认证的本机来源不使用平台路由权限。"""
+    try:
+        parts = json.loads(scope)
+        if not isinstance(parts, list) or not all(isinstance(part, str) for part in parts):
+            return False
+        if len(parts) == 2:
+            return parts[0] in ("web", "terminal") and bool(parts[1])
+        if len(parts) != 5 or not all(parts[:4]) or parts[2] not in ("group", "private"):
+            return False
+        return allows(ConversationKey.from_scope_key(scope))
+    except ValueError:
+        return False
+
+
 def take_language_batch(
     queue: PendingLearningBuffer[QueuedLanguageSample], limit: int
 ) -> tuple[str | None, list[LanguageSample]]:
@@ -265,15 +280,23 @@ async def learn_language(
 ) -> None:
     """独立抽取表达和候选黑话，并只对同会话的有效来源推断。"""
     try:
+        if conversation_key is not None and not store.learning_source_allowed(conversation_key):
+            return
         await asyncio.to_thread(store.observe, samples, ())
         if conversation_key is None:
             return
+
+        async def call_if_allowed(request: OrganRequest) -> OrganResponse:
+            if not store.learning_source_allowed(conversation_key):
+                raise CallRejectedError(request.organ_id, "语言学习来源已撤权")
+            return await call(request)
+
         banned_names = {name.strip().casefold() for name in bot_names if name.strip()}
         for kind in LanguageKind:
             attempts = await _extract(
                 store,
                 organ,
-                call,
+                call_if_allowed,
                 samples,
                 conversation_key,
                 kind,
@@ -281,7 +304,7 @@ async def learn_language(
                 expression_quality if kind == LanguageKind.EXPRESSION else None,
             )
             for attempt in attempts:
-                await _infer(store, organ, call, attempt)
+                await _infer(store, organ, call_if_allowed, attempt)
     except sqlite3.Error:
         logger.exception("语言学习存储失败")
 
@@ -297,7 +320,7 @@ async def _extract(
     expression_quality: ExpressionQuality | None,
 ) -> list[JargonInference]:
     fresh = await asyncio.to_thread(store.pending_extraction, kind, samples)
-    if not fresh:
+    if not fresh or not store.learning_source_allowed(scope):
         return []
     evidence = {sample.record_id: sample for sample in fresh}
     presented = {
