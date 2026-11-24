@@ -1,0 +1,32 @@
+# 长期记忆：保留记忆流日期草稿
+
+状态：待评审
+基线：`55c9fa5`；范围见 [网页与运行交互维护](resource-page-ux.md)。
+
+## 先读
+
+`aureus/web/static/memory-flow-transfer.js` 的记忆流筛选、`aureus/web/static/resource-management.js` 的分页失效保护、`tests/web/test_resource_browser.py` 的合成浏览器夹具。
+
+## 目标与验收
+
+- 日期框是尚未提交的草稿。快捷查询在等待期间只要有任一日期被编辑，就不覆盖两个日期框；「刷新」才把手填范围应用到请求。
+- 没有新编辑时，当前快捷查询回填服务器给出的起止时间。无论是否回填，本次结果的翻页都沿用该范围，不能重算快捷窗口或误用草稿。
+- 连续点击两次快捷查询时，以最后一次发出的查询为准；迟到结果不得覆盖草稿、列表或分页范围。
+
+## 子步骤与自检
+
+- [x] 在 390 px Chrome 合成夹具中延迟快捷响应。修复前 `test_memory_flow_keeps_date_draft_during_shortcut[start/end]` 两例均失败，原因是响应覆盖了手填草稿。
+- [x] 修正记忆流回填后，新回归两例均通过，覆盖迟到响应、固定范围翻页、按草稿刷新和未编辑时正常回填。资源页浏览器测试与 `tests/web/test_memory_transfer_api.py` 合计 29 项通过；整理测试代码后仅复跑新回归，两例均通过。
+- [x] 生产改动仅涉及记忆流筛选。Ruff 规范与格式检查、`node --check aureus/web/static/memory-flow-transfer.js` 和 `git diff --check` 均通过。
+
+## 验证范围
+
+本分支只跑改动专项，未跑全量检查。未操作正式实例。
+
+## 待设计问题
+
+无。
+
+## 不做
+
+不改共用分页器、API、时区语义、其他标签或正式启动方式。只用合成夹具，不读正式资料、不调用真实模型，不改主工作树或远程。

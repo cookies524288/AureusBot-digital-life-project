@@ -1642,6 +1642,86 @@ def test_learning_reflows_when_the_available_height_changes(browser: Browser) ->
     )
 
 
+@pytest.mark.parametrize("edited_field", ["start", "end"])
+def test_memory_flow_keeps_date_draft_during_shortcut(browser: Browser, edited_field: str) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        f"const editedField = {json.dumps(edited_field)};\n"
+        """
+      await waitFor(() => button('记忆流'), '长期记忆页已打开');
+      click('[data-memory-tab="flow"]');
+      await waitFor(() => text('合成事件000') && !button('下一页').disabled, '记忆流首页');
+      const panel = find('#memory-panel-flow');
+      const [start, end] = panel.querySelectorAll('input[type="datetime-local"]');
+      const localTime = value => {
+        const date = new Date(value);
+        return new Date(+date - date.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
+      };
+      const requests = [];
+      const original = window.fetch;
+      window.fetch = (url, options) => {
+        const path = new URL(url, location.href);
+        if (path.pathname !== '/api/resources/memory/flow') return original(url, options);
+        return new Promise(resolve => requests.push({params:path.searchParams, resolve}));
+      };
+      const respond = (index, range, summary) => {
+        requests[index].resolve({ok:true, status:200, headers:new Headers(), json:async () => ({
+          enabled:true, total:99, next_offset:3, conversations:[], ...range,
+          items:[{event_type:'profile_created', recorded_at:range.start,
+            summary, conversations:[]}],
+        })});
+        return new Promise(resolve => setTimeout(resolve, 0));
+      };
+      const oldRange = {start:'2026-01-01T00:00:01.000Z', end:'2026-01-02T00:00:01.000Z'};
+      const currentRange = {start:'2026-02-01T00:00:02.000Z', end:'2026-02-08T00:00:02.000Z'};
+      const newestRange = {start:'2026-03-01T00:00:03.000Z', end:'2026-03-31T00:00:03.000Z'};
+      try {
+        press('最近24小时');
+        press('最近7天');
+        check(requests[0].params.get('hours') === '24' &&
+          requests[1].params.get('hours') === '168', '两次快捷查询都已发出');
+        check(button('下一页').disabled, '读取中不可翻页');
+        const edited = editedField === 'start' ? start : end;
+        check(!edited.matches(':disabled'), '读取中可编辑日期');
+        edited.value = '2025-06-01T12:15:10';
+        edited.dispatchEvent(new Event('input', {bubbles:true}));
+        const draft = [start.value, end.value];
+        respond(1, currentRange, '当前快捷结果');
+        await waitFor(() => text('当前快捷结果'), '后发请求先返回');
+        check(start.value === draft[0] && end.value === draft[1], '快捷响应不得覆盖任一日期草稿');
+        const currentPage = page();
+        await respond(0, oldRange, '先发迟到结果');
+        check(text('当前快捷结果') && !text('先发迟到结果') && page() === currentPage,
+          '迟到响应不得替换当前结果或分页');
+        check(start.value === draft[0] && end.value === draft[1], '迟到响应不得改写日期草稿');
+        press('下一页');
+        const nextQuery = requests[2].params;
+        check(nextQuery.get('start') === currentRange.start &&
+          nextQuery.get('end') === currentRange.end && !nextQuery.has('hours'),
+          '翻页沿用已应用范围');
+        respond(2, currentRange, '已应用范围第二页');
+        await waitFor(() => text('已应用范围第二页'), '已应用范围翻页成功');
+        check(start.value === draft[0] && end.value === draft[1], '翻页不覆盖草稿');
+        press('刷新');
+        for (const [index, field] of ['start', 'end'].entries()) {
+          const expected = draft[index] ? new Date(draft[index]).toISOString() : null;
+          check(requests[3].params.get(field) === expected, '刷新使用手填范围');
+        }
+        respond(3, currentRange, '手填范围结果');
+        await waitFor(() => text('手填范围结果'), '手填范围刷新成功');
+        press('最近30天');
+        respond(4, newestRange, '无编辑的快捷结果');
+        await waitFor(() => text('无编辑的快捷结果'), '无编辑的快捷请求完成');
+        check(start.value === localTime(newestRange.start) &&
+          end.value === localTime(newestRange.end), '未编辑时仍回填两个日期');
+      } finally {
+        window.fetch = original;
+      }
+    """,
+    )
+
+
 def test_memory_image_bookmark_filter_and_flow(browser: Browser) -> None:
     browser.open("images", 390, 740)
     _run(

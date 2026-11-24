@@ -57,6 +57,10 @@
       el('div', {class:'row', style:'flex-wrap:wrap'}, ...shortcuts, refresh));
     const filters = el('form', {}, controls);
     let applied = new URLSearchParams();
+    let dateDraftChanged = false;
+    for (const field of [start, end]) {
+      field.addEventListener('input', () => { dateDraftChanged = true; });
+    }
 
     function localTime(value) {
       const date = new Date(value);
@@ -64,6 +68,7 @@
     }
 
     function apply(hours) {
+      dateDraftChanged = false;
       applied = new URLSearchParams();
       if (conversation.value) applied.set('conversation', conversation.value);
       if (type.value) applied.set('event_type', type.value);
@@ -95,6 +100,7 @@
         applied.delete('hours');
         applied.set('start', data.start);
         applied.set('end', data.end);
+        if (dateDraftChanged) return;
         start.value = localTime(data.start);
         end.value = localTime(data.end);
       },
