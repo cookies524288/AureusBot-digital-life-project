@@ -187,6 +187,35 @@ def test_legacy_history_pages_across_live_boundary_without_guessing(tmp_path: Pa
         rig.close()
 
 
+def test_legacy_private_routes_require_explicit_temporary_group(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    rig = ConfigRig(
+        tmp_path, inbox_store=store, allows_inbox_conversation=lambda key: key.account_id == "1"
+    )
+    route = {"channel": "qq", "account_id": "1", "message_type": "private", "recipient_id": "3"}
+    try:
+        rig.log_in()
+        for body, metadata in (
+            ("普通私聊", {**route, "temporary_group_id": None}),
+            ("临时私聊", {**route, "temporary_group_id": "2"}),
+            ("缺临时群字段", route),
+            ("缺账号", {"channel": "qq", "message_type": "private", "recipient_id": "3"}),
+        ):
+            rig.timeline.append(
+                "message", body, ActorType.PERSON, "3", VisibilityScope.USER_ONLY, metadata=metadata,
+            )
+        catalog = rig.client.get(CONVERSATIONS).json()["conversations"]
+        assert [row["key"]["temporary_group_id"] for row in catalog] == ["2", None]
+        private = {"platform": "qq", "account_id": "1", "kind": "private", "recipient_id": "3"}
+        for params, body in ((private, "普通私聊"), ({**private, "temporary_group_id": "2"}, "临时私聊")):
+            page = rig.client.get(MESSAGES, params=params).json()
+            assert [row["content"] for row in page["messages"]] == [body]
+        archive = rig.client.get(UNCATEGORIZED, params={"source": "timeline"}).json()
+        assert [row["content"] for row in archive["messages"]] == ["缺账号"]
+    finally:
+        rig.close()
+
+
 def test_imported_archive_pages_raw_messages_without_assigning_routes(tmp_path: Path) -> None:
     rig = ConfigRig(tmp_path)
     index = MemoryIndex(rig.paths.database_file, rig.timeline, rig.clock)
