@@ -96,7 +96,7 @@ class Rig:
         heartbeat.attach_channel(CHANNEL_NAME, self.terminal.append)
         self.channel = WebChannel(heartbeat)
         heartbeat.attach_channel(WEB_CHANNEL_NAME, self.channel.show)
-        self.channel.subscribe(self.web.append)
+        self.channel.subscribe(self.accept_on_web)
         config = WebConfig()
         passwords = PasswordStore(core.paths.web_password_file, FAST_HASHER)
         passwords.set_password(GOOD)
@@ -119,6 +119,11 @@ class Rig:
         )
         self.client = TestClient(app, client=(LOCAL, 50000))
         heartbeat.wake_up()
+
+    def accept_on_web(self, message: OutgoingMessage) -> None:
+        self.web.append(message)
+        if message.confirm_delivery is not None:
+            message.confirm_delivery()
 
     def log_in(self) -> None:
         response = self.client.post("/api/login", json={"password": GOOD})

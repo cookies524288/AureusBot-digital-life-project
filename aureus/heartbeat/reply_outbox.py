@@ -66,10 +66,14 @@ class _ConversationOutbox:
 class ReplyOutbox:
     """在心跳中投递到期的分段，等待期间只保存已记录的回复。"""
 
-    def __init__(self, clock: Clock, config: HeartbeatConfig, send: _Send) -> None:
+    def __init__(
+        self, clock: Clock, config: HeartbeatConfig, send: _Send,
+        record_discard: Callable[[TimelineRecord], None],
+    ) -> None:
         self._clock = clock
         self._config = config
         self._send = send
+        self._record_discard = record_discard
         self._conversations: dict[_Address, _ConversationOutbox] = {}
 
     def _typing_delay(self, text: str) -> float:
@@ -123,6 +127,7 @@ class ReplyOutbox:
         self._conversations = {}
         for queue in conversations.values():
             for reply in queue.replies:
+                self._record_discard(reply.record)
                 reply.fail()
 
     def deliver_due(self) -> None:

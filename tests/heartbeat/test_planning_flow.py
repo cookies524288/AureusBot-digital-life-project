@@ -17,12 +17,14 @@ from aureus.common import BodyConfig, BudgetCalendar, HeartbeatConfig, ManualClo
 from aureus.heartbeat import (
     EVENT_MESSAGE,
     EVENT_REPLY_DECLINED,
+    EVENT_REPLY_REFERENCE,
     Heartbeat,
     MessageKind,
     OutgoingMessage,
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.events import EVENT_REPLY_DELIVERED, EVENT_REPLY_DELIVERY_FAILED
 from aureus.identity import Identity
 from aureus.organs import (
     CallAttempt,
@@ -132,6 +134,7 @@ def make_rig(
     used_today: int = 0,
     planner: list[str | BaseException] | None = None,
     replyer: list[str | BaseException | Callable[[OrganRequest], str]] | None = None,
+    sink: Callable[[OutgoingMessage], None] | None = None,
     **heartbeat: Any,
 ) -> Rig:
     clock = ManualClock(NOW)
@@ -167,7 +170,7 @@ def make_rig(
         body=Body(BodyConfig(), MONTHLY_LIMIT, ledger, clock, CALENDAR),
     )
     rig = Rig(ledger, timeline, organs, beating)
-    beating.attach_channel(CHANNEL, rig.sent.append)
+    beating.attach_channel(CHANNEL, sink or rig.sent.append)
     beating.wake_up()
     made.append(rig)
     return rig
@@ -260,6 +263,30 @@ async def test_review_reason_returns_only_to_planner_then_sends_rewrite(
     assert record.content == "后来呢"
     assert record.metadata["plan"]["intent"] == "自然地问后来呢"
     assert [(item.kind, item.content) for item in rig.sent] == [(MessageKind.REPLY, "后来呢")]
+    [planning] = rig.records(EVENT_REPLY_REFERENCE)
+    [delivered] = rig.records(EVENT_REPLY_DELIVERED)
+    assert planning.metadata["round_id"] == delivered.metadata["round_id"]
+    assert delivered.metadata["segment"] == 1
+    assert delivered.content == "后来呢"
+    assert any(action["action"] == "review" for action in planning.metadata["actions"])
+    assert REVIEW_REASON not in str(planning.metadata)
+
+
+async def test_round_keeps_reference_but_no_sent_text_when_channel_refuses(
+    made: list[Rig], tmp_path: Path,
+) -> None:
+    def refuse(message: OutgoingMessage) -> None:
+        assert message.kind is MessageKind.REPLY
+        raise OSError("合成通道故障")
+
+    rig = make_rig(made, tmp_path, sink=refuse)
+    await rig.exchange("在吗")
+
+    [planning] = rig.records(EVENT_REPLY_REFERENCE)
+    [failure] = rig.records(EVENT_REPLY_DELIVERY_FAILED)
+    assert failure.metadata["round_id"] == planning.metadata["round_id"]
+    assert any(action.get("reference") for action in planning.metadata["actions"])
+    assert rig.records(EVENT_REPLY_DELIVERED) == []
 
 
 @pytest.mark.parametrize("second_plan", [DECLINE, "坏格式", REVISED_PLAN])

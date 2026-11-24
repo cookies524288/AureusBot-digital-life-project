@@ -11,6 +11,7 @@ from zipfile import ZipFile
 import pytest
 
 from aureus.common import ManualClock, MemoryConfig
+from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
 from aureus.memory import HistoricalMemory, MemoryEntry, MemoryEvidence, MemoryIndex, MemorySource
 from aureus.memory.consolidation import ConsolidationBatch, ConsolidationItem
 from aureus.memory.imported_messages import ImportedPlatformHistory
@@ -41,15 +42,19 @@ def test_platform_originals_do_not_enter_memory_catalog_search_or_exports(
     path, timeline, index = memory
     old = timeline.append("message", "旧入站合成原句", ActorType.USER)
     new = timeline.append("message", "新外发合成原句", ActorType.ME)
+    delivered = timeline.append(EVENT_REPLY_DELIVERED, "确认投递的合成原句", ActorType.ME)
     experience = timeline.append("diary_written", "整理后的日记", ActorType.ME)
-    assert index.index_more(10, lambda row: MemoryEntry("同名", row.content)) == 3
+    assert index.index_more(10, lambda row: MemoryEntry("同名", row.content)) == 4
     with closing(sqlite3.connect(path)) as conn, conn:
         assert conn.execute("SELECT record_id FROM memory_index").fetchall() == [(experience.id,)]
-        conn.execute(
+        conn.executemany(
             "INSERT INTO memory_index(rowid, record_id, content, actor_label, recorded_at) "
             "VALUES (?, ?, ?, '同名', ?)",
-            (old.id, old.id, old.content, old.timestamp.isoformat()),
+            [(record.id, record.id, record.content, record.timestamp.isoformat())
+             for record in (old, delivered)],
         )
+    batch = index.consolidation_batch(1)
+    assert batch is not None and [item.reference for item in batch.items] == [f"timeline:{experience.id}"]
 
     imported = [
         HistoricalMemory(MemorySource(account, "main", table, (1,)), text, "同名")
@@ -75,6 +80,7 @@ def test_platform_originals_do_not_enter_memory_catalog_search_or_exports(
     assert hit.source == paragraph.source and hit.evidence == paragraph.evidence
     assert index.get_history(imported[0].source) is None
     assert not index.update_resource("live", old.id, "合成覆盖", True)
+    assert not index.update_resource("live", delivered.id, "合成覆盖", True)
     assert not index.set_resources_removed([("live", old.id)], True)
     assert timeline.get(old.id) == old and timeline.get(new.id) == new
     platform = ImportedPlatformHistory(path).page(before_id=None, limit=10)

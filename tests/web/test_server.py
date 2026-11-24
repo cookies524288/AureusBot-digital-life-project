@@ -28,6 +28,8 @@ from PIL import Image
 from aureus.channels import WebChannel
 from aureus.common import ManualClock, WebConfig
 from aureus.heartbeat import EVENT_MESSAGE, Perception
+from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
+from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.memory.emoji import MAX_EMOJI_BYTES, EmojiStore, ImportedEmoji
 from aureus.memory.history import MemorySource
 from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
@@ -864,6 +866,30 @@ def test_history_only_contains_messages(rig: Rig) -> None:
     client = rig.client()
     login(client, GOOD)
     assert client.get("/api/history").json() == []
+
+
+def test_chat_history_and_reconnect_include_only_confirmed_reply_segments(rig: Rig) -> None:
+    set_password(rig)
+    add_message(rig, "来信", ActorType.USER, "web")
+    reply = rig.timeline.append(
+        EVENT_MESSAGE, "首段\n取消的第二段", ActorType.ME,
+        visibility=VisibilityScope.USER_ONLY, metadata={INTERNAL_REPLY_RECORD: True},
+    )
+    delivery = rig.timeline.append(
+        EVENT_REPLY_DELIVERED, "首段", ActorType.ME,
+        visibility=VisibilityScope.USER_ONLY,
+        metadata={"reply_id": reply.id, "segment": 1, "channel": "web"},
+    )
+    rig.timeline.append(EVENT_REPLY_DELIVERED, "其他范围", ActorType.ME)
+    client = rig.client()
+    assert client.get("/api/history?replies_only=true").status_code == 401
+    login(client, GOOD)
+
+    history = client.get("/api/history").json()
+    assert [item["content"] for item in history] == ["来信", "首段"]
+    assert client.get("/api/history?replies_only=true").json() == history[1:]
+    assert history[1]["id"] == delivery.id
+    assert history[1]["delivery_key"] == f"{reply.id}:1"
 
 
 def test_history_limit_is_bounded_and_keeps_the_latest(rig: Rig) -> None:

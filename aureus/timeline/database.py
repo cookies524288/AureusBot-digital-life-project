@@ -263,6 +263,9 @@ class TimelineDatabase:
                 " AND actual.type = wanted.type AND actual.value IS wanted.value)"
             )
             params.append(_encode_metadata({key: value}))
+        for key in query.without_metadata:
+            conditions.append("NOT EXISTS (SELECT 1 FROM json_each(timeline.metadata) WHERE key = ?)")
+            params.append(key)
 
         where_clause = " AND ".join(conditions)
         order = "DESC" if query.latest else "ASC"
