@@ -31,8 +31,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from aureus.channels import WebChannel
-from aureus.channels.qq_desktop import QQDesktop
+from aureus.channels import QQAvatars, QQDesktop, WebChannel
 from aureus.common import Clock, WebConfig
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
@@ -256,6 +255,7 @@ def create_app(
     inbox_archive_account_id: str | None = None,
     read_inbox_attachment: AttachmentReader | None = None,
     qq_desktop: QQDesktop | None = None,
+    qq_avatars: QQAvatars | None = None,
     allows_qq_delivery: Callable[[], bool] | None = None,
     resource_language: LanguageStore | None = None,
     resource_memory: MemoryIndex | None = None,
@@ -535,6 +535,8 @@ def create_app(
         inbox_archive_account_id,
         read_inbox_attachment,
         resource_emojis,
+        qq_avatars,
+        sessions.is_active,
     )
     register_inbox_operations(
         app, require_ready, sessions.is_active, _same_http_origin,

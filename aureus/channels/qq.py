@@ -94,7 +94,9 @@ class QQChannel:
         self._transport = OneBotTransport(
             config, token.get_secret_value() if token else None, self._receive
         )
-        self.desktop = QQDesktop(self._transport, self.allows_inbox_conversation, self._save_delivered)
+        self.desktop = QQDesktop(
+            self._transport, self.allows_inbox_conversation, self._save_delivered
+        )
         self._seen: OrderedDict[tuple[ConversationKey, str], None] = OrderedDict()
         self._sending: set[asyncio.Task[None]] = set()
         self._last_send: dict[ConversationKey, asyncio.Task[None]] = {}

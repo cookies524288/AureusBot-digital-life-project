@@ -642,6 +642,71 @@ def test_inbox_components_render_in_order_and_treat_poke_hints_as_text(browser: 
     """)
 
 
+def test_narrow_qq_desktop_confirms_and_keeps_operations_in_selected_conversation(
+    browser: Browser,
+) -> None:
+    browser.open("inbox", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof executeInboxOperation === 'function', '桌面脚本未就绪');
+      const group = {platform:'qq',account_id:'1',kind:'group',recipient_id:'2'};
+      const received = {source:'inbox',id:20,conversation:group,direction:'incoming',
+        sender_id:'3',platform_message_id:'-10',content:'合成文字'};
+      const posted = [];
+      window.api = async (path, method, body, headers) => {
+        if (method === 'POST') {
+          posted.push({path, body, headers});
+          const data = path.includes('/file?') ? {file_id:'fixture-file'} : {message_id:'-55'};
+          return {ok:true,data};
+        }
+        if (path.startsWith('/api/inbox/operations?')) return {ok:true,data:{enabled:true}};
+        return {ok:true,data:{messages:[received],next_before_id:null}};
+      };
+      const conversation = {key:group,name:'合成群'};
+      const other = {key:{...group,recipient_id:'4'},name:'另一群'};
+      await showPage('inbox', () => {});
+      inbox.view = 'qq';
+      inbox.conversations = [conversation, other];
+      await renderInboxView();
+      const desktopPage = document.querySelector('#page-inbox');
+      check(desktopPage.scrollWidth <= desktopPage.clientWidth, '窄屏不得横向溢出');
+      const messages = document.querySelector('#inbox-messages');
+      await waitFor(() => !messages.querySelector('.inbox-avatar img'), '头像失败时回到像素人头');
+      const fallback = messages.querySelector('.inbox-avatar svg use');
+      check(fallback.getAttribute('href') === '#i-inbox-person', '缺省头像');
+      const dialog = document.querySelector('#confirm-dialog');
+      const textarea = document.querySelector('#inbox-text');
+      messages.querySelectorAll('.inbox-row-actions button')[0].click();
+      messages.querySelectorAll('.inbox-row-actions button')[1].click();
+      textarea.value = '合成外发';
+      document.querySelector('#inbox-send-text').requestSubmit();
+      await waitFor(() => dialog.open, '发送前确认');
+      check(dialog.textContent.includes('合成群') && dialog.textContent.includes('引用消息 -10'),
+        '确认显示目的地与引用');
+      await selectInboxConversation(other);
+      await selectInboxConversation(conversation);
+      dialog.close('yes');
+      await waitFor(() => !inbox.operating, '旧确认结束');
+      check(posted.length === 0 && textarea.value === '', '切走再切回也不能使用旧确认');
+      textarea.value = '只发文字';
+      document.querySelector('#inbox-send-text').requestSubmit();
+      await waitFor(() => dialog.open, '再次确认');
+      dialog.close('yes');
+      await waitFor(() => posted.length === 1 && !inbox.operating, '等待合成消息回执');
+      check(posted[0].body.quote === null && posted[0].body.text === '只发文字', '不默认引用');
+      const input = document.querySelector('#inbox-file');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['hello'], 'sample.txt', {type:'text/plain'}));
+      input.files = transfer.files;
+      document.querySelector('#inbox-send-file').requestSubmit();
+      await waitFor(() => dialog.open, '必须确认文件传输');
+      dialog.close('yes');
+      await waitFor(() => posted.length === 2 && !inbox.operating, '等待合成文件回执');
+      check(posted[1].body instanceof File && posted[1].path.includes('name=sample.txt'),
+        '上传选件的实际字节');
+      check(desktopPage.textContent.includes('文件 fixture-file'), '只显示收到的文件回执');
+    """)
+
+
 @pytest.mark.parametrize("motion", ["no-preference", "reduce"])
 def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser, motion: str) -> None:
     browser.open("learning", 1280, 900)

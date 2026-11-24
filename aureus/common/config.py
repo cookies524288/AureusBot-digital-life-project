@@ -295,6 +295,7 @@ class WebConfig(BaseModel):
     login_max_failures: int = Field(default=7, ge=1)
     login_window_seconds: int = Field(default=300, ge=1)
     login_lockout_seconds: int = Field(default=30, ge=1)
+    qq_avatars_enabled: bool = True
 
 
 class QQConfig(BaseModel):
