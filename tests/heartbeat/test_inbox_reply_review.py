@@ -115,7 +115,7 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
         working_memory=WorkingMemory(timeline, config),
         identity=Identity.model_validate(
             {
-                "facts": {"name": "小豆", "birthday": "2026-11-23"},
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
                 "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
                 "persona": {"immutable": "温和。"},
             }

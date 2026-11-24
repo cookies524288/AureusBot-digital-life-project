@@ -20,8 +20,13 @@ class Facts(BaseModel):
     alias_names: list[str] = Field(
         default_factory=list, description="昵称列表：用户可以用这些名字称呼 Bot"
     )
-    gender: str = Field(default="", description="性别，可以留空")
+    gender: str = Field(default="", description="性别；旧身份允许缺省或使用自由文本")
     birthday: str = Field(..., description="出生日期：YYYY-MM-DD 格式")
+
+    @property
+    def pronoun(self) -> str:
+        """按当前身份给出称谓，不修改旧性别值。"""
+        return {"男": "他", "女": "她"}.get(self.gender, "Ta")
 
 
 class UserAccount(BaseModel):

@@ -81,7 +81,7 @@ def run_persona_command(
     finally:
         history.close()
     if not versions:
-        write_line("还没有身份的版本记录：它还没有运行过。")
+        write_line("还没有身份的版本记录：助手还没有运行过。")
         return EXIT_OK
     if layer is None:
         write_line(f"各层混在一起最新的 {len(versions)} 个版本（从早到晚）：")
@@ -120,7 +120,7 @@ def _revert(version_id: int, paths: AureusPaths, write_line: WriteLine) -> int:
             finally:
                 history.close()
     except SingleInstanceLockError:
-        write_line("它正在运行，请用网页设置页的回退。")
+        write_line("助手正在运行，请用网页设置页的回退。")
     except (IdentityError, sqlite3.Error, OSError) as error:
         print(f"错误：人设回退失败（{type(error).__name__}）：{error}", file=sys.stderr)
     return EXIT_FAILURE

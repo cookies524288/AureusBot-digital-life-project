@@ -420,6 +420,8 @@ def create_app(
         request: Request, _token: Annotated[str, Depends(require_session)]
     ) -> dict[str, bool | str]:
         result: dict[str, bool | str] = {"must_change_password": auth.password_is_default}
+        if settings is not None and not auth.password_is_default:
+            result["bot_pronoun"] = settings.heartbeat.identity.facts.pronoun
         if qq_link is not None and not auth.password_is_default:
             result["qq_link"] = True
         if request_restart is not None and not auth.password_is_default:

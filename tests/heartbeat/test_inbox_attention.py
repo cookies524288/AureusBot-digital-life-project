@@ -268,7 +268,7 @@ async def test_active_conversation_keeps_each_batch_separate(tmp_path: Path) -> 
 
     identity = Identity.model_validate(
         {
-            "facts": {"name": "小豆", "birthday": "2026-11-23"},
+            "facts": {"name": "测试助手", "birthday": "2026-11-23"},
             "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
             "persona": {"immutable": "温和。"},
         }
@@ -399,7 +399,7 @@ async def test_priority_preemption_discards_stale_selection_reply_or_segments(
 
     identity = Identity.model_validate(
         {
-            "facts": {"name": "小豆", "birthday": "2026-11-23"},
+            "facts": {"name": "测试助手", "birthday": "2026-11-23"},
             "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
             "persona": {"immutable": "温和。"},
         }
@@ -518,7 +518,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
             organs=organs,
             identity=Identity.model_validate(
                 {
-                    "facts": {"name": "小豆", "birthday": "2026-11-23"},
+                    "facts": {"name": "测试助手", "birthday": "2026-11-23"},
                     "user": {"name": "主人"},
                     "persona": {"immutable": "温和。"},
                 }

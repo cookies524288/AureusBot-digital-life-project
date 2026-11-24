@@ -21,7 +21,7 @@ START = datetime(2026, 11, 19, 8, 0, tzinfo=UTC)
 IDENTITY = textwrap.dedent(
     """\
     [facts]
-    name = "测试豆"
+    name = "测试助手"
     birthday = "2008-01-01"
 
     [user]

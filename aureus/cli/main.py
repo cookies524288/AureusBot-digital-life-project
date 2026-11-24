@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="命令")
     init = commands.add_parser("init", help="建好数据根目录；没指定位置时会问你放哪里")
     init.add_argument("--yes", action="store_true", help="接受默认位置，不再询问")
-    chat = commands.add_parser("chat", help="启动它，在终端里聊天")
+    chat = commands.add_parser("chat", help="启动助手，在终端里聊天")
     chat.add_argument(
         "--fake", action="store_true", help="用假器官：不调用模型、不花钱，用来试运行"
     )
@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     persona.add_argument(
         "--revert", type=positive_int, metavar="版本号", help="恢复到旧版本，运行中请用网页"
     )
-    agenda = commands.add_parser("agenda", help="查看它答应过的事；--cancel 编号 取消一条")
+    agenda = commands.add_parser("agenda", help="查看助手答应过的事；--cancel 编号 取消一条")
     agenda.add_argument("--all", action="store_true", help="也列出已经结束的")
     agenda.add_argument(
         "--limit",
@@ -100,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     interests = commands.add_parser("interests", help="查看兴趣和最近收获")
     interests.add_argument("--remove", type=positive_int, metavar="编号", help="结束这一条兴趣")
     monitor = commands.add_parser(
-        "monitor", help="启动观察台：在浏览器里只读地看它的内部状态（只绑本机，要装 Streamlit）"
+        "monitor", help="启动观察台：在浏览器里只读地看助手的内部状态（只绑本机，要装 Streamlit）"
     )
     monitor.add_argument(
         "--port",
@@ -112,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     configure_lab_parser(commands.add_parser("lab", help="运行可复现的离线实验"))
     configure_maibot_parser(commands.add_parser("migrate-maibot", help="盘点并迁移 MaiBot 数据"))
     halt = commands.add_parser(
-        "halt", help="急停：它不再调用模型、不再回复，消息照常记录（运行中的实例下一拍生效）"
+        "halt", help="急停：助手不再调用模型、不再回复，消息照常记录（运行中的实例下一拍生效）"
     )
     halt.add_argument(
         "reason", nargs="?", default="", metavar="原因", help="记进时间线的原因，可以不写"

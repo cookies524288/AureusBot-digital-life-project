@@ -172,7 +172,7 @@ def test_revert_running_instance_refuses_without_changing_file_or_database(
     before = (paths.identity_file.read_bytes(), paths.database_file.read_bytes())
     with IdentityService(paths).acquire_lock():
         assert main(["--home", str(paths.home), "persona", "--revert", str(version_id)]) == 1
-    assert "它正在运行，请用网页设置页的回退" in capsys.readouterr().out
+    assert "助手正在运行，请用网页设置页的回退" in capsys.readouterr().out
     assert (paths.identity_file.read_bytes(), paths.database_file.read_bytes()) == before
 
 

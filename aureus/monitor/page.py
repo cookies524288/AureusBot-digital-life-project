@@ -40,7 +40,7 @@ def _percent(value: float | None) -> str:
 
 def _show_latest(sample: BodySample | None) -> None:
     if sample is None:
-        st.info("还没有身体信号样本：它还没运行，或 [body] sample_enabled 关着。")
+        st.info("还没有身体信号样本：助手还没运行，或 [body] sample_enabled 关着。")
         return
     st.caption(f"最新样本：{format_local_time(sample.timestamp)}")
     cells = st.columns(6)

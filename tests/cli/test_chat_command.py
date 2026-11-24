@@ -18,7 +18,7 @@ from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
 IDENTITY = textwrap.dedent(
     """\
     [facts]
-    name = "测试豆"
+    name = "测试助手"
     birthday = "2008-01-01"
 
     [user]
@@ -71,7 +71,7 @@ def run_chat(paths: AureusPaths, lines: list[str]) -> list[str]:
 
     def write_line(text: str) -> None:
         output.append(text)
-        if text.startswith("测试豆："):
+        if text.startswith("测试助手："):
             replied.set()
 
     code = run_chat_command(FAKE, paths, scripted_input(lines, replied), write_line)
@@ -90,7 +90,7 @@ def read_timeline(paths: AureusPaths) -> list:
 
 def test_chat_replies_and_records_everything(paths: AureusPaths) -> None:
     output = run_chat(paths, ["你好呀", "/quit"])
-    assert any(line.startswith("测试豆：") for line in output)
+    assert any(line.startswith("测试助手：") for line in output)
     assert output[-1] == "已关闭。"
     records = read_timeline(paths)
     messages = [record for record in records if record.event_type == EVENT_MESSAGE]
@@ -115,7 +115,7 @@ def test_occupied_web_port_is_not_advertised_and_terminal_still_replies(
     error = next(line for line in output if line.startswith("网页没有开启："))
     assert "端口 18780" in error
     assert not any(line.startswith("网页：http://") for line in output)
-    assert any(line.startswith("测试豆：") for line in output)
+    assert any(line.startswith("测试助手：") for line in output)
 
 
 def test_end_of_input_shuts_down_cleanly(paths: AureusPaths) -> None:
@@ -135,7 +135,7 @@ def test_restart_reopens_core_and_reads_next_command(paths: AureusPaths) -> None
 def test_restart_says_how_long_it_was_down(paths: AureusPaths) -> None:
     run_chat(paths, [])
     output = run_chat(paths, [])
-    woke = next(line for line in output if line.startswith("它醒来了。"))
+    woke = next(line for line in output if line.startswith("Ta醒来了。"))
     # 上次是 /quit 或输入结束正常关闭的，写了关闭记录，所以说的是准确的停机时长。
     assert "关闭，停了" in woke
     assert "没有留下关闭记录" not in woke

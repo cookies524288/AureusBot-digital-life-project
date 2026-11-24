@@ -13,6 +13,7 @@ from aureus.heartbeat import MessageKind, OutgoingMessage, Perception, TrustLeve
 class FakeHeartbeat:
     def __init__(self, accepting: bool = True) -> None:
         self.accepting = accepting
+        self.bot_pronoun = "Ta"
         self.received: list[Perception] = []
         self.stop_requests = 0
         self.halts: list[str] = []
@@ -114,6 +115,19 @@ def test_help_and_unknown_commands() -> None:
     assert "/state" in terminal.output[0]
     assert "不认识命令 /dance" in terminal.output[1]
     assert terminal.heartbeat.received == []
+
+
+def test_terminal_copy_uses_the_current_identity_pronoun() -> None:
+    terminal = Terminal()
+
+    terminal.heartbeat.bot_pronoun = "她"
+    terminal.channel.handle_line("/help")
+    terminal.heartbeat.bot_pronoun = "他"
+    terminal.channel.handle_line("/halt")
+
+    assert "和她说话" in terminal.output[0]
+    assert "看她此刻的状态" in terminal.output[0]
+    assert "他不会再调用模型" in terminal.output[1]
 
 
 def test_text_refused_during_shutdown_is_reported() -> None:

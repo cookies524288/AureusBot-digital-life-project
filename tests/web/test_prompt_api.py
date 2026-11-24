@@ -41,7 +41,7 @@ from tests.web.test_timeline_api import NOW
 
 IDENTITY = Identity.model_validate(
     {
-        "facts": {"name": "测试豆", "birthday": "2000-01-01"},
+        "facts": {"name": "测试助手", "birthday": "2000-01-01"},
         "user": {"name": "测试用户"},
         "persona": {
             "immutable": "温和。",
@@ -315,4 +315,4 @@ async def test_save_invalid_reset_restart_and_upgrade_share_the_live_default(
     )
     assert upgraded.snapshot()["reply_length"].template == "短一点 $length。"
     assert rig.paths.identity_file.read_bytes() == identity_bytes
-    assert json.loads(IDENTITY.model_dump_json())["facts"]["name"] == "测试豆"
+    assert json.loads(IDENTITY.model_dump_json())["facts"]["name"] == "测试助手"

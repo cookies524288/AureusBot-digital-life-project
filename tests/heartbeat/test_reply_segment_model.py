@@ -98,7 +98,7 @@ async def test_fast_model_only_gets_final_reply_through_gateway(
         emergency_stop=stop,
         identity=Identity.model_validate(
             {
-                "facts": {"name": "小豆", "birthday": "2026-11-23"},
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
                 "user": {"name": "维护者"},
                 "persona": {"immutable": "温和。"},
             }
