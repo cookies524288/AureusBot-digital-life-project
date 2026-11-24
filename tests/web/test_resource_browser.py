@@ -1118,9 +1118,6 @@ def test_memory_batch_remove_and_restore(browser: Browser) -> None:
       const list = () => find('#memory-result');
       const boxes = () => [...list().querySelectorAll('input[type="checkbox"]')];
       const toggle = () => find('#memory-toggle-removed');
-      const dialog = document.querySelector('#editor-dialog');
-      const dialogButton = label => [...dialog.querySelectorAll('button')]
-        .find(node => node.textContent.trim() === label);
       const writes = [];
       const fetchOriginal = window.fetch;
       window.fetch = (url, options) => {
@@ -1130,6 +1127,9 @@ def test_memory_batch_remove_and_restore(browser: Browser) -> None:
         return fetchOriginal(url, options);
       };
       await waitFor(() => text('合成记忆000'), '文字记忆初始查询');
+      const dialog = document.querySelector('#editor-dialog');
+      const dialogButton = label => [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent.trim() === label);
       find('#memory-search [name="q"]').value = '合成批量';
       click('#memory-search [name="disabled"]');
       await waitFor(() => text('合成批量000') && !button('下一页').disabled, '筛出多页的批量用例');
