@@ -173,7 +173,7 @@ def register_resource_routes(
     """注册资源浏览和维护，使用工作线程里的独立数据库连接。"""
     review_clock = clock if clock is not None else SystemClock()
 
-    def scope_targets() -> dict[str, str]:
+    def known_conversations(*, include_temporary: bool = False) -> dict[str, str]:
         if inbox is None:
             return {}
         labels = {"group": "群聊", "private": "私聊"}
@@ -182,9 +182,15 @@ def register_resource_routes(
                 f"{conversation.name} · {labels[conversation.key.kind]} "
                 f"{conversation.key.recipient_id} ({conversation.key.platform} / "
                 f"{conversation.key.account_id})"
+                + (
+                    f" · 临时私聊，来自群 {conversation.key.temporary_group_id}"
+                    if conversation.key.temporary_group_id is not None
+                    else ""
+                )
             )
             for conversation in inbox.list_conversations()
-            if conversation.key.kind in labels and conversation.key.temporary_group_id is None
+            if conversation.key.kind in labels
+            and (include_temporary or conversation.key.temporary_group_id is None)
         }
 
     def require_emoji_editor(
@@ -445,18 +451,33 @@ def register_resource_routes(
         review: ExpressionReviewStatus | None = None,
         removed: bool = False,
         conversation_key: str = "",
+        origin_conversation_key: str = "",
+        authorized_conversation_key: str = "",
         q: Annotated[str, Query(max_length=200)] = "",
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
     ) -> dict[str, Any]:
         def query() -> tuple[list[dict[str, Any]], int]:
-            if language is None or (conversation_key and conversation_key not in scope_targets()):
+            if language is None:
+                return [], 0
+            if conversation_key or authorized_conversation_key:
+                targets = known_conversations()
+                if any(
+                    key and key not in targets
+                    for key in (conversation_key, authorized_conversation_key)
+                ):
+                    return [], 0
+            if origin_conversation_key and origin_conversation_key not in known_conversations(
+                include_temporary=True
+            ):
                 return [], 0
             rows, total = language.browse_page(
                 kind,
                 offset,
                 limit,
                 conversation_key=conversation_key,
+                origin_conversation_key=origin_conversation_key,
+                authorized_conversation_key=authorized_conversation_key,
                 text=q,
                 is_enabled=(recall == "enabled") if recall else None,
                 review=review,
@@ -472,11 +493,18 @@ def register_resource_routes(
             "next_offset": offset + limit if offset + limit < total else None,
         }
 
+    @app.get("/api/resources/learning/origins")
+    async def list_learning_origins(
+        _token: Annotated[str, Depends(require_ready)],
+    ) -> dict[str, Any]:
+        targets = await asyncio.to_thread(known_conversations, include_temporary=True)
+        return {"items": [{"key": key, "label": label} for key, label in targets.items()]}
+
     @app.get("/api/resources/learning/scope")
     async def list_learning_scope_targets(
         _token: Annotated[str, Depends(require_ready)],
     ) -> dict[str, Any]:
-        targets = await asyncio.to_thread(scope_targets)
+        targets = await asyncio.to_thread(known_conversations)
         return {"items": [{"key": key, "label": label} for key, label in targets.items()]}
 
     @app.post("/api/resources/learning/scope")
@@ -489,7 +517,7 @@ def register_resource_routes(
             raise HTTPException(403, "请从当前网页设置语言包会话范围。")
         if language is None:
             raise HTTPException(409, "学习功能当前关闭。")
-        targets = await asyncio.to_thread(scope_targets)
+        targets = await asyncio.to_thread(known_conversations)
         keys = tuple(dict.fromkeys(body.conversation_keys))
         if any(key not in targets for key in keys):
             raise HTTPException(422, "所选目标不是已知群聊或普通私聊。")

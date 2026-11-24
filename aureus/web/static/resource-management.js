@@ -378,14 +378,16 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const disabled = el('label', {}, el('input', {name:'disabled', type:'checkbox'}), ' 显示停用和待映射');
     const removed = el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除');
     const reviewFilter = kind === 'expression' ? el('select', {name:'review', 'aria-label':'审核状态'}, ...reviewOptions('全部')) : null;
-    const scopeDescription = '会话筛选按学习来源或导入包授权浏览，不改变实际召回范围。';
+    const scopeDescription = '来自会话按已确认的学习来源筛选；授权会话只筛选明确授权的语言包。筛选不改变实际召回范围。';
     const scopeHint = el('p', {class:'muted', id:'learning-scope-hint-' + kind,
       'aria-live':'polite', text:scopeDescription});
-    const all = el('option', {value:'', text:'全部资料'});
-    const scope = el('select', {name:'conversation_key', 'aria-label':'浏览会话',
-      'aria-describedby':scopeHint.id, disabled:true}, all);
+    const conversationFilter = name => el('select', {name, 'aria-describedby':scopeHint.id, disabled:true});
+    const origin = conversationFilter('origin_conversation_key');
+    const authorized = conversationFilter('authorized_conversation_key');
+    const originLabels = new Map();
     const toolbar = searchForm('搜索' + learningLabels[kind], '搜索词、释义或例句', disabled, removed,
-      reviewFilter && el('label', {}, '审核状态 ', reviewFilter), scope);
+      reviewFilter && el('label', {}, '审核状态 ', reviewFilter),
+      el('label', {}, '来自会话 ', origin), el('label', {}, '授权会话 ', authorized));
     const add = action('添加' + learningLabels[kind], () => editLearning(kind, pager.read));
     const upload = action('导入', () => importLearning(kind, pager.read));
     const download = action('导出', () => {
@@ -416,9 +418,10 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         + (item.review_status ? ' · ' + reviewLabels[item.review_status] : '');
       const open = () => detail(title, field(kind === 'jargon' ? '释义' : '使用场景', item.detail),
         field('例句', item.example), field('证据数', item.count), field('发言者', item.speakers.join('、')),
-        field('时间线证据', item.evidence_ids.join('、')), field('迁入来源', item.source_refs.map(sourceId).join('；')),
-        item.package_source != null && field('包内来源会话', item.package_source || '未提供名称'),
-        item.package_source != null && field('已授权会话数', item.scope_keys.length),
+        field('时间线证据', item.evidence_ids.join('、')), field('来源证据', item.source_refs.map(sourceId).join('；')),
+        field('来自会话', originLabels.get(item.learning_source) || (item.learning_source ? '已记录来源键' : '未确认')),
+        item.package_source != null && field('包内所载会话名称', item.package_source || '未提供名称'),
+        item.package_source != null && field('授权会话数', item.scope_keys.length),
         item.original && field('原件', item.original.filter(Boolean).join('\n')),
         item.review_status && field('审核状态', reviewLabels[item.review_status]),
         item.review_status && expressionReviewHistory(item),
@@ -434,30 +437,41 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       return record(title, open, batch.checkbox(item));
     }
     const pager = searchable({panel, id:'learning-' + kind, render,
-      empty:() => scope.value ? '该会话没有符合条件的资料' : '没有符合条件的记录', prepare:() => {
+      empty:() => origin.value || authorized.value ? '该会话没有符合条件的资料' : '没有符合条件的记录', prepare:() => {
       batch.clear(); for (const tool of tools) tool.disabled = true;
     }, loaded:data => { for (const tool of tools) tool.disabled = !data.enabled; }}, toolbar, '/api/resources/learning',
     fields => ({kind, q:fields.q.value, recall:fields.disabled.checked || fields.removed.checked ? '' : 'enabled',
-      removed:fields.removed.checked, conversation_key:scope.value,
+      removed:fields.removed.checked, origin_conversation_key:origin.value, authorized_conversation_key:authorized.value,
       ...(fields.review?.value ? {review:fields.review.value} : {})}));
     let scopeGeneration = 0;
-    async function loadScopes() {
+    function loadScopes() {
       const generation = ++scopeGeneration;
-      scope.disabled = true;
-      scope.replaceChildren(all);
-      scopeHint.textContent = '正在确认会话列表；当前浏览全部资料。' + scopeDescription;
-      pager.apply();
-      const response = await api(scopeEndpoint);
-      if (generation !== scopeGeneration) return;
-      if (!response.ok) {
-        scopeHint.textContent = '会话列表读取失败；当前仅可浏览全部资料。' + scopeDescription;
-        return;
+      const filters = [[origin, '/api/resources/learning/origins', '来源'], [authorized, scopeEndpoint, '授权']];
+      const statuses = new Map(filters.map(([control, , label]) => [control, `正在确认${label}会话。`]));
+      const all = () => el('option', {value:'', text:'全部资料'});
+      const updateHint = () => { scopeHint.textContent = [...statuses.values()].join('') + scopeDescription; };
+      originLabels.clear();
+      for (const [control] of filters) {
+        control.disabled = true;
+        control.replaceChildren(all());
       }
-      scope.replaceChildren(all, ...response.data.items.map(target =>
-        el('option', {value:target.key, text:target.label})));
-      scope.disabled = !response.data.items.length;
-      scopeHint.textContent = (scope.disabled ? '暂无已知会话；当前仅可浏览全部资料。' : '')
-        + scopeDescription;
+      updateHint();
+      pager.apply();
+      async function load(control, endpoint, label) {
+        const response = await api(endpoint);
+        if (generation !== scopeGeneration) return;
+        if (!response.ok) statuses.set(control, `${label}会话列表读取失败，仍可浏览全部资料。`);
+        else {
+          control.replaceChildren(all(), ...response.data.items.map(target => {
+            if (control === origin) originLabels.set(target.key, target.label);
+            return el('option', {value:target.key, text:target.label});
+          }));
+          control.disabled = !response.data.items.length;
+          statuses.set(control, control.disabled ? `暂无已知${label}会话。` : '');
+        }
+        updateHint();
+      }
+      for (const [control, endpoint, label] of filters) load(control, endpoint, label);
     }
     return {
       show() { loadScopes(); return pager.show(); },
