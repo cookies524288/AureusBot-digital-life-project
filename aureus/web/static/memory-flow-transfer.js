@@ -88,11 +88,11 @@
     });
     panel.replaceChildren(filters);
     const pager = createResourcePager({el, panel, id:'memory-flow', render:renderEntry, error:fail,
-      empty:() => '没有符合条件的记忆事件', request:({offset, limit}) => {
+      empty:() => '没有符合条件的记忆事件', request:({offset, limit, signal}) => {
         const params = new URLSearchParams(applied);
         params.set('offset', offset);
         params.set('limit', limit);
-        return api(flowPath + '?' + params);
+        return api(flowPath + '?' + params, 'GET', undefined, {}, signal);
       }, loaded:data => {
         const selected = conversation.value;
         conversation.replaceChildren(el('option', {value:'', text:'全部聊天流'}),
