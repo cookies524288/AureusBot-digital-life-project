@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from aureus.actions.web import WebPage
+from aureus.attention import build_working_memory_summary_request
 from aureus.common.language_prompts import (
     LANGUAGE_EXPRESSION_ITEM,
     LANGUAGE_JARGON_ITEM,
@@ -48,7 +49,13 @@ from aureus.heartbeat.recall import (
 from aureus.heartbeat.reply_segments import SEGMENT_PROMPT, prepare_reply
 from aureus.identity import Identity
 from aureus.memory import LanguageKind
-from aureus.organs import EMPTY_SYSTEM_MESSAGE, OrganRequest, PromptTemplate, prompt_template_keys
+from aureus.organs import (
+    EMPTY_SYSTEM_MESSAGE,
+    ModelPreference,
+    OrganRequest,
+    PromptTemplate,
+    prompt_template_keys,
+)
 from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 
 _HISTORY = "〔聊天历史〕"
@@ -63,6 +70,7 @@ _CONDITIONAL = {
     "reply_segments": "启用分段且有快速模型时，在回复再审通过后请求切点。",
     "language_learning": "启用增量学习且收到未处理的新样本时调用。",
     "memory_consolidation": "夜间空闲且整理达到批量门槛，启用提取、有可用器官和可提取发言时调用。",
+    "working_memory_summary": "工作记忆达到容量时按来源分区整理；预览只显示一份模拟分区。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
     "judge": "仅在判断器官启用且档位允许时调用，有历史才附对话。",
@@ -405,6 +413,17 @@ def build_prompt_scenes(
         build_extraction_prompt("〔编号发言 JSON〕"),
         "",
     )
+    if "working_memory_summary" in tasks:
+        add(
+            "working_memory_summary",
+            "working_memory_summary",
+            "工作记忆摘要",
+            build_working_memory_summary_request(
+                "〔本分区旧摘要〕",
+                [sample(1, ActorType.PERSON, "〔本分区新增经历〕")],
+                ModelPreference.PREFERRED,
+            ),
+        )
     if "image_description" in tasks:
         scenes.extend(
             [

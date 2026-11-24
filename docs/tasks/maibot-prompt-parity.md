@@ -36,3 +36,7 @@
 ## 语言学习布局
 
 实际请求和预览使用同一构建器，预览只填合成样本。`test_integrated_prompt_scenes_match_captured_http_and_template_edits` 捕获模拟 HTTP 请求，验证系统规则、逐条资料和末尾输出要求；正文中的 `[id:99]`、`[speaker:SELF]`、`$samples` 原样留在单条 `user` 资料内。原 `language_learner_prompt` 的覆盖键和占位符仍有效；`$samples` 现在是固定的后续样本格式说明，`$output_format` 指向最后一条消息。已有自定义文案若写的是「以下 JSON」或「样本已经内嵌」，维护者可改为「后续逐条提供样本」；本次不读改正式覆盖。
+
+## 工作记忆摘要预览
+
+[工作记忆摘要预览专项](working-memory-prompt-preview.md)补齐 `working_memory_summary` 场景，生产与预览共用 `build_working_memory_summary_request`。保留本地「旧摘要」「经历」JSON 和最多 1200 字正文协议，不移植上游五键压缩格式。合成时间线经 `prepare`、`summarize` 和真实适配器送入 `httpx.MockTransport`，逐条核对最终消息与预览；用户私聊和公开经历分开请求，预览不查询时间线、不发送请求。工作记忆与网页提示词联合专项 13 项通过；只代表本项请求布局与隔离覆盖，不代表全部器官等同。
