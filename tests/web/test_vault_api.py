@@ -61,7 +61,10 @@ def test_rename_retains_model_reference_and_delete_immediately_removes_it(rig: C
     config["providers"] = [{"name": "测试厂商", "protocol": "openai", "api_key_ref": entry_id}]
     assert rig.client.put("/api/models", json={"config": config}).status_code == 403
     assert (
-        rig.client.put("/api/models", json={"config": config, "password": GOOD}).status_code == 200
+        rig.client.put(
+            "/api/models", json={"config": config}, headers={"Origin": str(rig.client.base_url)}
+        ).status_code
+        == 200
     )
     before = rig.paths.models_config_file.read_bytes()
     renamed = rig.client.post(
