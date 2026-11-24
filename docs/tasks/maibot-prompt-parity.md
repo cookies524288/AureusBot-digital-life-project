@@ -40,3 +40,7 @@
 ## 工作记忆摘要预览
 
 [工作记忆摘要预览专项](working-memory-prompt-preview.md)补齐 `working_memory_summary` 场景，生产与预览共用 `build_working_memory_summary_request`。保留本地「旧摘要」「经历」JSON 和最多 1200 字正文协议，不移植上游五键压缩格式。合成时间线经 `prepare`、`summarize` 和真实适配器送入 `httpx.MockTransport`，逐条核对最终消息与预览；用户私聊和公开经历分开请求，预览不查询时间线、不发送请求。工作记忆与网页提示词联合专项 13 项通过；只代表本项请求布局与隔离覆盖，不代表全部器官等同。
+
+## 默认文字表情选择预览
+
+[文字选表情预览专项](text-emoji-prompt-preview.md)为已有 `emoji` 任务补齐网页场景。生产与预览共用 `build_text_selection_request`：系统给出 `selected` JSON 协议，用户消息依次提供近期对话、情绪意图和编号候选描述。合成目录经实际选择入口和 `httpx.MockTransport` 逐条核对，预览不查目录、媒体或聊天。MaiBot 固定版原生 `send_emoji.py` 则抽样并发送有编号的视觉拼图，使用 `emoji_index`，模板要求附理由。这里既不替换 Aureus 的协议，也不把现有文字策略算作原生工具或第三方插件的完整移植。

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from aureus.actions.web import WebPage
+from aureus.common import HeartbeatConfig, RuntimeConfig
 from aureus.common.time_format import format_local_time
 from aureus.heartbeat import ReplyLength, registered_templates
 from aureus.heartbeat.context import (
@@ -31,6 +32,7 @@ from aureus.organs import (
     PromptStore,
     PromptTemplate,
     assemble_messages,
+    organ_tasks,
 )
 from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 from tests.organs.test_llm_adapter import FakeCompletion, make_config, make_response
@@ -57,6 +59,18 @@ def rig(tmp_path: Path) -> Iterator[ConfigRig]:
     item.log_in()
     yield item
     item.close()
+
+
+def test_emoji_preview_routes_follow_active_selection_mode() -> None:
+    default = RuntimeConfig()
+    assert organ_tasks(default)["emoji"] == default.heartbeat.reply_organ
+    assert organ_tasks(default, {"emoji", default.heartbeat.reply_organ})["emoji"] == "emoji"
+    visual = RuntimeConfig(heartbeat=HeartbeatConfig(qq_emoji_visual_enabled=True))
+    assert "emoji" not in organ_tasks(visual, {"emoji"})
+    assert organ_tasks(visual)["emoji_visual_selection"] == "vlm"
+    disabled = RuntimeConfig(heartbeat=HeartbeatConfig(qq_emoji_selection_enabled=False))
+    assert "emoji" not in organ_tasks(disabled, {"emoji"})
+    assert "emoji_visual_selection" not in organ_tasks(disabled)
 
 
 def test_prompt_access_and_catalog(rig: ConfigRig, tmp_path: Path) -> None:

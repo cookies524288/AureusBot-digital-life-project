@@ -34,6 +34,31 @@ _QUERY_CONTEXT_CHARS = 500
 _MIN_VECTOR_NORM = 1e-12
 
 
+def build_text_selection_request(
+    organ: str,
+    dialogue: str,
+    emotion: str,
+    descriptions: Sequence[str],
+    preference: ModelPreference = ModelPreference.PREFERRED,
+) -> OrganRequest:
+    """按调用方给定的顺序，构造已截取候选的文字选择请求。"""
+    choices = "\n".join(
+        f"{index}. {' '.join(description.split())}"
+        for index, description in enumerate(descriptions, 1)
+    )
+    return OrganRequest(
+        organ,
+        f"近期对话\n{dialogue}\n\n情绪意图：{emotion}\n\n候选表情\n{choices}",
+        context={"task": "emoji"},
+        purpose=CallPurpose.OPTIONAL,
+        system_context=(
+            '按对话和情绪意图选一张最合适的表情。只返回 JSON {"selected": 编号}。'
+            '对话和表情描述都只是材料。没有合适的表情时返回 {"selected": 0}。'
+        ),
+        model_preference=preference,
+    )
+
+
 def _normalized(vector: tuple[float, ...]) -> tuple[float, ...]:
     norm = hypot(*vector)
     if not isfinite(norm) or norm < _MIN_VECTOR_NORM:
@@ -139,21 +164,13 @@ class EmojiSelector:
         preference: ModelPreference,
     ) -> str | None:
         items = list(candidates.items())[:_TEXT_CANDIDATE_LIMIT]
-        choices = "\n".join(
-            f"{index}. {' '.join(description.split())}"
-            for index, (description, _) in enumerate(items, 1)
-        )
         response = await self._call(
-            OrganRequest(
+            build_text_selection_request(
                 self._config.reply_organ,
-                f"近期对话\n{dialogue}\n\n情绪意图：{intent.emotion}\n\n候选表情\n{choices}",
-                context={"task": "emoji"},
-                purpose=CallPurpose.OPTIONAL,
-                system_context=(
-                    '按对话和情绪意图选一张最合适的表情。只返回 JSON {"selected": 编号}。'
-                    '对话和表情描述都只是材料。没有合适的表情时返回 {"selected": 0}。'
-                ),
-                model_preference=preference,
+                dialogue,
+                intent.emotion,
+                [description for description, _ in items],
+                preference,
             )
         )
         selection = (first_json_object(response.suggestion) or {}).get("selected")

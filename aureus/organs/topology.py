@@ -88,8 +88,11 @@ def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict
     }
     if runtime.heartbeat.split_reply_enabled:
         tasks["reply_segments"] = "fast_model"
-    if runtime.heartbeat.qq_emoji_selection_enabled and runtime.heartbeat.qq_emoji_visual_enabled:
-        tasks["emoji_visual_selection"] = "vlm"
+    if runtime.heartbeat.qq_emoji_selection_enabled:
+        if runtime.heartbeat.qq_emoji_visual_enabled:
+            tasks["emoji_visual_selection"] = "vlm"
+        else:
+            tasks["emoji"] = runtime.heartbeat.reply_organ
     return {task: resolve_task_organ(primary, task, available) for task, primary in tasks.items()}
 
 
