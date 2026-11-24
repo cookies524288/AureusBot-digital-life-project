@@ -2211,6 +2211,102 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
     )
 
 
+def test_memory_graph_grant_editor_and_late_response_at_390px(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000'), '记忆初始查询');
+      const path = '/api/resources/memory/graph';
+      const endpoint = path + '/grants';
+      const source = '["合成","memory","entities",[1]]';
+      const item = {kind:'entity', source, name:'获准合成节点', evidence:[]};
+      const realFetch = window.fetch;
+      let categories = [], generation = 0, pauseDetail = false, releaseDetail, releaseRevoke;
+      let pausePage = false, releasePage;
+      window.fetch = (resource, options) => {
+        const {pathname} = new URL(resource, location.origin);
+        if (pathname === endpoint) {
+          const batch = {batch_id:'batch', instance:'<b>合成批次</b>', categories};
+          return Promise.resolve(Response.json({enabled:true, items:[batch]}));
+        }
+        if (pathname === endpoint + '/batch') {
+          const body = JSON.parse(options.body);
+          check(body.password === 'synthetic', '写操作提交复验密码');
+          check(Object.keys(body).length === 2, '不提交节点或名称');
+          const apply = () => {
+            categories = body.categories;
+            generation++;
+            return Response.json({});
+          };
+          if (body.categories.length) return Promise.resolve(apply());
+          return new Promise(resolve => { releaseRevoke = () => resolve(apply()); });
+        }
+        const headers = {'X-Aureus-Graph-Revision':String(generation)};
+        const covered = categories.includes('entities');
+        if (pathname === path) {
+          const result = {covered, items:covered ? [item] : [], total:Number(covered), next_offset:null};
+          const response = Response.json(result, {headers});
+          if (pausePage) return new Promise(resolve => { releasePage = () => resolve(response); });
+          return Promise.resolve(response);
+        }
+        if (pathname === path + '/access') return Promise.resolve(Response.json({}, {headers}));
+        if (pathname === path + '/detail') {
+          const response = Response.json(item, {headers});
+          if (pauseDetail) {
+            return new Promise(resolve => { releaseDetail = () => resolve(response); });
+          }
+          return Promise.resolve(response);
+        }
+        return realFetch(resource, options);
+      };
+      press('关系图');
+      await waitFor(() => text('当前没有获准的图谱资料'), '关闭态不显示图');
+      const panel = find('#memory-panel-graph');
+      panel.querySelector('summary').click();
+      await waitFor(() => button('保存展示授权'), '真实管理表单');
+      const legend = panel.querySelector('legend');
+      check(legend.textContent === '<b>合成批次</b>' && !legend.querySelector('b'),
+        '批次名是纯文本');
+      check(!panel.querySelector('input[type=checkbox]:checked'), '各类授权默认不勾选');
+      panel.querySelector('input[value=entities]').click();
+      panel.querySelector('input[type=password]').value = 'synthetic';
+      press('保存展示授权');
+      const canRevoke = () => button('撤回本批授权') && !button('撤回本批授权').disabled;
+      await waitFor(() => text('获准合成节点') && canRevoke(), '保存后查询新的范围');
+      check(!panel.querySelector('input[type=password]').value, '成功后清除密码');
+      check(root().scrollWidth <= innerWidth, '展开管理操作后窄屏不溢出');
+
+      pauseDetail = true;
+      press('实体 · 获准合成节点');
+      await waitFor(() => releaseDetail, '旧详情尚在途中');
+      panel.querySelector('input[type=password]').value = 'synthetic';
+      press('撤回本批授权');
+      await waitFor(() => releaseRevoke, '撤权请求在途');
+      check(!text('获准合成节点') && !panel.querySelector('.memory-graph-node'),
+        '撤回开始即移除旧图');
+      releaseDetail();
+      releaseRevoke();
+      await waitFor(() => text('当前没有获准的图谱资料'), '撤回后不显示旧图');
+      check(!document.querySelector('#editor-dialog').open && !text('获准合成节点'),
+        '迟到详情不能重开');
+
+      categories = ['entities'];
+      generation++;
+      pausePage = true;
+      press('刷新');
+      await waitFor(() => releasePage, '另一会话撤回前，旧列表已从服务端返回');
+      categories = [];
+      generation++;
+      pausePage = false;
+      releasePage();
+      await waitFor(() => text('读取失败'), '活动页复核后丢弃旧列表');
+      check(!text('获准合成节点') && !panel.querySelector('.memory-graph-node'),
+        '不得渲染失效范围');
+    """,
+    )
+
+
 def test_expression_clusters_paginate_and_discard_stale_results_at_390px(browser: Browser) -> None:
     browser.open("learning", 390, 740)
     _run(
