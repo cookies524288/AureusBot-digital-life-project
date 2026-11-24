@@ -6,9 +6,11 @@
 import re
 from base64 import b64encode
 from typing import Any
+from uuid import uuid4
 
 from aureus.heartbeat import (
     MediaReference,
+    MessageComponent,
     MessageRoute,
     OutgoingMessage,
     Perception,
@@ -71,11 +73,18 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
         visibility = VisibilityScope.PRIVATE
     else:
         return None
-    text, mentioned, quoted, attachments = _read_segments(payload.get("message"), receiving_account)
+    text, mentioned, quoted, attachments, components = read_message_segments(
+        payload.get("message"), receiving_account
+    )
     if not text:
-        if not attachments:
+        if attachments:
+            text = " ".join("[图片]" if item.kind == "image" else "[语音]" for item in attachments)
+        elif any(item.kind == "poke" for item in components):
+            text = "[窗口抖动]"
+        elif quoted is not None:
+            text = "[引用消息]"
+        else:
             return None
-        text = " ".join("[图片]" if item.kind == "image" else "[语音]" for item in attachments)
     timestamp = payload.get("time")
     return Perception(
         QQ_CHANNEL_NAME,
@@ -89,35 +98,96 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
         source_timestamp=timestamp if type(timestamp) is int else None,
         source_message_id=f"{receiving_account}:{identifier}",
         attachments=attachments,
+        components=components,
     )
 
 
-def _read_segments(
+def decode_poke_notice(payload: dict[str, Any], receiving_account: str) -> Perception | None:
+    """按 SnowLuma 的 notify/poke 事件区分群戳和普通私聊戳，不构造可引用消息。"""
+    if (
+        payload.get("post_type") != "notice"
+        or payload.get("notice_type") != "notify"
+        or payload.get("sub_type") != "poke"
+        or account_id(payload.get("self_id")) != receiving_account
+    ):
+        return None
+    target = account_id(payload.get("target_id"))
+    if "group_id" in payload:
+        group = account_id(payload["group_id"])
+        if group is None:
+            return None
+        actor = account_id(payload.get("user_id"))
+        kind, recipient, visibility = "group", group, VisibilityScope.GROUP
+    else:
+        peer = account_id(payload.get("user_id"))
+        actor = account_id(payload.get("sender_id"))
+        if (
+            peer is None
+            or peer == receiving_account
+            or {actor, target} != {receiving_account, peer}
+        ):
+            return None
+        kind, recipient, visibility = "private", peer, VisibilityScope.PRIVATE
+    timestamp = payload.get("time")
+    return Perception(
+        QQ_CHANNEL_NAME,
+        actor or "",
+        "[戳一戳]",
+        visibility,
+        TrustLevel.UNVERIFIED,
+        route=MessageRoute(receiving_account, kind, recipient, f"poke:{uuid4().hex}"),
+        source_timestamp=timestamp if type(timestamp) is int else None,
+        components=(MessageComponent(
+            "poke", 0, target_account_id=target,
+            action=_notice_text(payload.get("action")), suffix=_notice_text(payload.get("suffix")),
+        ),),
+    )
+
+
+def _notice_text(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def read_message_segments(
     message: object, receiving_account: str
-) -> tuple[str, bool, str | None, tuple[MediaReference, ...]]:
+) -> tuple[str, bool, str | None, tuple[MediaReference, ...], tuple[MessageComponent, ...]]:
+    """提取原始数组的顺序与事实，同时保留心跳使用的正文兼容格式。"""
     if isinstance(message, str):
-        return message.strip(), False, None, ()
+        return message.strip(), False, None, (), (MessageComponent("text", 0, text=message),)
     if not isinstance(message, list):
-        return "", False, None, ()
+        return "", False, None, (), ()
     parts: list[str] = []
     attachments: list[MediaReference] = []
+    components: list[MessageComponent] = []
     mentioned = False
     quoted = None
-    for segment in message:
+    for position, segment in enumerate(message):
         if not isinstance(segment, dict) or not isinstance(data := segment.get("data"), dict):
+            components.append(MessageComponent("unknown", position))
             continue
         match segment.get("type"):
             case "text" if isinstance(text := data.get("text"), str):
                 parts.append(text)
+                components.append(MessageComponent("text", position, text=text))
             case "at":
-                if data.get("qq") == "all":
+                all_members = data.get("qq") == "all"
+                target = account_id(data.get("qq"))
+                if all_members:
                     parts.append("@全体成员 ")
-                elif target := account_id(data.get("qq")):
+                elif target is not None:
                     mentioned |= target == receiving_account
                     parts.append(f"@{target} ")
+                components.append(MessageComponent(
+                    "at", position, target_account_id=target, all_members=all_members
+                ))
             case "reply":
-                quoted = quoted or _read_id(data.get("id"), _MESSAGE_ID)
+                target_message = message_id(data.get("id"))
+                quoted = quoted or target_message
+                components.append(
+                    MessageComponent("reply", position, target_message_id=target_message)
+                )
             case "image" | "record" as kind:
+                index = None
                 if file_id := media_file_id(data.get("file")):
                     subtype = data.get("sub_type", data.get("subType"))
                     summary = data.get("summary")
@@ -125,8 +195,17 @@ def _read_segments(
                         (str(subtype).isdigit() and str(subtype).lstrip("0") not in {"", "4", "9"})
                         or (isinstance(summary, str) and summary.strip() not in {"", "[图片]"})
                     )
+                    index = len(attachments)
                     attachments.append(MediaReference(kind, file_id, is_emoji))
-    return "".join(parts).strip(), mentioned, quoted, tuple(attachments)
+                components.append(MessageComponent(kind, position, attachment_index=index))
+            case "poke":
+                poke_type = data.get("type")
+                components.append(MessageComponent(
+                    "poke", position, poke_type=poke_type if type(poke_type) is int else None
+                ))
+            case _:
+                components.append(MessageComponent("unknown", position))
+    return "".join(parts).strip(), mentioned, quoted, tuple(attachments), tuple(components)
 
 
 def encode_message(

@@ -614,6 +614,34 @@ def _run(browser: Browser, script: str) -> None:
     )
 
 
+def test_inbox_components_render_in_order_and_treat_poke_hints_as_text(browser: Browser) -> None:
+    browser.open("timeline", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof renderInboxMessage === 'function', '收件箱脚本未就绪');
+      const group = {account_id:'9000', kind:'group', recipient_id:'8000'};
+      const bubble = message => renderInboxMessage(message).querySelector('.inbox-bubble');
+      const mixed = bubble({conversation:group, sender_id:'2200', direction:'incoming',
+        content:'兼容正文不可重复展示', components:[
+          {kind:'text', text:'起始 '}, {kind:'at', target_account_id:'9000'},
+          {kind:'reply', target_message_id:'-10', target_account_id:'2300'},
+          {kind:'at', all_members:true}, {kind:'text', text:' 末尾'},
+        ]});
+      check([...mixed.children].map(part => part.textContent).join('|') ===
+        '起始 |@QQ 9000|引用消息 -10 · 原发件人：QQ 2300|@全体成员| 末尾', '按真实组件顺序显示');
+      const hint = '<img src="https://invalid.example/track">';
+      const notice = bubble({conversation:group, sender_id:'2200', event_type:'poke_notice',
+        components:[{kind:'poke', target_account_id:'2300', action:hint, suffix:'一下'}]});
+      check(notice.textContent === `群戳：QQ 2200 → QQ 2300 · ${hint} 一下`, '群戳两方及提示');
+      check(!notice.querySelector('img,a'), '提示不能加载远程图片或变成链接');
+      const direct = bubble({conversation:{...group,kind:'private'}, sender_id:'9000',
+        event_type:'poke_notice', components:[{kind:'poke', target_account_id:'2100'}]});
+      check(direct.textContent === '私聊戳：QQ 9000 → QQ 2100', '缺提示时不补写');
+      const legacy = bubble({content:'旧正文', quoted_message_id:'11', mentioned:true});
+      check(legacy.textContent.includes('原发件人：未知') && legacy.textContent.includes('@未知'),
+        '旧记录不猜参与者');
+    """)
+
+
 @pytest.mark.parametrize("motion", ["no-preference", "reduce"])
 def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser, motion: str) -> None:
     browser.open("learning", 1280, 900)

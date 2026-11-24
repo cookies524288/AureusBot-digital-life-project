@@ -3,7 +3,7 @@
 import json
 from collections.abc import Iterable
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection, Row
@@ -11,7 +11,14 @@ from sqlite3 import Connection, Row
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
 
-from .perception import MediaReference, MessageRoute, Perception, TrustLevel, VisibilityScope
+from .perception import (
+    MediaReference,
+    MessageComponent,
+    MessageRoute,
+    Perception,
+    TrustLevel,
+    VisibilityScope,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox_conversations (
@@ -27,6 +34,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
     mentioned INTEGER NOT NULL, quoted_message_id TEXT, source_timestamp INTEGER,
     source_message_id TEXT, timestamp TEXT NOT NULL,
     attachments TEXT NOT NULL DEFAULT '[]',
+    components TEXT NOT NULL DEFAULT '[]',
     direction TEXT NOT NULL DEFAULT 'incoming',
     UNIQUE (conversation_id, message_id)
 );
@@ -136,6 +144,7 @@ def _message(row: Row) -> InboxMessage:
         source_timestamp=row["source_timestamp"],
         source_message_id=row["source_message_id"],
         attachments=tuple(MediaReference(*value) for value in json.loads(row["attachments"])),
+        components=tuple(MessageComponent(**value) for value in json.loads(row["components"])),
     )
     return InboxMessage(
         row["id"],
@@ -165,6 +174,25 @@ def _migrate_read_range(database: Connection) -> None:
     """)
     database.execute("DROP INDEX IF EXISTS inbox_messages_unread")
     database.execute("ALTER TABLE inbox_messages DROP COLUMN is_read")
+
+
+def _resolve_components(
+    database: Connection, conversation_id: int, perception: Perception
+) -> list[dict[str, object]]:
+    resolved: list[dict[str, object]] = []
+    for component in perception.components:
+        if component.kind == "reply" and component.target_message_id is not None:
+            original = database.execute(
+                """SELECT sender_id FROM inbox_messages WHERE conversation_id = ?
+                AND message_id = ? AND visibility = ? AND direction != 'notice'""",
+                (conversation_id, component.target_message_id, perception.visibility),
+            ).fetchone()
+            if original is not None:
+                component = replace(component, target_account_id=original["sender_id"] or None)
+        resolved.append({
+            key: value for key, value in asdict(component).items() if value is not None
+        })
+    return resolved
 
 
 def _advance_read_range(database: Connection, conversation_id: int, confirmed: set[int]) -> None:
@@ -211,6 +239,11 @@ class InboxStore:
                         "ALTER TABLE inbox_messages ADD COLUMN direction "
                         "TEXT NOT NULL DEFAULT 'incoming'"
                     )
+                if "components" not in columns:
+                    database.execute(
+                        "ALTER TABLE inbox_messages ADD COLUMN components "
+                        "TEXT NOT NULL DEFAULT '[]'"
+                    )
                 if "is_read" in columns:
                     database.execute(
                         "ALTER TABLE inbox_conversations ADD COLUMN first_read_id INTEGER"
@@ -229,6 +262,12 @@ class InboxStore:
     def add_delivered(self, perception: Perception, *, sender_name: str) -> None:
         """保存平台已确认的外发消息，不增加未读数。"""
         self._add(perception, sender_name, "", "outgoing")
+
+    def archive(
+        self, perception: Perception, *, sender_name: str, conversation_name: str, notice: bool
+    ) -> None:
+        """只保存平台事件，不进入未读、特别关心和回复流程。"""
+        self._add(perception, sender_name, conversation_name, "notice" if notice else "archived")
 
     def _add(
         self, perception: Perception, sender_name: str, conversation_name: str, direction: str
@@ -257,8 +296,8 @@ class InboxStore:
             added = database.execute(
                 """INSERT INTO inbox_messages (conversation_id, message_id, sender_id, sender_name,
                 content, visibility, trust, mentioned, quoted_message_id, source_timestamp,
-                source_message_id, timestamp, attachments, direction)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_message_id, timestamp, attachments, direction, components)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (conversation_id, message_id) DO NOTHING RETURNING id""",
                 (
                     conversation_id,
@@ -280,6 +319,7 @@ class InboxStore:
                         ]
                     ),
                     direction,
+                    json.dumps(_resolve_components(database, conversation_id, perception)),
                 ),
             ).fetchone()
             if added is None:

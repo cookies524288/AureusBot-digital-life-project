@@ -14,19 +14,29 @@ LEGACY_SCAN_SIZE = 100
 def inbox_message(message: InboxMessage, *, include_attachment_ids: bool = True) -> dict[str, Any]:
     """返回有规范回址的收发原件。"""
     perception = message.perception
+    notice = message.direction == "notice"
+    direction = message.direction
+    if direction in {"notice", "archived"}:
+        from_self = perception.sender_id == message.conversation.account_id
+        direction = "outgoing" if from_self else "incoming"
+    identifier = perception.route.message_id if perception.route and not notice else None
     return {
         "id": message.id,
         "source": "inbox",
         "platform": message.conversation.platform,
         "conversation": asdict(message.conversation),
-        "sender_id": perception.sender_id,
-        "sender_name": message.sender_name,
-        "direction": message.direction,
-        "platform_message_id": perception.route.message_id if perception.route else None,
+        "sender_id": perception.sender_id or None,
+        "sender_name": message.sender_name or None,
+        "direction": direction,
+        "event_type": "poke_notice" if notice else "message",
+        "platform_message_id": identifier,
         "visibility": perception.visibility,
         "quoted_message_id": perception.quoted_message_id,
+        "mentioned": perception.mentioned,
+        "components": [asdict(item) for item in perception.components],
         "attachments": [
-            asdict(item) if include_attachment_ids else {"kind": item.kind, "is_emoji": item.is_emoji}
+            asdict(item)
+            if include_attachment_ids else {"kind": item.kind, "is_emoji": item.is_emoji}
             for item in perception.attachments
         ],
         "timestamp": message.timestamp,
@@ -47,6 +57,8 @@ def timeline_message(record: TimelineRecord) -> dict[str, Any]:
         "platform_message_id": metadata.get("message_id"),
         "visibility": record.visibility,
         "quoted_message_id": metadata.get("quoted_message_id"),
+        "mentioned": metadata.get("mentioned") is True,
+        "components": [],
         "attachments": [],
         "timestamp": record.timestamp,
         "content": record.content,
@@ -65,6 +77,7 @@ def imported_message(record: HistoricalMemory) -> dict[str, Any]:
         "platform_message_id": None,
         "visibility": None,
         "attachments": [],
+        "components": [],
         "timestamp": record.recorded_at,
         "received_at": record.received_at,
         "content": record.text,
