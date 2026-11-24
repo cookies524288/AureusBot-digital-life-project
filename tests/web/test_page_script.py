@@ -195,7 +195,9 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
             archives:[{archive:'imported', name:'迁入原件'}],
           });
           if (path.includes('view=description')) {
-            return reply(200, {source:'emoji_catalog', description:'合成描述'});
+            return reply(200, path.includes('/images/1?')
+              ? {source:'emoji_catalog', description:'合成描述'}
+              : {source:null, description:null});
           }
           if (path.startsWith('/api/inbox/history-cleanup?')) return reply(200, {preview:null});
           if (path.startsWith('/api/inbox/uncategorized?')) return reply(200,
@@ -239,7 +241,7 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
         assert.match(second.children[0].children[0].attributes.src,
           /^\/api\/inbox\/messages\/13\/images\/1\?/);
         await first.children[2].listeners.click[0]();
-        assert.match(first.children[1].textContent, /没有保存/);
+        assert.match(first.children[1].textContent, /没有可核验的已有描述/);
         assert.equal(second.children[1].classList.contains('hidden'), true);
         await second.children[2].listeners.click[0]();
         assert.match(second.children[1].textContent, /来源：表情资料库.*\n合成描述/);
