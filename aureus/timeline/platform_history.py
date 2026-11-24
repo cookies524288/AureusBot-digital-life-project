@@ -24,12 +24,15 @@ WITH candidates AS ({_BASE}), routed AS (
            details ->> '$.message_id' AS message_key
     FROM candidates WHERE details ->> '$.channel' IN ('qq', 'web', 'terminal')
 ), classified AS (
-    SELECT *, coalesce(
-        platform = 'qq' AND typeof(account) = 'text' AND account != ''
+    SELECT *, CASE WHEN platform = 'qq' AND typeof(account) = 'text' AND account != ''
         AND typeof(recipient) = 'text' AND recipient != ''
-        AND ((kind = 'group' AND temp IS NULL) OR (kind = 'private'
-              AND (json_type(details, '$.temporary_group_id') = 'null'
-                   OR (typeof(temp) = 'text' AND temp != ''))), 0) AS has_route
+        AND (
+            (kind = 'group' AND temp IS NULL)
+            OR (kind = 'private' AND (
+                json_type(details, '$.temporary_group_id') = 'null'
+                OR (typeof(temp) = 'text' AND temp != '')
+            ))
+        ) THEN 1 ELSE 0 END AS has_route
     FROM routed WHERE details ->> '$.inbox_message_id' IS NULL
 )
 """
