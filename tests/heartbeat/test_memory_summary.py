@@ -5,7 +5,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -17,9 +17,11 @@ from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.memory_consolidation import MemoryConsolidator, summary_material
 from aureus.heartbeat.memory_summary_source import PlatformSummarySource, summary_scope_for
 from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception, TrustLevel
-from aureus.memory import MemoryIndex, SummaryScope, SummaryWindow, parse_delta
+from aureus.memory import HistoricalMemory, MemoryIndex, MemorySource, SummaryScope, SummaryWindow
+from aureus.memory import parse_delta
 from aureus.organs import ModelPreference, OrganCallError, OrganRequest, OrganResponse
 from aureus.timeline import TimelineDatabase, VisibilityScope
+from aureus.web.memory_lifecycle_api import register_memory_lifecycle_routes
 from aureus.web.resource_api import register_resource_routes
 
 _EMPTY = '{"summary":"","entities":[],"relations":[],"facts":[]}'
@@ -30,6 +32,7 @@ _PREFERENCE = ModelPreference.CHEAPEST
 @dataclass
 class Rig:
     path: Path
+    clock: ManualClock
     inbox: InboxStore
     index: MemoryIndex
     source: PlatformSummarySource
@@ -95,7 +98,7 @@ def rig(tmp_path: Path) -> Iterator[Rig]:
     runner = MemoryConsolidator(index, config)
     runner.source, runner.has_organ = source, True
     try:
-        yield Rig(path, inbox, index, source, runner, key)
+        yield Rig(path, clock, inbox, index, source, runner, key)
     finally:
         index.close()
         timeline.close()
@@ -358,6 +361,105 @@ def test_correction_retains_history_and_rechecks_route_under_transaction(rig: Ri
     with sqlite3.connect(rig.path) as connection:
         rows = connection.execute("SELECT id, superseded_by FROM memory_summary_facts ORDER BY id")
         assert rows.fetchall() == [(old.identifier, old.identifier + 1), (old.identifier + 1, None)]
+
+
+def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> None:
+    excerpt = "我目前住在晴桂巷。"
+    rig.add("m1", excerpt)
+    rig.add("m2", "合成上下文")
+    window = rig.window()
+    delta = parse_delta(_answer("晴桂巷", excerpt), window)
+    assert rig.index.commit_summary(window, delta, rig.source.check_window)
+    [hit] = rig.index.search(["晴桂巷"], (), 5, summary_scope=rig.scope)
+    assert hit.source is not None
+    rig.index.summary_scope_allowed = rig.source.allows_scope
+    app = FastAPI()
+    visible = True
+    active = True
+
+    async def ready() -> str:
+        return "fixture-session"
+
+    def can_show(scope: SummaryScope) -> bool:
+        return visible and scope == rig.scope
+
+    register_resource_routes(app, ready, None, rig.index, can_show_summary=can_show)
+    register_memory_lifecycle_routes(app, ready, rig.index, lambda _: True, lambda _: active, can_show)
+    endpoint = "/api/resources/memory/maintenance"
+    catalog = "/api/resources/memory"
+    with TestClient(app) as client:
+        def preview(action: str, text: str | None = None) -> str:
+            response = client.post(endpoint + "/preview", json={
+                "source": hit.source.encode(), "action": action, "text": text,
+            })
+            assert response.status_code == 200, response.text
+            return response.json()["plan_id"]
+
+        expired = preview("correct", "阿青：居住地点是栖松巷。")
+        with sqlite3.connect(rig.path) as database:
+            assert database.execute("SELECT count(*) FROM memory_edits").fetchone() == (0,)
+        rig.clock.advance(timedelta(minutes=15))
+        assert client.post(f"{endpoint}/{expired}/apply").status_code == 409
+        corrected = preview("correct", "阿青：居住地点是栖松巷。")
+        race = preview("correct", "阿青：居住地点是竞争值。")
+        visible = False
+        assert client.post(f"{endpoint}/{corrected}/apply").status_code == 404
+        assert client.get(catalog, params={"category": "fact_claims"}).json()["counts"] == {}
+        visible = True
+        active = False
+        assert client.post(f"{endpoint}/{corrected}/apply").status_code == 404
+        active = True
+        assert client.post(f"{endpoint}/{corrected}/apply").status_code == 200
+        assert client.post(f"{endpoint}/{corrected}/apply").status_code == 409
+        assert client.post(f"{endpoint}/{race}/apply").status_code == 409
+        assert not rig.index.search(["晴桂巷"], (), 5, summary_scope=rig.scope)
+        assert "栖松巷" in rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope)[0].text
+        assert rig.index.summary_reference(rig.scope)[1:] == ((), ())
+        assert client.get(catalog, params={"q": "晴桂巷"}).json()["items"] == []
+        assert client.post(f"{endpoint}/{preview('disable')}/apply").status_code == 200
+        removed = preview("remove")
+        assert client.post(f"{endpoint}/{removed}/apply").status_code == 200
+        assert client.get(catalog, params={"removed": True}).json()["items"][0]["is_removed"]
+        assert not rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope)
+        restored = preview("restore")
+        assert client.post(f"{endpoint}/{restored}/apply").status_code == 200
+        assert not rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope)
+        assert client.post(f"{endpoint}/{removed}/undo").status_code == 409
+        assert client.post(f"{endpoint}/{corrected}/undo").status_code == 409
+        history = endpoint + "/history"
+        params = {"source": hit.source.encode(), "limit": 2}
+        page = client.get(history, params=params).json()
+        assert page["total"] == 4
+        assert [item["plan_id"] for item in page["items"]] == [restored, removed]
+        assert [item["can_undo"] for item in page["items"]] == [True, False]
+        assert client.post(f"{endpoint}/{restored}/undo").status_code == 200
+        assert client.get(history, params=params).json()["items"][0]["undone_at"] is not None
+        assert client.get(catalog, params={"removed": True}).json()["total"] == 1
+        visible = False
+        denied = client.get(history, params=params)
+        assert denied.status_code == 404 and "total" not in denied.json()
+
+
+def test_relation_maintenance_cannot_be_bypassed_by_old_endpoints(rig: Rig) -> None:
+    first = MemorySource("first", "formal", "relations", (7,))
+    second = MemorySource("second", "formal", "relations", (7,))
+    assert rig.index.publish([
+        HistoricalMemory(first, "阿明却是河岸向导", actor_label="阿明", person_key="first:7"),
+        HistoricalMemory(second, "阿明却是远山向导", actor_label="阿明", person_key="second:7"),
+    ]) == 2
+    items, total, _counts = rig.index.browse_text_resources("", "relations", "", "", 0, 10)
+    assert total == 2
+    ids = {item["source"]["instance"]: item["entry_id"] for item in items}
+
+    for action in ("freeze", "protect"):
+        plan = rig.index.preview_lifecycle(first, action, None, None, lambda: True)
+        assert plan is not None
+        assert rig.index.apply_lifecycle(plan["plan_id"], None, lambda: True, undo=False)
+        assert not rig.index.update_resource("history", ids["first"], "晚到覆盖", None)
+        assert not rig.index.set_resources_removed([("history", ids["first"])], True)
+        assert rig.index.update_resource("history", ids["second"], "同名者独立修改", None)
+        assert rig.index.apply_lifecycle(plan["plan_id"], None, lambda: True, undo=True)
+    assert rig.index.get_history(first).text == "阿明却是河岸向导"
 
 
 @pytest.mark.asyncio

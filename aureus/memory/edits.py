@@ -79,7 +79,10 @@ def write_edit(
         if not text or len(text) > MAX_MEMORY_TEXT:
             raise ValueError(f"请填写正文，最多 {MAX_MEMORY_TEXT} 字。")
     target = (
-        f"SELECT 1 FROM memory_history WHERE id = ? AND NOT ({is_message_source('source_key')})"
+        f"""SELECT 1 FROM memory_history history
+        LEFT JOIN memory_lifecycle_relations flags USING (source_key)
+        WHERE id = ? AND NOT ({is_message_source('source_key')})
+          AND NOT coalesce(flags.is_frozen, 0) AND NOT coalesce(flags.is_protected, 0)"""
         if kind == "history"
         else "SELECT 1 FROM memory_index entry JOIN timeline event ON event.id = entry.record_id "
         f"WHERE entry.rowid = ? AND NOT ({is_message_event('event.event_type')})"

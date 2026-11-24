@@ -69,11 +69,15 @@ WITH catalog AS (
            CASE WHEN current.value ->> '$[1]' = 'active' THEN fact.text ELSE '' END,
            '会话事实', unixepoch(delta.recorded_at, 'subsec'),
            json_array('aureus', 'memory', 'summary_facts', json_array(fact.id)),
-           'fact_claims', current.value ->> '$[1]', NULL,
-           current.value ->> '$[1]' = 'active', 0, NULL, current.value ->> '$[1]' = 'active'
+           'fact_claims', current.value ->> '$[1]',
+           CASE WHEN current.value ->> '$[1]' = 'active' THEN edit.edited_content END,
+           coalesce(edit.is_enabled, 1), coalesce(edit.is_removed, 0), NULL,
+           (current.value ->> '$[1]' = 'active' AND coalesce(edit.is_enabled, 1)
+            AND NOT coalesce(edit.is_removed, 0))
     FROM json_each(:summaries) current JOIN memory_summary_facts fact
         ON fact.id = current.value ->> '$[0]'
     JOIN memory_summary_deltas delta ON delta.id = fact.delta_id
+    LEFT JOIN memory_edits edit ON edit.kind = 'summary' AND edit.entry_id = fact.id
 )
 """
 _MATCHING = (
@@ -86,7 +90,7 @@ _MATCHING = (
       AND (:status = '' OR status = :status)
       AND (:recall = '' OR is_recallable = (:recall = 'enabled'))
       AND (:query = '' OR instr(lower(coalesce(edited_content, content)), lower(:query)) > 0
-                      OR instr(lower(content), lower(:query)) > 0
+                      OR (kind != 'summary' AND instr(lower(content), lower(:query)) > 0)
                       OR instr(lower(actor_label), lower(:query)) > 0
                       OR instr(lower(source_key), lower(:query)) > 0)
 )
@@ -120,7 +124,7 @@ def browse_text_resources(
     }
     with connection:
         connection.execute("BEGIN")
-        access = summary_access if not removed and category in ("", "fact_claims") else None
+        access = summary_access if category in ("", "fact_claims") else None
         scopes = authorized_summary_scopes(connection, access[0]) if access else set()
         params["summaries"] = json.dumps(
             summary_catalog(connection, scopes, access[1]) if access else []
@@ -161,6 +165,12 @@ def _text_resource(
             "SELECT * FROM memory_history WHERE id = ?", (entry_id,)
         ).fetchone()
         resource = asdict(replace(decode_history_row(stored), text=text, original_text=original))
+        if row["category"] == "relations":
+            flags = connection.execute(
+                "SELECT is_frozen, is_protected FROM memory_lifecycle_relations WHERE source_key=?",
+                (row["source_key"],),
+            ).fetchone()
+            resource.update(is_frozen=bool(flags and flags[0]), is_protected=bool(flags and flags[1]))
     elif row["kind"] == "summary":
         detail = (
             summary_detail(connection, MemorySource.decode(row["source_key"]), *summary_access)
@@ -211,6 +221,8 @@ def set_resources_removed(
         matched = connection.execute(
             _TEXT_CATALOG
             + "SELECT original_id FROM catalog WHERE category IS NOT NULL "
+            + "AND NOT EXISTS (SELECT 1 FROM memory_lifecycle_relations flags "
+            + "WHERE flags.source_key = catalog.source_key AND (flags.is_frozen OR flags.is_protected)) "
             + f"AND is_removed = :prior AND (kind, entry_id) IN (VALUES {pairs})",
             params,
         ).fetchall()

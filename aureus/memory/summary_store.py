@@ -109,8 +109,11 @@ def authorized_summary_scopes(connection: Connection, allows: ScopeCheck) -> set
     }
 
 
-_RESOURCE_ROWS = """SELECT fact.*, delta.route, delta.visibility, delta.recorded_at
-    FROM memory_summary_facts fact JOIN memory_summary_deltas delta ON delta.id=fact.delta_id"""
+_RESOURCE_ROWS = """SELECT fact.*, delta.route, delta.visibility, delta.recorded_at,
+    edit.edited_content, coalesce(edit.is_enabled, 1) AS is_enabled,
+    coalesce(edit.is_removed, 0) AS is_removed
+    FROM memory_summary_facts fact JOIN memory_summary_deltas delta ON delta.id=fact.delta_id
+    LEFT JOIN memory_edits edit ON edit.kind='summary' AND edit.entry_id=fact.id"""
 
 
 def summary_catalog(
@@ -150,23 +153,22 @@ def summary_detail(
     evidence = _evidence(_scope(row), row) if status == "active" else ()
     return HistoricalMemory(
         source,
-        row["text"] if status == "active" else "",
+        (row["edited_content"] or row["text"]) if status == "active" else "",
         "会话事实",
         recorded_at=datetime.fromisoformat(row["recorded_at"]),
         status=status,
         evidence=evidence,
         entry_id=row["id"],
-        is_enabled=status == "active",
-        is_recallable=status == "active",
+        is_enabled=bool(row["is_enabled"]),
+        is_recallable=status == "active" and bool(row["is_enabled"]) and not row["is_removed"],
+        is_removed=bool(row["is_removed"]),
     )
 
 
 def _facts(connection: Connection, scope: SummaryScope, limit: int = -1) -> Cursor:
     return connection.execute(
-        """SELECT fact.*, delta.recorded_at FROM memory_summary_facts fact
-        JOIN memory_summary_deltas delta ON delta.id=fact.delta_id
-        WHERE delta.route=? AND delta.visibility=? AND fact.superseded_by IS NULL
-        ORDER BY fact.id DESC LIMIT ?""",
+        _RESOURCE_ROWS + """ WHERE delta.route=? AND delta.visibility=?
+        AND fact.superseded_by IS NULL ORDER BY fact.id DESC LIMIT ?""",
         (*scope, limit),
     )
 
@@ -179,7 +181,10 @@ def previous_summary(
         """SELECT delta.id, delta.summary FROM memory_summary_deltas delta
         WHERE delta.route=? AND delta.visibility=? AND NOT EXISTS (
             SELECT 1 FROM memory_summary_facts fact
-            WHERE fact.delta_id=delta.id AND fact.superseded_by IS NOT NULL
+            LEFT JOIN memory_edits edit ON edit.kind='summary' AND edit.entry_id=fact.id
+            WHERE fact.delta_id=delta.id AND (fact.superseded_by IS NOT NULL
+                OR NOT coalesce(edit.is_enabled, 1) OR coalesce(edit.is_removed, 0)
+                OR edit.edited_content IS NOT NULL)
         ) ORDER BY delta.id DESC LIMIT ?""",
         (*scope, _REFERENCE_LIMIT),
     ).fetchall()
@@ -193,7 +198,8 @@ def previous_summary(
     facts = [
         PreviousFact(row["id"], row["text"], row["sender_id"], row["predicate"], row["value"])
         for row in _facts(connection, scope, _REFERENCE_LIMIT)
-        if _source_exists(connection, scope, row, check)
+        if row["is_enabled"] and not row["is_removed"] and row["edited_content"] is None
+        and _source_exists(connection, scope, row, check)
     ]
     return tuple(summaries), tuple(facts)
 
@@ -303,17 +309,20 @@ def search_summaries(
         return []
     hits = []
     for row in _facts(connection, scope):
-        relevance = sum(word in row["text"].casefold() for word in terms)
+        text = row["edited_content"] or row["text"]
+        relevance = sum(word in text.casefold() for word in terms)
         timestamp = datetime.fromisoformat(row["recorded_at"])
         if (
             not relevance
+            or not row["is_enabled"]
+            or row["is_removed"]
             or (since is not None and timestamp < since)
             or (before is not None and timestamp >= before)
             or not _source_exists(connection, scope, row, check)
         ):
             continue
         hits.append(
-            SummaryHit(_summary_source(row["id"]), timestamp, row["text"], _evidence(scope, row),
+            SummaryHit(_summary_source(row["id"]), timestamp, text, _evidence(scope, row),
                        relevance)
         )
     hits.sort(key=lambda hit: (hit.relevance, hit.recorded_at), reverse=True)

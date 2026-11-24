@@ -78,6 +78,7 @@ class HistoricalMemory:
     is_enabled: bool = True
     is_recallable: bool = True
     original_text: str | None = None
+    is_removed: bool = False
 
 
 class MemorySnapshotConflictError(ValueError):

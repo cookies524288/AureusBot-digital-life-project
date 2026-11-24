@@ -81,6 +81,7 @@ from .memory_transfer_api import register_memory_transfer_routes
 from .prompt_api import register_prompt_routes
 from .recall_feedback_api import register_recall_feedback_routes
 from .resource_api import register_resource_routes
+from .memory_lifecycle_api import register_memory_lifecycle_routes
 from .session import SessionStore
 from .settings import SettingsService
 from .settings_api import register_settings_routes
@@ -618,6 +619,9 @@ def create_app(
         clock=clock,
         inbox=inbox_store,
         can_show_summary=can_show_summary,
+    )
+    register_memory_lifecycle_routes(
+        app, require_ready, resource_memory, _same_http_origin, sessions.is_active, can_show_summary
     )
 
     if maintenance_paused is not None and set_maintenance_paused is not None:

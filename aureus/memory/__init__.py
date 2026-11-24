@@ -48,6 +48,7 @@ from aureus.memory.language_import import (
     LanguageSnapshotConflictError,
 )
 from aureus.memory.language_online import JargonInference
+from aureus.memory.lifecycle import LifecycleAction, LifecycleConflictError
 from aureus.memory.summary_protocol import (
     MAX_MESSAGE_CHARS,
     SummaryDelta,
@@ -90,6 +91,8 @@ __all__ = [
     "LanguageSnapshotConflictError",
     "LanguageStore",
     "LanguageTargetError",
+    "LifecycleAction",
+    "LifecycleConflictError",
     "MemoryEntry",
     "MemoryEvent",
     "MemoryEventType",
