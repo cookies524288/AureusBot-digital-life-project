@@ -1,6 +1,6 @@
 # 路线图 3.11 后续：关系图只读搜索与浏览
 
-状态：待实现
+状态：待评审
 设计：D99、D100；只消费[关系图结构化来源](memory-graph-source.md)已经明确获准的结果。
 
 ## 先读
@@ -41,10 +41,17 @@
 
 ## 自检清单
 
-- [ ] 同名实体不合并；隐藏精确命中不影响可见排序、总数、分页或详情。
-- [ ] 关系、两端、段落和关联行撤权独立生效；单跳保留显式方向。
-- [ ] D99 停用、移除和恢复及有效期先于结果；空授权、缺乏结构化覆盖和有效授权零命中可区分。
-- [ ] 只读，不接网页、不改变 D100 召回，不修改正式数据；相关专项通过。
+- [x] 同名实体不合并；隐藏精确命中不影响可见排序、总数、分页或详情。`test_search_ranks_only_visible_matches_before_counting_and_paging` 通过。
+- [x] 关系、两端、段落和关联行撤权独立生效；单跳保留显式方向。`test_detail_and_neighbors_respect_independent_grants` 六种撤权与 `test_neighbors_keep_directions_and_use_full_source_keys` 通过。
+- [x] D99 停用、移除和恢复及有效期先于结果；空授权、缺乏结构化覆盖和有效授权零命中可区分。`test_removal_and_restore_do_not_override_disabled_graph_items`、`test_validity_boundaries_filter_graph_before_search`、`test_readonly_query_distinguishes_legacy_and_authorized_zero_matches` 通过。
+- [x] 只读，不接网页、不改变 D100 召回，不修改正式数据。图来源专项以及 `test_batch_removal_suppresses_real_recall_without_changing_original_states`、`test_private_memory_and_disclosure_reminder_reach_group_replyer` 通过。
+
+### 实现与验证记录（2026-11-24）
+
+- 实现提交 `4f9b004`；查询和详情共用 `MemoryIndex.read_graph()`，不新增数据库读写路径。只使用主树既有虚拟环境，以开发工作树为 `PYTHONPATH`，显式设置 `PYTHONUTF8=1`。
+- `python -m pytest -q --basetemp <独立目录>` 联合运行 `tests/memory/test_graph_query.py`、`tests/cli/test_maibot_memory_graph.py` 和上列 D99/D100 两项：20 项通过，1 项因夹具从原件详情而非维护列表取编号失败。只修正测试夹具，随后在新目录独立复跑 `test_removal_and_restore_do_not_override_disabled_graph_items`，1 项通过。按本步范围未重跑已通过用例或全量；共 21 项专项分别通过。
+- 联合夹具：`E:/Temp/aureus-graph-query-regression-e5b94c80d758447c949d736340aba906`；单项复跑夹具：`E:/Temp/aureus-graph-query-restore-dad51117e05344258e9c0c67e19f704f`。
+- 四个改动 Python 文件通过 `ruff check`、`ruff format --check` 及 `python -m pyright --venvpath <主树>`；修正后的测试文件单独复查也通过。`import-linter` 8 条架构规则全部通过；`git diff --check` 通过。
 
 ## 坑
 
