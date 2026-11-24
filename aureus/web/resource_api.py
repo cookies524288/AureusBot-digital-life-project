@@ -540,7 +540,7 @@ def register_resource_routes(
     @app.get("/api/resources/memory")
     async def browse_memory(
         _token: Annotated[str, Depends(require_ready)],
-        kind: Literal["all", "history", "live"] = "history",
+        kind: Literal["all", "history", "live"] = "all",
         category: MemoryCategory = "",
         recall: RecallFilter = "",
         removed: bool = False,

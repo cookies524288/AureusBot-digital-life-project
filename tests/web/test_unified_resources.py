@@ -34,9 +34,10 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
     evidence = (MemoryEvidence("message", "sample:71"),)
     live = timeline.append("message", "同期现场消息", ActorType.USER)
     timeline.append("diary_written", "同期日记条目", ActorType.ME)
+    unindexed = timeline.append("message", "同期未入索引消息", ActorType.USER)
 
-    def describe(record: TimelineRecord) -> MemoryEntry:
-        return MemoryEntry("合成人物", record.content)
+    def describe(record: TimelineRecord) -> MemoryEntry | None:
+        return None if record.id == unindexed.id else MemoryEntry("合成人物", record.content)
 
     try:
         memory.index_more(10, describe)
@@ -48,16 +49,22 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
                     "过期事实原件",
                     valid_to=stamp - timedelta(days=1),
                 ),
+                HistoricalMemory(
+                    MemorySource("demo", "memory", "image_assets", (1,)),
+                    "同期图片原件",
+                    recorded_at=stamp,
+                ),
             ]
         )
         app = FastAPI()
         register_resource_routes(app, _require_session, None, memory)
         with TestClient(app) as client:
             endpoint = "/api/resources/memory"
-            params = {"kind": "all", "category": "messages", "limit": 1}
+            params = {"q": "同期", "category": "messages", "limit": 1}
             assert client.get(endpoint, params=params).status_code == 401
             client.cookies.set("session", "test")
             first = client.get(endpoint, params=params).json()
+            assert first == client.get(endpoint, params={**params, "kind": "all"}).json()
             [history] = first["items"]
             assert first["total"] == 2 and first["counts"] == {"messages": 2}
             assert first["next_offset"] == 1 and history["labels"] == ["messages"]
@@ -66,10 +73,23 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
             )
 
             second = client.get(endpoint, params={**params, "offset": 1}).json()
+            assert (
+                second == client.get(endpoint, params={**params, "kind": "all", "offset": 1}).json()
+            )
             [local] = second["items"]
             assert second["total"] == 2 and second["next_offset"] is None
             assert local["kind"] == "live" and local["labels"] == ["messages"]
             assert local["entry_id"] == history["entry_id"] == live.id
+            legacy_history = client.get(
+                endpoint, params={"kind": "history", "source_table": "mai_messages", "q": "同期"}
+            ).json()
+            assert legacy_history["total"] == 1 and not legacy_history["next_offset"]
+            assert [item["text"] for item in legacy_history["items"]] == ["同期迁入消息"]
+            legacy_live = client.get(endpoint, params={"kind": "live", "q": "现场"}).json()
+            assert legacy_live["total"] == 1 and not legacy_live["next_offset"]
+            assert [item["text"] for item in legacy_live["items"]] == ["同期现场消息"]
+            for excluded in ("同期未入索引消息", "同期图片原件"):
+                assert client.get(endpoint, params={"q": excluded}).json()["total"] == 0
             assert client.get(endpoint, params={"kind": "all"}).json()["counts"] == {
                 "messages": 2,
                 "experiences": 1,
@@ -82,7 +102,9 @@ def test_message_catalog_uses_same_category_without_crossing_edit_ids(tmp_path: 
             ).is_success
             active = client.get(endpoint, params={**params, "recall": "enabled"}).json()
             assert active["total"] == 1 and active["items"][0]["text"] == "同期迁入消息"
-            disabled = client.get(endpoint, params={**params, "recall": "disabled"}).json()
+            disabled = client.get(
+                endpoint, params={**params, "q": "正文已修订", "recall": "disabled"}
+            ).json()
             [item] = disabled["items"]
             assert item["text"] == "正文已修订" and item["original_text"] == "同期现场消息"
             assert not memory.search(["正文已修订"], set(), 5)

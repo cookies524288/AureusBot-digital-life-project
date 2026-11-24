@@ -246,7 +246,13 @@ def test_resource_filters_pages_and_reads_evidence(tmp_path: Path) -> None:
         endpoint = "/api/resources/memory"
         assert client.get(endpoint).status_code == 401
         client.cookies.set("session", "test")
-        params = {"status": "active", "q": "样本", "limit": 1, "recall": "enabled"}
+        params = {
+            "kind": "history",
+            "status": "active",
+            "q": "样本",
+            "limit": 1,
+            "recall": "enabled",
+        }
         first = client.get(endpoint, params=params).json()
         assert len(first["items"]) == 1
         assert first["items"][0]["evidence"][0]["kind"] == "message"
@@ -255,7 +261,7 @@ def test_resource_filters_pages_and_reads_evidence(tmp_path: Path) -> None:
         assert first["total"] == second["total"] == 2
         assert second["items"][0]["text"] != first["items"][0]["text"]
         assert second["next_offset"] is None
-        empty = client.get(endpoint, params={"q": "不存在"}).json()
+        empty = client.get(endpoint, params={"kind": "history", "q": "不存在"}).json()
         assert empty["items"] == [] and empty["total"] == 0
         assert client.get("/api/resources/learning").json()["enabled"] is False
         assert timeline.count_records() == 0

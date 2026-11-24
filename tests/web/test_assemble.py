@@ -227,7 +227,7 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
             assert "平稳着陆" in core.language.expression_reference("跑步", "", (), "", 500)
 
             payload = client.get(
-                memory, params={"source_table": "text", "recall": "enabled"}
+                memory, params={"kind": "history", "source_table": "text", "recall": "enabled"}
             ).json()
             [history] = payload["items"]
             assert payload["counts"]["paragraphs"] == 1
