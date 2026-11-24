@@ -162,6 +162,97 @@ async def test_language_learning_batches_by_trusted_conversation(
 
 
 @pytest.mark.asyncio
+async def test_online_expression_filter_runs_before_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    identity = paths.identity_file.read_text(encoding="utf-8")
+    paths.identity_file.write_text(
+        identity.replace("[facts]\n", '[facts]\nalias_names = ["  MoonBot  "]\n'), encoding="utf-8"
+    )
+    paths.runtime_config_file.write_text(
+        "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
+        "[language]\nlearning_enabled = true\n",
+        encoding="utf-8",
+    )
+    requests: list[OrganRequest] = []
+
+    class FilterOrgan(LanguageOrgan):
+        async def process(self, request: OrganRequest) -> OrganResponse:
+            if request.context["task"] != "learn_style":
+                return await super().process(request)
+            requests.append(request)
+            proposals = [
+                {"style": style, "situation": "庆祝跑步成绩", "id": source_id}
+                for style, source_id in (
+                    ("测试豆", 1),
+                    ("使用MoonBOT", 1),
+                    ("使用", 1),
+                    ("使用：MoonBot冲线", 1),
+                    (" 使用月兔冲线 ", 1),
+                    ("月兔冲线", 1),
+                    ("不应学入的表达", 2),
+                )
+            ]
+            return OrganResponse(self.organ_id, json.dumps(proposals, ensure_ascii=False))
+
+    bus = OrganBus()
+    bus.register(FilterOrgan("summarizer", requests))
+
+    def build_bus(
+        _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
+    ) -> ModelRuntime:
+        return ModelRuntime(bus, resolver, fake_organs=False)
+
+    monkeypatch.setattr(runtime, "_build_organ_bus", build_bus)
+    clock = ManualClock(NOW)
+    inbox = InboxStore(paths.database_file, clock)
+    with runtime.open_core(paths, clock=clock, to_console=False) as core:
+        heart = core.heartbeat
+        heart.attach_channel("synthetic_qq", lambda _message: None)
+        heart.wake_up()
+        original = ["大家冲线啦", "文" * 400 + "SELF"]
+        stored = []
+        for index, content in enumerate(original, start=1):
+            row = inbox.add(
+                Perception(
+                    "synthetic_qq",
+                    "runner",
+                    content,
+                    VisibilityScope.GROUP,
+                    TrustLevel.UNVERIFIED,
+                    source_message_id=str(index),
+                    route=MessageRoute("account", "group", "10", str(index)),
+                )
+            )
+            assert row is not None
+            stored.append(row)
+        for _ in range(2):
+            heart._submit_inbox(stored)
+            for _ in original:
+                heart.beat()
+                await heart.wait_for_thought()
+
+        records = core.timeline.query(TimelineQuery(event_type="message"))
+        assert {row.content for row in records} == set(original)
+        source_id = next(row.id for row in records if row.content == original[0])
+        store = LanguageStore(paths.database_file)
+        assert {
+            entry.text: entry.evidence_ids for entry in store.entries(LanguageKind.EXPRESSION)
+        } == {
+            "MoonBot冲线": (source_id,),
+            "月兔冲线": (source_id,),
+        }
+        await heart.shut_down()
+
+    assert [request.context["task"] for request in requests] == ["learn_style", "learn_jargon"]
+    assert learning_samples(requests[0]) == [
+        {"id": 1, "text": original[0]},
+        {"id": 2, "text": original[1][:400]},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_language_learning_maps_only_presented_evidence_ids(tmp_path: Path) -> None:
     store = LanguageStore(tmp_path / "language.sqlite")
     store.open()

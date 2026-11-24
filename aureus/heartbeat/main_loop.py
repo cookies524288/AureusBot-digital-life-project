@@ -1621,6 +1621,7 @@ class Heartbeat:
                 self._call_organ,
                 samples,
                 conversation_key=scope,
+                bot_names=(self._identity.facts.name, *self._identity.facts.alias_names),
             ),
             name=language_runner.TASK_NAME,
         )
