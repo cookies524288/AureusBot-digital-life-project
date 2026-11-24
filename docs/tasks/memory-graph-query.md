@@ -1,6 +1,6 @@
 # 路线图 3.11 后续：关系图只读搜索与浏览
 
-状态：待评审
+状态：完成
 设计：D99、D100；只消费[关系图结构化来源](memory-graph-source.md)已经明确获准的结果。
 
 ## 先读
@@ -67,4 +67,4 @@ Windows 使用主树已有 `.venv`、开发树 `PYTHONPATH` 和独立 `--basetem
 
 ## 验收意见
 
-待 Astra 复审。
+2026-11-24 Astra 复审通过（实现 `4f9b004`，自检 `b7254f2`）。查询和详情每次先取得当前明确授权的只读投影，再匹配、计数和分页；完整来源键区分同名实体，邻居遍历不补反向边。独立复跑 `test_search_ranks_only_visible_matches_before_counting_and_paging` 与 `test_detail_and_neighbors_respect_independent_grants`，共 7 项通过。未新增网页授权、开放正式迁入图谱或改变内部召回。复审夹具：`E:/Temp/aureus-graph-review-b7254f2-4eaae11e2720426b9968cc088cf125bd`。
