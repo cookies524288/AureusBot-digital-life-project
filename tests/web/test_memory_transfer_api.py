@@ -326,16 +326,19 @@ def test_maibot_full_bundle_uses_fact_and_people_recall_and_exports_knowledge(
                 for record in people.history_for(person.id)
             )
             exported = client.get(BUNDLES + "/export")
+            assert exported.status_code == 409
+            assert client.get(BUNDLES + "/sources").json() == {"items": []}
+            installation = result.json()["installation_id"]
+            exported = client.get(f"{BUNDLES}/{installation}/download")
             assert exported.status_code == 200
             checked = client.post(
                 BUNDLES + "/preview", content=exported.content, headers=BUNDLE_HEADERS
             )
             assert checked.status_code == 200, checked.text
             assert (
-                checked.json()["content_level"] == "knowledge"
+                checked.json()["content_level"] == "full"
                 and checked.json()["counts"]["paragraphs"] == 1
             )
-            installation = result.json()["installation_id"]
             assert client.post(
                 f"{BUNDLES}/{installation}/uninstall", headers=BUNDLE_HEADERS
             ).is_success
@@ -353,6 +356,40 @@ def test_maibot_full_bundle_uses_fact_and_people_recall_and_exports_knowledge(
             )
     finally:
         people.close()
+        memory.close()
+        timeline.close()
+
+
+def test_generated_bundle_requires_authenticated_same_origin_preview(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 24, tzinfo=UTC))
+    timeline, memory = _open_memory(tmp_path / "export.db", clock)
+    paragraph = MemorySource("registered", "memory", "paragraphs", ("p",))
+    memory.publish(
+        [HistoricalMemory(paragraph, "只导出明确选中的合成段落")],
+        snapshot=("registered", "authorized-test"),
+    )
+    try:
+        with _client(memory) as client:
+            assert client.get(BUNDLES + "/sources").status_code == 401
+            client.cookies.set("session", "test")
+            assert client.get(BUNDLES + "/export").status_code == 409
+            [scope] = client.get(BUNDLES + "/sources").json()["items"]
+            assert set(scope) == {"source_id", "instance"}
+            payload = {"source_ids": [scope["source_id"]], "content_level": "full"}
+            origin = {"origin": "http://testserver"}
+            assert client.post(BUNDLES + "/export-preview", json=payload).status_code == 403
+            assert client.post(BUNDLES + "/export", json=payload, headers=origin).status_code == 409
+            preview = client.post(BUNDLES + "/export-preview", json=payload, headers=origin)
+            assert preview.status_code == 200
+            assert preview.json()["counts"]["paragraphs"] == 1
+            confirmed = payload | {"preview_digest": preview.json()["preview_digest"]}
+            result = client.post(BUNDLES + "/export", json=confirmed, headers=origin)
+            assert result.status_code == 200 and result.content.startswith(b"PK")
+            memory.publish([HistoricalMemory(paragraph, "旧预检后变化")])
+            assert (
+                client.post(BUNDLES + "/export", json=confirmed, headers=origin).status_code == 409
+            )
+    finally:
         memory.close()
         timeline.close()
 

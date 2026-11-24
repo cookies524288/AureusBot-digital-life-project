@@ -291,7 +291,11 @@ def open_core(
         if runtime.memory.enabled:
             try:
                 memory = MemoryIndex(
-                    paths.database_file, timeline, the_clock, config=runtime.memory
+                    paths.database_file,
+                    timeline,
+                    the_clock,
+                    config=runtime.memory,
+                    bundle_attachment_root=paths.memory_dir,
                 )
                 memory.open()
                 stack.callback(memory.close)

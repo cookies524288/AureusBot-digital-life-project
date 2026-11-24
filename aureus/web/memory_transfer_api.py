@@ -10,7 +10,7 @@ from typing import Annotated, Any, BinaryIO, Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
 from starlette.background import BackgroundTask
 
 from aureus.common import Clock, SystemClock
@@ -18,6 +18,7 @@ from aureus.memory import MemoryEventType, MemoryIndex
 from aureus.memory.bundle_format import (
     MAX_BUNDLE_BYTES,
     BundleMode,
+    ContentLevel,
     MemoryBundleConflictError,
     MemoryBundleError,
 )
@@ -37,6 +38,19 @@ _FLOW_PATH = "/api/resources/memory/flow"
 _TRANSFER_PATH = "/api/resources/memory/transfer"
 _BUNDLE_PATH = "/api/resources/memory/bundles"
 _BUNDLE_MEDIA_TYPE = "application/zip"
+
+
+class BundleExportSelection(BaseModel):
+    """只接受服务端登记的来源编号和规范内容层级。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source_ids: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]] = Field(
+        min_length=1,
+        max_length=100,
+    )
+    content_level: ContentLevel = "knowledge"
+    include_images: bool = False
+    preview_digest: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
 
 
 def _download(file: BinaryIO) -> Iterator[bytes]:
@@ -235,36 +249,89 @@ def _register_bundle_routes(
             raise HTTPException(404, "找不到该包安装记录。")
         return {"installed": installed}
 
+    @app.get(_BUNDLE_PATH + "/sources")
+    async def export_sources(_token: Annotated[str, Depends(require_ready)]) -> JSONResponse:
+        sources = await asyncio.to_thread(index().list_bundle_sources)
+        return JSONResponse(
+            {"items": [asdict(source) for source in sources]}, headers={"Cache-Control": "no-store"}
+        )
+
+    @app.post(_BUNDLE_PATH + "/export-preview")
+    async def preview_export(
+        request: Request,
+        selection: BundleExportSelection,
+        _token: Annotated[str, Depends(require_ready)],
+    ) -> JSONResponse:
+        try:
+            report = await asyncio.to_thread(
+                index(request).generate_bundle,
+                selection.source_ids,
+                selection.content_level,
+                people,
+                include_images=selection.include_images,
+            )
+        except MemoryBundleConflictError as error:
+            raise HTTPException(409, str(error)) from error
+        return JSONResponse(report, headers={"Cache-Control": "no-store"})
+
     @app.get(_BUNDLE_PATH + "/export")
+    async def legacy_export(_token: Annotated[str, Depends(require_ready)]) -> None:
+        raise HTTPException(409, "本库生成需要先选择可信来源并预检。")
+
+    @app.post(_BUNDLE_PATH + "/export")
+    async def generate_export(
+        request: Request,
+        selection: BundleExportSelection,
+        _token: Annotated[str, Depends(require_ready)],
+    ) -> StreamingResponse:
+        current = index(request)
+
+        def build(file: BinaryIO) -> None:
+            current.generate_bundle(
+                selection.source_ids,
+                selection.content_level,
+                people,
+                output=file,
+                expected_digest=selection.preview_digest,
+                include_images=selection.include_images,
+            )
+
+        return await _stream_bundle(build, "aureus-memory.amembundle")
+
     @app.get(_BUNDLE_PATH + "/{installation_id}/download")
     async def download(
-        _token: Annotated[str, Depends(require_ready)], installation_id: str = ""
+        _token: Annotated[str, Depends(require_ready)], installation_id: str
     ) -> StreamingResponse:
         current = index()
 
-        def make_file() -> BinaryIO:
-            file = cast(BinaryIO, TemporaryFile())  # noqa: SIM115 - 响应完成时关闭。
-            try:
-                if not installation_id:
-                    current.export_knowledge(file)
-                elif not current.export_bundle(installation_id, file):
-                    raise HTTPException(404, "找不到该包安装记录。")
-                file.seek(0)
-                return file
-            except BaseException:
-                file.close()
-                raise
+        def build(file: BinaryIO) -> None:
+            if not current.export_bundle(installation_id, file):
+                raise HTTPException(404, "找不到该包安装记录。")
 
+        return await _stream_bundle(build, "maibot-memory.amembundle")
+
+
+async def _stream_bundle(build: Callable[[BinaryIO], None], filename: str) -> StreamingResponse:
+    def make_file() -> BinaryIO:
+        file = cast(BinaryIO, TemporaryFile())  # noqa: SIM115 - 响应完成时关闭。
         try:
-            file = await asyncio.to_thread(make_file)
-        except MemoryBundleConflictError as error:
-            raise HTTPException(409, str(error)) from error
-        return StreamingResponse(
-            _download(file),
-            media_type=_BUNDLE_MEDIA_TYPE,
-            background=BackgroundTask(file.close),
-            headers={
-                "Cache-Control": "no-store",
-                "Content-Disposition": 'attachment; filename="maibot-memory.amembundle"',
-            },
-        )
+            build(file)
+            file.seek(0)
+            return file
+        except BaseException:
+            file.close()
+            raise
+
+    try:
+        file = await asyncio.to_thread(make_file)
+    except MemoryBundleConflictError as error:
+        raise HTTPException(409, str(error)) from error
+    return StreamingResponse(
+        _download(file),
+        media_type=_BUNDLE_MEDIA_TYPE,
+        background=BackgroundTask(file.close),
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
