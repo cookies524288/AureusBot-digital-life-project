@@ -10,7 +10,12 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from aureus.memory import ExpressionClusterStore, LanguageStore, VisibleExpressionCluster
+from aureus.memory import (
+    ExpressionClusterStore,
+    ExpressionVectorIndex,
+    LanguageStore,
+    VisibleExpressionCluster,
+)
 
 from .resource_api import DEFAULT_SIZE, MAX_SIZE
 
@@ -26,7 +31,7 @@ def register_expression_cluster_routes(
     app: FastAPI,
     require_ready: Callable[..., Awaitable[str]],
     language: LanguageStore | None,
-    store: ExpressionClusterStore | None,
+    store: ExpressionClusterStore | ExpressionVectorIndex | None,
     grants: ExpressionClusterGrants | None,
     session_is_active: Callable[[str], bool],
 ) -> None:

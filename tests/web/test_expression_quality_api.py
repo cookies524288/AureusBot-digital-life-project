@@ -15,6 +15,7 @@ from aureus.memory import (
     ExpressionQualityDecision,
     ExpressionQualityReason,
     ExpressionQualityStatus,
+    ExpressionVectorIndex,
     LanguageKind,
     LanguageProposal,
     LanguageStore,
@@ -155,6 +156,9 @@ def test_rescue_preserves_rejection_and_cannot_expand_scope(tmp_path: Path) -> N
             store.review_expressions([entry_key], ExpressionReviewStatus.APPROVED, "", NOW)
             assert [entry.entry_key for entry in store.expression_candidates(scope)] == [entry_key]
             assert not store.expression_candidates(other_scope)
+            index = ExpressionVectorIndex(path)
+            assert index.coverage(store, "synthetic", frozenset({scope})) == (0, 1)
+            assert index.coverage(store, "synthetic", frozenset({other_scope})) == (0, 0)
             assert (
                 json.loads(make_package(store, LanguageKind.EXPRESSION, NOW.isoformat()))["count"]
                 == 0

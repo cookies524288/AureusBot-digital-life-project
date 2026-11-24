@@ -9,6 +9,9 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
+from typing import Literal
+from uuid import uuid4
 
 from aureus.common import LanguageConfig
 from aureus.heartbeat.planning import Plan, first_json_object
@@ -34,6 +37,18 @@ from aureus.safety import CallRejectedError
 
 logger = logging.getLogger(__name__)
 _MAX_SELECTED_EXPRESSIONS = 5
+EXPRESSION_MAINTENANCE_BATCH = 25
+
+
+@dataclass
+class ExpressionBackfillRun:
+    """本次人工操作；只有原登录可查结果，写入数来自已提交的批次。"""
+
+    id: str
+    owner: str
+    space: str
+    state: Literal["running", "writing", "written", "unchanged", "failed", "cancelled"] = "running"
+    written: int = 0
 
 
 def _query_text(plan: Plan | None) -> str:
@@ -62,13 +77,20 @@ class ExpressionRecall:
         self._language, self._index, self._config, self._call = language, index, config, call
         self.space: str | None = None
         self._backfill: asyncio.Task[None] | None = None
+        self._maintenance: asyncio.Task[None] | None = None
+        self.maintenance_run: ExpressionBackfillRun | None = None
 
     async def close(self) -> None:
-        """关闭运行时，取消单个后台补建任务。"""
+        """关闭运行时，取消尚未提交的补建；已进入事务则等待实际结果。"""
         if self._backfill is not None:
             self._backfill.cancel()
             with suppress(asyncio.CancelledError):
                 await self._backfill
+        if self._maintenance is not None:
+            if self.maintenance_run is not None and self.maintenance_run.state == "running":
+                self.cancel_maintenance(self.maintenance_run)
+            with suppress(asyncio.CancelledError):
+                await self._maintenance
 
     def _candidates(self, scope: str | None, avoid: tuple[str, ...]) -> list[LanguageEntry]:
         return distinct_expressions(self._language.expression_candidates(scope), avoid)
@@ -119,10 +141,87 @@ class ExpressionRecall:
 
     def backfill(self, scope: str | None) -> None:
         """只启动一个补建任务，在对应回复调用之后处理当前合规材料。"""
-        if self.space is not None and (self._backfill is None or self._backfill.done()):
+        if self.space is not None and not self._build_busy():
             self._backfill = asyncio.create_task(
                 self._build(self.space, scope), name="aureus-expression-index"
             )
+
+    def _build_busy(self) -> bool:
+        return any(
+            task is not None and not task.done() for task in (self._backfill, self._maintenance)
+        )
+
+    def start_maintenance(
+        self,
+        owner: str,
+        space: str,
+        scopes: frozenset[str],
+        allows: Callable[[], Awaitable[bool]],
+    ) -> ExpressionBackfillRun | None:
+        """复用当前本地路线和写入器，在原授权内补建一小批缺项。"""
+        if self.space != space or self._build_busy():
+            return None
+        run = ExpressionBackfillRun(uuid4().hex, owner, space)
+        self.maintenance_run = run
+        self._maintenance = asyncio.create_task(
+            self._maintain(run, scopes, allows), name="aureus-expression-maintenance"
+        )
+        return run
+
+    def cancel_maintenance(self, run: ExpressionBackfillRun) -> bool:
+        """提交前可取消；已交给 SQLite 的事务不报告成已取消。"""
+        if run is not self.maintenance_run or run.state != "running" or self._maintenance is None:
+            return False
+        run.state = "cancelled"
+        self._maintenance.cancel()
+        return True
+
+    async def _maintain(
+        self,
+        run: ExpressionBackfillRun,
+        scopes: frozenset[str],
+        allows: Callable[[], Awaitable[bool]],
+    ) -> None:
+        try:
+            entries = await asyncio.to_thread(self._index.candidates, self._language, scopes)
+            missing = await asyncio.to_thread(self._index.missing, run.space, entries)
+            batch = missing[:EXPRESSION_MAINTENANCE_BATCH]
+            if not await allows() or run.state != "running" or self.space != run.space:
+                run.state = "cancelled"
+                return
+            if not batch:
+                run.state = "unchanged"
+                return
+            vectors = await self._embed(
+                run.space, tuple(map(embedding_text, batch)), purpose=CallPurpose.OPTIONAL
+            )
+            current = {
+                entry.entry_key: fingerprint(entry)
+                for entry in await asyncio.to_thread(self._index.candidates, self._language, scopes)
+            }
+            if not await allows() or run.state != "running" or self.space != run.space:
+                run.state = "cancelled"
+                return
+            valid = [
+                (entry, vector)
+                for entry, vector in zip(batch, vectors, strict=True)
+                if current.get(entry.entry_key) == fingerprint(entry)
+            ]
+            if not valid:
+                run.state = "unchanged"
+                return
+            retained, retained_vectors = zip(*valid, strict=True)
+            run.state = "writing"
+            await asyncio.to_thread(self._index.publish, run.space, retained, retained_vectors)
+            run.written = len(retained)
+            run.state = "written"
+        except asyncio.CancelledError:
+            run.state = "cancelled"
+            raise
+        except Exception as error:
+            if run.state != "cancelled":
+                run.state = "failed"
+                logger.warning("人工表达向量补建失败（%s）", type(error).__name__)
 
     async def _build(self, space: str, scope: str | None) -> None:
         try:
@@ -146,12 +245,14 @@ class ExpressionRecall:
             for entry in await asyncio.to_thread(self._candidates, scope, avoid)
         }
 
-    async def _embed(self, space: str, inputs: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+    async def _embed(
+        self, space: str, inputs: tuple[str, ...], *, purpose: CallPurpose = CallPurpose.USER_REPLY
+    ) -> tuple[tuple[float, ...], ...]:
         response = await self._call(
             OrganRequest(
                 LOCAL_EXPRESSION_EMBEDDING,
                 "",
-                purpose=CallPurpose.USER_REPLY,
+                purpose=purpose,
                 embedding_inputs=inputs,
                 embedding_space=space,
             )

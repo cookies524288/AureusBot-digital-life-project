@@ -1126,6 +1126,78 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     form.addEventListener('submit', event => { event.preventDefault(); counts.textContent = ''; pager.reset(); });
     return {show:() => pager.show(), hide:() => { pager.hide(); source.replaceChildren(); pager.list.replaceChildren(); }};
   }
+  function vectorView(panel) {
+    const endpoint = '/api/resources/learning/vector-spaces';
+    const select = el('select', {'aria-label':'选择要补建的向量空间'});
+    const offers = el('div', {class:'stack'});
+    const status = el('p', {class:'muted', role:'status'});
+    const cost = el('p', {class:'muted'});
+    const states = {running:'正在补建', writing:'正在保存，已无法取消', unchanged:'本次没有新增向量',
+      failed:'补建失败，未新增向量', cancelled:'补建已取消，未新增向量'};
+    let selection = '', currentJob = null, generation = 0, timer, visible = false, pending = false;
+    const start = action('补建一批', () => mutate('/backfill', 'POST', {space:select.value}));
+    const cancel = action('取消补建', () => mutate('/backfill/' + currentJob.id, 'DELETE'));
+    panel.append(cost, offers,
+      el('div', {class:'row resource-filters'}, select, start, cancel, action('刷新', refresh)), status);
+
+    function controls() {
+      const busy = ['running', 'writing'].includes(currentJob?.state);
+      start.disabled = pending || busy || !select.value;
+      cancel.disabled = pending || currentJob?.state !== 'running';
+    }
+    select.addEventListener('change', () => { selection = select.value; controls(); });
+
+    async function refresh() {
+      clearTimeout(timer);
+      const request = ++generation;
+      const response = await api(endpoint);
+      if (!visible || request !== generation) return;
+      if (!response.ok) {
+        offers.replaceChildren();
+        select.replaceChildren();
+        currentJob = null;
+        status.textContent = '暂时无法读取表达向量空间。';
+        controls();
+        return;
+      }
+      const {items, batch_limit, job} = response.data;
+      currentJob = job;
+      cost.textContent = `仅使用当前免费的本地嵌入路线，每次最多补建 ${batch_limit} 条缺项；会占用本地算力，提交前可取消。`;
+      offers.replaceChildren(...items.map((item, index) => el('div', {class:'resource-record'},
+        el('span', {text:`空间 ${index + 1} · ${item.space.slice(0, 12)} · ${item.available ? '可补建' : '已保存'}`}),
+        el('span', {class:'muted', text:`来源候选 ${item.eligible} 条 · 已写入 ${item.established} 条`}))));
+      select.replaceChildren(el('option', {value:'', text:'请选择可用空间'}), ...items.flatMap((item, index) =>
+        item.available ? [el('option', {value:item.space, text:`空间 ${index + 1} · ${item.space.slice(0, 12)}`})] : []));
+      select.value = selection;
+      status.textContent = job ? (job.state === 'written' ? `本次写入 ${job.written} 条` : states[job.state]) :
+        (items.length ? '' : '当前没有可用或已保存的空间。');
+      controls();
+      if (['running', 'writing'].includes(job?.state)) timer = setTimeout(refresh, 1000);
+    }
+
+    async function mutate(path, method, body) {
+      if (pending) return;
+      pending = true;
+      controls();
+      const response = await api(endpoint + path, method, body);
+      pending = false;
+      if (!visible) return;
+      if (!response.ok) fail(response);
+      await refresh();
+    }
+
+    return {show:() => { visible = true; controls(); return refresh(); }, hide:() => {
+      visible = false;
+      generation++;
+      clearTimeout(timer);
+      select.replaceChildren();
+      offers.replaceChildren();
+      status.textContent = '';
+      currentJob = null;
+      selection = '';
+      controls();
+    }};
+  }
   function clusterView(panel) {
     const endpoint = '/api/resources/learning/clusters';
     const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
@@ -1183,6 +1255,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   const learning = {jargon:learningView('jargon'), expression:learningView('expression'),
     quality:qualityView($('learning-panel-quality')),
+    vectors:vectorView($('learning-panel-vectors')),
     clusters:clusterView($('learning-panel-clusters')), emoji:mediaView($('learning-panel-emoji'), 'emoji')};
   const operations = createResourcePager({el, panel:$('memory-panel-operations'), id:'memory-operations', error:fail,
     request:({offset, limit, signal}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit}),
@@ -1478,6 +1551,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     if (kind === 'expression') {
       activate('data-expression-view', expressionView);
       switchPanel({list:'learning-expression-list', quality:'learning-panel-quality',
+        vectors:'learning-panel-vectors',
         clusters:'learning-panel-clusters'}, expressionView);
     }
     const view = kind === 'expression' && expressionView !== 'list' ? learning[expressionView] : learning[kind];

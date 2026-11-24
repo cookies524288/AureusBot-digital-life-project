@@ -1,16 +1,25 @@
 """组装运行中的嵌入覆盖统计；只读，不启动向量生成。"""
 
 import asyncio
+import json
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from aureus.channels import CHANNEL_NAME, TERMINAL_USER_ID
+from aureus.common.web_identity import WEB_CHANNEL_NAME, WEB_USER_ID
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat.emoji_selection import EmojiSelector
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.memory import ExpressionVectorIndex, LanguageStore
+from aureus.memory.expression_index import ExpressionSpaceCoverage
+
+_LOCAL_EXPRESSION_SCOPES = frozenset(
+    json.dumps(source, separators=(",", ":"))
+    for source in ((WEB_CHANNEL_NAME, WEB_USER_ID), (CHANNEL_NAME, TERMINAL_USER_ID))
+)
 
 type ProgressKind = Literal["expression", "images", "emoji_cache", "memory_rerank"]
 type ProgressState = Literal[
@@ -82,20 +91,35 @@ class EmbeddingProgress:
             return IndexProgress("expression", "no_model")
         if self.expression_index is None or self.language is None:
             return IndexProgress("expression", "unavailable")
+        scopes = await self.expression_scopes()
+        established, eligible = await asyncio.to_thread(
+            self.expression_index.coverage, self.language, space, scopes
+        )
+        if not scopes <= await self.expression_scopes():
+            return IndexProgress("expression", "unavailable")
+        return _coverage("expression", established, eligible)
+
+    async def expression_scopes(self) -> frozenset[str]:
+        """已登录本机来源及当前可查看、可使用的 QQ 会话范围。"""
         routes = (
             await asyncio.to_thread(self.inbox.visible_conversation_keys)
             if self.inbox is not None and self.allows_conversation is not None
             else []
         )
         allows = self.allows_conversation
-        allowed = [route for route in routes if allows is not None and allows(route)]
-        scopes = frozenset(route.language_scope_key() for route in allowed)
-        established, eligible = await asyncio.to_thread(
-            self.expression_index.coverage, self.language, space, scopes
+        return _LOCAL_EXPRESSION_SCOPES.union(
+            route.language_scope_key() for route in routes if allows is not None and allows(route)
         )
-        if allows is not None and any(not allows(route) for route in allowed):
-            return IndexProgress("expression", "unavailable")
-        return _coverage("expression", established, eligible)
+
+    async def expression_spaces(
+        self, scopes: frozenset[str], available: str | None
+    ) -> list[ExpressionSpaceCoverage]:
+        """只读学习页的空间和覆盖，不触发计算。"""
+        if self.language is None or self.expression_index is None:
+            return []
+        return await asyncio.to_thread(
+            self.expression_index.spaces, self.language, scopes, available
+        )
 
     async def _emoji(self, spaces: tuple[tuple[int, str], ...]) -> list[IndexProgress]:
         if self.emoji_selector is None:
