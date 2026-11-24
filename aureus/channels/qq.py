@@ -25,7 +25,14 @@ from aureus.heartbeat import (
 )
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 
-from .onebot import QQ_CHANNEL_NAME, decode_message, encode_message, media_file_id, message_id
+from .onebot import (
+    QQ_CHANNEL_NAME,
+    account_id,
+    decode_message,
+    encode_message,
+    media_file_id,
+    message_id,
+)
 from .onebot_transport import OneBotError, OneBotTransport, decode_media_base64
 from .web import HeartbeatHandle
 
