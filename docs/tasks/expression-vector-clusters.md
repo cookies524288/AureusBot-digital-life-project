@@ -28,6 +28,8 @@
 - `aureus/memory/expression_clusters.py`：表达输入、暂存快照、余弦聚类与有效成员投影。调用者显式提供异步批量嵌入函数，返回同一空间及有序向量；聚类在工作线程执行。不新增依赖、配置、写库、后台任务或运行时接线。K 由调用者显式提供，测试验证真实簇，不把上游自动选 K、增量重聚类或候选精排记作已完成。
 - `aureus/memory/language.py`：为表达文字召回和聚类成员投影提供同一个当前可用候选入口；不改变文字召回行为。
 - 每次使用固定随机种子和稳定键排序初始化。参考上游余弦距离加权选初始中心、按中心余弦相似度分配，再归一化更新；不用同一随机数实现或 NumPy，不要求簇编号与上游相同。快照只带空间、成员键及指纹，不保存原文或向量，不是可供回复精排的向量索引。实际精排还须先核对当轮可用候选和查询向量空间，不能让无权条目通过聚类绕过授权。
+- 构建调用默认无嵌入传输授权；调用方必须显式传入对该嵌入器获准发送的表达键。调用前再与目标会话下当前可用的表达取交集；目标会话不指定时，不发送包记录。D100 和明确会话绑定都不等于传输授权。已发出的请求不能靠事后撤销收回；当前快照投影仍独立复核召回权限。
+- 有效反向向量同簇相消为零中心时，明确报错并不产出快照，不随机选方向或偷偷增加簇数；MaiBot 1.3.15 的 `_build_cluster_centers_from_labels` 同样拒绝零中心。
 - `tests/memory/test_expression_clusters.py`：确定性假器官、非文本分组、向量合法性、原件状态和会话边界。
 
 ## 子步骤
@@ -39,7 +41,7 @@
 - [x] `test_expression_clusters_follow_vector_direction_and_keep_homonyms` 验证假器官仅收到标准化情景与风格、交换向量改变聚类；`test_expression_clusters_reject_invalid_embeddings` 覆盖空空间、数量与维度、零向量和非有限值。
 - [x] 同名异情景保留不同键；`test_expression_cluster_recall_rechecks_state_and_content` 验证停用、移除、拒绝、恢复与编辑的即时效果。
 - [x] `test_expression_cluster_recall_keeps_source_separate_from_package_scope` 验证跨会话在线候选、原始来源浏览、语言包待映射/授权/撤销；现有 `tests/test_language_runtime.py` 检查正常回复请求边界。
-- [x] 聚类、语言库、语言运行共 24 项通过；变更 Python 文件 Ruff 规范和格式、Pyright 通过，8 条架构规则及 `git diff --check` 通过。未重复跑全量。测试夹具为 `E:/Temp/aureus-expression-clusters-7524359-f805e77a`，防误用的数据目录未创建。
+- [x] 聚类、语言库、语言运行共 27 项通过；返工文件的 Ruff、Pyright、8 条架构规则及差异检查通过。红测夹具为 `E:/Temp/aureus-expression-red-62af062-d3a6b80c`，绿测夹具为 `E:/Temp/aureus-expression-green-62af062-9e2b521a`，防误用的数据目录均未创建。未跑全量。
 
 ## 坑与不做
 
@@ -50,3 +52,8 @@
 正式发送既有表达给哪个模型、预算及触发条件，和是否启用正式回复切换或删除派生空间，留待维护者决定。本步不依赖这些决定。
 
 ## 验收意见
+
+### 第 1 轮修改说明（GPT，2026-11-24）
+
+- `test_expression_clusters_do_not_embed_without_explicit_permission` 在 `62af062` 上先失败：假器官收到本地可召回表达及仅绑定会话的语言包。修复后未显式传入发送许可时不调用嵌入器；`test_expression_cluster_embedding_inputs_require_live_scope_and_permission` 捕获实际入参，确认待映射、未指定会话、错会话、已撤销、停用、移除、拒绝及未列入许可的材料均未发送。
+- `test_expression_clusters_reject_zero_center_from_valid_opposite_vectors` 验证同一对有效向量分到两簇时可用、放入同一簇时重复构建均明确报零中心错误，不产出快照。上游也拒绝零中心；未增加兜底簇或真实模型默认。

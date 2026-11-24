@@ -61,6 +61,77 @@ def _member_keys(clusters: ExpressionClusters, store: LanguageStore) -> set[froz
 
 
 @pytest.mark.asyncio
+async def test_expression_clusters_do_not_embed_without_explicit_permission(
+    store: LanguageStore,
+) -> None:
+    store.add_entry(EXPRESSION, LanguageContent("合成未授权", "本地可召回"))
+    package = LanguagePackageRow(
+        LanguageContent("合成语言包", "仅允许会话召回"), 1, "只作来源", "{}"
+    )
+    assert store.save_package(EXPRESSION, [package]) == 1
+    package_key = f"package:{package.digest}"
+    assert store.package_scope(EXPRESSION, package_key, [GROUP], confirm=True) == ()
+    fake = FakeExpressionOrgan(
+        {
+            _embedding_text("本地可召回", "合成未授权"): (1, 0),
+            _embedding_text("仅允许会话召回", "合成语言包"): (1, 1),
+        }
+    )
+    clusters = await build_expression_clusters(store, fake.embed, cluster_count=1)
+    assert [request.embedding_inputs for request in fake.requests] == []
+    assert clusters is None
+
+
+@pytest.mark.asyncio
+async def test_expression_cluster_embedding_inputs_require_live_scope_and_permission(
+    store: LanguageStore,
+) -> None:
+    allowed = store.add_entry(EXPRESSION, LanguageContent("明示许可", "允许材料"))
+    disabled = store.add_entry(EXPRESSION, LanguageContent("停用", "不得发送"))
+    removed = store.add_entry(EXPRESSION, LanguageContent("移除", "不得发送"))
+    rejected = store.add_entry(EXPRESSION, LanguageContent("拒绝", "不得发送"))
+    store.add_entry(EXPRESSION, LanguageContent("未许可", "不得发送"))
+    assert store.update_entry(EXPRESSION, disabled, None, False)
+    assert store.set_removed(EXPRESSION, [removed], True)
+    stamp = datetime(2026, 11, 24, tzinfo=UTC)
+    assert store.review_expressions([rejected], ExpressionReviewStatus.REJECTED, "不采用", stamp)
+    package = LanguagePackageRow(
+        LanguageContent("包材料", "包内情景"), 1, "只作来源", '{"is_global":true}'
+    )
+    assert store.save_package(EXPRESSION, [package]) == 1
+    package_key = f"package:{package.digest}"
+    allowed_input = _embedding_text("允许材料", "明示许可")
+    package_input = _embedding_text("包内情景", "包材料")
+    fake = FakeExpressionOrgan({allowed_input: (1, 0), package_input: (1, 1)})
+    authorized = (allowed, disabled, removed, rejected, package_key)
+
+    async def build(conversation_key: str | None) -> None:
+        clusters = await build_expression_clusters(
+            store,
+            fake.embed,
+            cluster_count=1,
+            authorized_entry_keys=authorized,
+            conversation_key=conversation_key,
+        )
+        assert clusters is not None
+
+    await build(GROUP)
+    assert store.package_scope(EXPRESSION, package_key, [GROUP], confirm=True) == ()
+    await build(None)
+    await build(OTHER)
+    await build(GROUP)
+    assert store.package_scope(EXPRESSION, package_key, [], confirm=True) == (GROUP,)
+    await build(GROUP)
+    assert [request.embedding_inputs for request in fake.requests] == [
+        (allowed_input,),
+        (allowed_input,),
+        (allowed_input,),
+        (allowed_input, package_input),
+        (allowed_input,),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_expression_clusters_follow_vector_direction_and_keep_homonyms(
     store: LanguageStore,
 ) -> None:
@@ -76,7 +147,10 @@ async def test_expression_clusters_follow_vector_direction_and_keep_homonyms(
         _embedding_text("场景 丁", "另一说法"),
     )
     fake = FakeExpressionOrgan(dict(zip(inputs, [(0, 2), (20, 1), (1, 20), (2, 0)], strict=True)))
-    clusters = await build_expression_clusters(store, fake.embed, cluster_count=2)
+    authorized = (first, second, third, fourth)
+    clusters = await build_expression_clusters(
+        store, fake.embed, cluster_count=2, authorized_entry_keys=authorized
+    )
     assert clusters is not None
     assert clusters.embedding_space == "synthetic-expression-space"
     assert _member_keys(clusters, store) == {frozenset((first, third)), frozenset((second, fourth))}
@@ -87,7 +161,9 @@ async def test_expression_clusters_follow_vector_direction_and_keep_homonyms(
         fake.vectors[inputs[3]],
         fake.vectors[inputs[2]],
     )
-    permuted = await build_expression_clusters(store, fake.embed, cluster_count=2)
+    permuted = await build_expression_clusters(
+        store, fake.embed, cluster_count=2, authorized_entry_keys=authorized
+    )
     assert permuted is not None
     assert _member_keys(permuted, store) == {frozenset((first, fourth)), frozenset((second, third))}
 
@@ -96,13 +172,19 @@ async def test_expression_clusters_follow_vector_direction_and_keep_homonyms(
 async def test_expression_cluster_recall_rechecks_state_and_content(store: LanguageStore) -> None:
     key = store.add_entry(EXPRESSION, LanguageContent("同名", "合成场景"))
     fake = FakeExpressionOrgan({_embedding_text("合成场景", "同名"): (1, 0)})
-    clusters = await build_expression_clusters(store, fake.embed, cluster_count=1)
+
+    async def build() -> ExpressionClusters | None:
+        return await build_expression_clusters(
+            store, fake.embed, cluster_count=1, authorized_entry_keys=(key,)
+        )
+
+    clusters = await build()
     assert clusters is not None
     assert _member_keys(clusters, store) == {frozenset((key,))}
 
     assert store.update_entry(EXPRESSION, key, None, False)
     assert not clusters.recall_members(store, GROUP)
-    assert await build_expression_clusters(store, fake.embed, cluster_count=1) is None
+    assert await build() is None
     assert store.set_removed(EXPRESSION, [key], True)
     assert store.set_removed(EXPRESSION, [key], False)
     assert not clusters.recall_members(store, GROUP)
@@ -110,14 +192,14 @@ async def test_expression_cluster_recall_rechecks_state_and_content(store: Langu
     assert _member_keys(clusters, store) == {frozenset((key,))}
     assert store.set_removed(EXPRESSION, [key], True)
     assert not clusters.recall_members(store, GROUP)
-    assert await build_expression_clusters(store, fake.embed, cluster_count=1) is None
+    assert await build() is None
     assert store.set_removed(EXPRESSION, [key], False)
     assert _member_keys(clusters, store) == {frozenset((key,))}
 
     stamp = datetime(2026, 11, 24, tzinfo=UTC)
     assert store.review_expressions([key], ExpressionReviewStatus.REJECTED, "不采用", stamp) == 1
     assert not clusters.recall_members(store, GROUP)
-    assert await build_expression_clusters(store, fake.embed, cluster_count=1) is None
+    assert await build() is None
     assert store.review_expressions([key], ExpressionReviewStatus.APPROVED, "改为采用", stamp) == 1
     assert _member_keys(clusters, store) == {frozenset((key,))}
     assert store.update_entry(EXPRESSION, key, LanguageContent("同名", "新场景"), None)
@@ -147,12 +229,20 @@ async def test_expression_cluster_recall_keeps_source_separate_from_package_scop
     fake = FakeExpressionOrgan(
         {_embedding_text("在线情景", "同名"): (1, 0), _embedding_text("包内情景", "同名"): (1, 1)}
     )
-    pending = await build_expression_clusters(store, fake.embed, cluster_count=1)
+    pending = await build_expression_clusters(
+        store, fake.embed, cluster_count=1, authorized_entry_keys=(online_key,)
+    )
     assert pending is not None
     assert _member_keys(pending, store) == {frozenset((online_key,))}
     assert fake.requests[0].embedding_inputs == (_embedding_text("在线情景", "同名"),)
     assert store.package_scope(EXPRESSION, package_key, [GROUP], confirm=True) == ()
-    granted = await build_expression_clusters(store, fake.embed, cluster_count=1)
+    granted = await build_expression_clusters(
+        store,
+        fake.embed,
+        cluster_count=1,
+        authorized_entry_keys=(online_key, package_key),
+        conversation_key=GROUP,
+    )
     assert granted is not None
     assert _member_keys(granted, store) == {frozenset((online_key, package_key))}
     [outside] = granted.recall_members(store, OTHER)[0]
@@ -180,11 +270,35 @@ async def test_expression_cluster_recall_keeps_source_separate_from_package_scop
 async def test_expression_clusters_reject_invalid_embeddings(
     store: LanguageStore, space: str, vectors: tuple[tuple[float, ...], ...]
 ) -> None:
-    store.add_entry(EXPRESSION, LanguageContent("第一项", "场景甲"))
-    store.add_entry(EXPRESSION, LanguageContent("第二项", "场景乙"))
+    first = store.add_entry(EXPRESSION, LanguageContent("第一项", "场景甲"))
+    second = store.add_entry(EXPRESSION, LanguageContent("第二项", "场景乙"))
 
     async def embed(_texts: tuple[str, ...]) -> tuple[str, tuple[tuple[float, ...], ...]]:
         return space, vectors
 
     with pytest.raises(ValueError, match="表达向量"):
-        await build_expression_clusters(store, embed, cluster_count=2)
+        await build_expression_clusters(
+            store, embed, cluster_count=2, authorized_entry_keys=(first, second)
+        )
+
+
+@pytest.mark.asyncio
+async def test_expression_clusters_reject_zero_center_from_valid_opposite_vectors(
+    store: LanguageStore,
+) -> None:
+    first = store.add_entry(EXPRESSION, LanguageContent("第一项", "场景甲"))
+    second = store.add_entry(EXPRESSION, LanguageContent("第二项", "场景乙"))
+    fake = FakeExpressionOrgan(
+        {_embedding_text("场景甲", "第一项"): (1, 0), _embedding_text("场景乙", "第二项"): (-2, 0)}
+    )
+    authorized = (first, second)
+    split = await build_expression_clusters(
+        store, fake.embed, cluster_count=2, authorized_entry_keys=authorized
+    )
+    assert split is not None
+    assert _member_keys(split, store) == {frozenset((first,)), frozenset((second,))}
+    for _ in range(2):
+        with pytest.raises(ValueError, match="表达簇中心"):
+            await build_expression_clusters(
+                store, fake.embed, cluster_count=1, authorized_entry_keys=authorized
+            )
