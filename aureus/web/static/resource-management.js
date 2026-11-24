@@ -875,6 +875,81 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }
     return el('div', {class:'resource-tile-selection'}, tile, batch.checkbox(item), approval || null);
   }
+  const emojiMaterialsEndpoint = '/api/resources/emoji/materials';
+  function emojiMaterialExport(keys) {
+    const license = textControl('选中素材的来源及许可声明', '', 500, true);
+    const submit = el('button', {class:'btn primary small', text:'导出所选'});
+    const form = el('form', {class:'stack'},
+      el('p', {text:`只导出选中的 ${keys.length} 张原图及描述，不包含登记或审批。每份最多 20 张；请确认有分享权。`}),
+      license.field, submit, action('取消', () => $('editor-dialog').close()));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (submit.disabled || !license.input.value.trim()) return;
+      submit.disabled = true;
+      try {
+        const response = await api(emojiMaterialsEndpoint + '/export', 'POST', {
+          keys, source_license:license.input.value,
+        });
+        if (!response.ok) { fail(response); return; }
+        if (!form.isConnected || !$('editor-dialog').open) return;
+        const url = URL.createObjectURL(new Blob([JSON.stringify(response.data)], {type:'application/json'}));
+        const link = el('a', {href:url, download:'aureus-emoji-materials.json'});
+        document.body.append(link); link.click(); link.remove();
+        URL.revokeObjectURL(url);
+        $('editor-dialog').close();
+      } finally { submit.disabled = false; }
+    });
+    openEditor('导出 Aureus 表情素材集', form);
+  }
+  function emojiMaterialImport(refresh) {
+    const input = el('input', {type:'file', accept:'.json,application/json', required:true});
+    const register = el('input', {type:'checkbox'});
+    const submit = el('button', {class:'btn primary small', text:'预检'});
+    const status = el('p', {role:'status', class:'muted'});
+    const members = el('ul');
+    const controls = el('fieldset', {class:'stack'}, el('label', {class:'stack'}, 'Aureus v1 JSON 素材集', input),
+      el('label', {}, register, ' 同时登记有描述且有空位的新素材'), submit);
+    const form = el('form', {class:'stack'},
+      el('p', {text:'这是 Aureus 扩展格式，不是 MaiBot 专用接口或 A_Memorix 记忆包。重复素材保留原有登记和审批。'}),
+      controls, status, members, action('取消', () => $('editor-dialog').close()));
+    let digest;
+    function reset() {
+      digest = null;
+      submit.textContent = '预检';
+      status.textContent = '最多 20 张、32 MiB；预检不写入。';
+      members.replaceChildren();
+    }
+    input.addEventListener('change', reset);
+    register.addEventListener('change', reset);
+    reset();
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (controls.disabled) return;
+      const confirmed = digest;
+      const params = new URLSearchParams({register:register.checked, ...(confirmed ? {confirmed} : {})});
+      controls.disabled = true;
+      try {
+        const response = await api(emojiMaterialsEndpoint + '/import?' + params, 'POST', input.files[0],
+          {'Content-Type':'application/json'});
+        if (!response.ok) { reset(); status.textContent = errorText(response); return; }
+        const data = response.data;
+        status.textContent = `${confirmed ? '已完成' : '预检'}：新增 ${data.added} 张 · 登记 ${data.registered} 张 · 重复 ${data.skipped} 张 · 超额 ${data.capacity_blocked} 张 · 缺描述 ${data.missing_description} 张`;
+        members.replaceChildren(...data.members.map(item => el('li', {text:
+          `${item.description || '未填写描述'} · ${item.bytes} 字节 · ${item.digest} · 来源及许可：${item.source_license}`})));
+        if (!confirmed) { digest = data.digest; submit.textContent = '确认导入'; }
+        else { digest = null; submit.textContent = '预检'; toast('素材集已处理'); await refresh(); }
+      } finally { controls.disabled = false; }
+    });
+    openEditor('导入 Aureus 表情素材集', form);
+  }
+  async function emojiThumbnailStatus() {
+    const status = el('p', {role:'status', text:'正在读取缩略图缓存状态…'});
+    detail('表情缩略图缓存', status);
+    const result = await api('/api/resources/emoji/thumbnail-cache');
+    if (status.isConnected) status.textContent = result.ok
+      ? '本项目不生成持久缩略图缓存，当前 0 条，无需预热或清理。原图和目录状态不受影响。'
+      : errorText(result);
+  }
   function mediaView(panel, kind) {
     const emoji = kind === 'emoji';
     const select = (label, name, options) => el('label', {}, label + ' ', el('select', {name},
@@ -889,10 +964,15 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const removed = kind === 'emoji' ? el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除') : null;
     const form = searchForm(label, label, status, review, format, sort, removed);
     const counts = emoji ? el('div', {class:'muted', id:'emoji-library-counts'}) : null;
+    const exportMaterials = emoji ? action('导出所选素材', () => emojiMaterialExport(batch.keys())) : null;
     const batch = kind === 'emoji' ? batchControls(item => item.entry_key, '/api/resources/emoji/batch',
-      (entry_keys, removed) => ({entry_keys, removed}), () => pager.read()) : null;
+      (entry_keys, removed) => ({entry_keys, removed}), () => pager.read(), count => {
+        if (exportMaterials) exportMaterials.disabled = !count || count > 20 || removed.firstChild.checked;
+      }) : null;
     const upload = kind === 'emoji' ? action('上传表情', () => emojiForm(pager.read)) : null;
     const batchUpload = kind === 'emoji' ? action('批量上传', () => emojiBatchForm(pager.read)) : null;
+    const importMaterials = emoji ? action('导入素材集', () => emojiMaterialImport(pager.read)) : null;
+    const thumbnail = emoji ? action('缩略图缓存', emojiThumbnailStatus) : null;
     let checkingIntegrity = false;
     let emojiEnabled = false;
     const pendingReviews = new Set();
@@ -908,12 +988,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       emojiEnabled = enabled;
       if (upload) upload.disabled = !enabled;
       if (batchUpload) batchUpload.disabled = !enabled;
+      if (importMaterials) importMaterials.disabled = !enabled;
+      if (thumbnail) thumbnail.disabled = !enabled;
       if (integrity) integrity.disabled = !enabled || checkingIntegrity;
     }
     syncEmojiActions(false);
     panel.append(form);
-    if (emoji) panel.append(actions('表情操作', upload, batchUpload, integrity));
-    if (batch) panel.append(actions('所选表情', batch.remove, batch.restore));
+    if (emoji) panel.append(actions('表情操作', upload, batchUpload, integrity, importMaterials, thumbnail));
+    if (batch) panel.append(actions('所选表情', batch.remove, batch.restore, exportMaterials));
     if (counts) panel.append(counts);
     const pager = searchable({panel, grid:true, id:kind === 'emoji' ? 'learning-emoji' : 'archived-images',
       render:item => renderMedia(item, pager.read, batch, openReview),

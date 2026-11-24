@@ -1113,7 +1113,7 @@ async function api(path, method, body, headers = {}, signal) {
     opt.body = body;
   } else if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/octet-stream'; opt.body = body;
-  } else if (path.startsWith('/api/resources/learning/package/') && method === 'POST' && body instanceof Blob) {
+  } else if ((path.startsWith('/api/resources/learning/package/') || path.startsWith('/api/resources/emoji/materials/import?')) && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/json'; opt.body = body;
   } else if ((path === '/api/resources/memory/transfer' || path === '/api/resources/memory/transfer/preview') && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/x-ndjson'; opt.body = body;
