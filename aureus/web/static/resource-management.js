@@ -774,6 +774,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   pictureForm.addEventListener('submit', event => { event.preventDefault(); searchPictures(); });
   pictureForm.elements.availability.addEventListener('change', searchPictures);
   const learning = {jargon:learningView('jargon'), expression:learningView('expression'), emoji:mediaView($('learning-panel-emoji'), 'emoji')};
+  const operations = createResourcePager({el, panel:$('memory-panel-operations'), id:'memory-operations', error:fail,
+    request:({offset, limit}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit})),
+    empty:() => '没有可见的移除或恢复记录',
+    render:item => el('div', {class:'resource-record'},
+      el('span', {text:`${item.kind === 'remove' ? '移除' : '恢复'} ${item.changed} 条`}),
+      el('time', {datetime:item.occurred_at, class:'muted',
+        text:`${new Date(item.occurred_at).getFullYear()}年${fmtTime(item.occurred_at, true)}`})),
+  });
   function showLearning(kind) {
     activeLearning?.hide();
     learningKind = kind;
@@ -787,13 +795,15 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     activeMemory = null;
     memoryTab = tab;
     activate('data-memory-tab', tab);
-    switchPanel({query:'memory-panel-query', images:'memory-panel-images', flow:'memory-panel-flow', transfer:'memory-panel-transfer'}, tab);
+    switchPanel({query:'memory-panel-query', images:'memory-panel-images', flow:'memory-panel-flow',
+      operations:'memory-panel-operations', transfer:'memory-panel-transfer'}, tab);
     if (tab === 'query') {
       activate('data-memory-query', queryKind);
       switchPanel({text:'memory-query-text', profiles:'memory-query-profiles'}, queryKind);
       activeMemory = queryKind === 'text' ? memory : profiles;
     } else if (tab === 'images') activeMemory = pictures;
     else if (tab === 'flow') activeMemory = window.getMemoryFlow?.();
+    else if (tab === 'operations') activeMemory = operations;
     else window.loadMemoryTransfer?.();
     return activeMemory?.show();
   }

@@ -1,9 +1,10 @@
 """集成新增记忆、人际和语言片段，并在 MockTransport 捕获模型 HTTP 请求。"""
 
 import json
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from collections.abc import Callable, Iterator
 from datetime import UTC
+from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,8 @@ import httpx
 import pytest
 from PIL import Image
 
-from aureus.common import HeartbeatConfig, MemoryConfig
+from aureus.channels.onebot import decode_message
+from aureus.common import BudgetCalendar, HeartbeatConfig, ManualClock, MemoryConfig, SafetyConfig
 from aureus.common.language_prompts import (
     LANGUAGE_EXPRESSION_ITEM,
     LANGUAGE_JARGON_ITEM,
@@ -28,12 +30,13 @@ from aureus.heartbeat.context import (
     build_system_context,
 )
 from aureus.heartbeat.inbox_media import InboxMedia
+from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.language_runner import learn_language
 from aureus.heartbeat.memory_consolidation import _extract
 from aureus.heartbeat.people_context import PEOPLE_CONTEXT_TEMPLATE
 from aureus.heartbeat.perception import MessageRoute
 from aureus.heartbeat.recall import format_recall
-from aureus.memory import LanguageSample, LanguageStore, MemoryHit
+from aureus.memory import EmojiStore, LanguageSample, LanguageStore, MemoryHit
 from aureus.memory.consolidation import ConsolidationItem
 from aureus.organs import (
     BUILTIN_ORGANS,
@@ -41,11 +44,14 @@ from aureus.organs import (
     LLMOrgan,
     ModelPreference,
     ModelsConfig,
+    OrganBus,
     OrganRequest,
     OrganResponse,
 )
 from aureus.organs.api_keys import KeyResolver
+from aureus.safety import EmergencyStop, Ledger, PermissionChecker, SafetyGateway
 from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
+from tests.channels.test_qq_runtime import ACCOUNT, event
 from tests.heartbeat.test_recall_flow import CountingIndex, MemoryEnv
 from tests.web.config_rig import ConfigRig
 from tests.web.test_prompt_api import IDENTITY
@@ -53,9 +59,16 @@ from tests.web.test_timeline_api import NOW
 
 
 @pytest.fixture
-def rig(tmp_path: Path) -> Iterator[ConfigRig]:
+def emoji_store(tmp_path: Path) -> EmojiStore:
+    store = EmojiStore(tmp_path / "emoji-catalog.db", tmp_path, ManualClock(NOW))
+    store.open()
+    return store
+
+
+@pytest.fixture
+def rig(tmp_path: Path, emoji_store: EmojiStore) -> Iterator[ConfigRig]:
     """使用合成身份、临时目录和网页会话。"""
-    item = ConfigRig(tmp_path, prompt_identity=IDENTITY)
+    item = ConfigRig(tmp_path, prompt_identity=IDENTITY, emoji_store=emoji_store)
     item.log_in()
     yield item
     item.close()
@@ -114,7 +127,7 @@ def _dialogue(record_id: int, actor: ActorType, content: str) -> TimelineRecord:
 
 @pytest.mark.asyncio
 async def test_image_prompt_preview_matches_inbox_vision_http_request(
-    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, emoji_store: EmojiStore
 ) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     import litellm
@@ -132,6 +145,12 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
         body = json.loads(request.content)
         assert body["model"] == "sample-model"
         captured.append(body)
+        instruction = body["messages"][1]["content"][0]["text"]
+        suggestion = (
+            "惊讶，犹豫, 惊讶、庆祝; 打招呼；无奈, 额外项"
+            if instruction.startswith("输入类型：")
+            else "模拟图片说明"
+        )
         return httpx.Response(
             200,
             json={
@@ -142,7 +161,7 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": "模拟图片说明"},
+                        "message": {"role": "assistant", "content": suggestion},
                         "finish_reason": "stop",
                     }
                 ],
@@ -156,34 +175,77 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
         token_counter=lambda _messages: 12,
         prompts=rig.models.prompts,
     )
+    clock = ManualClock(NOW)
+    bus = OrganBus()
+    bus.register(adapter)
+    ledger = Ledger(rig.paths.database_file, clock, calendar=BudgetCalendar(UTC))
+    ledger.open()
+    stop = EmergencyStop(tmp_path / "emergency-stop.json", clock)
+    gateway = SafetyGateway(
+        bus,
+        ledger,
+        rig.timeline,
+        clock,
+        SafetyConfig(monthly_token_limit=1_000_000),
+        PermissionChecker(stop),
+    )
 
     async def call(request: OrganRequest) -> OrganResponse:
         assert request.organ_id == "vlm"
         assert request.purpose == CallPurpose.OPTIONAL
         assert request.model_preference == ModelPreference.CHEAPEST
-        return await adapter.process(request)
+        return await gateway.call(request)
 
     attachment = MediaReference("image", "synthetic.png")
     emoji = MediaReference("image", "synthetic-emoji.png", is_emoji=True)
+    gif = MediaReference("image", "animated-emoji.gif", is_emoji=True)
+    ordinary_gif = MediaReference("image", "ordinary.gif")
     buffer = BytesIO()
     Image.new("RGB", (1, 1), "red").save(buffer, format="PNG")
     image_bytes = buffer.getvalue()
-    source = Perception(
-        "qq",
-        "测试账号",
-        "[图片]",
-        VisibilityScope.GROUP,
-        TrustLevel.UNVERIFIED,
-        attachments=(attachment, emoji),
+    frames = [Image.new("RGB", (8, 4), color) for color in ("red", "blue")]
+    buffer = BytesIO()
+    frames[0].save(buffer, format="GIF", save_all=True, append_images=frames[1:])
+    gif_bytes = buffer.getvalue()
+    incoming = decode_message(
+        event(
+            50,
+            2100,
+            "",
+            message=[
+                {"type": "image", "data": {"file": attachment.file_id}},
+                {"type": "image", "data": {"file": emoji.file_id, "sub_type": 1}},
+                {"type": "image", "data": {"file": gif.file_id, "sub_type": 1}},
+                {"type": "image", "data": {"file": ordinary_gif.file_id}},
+            ],
+        ),
+        str(ACCOUNT),
     )
+    assert incoming is not None
+    assert stop.engage("合成急停")
+    paused = InboxMedia(call)
+
+    async def read_paused(_source: Perception, _reference: MediaReference) -> tuple[bytes, str]:
+        return image_bytes, "image/png"
+
+    paused.read = read_paused
+    paused.available = frozenset({"vlm"})
+    inbox = InboxStore(tmp_path / "emoji-inbox.db", clock)
+    saved = inbox.add(incoming)
+    assert saved is not None
+    [message] = inbox.list_unread(saved.conversation)
+    source = message.perception
+    assert source.attachments == (attachment, emoji, gif, ordinary_gif)
     reads: list[MediaReference] = []
 
-    async def read(media_source: Perception, reference: MediaReference) -> tuple[bytes, str]:
+    async def read(media_source: object, reference: MediaReference) -> tuple[bytes, str]:
         assert media_source is source
         reads.append(reference)
-        return (image_bytes if reference == attachment else image_bytes + b"emoji"), "image/png"
+        if reference in (gif, ordinary_gif):
+            return gif_bytes, "image/gif"
+        return image_bytes, "image/png"
 
-    flow = InboxMedia(call)
+    flow = InboxMedia(call, emoji_store)
     flow.read = read
     flow.available = frozenset({"vlm"})
 
@@ -191,12 +253,35 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
         monkeypatch.setattr(litellm, "aclient_session", client)
         litellm.in_memory_llm_clients_cache.flush_cache()
         try:
+            paused_source = Perception(
+                "qq",
+                "测试账号",
+                "[表情]",
+                VisibilityScope.GROUP,
+                TrustLevel.UNVERIFIED,
+                attachments=(emoji,),
+            )
+            [blocked] = await paused.enrich(
+                [_dialogue(1, ActorType.PERSON, paused_source.content)],
+                [paused_source],
+                ModelPreference.CHEAPEST,
+            )
+            assert blocked.content == "[表情]" and not captured
+            assert stop.release()
             [record] = await flow.enrich(
                 [_dialogue(1, ActorType.PERSON, source.content)], [source], ModelPreference.CHEAPEST
             )
-            assert record.content == "[图片]\n[图片识别] 模拟图片说明\n[表情识别] 模拟图片说明"
-            assert reads == [attachment, emoji]
-            [actual, actual_emoji] = [body["messages"] for body in captured]
+            rendered_tags = "惊讶，犹豫，庆祝，打招呼，无奈"
+            assert record.content.splitlines()[1:] == [
+                "[图片识别] 模拟图片说明",
+                f"[表情识别] {rendered_tags}",
+                f"[表情识别] {rendered_tags}",
+                "[图片识别] 模拟图片说明",
+            ]
+            assert reads == [attachment, emoji, gif, ordinary_gif]
+            [actual, actual_emoji, actual_gif, actual_ordinary_gif] = [
+                body["messages"] for body in captured
+            ]
             [system, user] = actual
             assert system == {"role": "system", "content": system_text}
             assert user["role"] == "user"
@@ -206,16 +291,60 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
             mime, encoded = image["image_url"]["url"].split(",", 1)
             assert mime == "data:image/png;base64"
             assert b64decode(encoded, validate=True) == image_bytes
-            assert actual_emoji[1]["content"][0] == {
-                "type": "text",
-                "text": (
-                    "请客观描述这张图片，读出可辨认的文字。请用一句简短中文注明画面和它表达的情绪。"
-                ),
+            template = (
+                "输入类型：{image_type}\n"
+                "这是一个表情包图片。输入类型为 GIF 时，图片由动态图中抽取的不同帧横向拼接而成；"
+                "输入类型为 STATIC 时，图片为单张静态图。\n"
+                "请提取这个表情包主要表达的情绪、语气或常见使用场景标签，最多 5 个，使用逗号分隔。"
+                "只返回纯文本标签列表，不要解释或输出其他内容。"
+            )
+            assert actual_emoji[1]["content"] == [
+                {"type": "text", "text": template.format(image_type="STATIC")},
+                image,
+            ]
+            gif_text, gif_image = actual_gif[1]["content"]
+            assert gif_text == {"type": "text", "text": template.format(image_type="GIF")}
+            gif_mime, encoded_jpeg = gif_image["image_url"]["url"].split(",", 1)
+            assert gif_mime == "data:image/jpeg;base64"
+            with Image.open(BytesIO(b64decode(encoded_jpeg, validate=True))) as sheet:
+                assert sheet.size == (800, 200)
+                assert sheet.getpixel((200, 100)) == (254, 0, 0)
+                assert sheet.getpixel((600, 100)) == (0, 0, 254)
+            assert actual_ordinary_gif[1]["content"] == [
+                text,
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/gif;base64,{b64encode(gif_bytes).decode()}"},
+                },
+            ]
+            entries, total = emoji_store.browse_page("打招呼", 0, 10, "registered")
+            assert total == 2
+            assert {entry.digest for entry in entries} == {
+                sha256(image_bytes).hexdigest(),
+                sha256(gif_bytes).hexdigest(),
             }
+            expected_tags = ("惊讶", "犹豫", "庆祝", "打招呼", "无奈")
+            assert all(
+                entry.tags == expected_tags
+                and entry.description == rendered_tags
+                and entry.collection_count == 1
+                for entry in entries
+            )
+            assert emoji_store.read_media(sha256(gif_bytes).hexdigest()) == gif_bytes
+            catalog = rig.client.get(
+                "/api/resources/media",
+                params={"q": "打招呼", "status": "registered", "format": "gif"},
+            )
+            assert catalog.status_code == 200
+            [item] = catalog.json()["items"]
+            assert item["digest"] == sha256(gif_bytes).hexdigest()
+            assert item["tags"] == list(expected_tags)
+            extra = rig.client.get("/api/resources/media", params={"q": "额外项"})
+            assert extra.json()["total"] == 0
 
             preview = rig.client.get("/api/organs/vlm/prompt-preview")
             assert preview.status_code == 200
-            [scene] = preview.json()["scenes"]
+            [scene, static, animated] = preview.json()["scenes"]
             assert scene["id"] == "image_description"
             assert scene["label"] == "普通图片描述"
             assert "预览不读取或发送图片" in scene["note"]
@@ -223,8 +352,23 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
                 system,
                 {"role": "user", "content": [text, {"type": "image", "label": "〔来信图片〕"}]},
             ]
+            assert [static["id"], animated["id"]] == ["emoji_static", "emoji_gif"]
+            for preview_scene, actual_messages, placeholder in (
+                (static, actual_emoji, "〔静态表情〕"),
+                (animated, actual_gif, "〔GIF 表情拼图〕"),
+            ):
+                assert preview_scene["messages"] == [
+                    actual_messages[0],
+                    {
+                        "role": "user",
+                        "content": [
+                            actual_messages[1]["content"][0],
+                            {"type": "image", "label": placeholder},
+                        ],
+                    },
+                ]
             assert "data:" not in preview.text and encoded not in preview.text
-            assert len(captured) == 2 and reads == [attachment, emoji]
+            assert len(captured) == 4 and reads == [attachment, emoji, gif, ordinary_gif]
             for organ in ("planner", "voice"):
                 scenes = rig.client.get(f"/api/organs/{organ}/prompt-preview").json()["scenes"]
                 assert all(scene["id"] != "image_description" for scene in scenes)
@@ -234,6 +378,7 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
                     for message in scene["messages"]
                 )
         finally:
+            ledger.close()
             litellm.in_memory_llm_clients_cache.flush_cache()
 
 

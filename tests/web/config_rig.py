@@ -10,6 +10,7 @@ from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import registered_templates
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.identity import Identity
+from aureus.memory import EmojiStore
 from aureus.organs import KeyResolver, OrganBus, PromptStore
 from aureus.timeline import TimelineDatabase
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
@@ -25,6 +26,7 @@ class ConfigRig:
         password_set: bool = True,
         prompt_identity: Identity | None = None,
         inbox_store: InboxStore | None = None,
+        emoji_store: EmojiStore | None = None,
     ) -> None:
         self.paths = AureusPaths(tmp_path)
         self.paths.ensure_directories()
@@ -65,6 +67,7 @@ class ConfigRig:
             model_runtime=self.models,
             prompt_identity=read_identity if prompt_identity is not None else None,
             inbox_store=inbox_store,
+            resource_emojis=emoji_store,
         )
         self.client = TestClient(self.app, client=("127.0.0.1", 50000))
 

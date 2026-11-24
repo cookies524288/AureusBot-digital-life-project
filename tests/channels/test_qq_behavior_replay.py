@@ -631,3 +631,96 @@ async def test_imported_memory_and_edited_prompts_in_group_replay(
                 assert ("启发式记忆" in content) is hits
             else:
                 assert f"查询：{topic}\n命中：{int(hits)} 条" in content
+
+
+@pytest.mark.parametrize("heuristic", [False, True], ids=["explicit", "heuristic"])
+async def test_private_memory_and_disclosure_reminder_reach_group_replyer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, heuristic: bool
+) -> None:
+    clock = ManualClock(START)
+    async with open_replay(
+        tmp_path, monkeypatch, clock, history_limit=1, heuristic=heuristic
+    ) as replay:
+        private_text = "约好给木卫二的观测照取名冰下暗灯。"
+        await replay.receive(event(701, 2100, private_text))
+        await replay.step()
+        [private] = replay.records()
+        assert private.visibility is VisibilityScope.PRIVATE
+        assert private.metadata["message_type"] == "private"
+        assert private.metadata["recipient_id"] == "2100"
+
+        memory = replay.core.memory
+        assert memory is not None
+        disabled, removed, expired, retracted = [
+            MemorySource("synthetic", "memory", "fact_claims", (number,)) for number in range(1, 5)
+        ]
+        restricted = (
+            HistoricalMemory(disabled, "停用木卫二资料"),
+            HistoricalMemory(removed, "移除木卫二资料"),
+            HistoricalMemory(expired, "过期木卫二资料", valid_to=clock.now()),
+            HistoricalMemory(retracted, "已撤回木卫二资料", status="retracted"),
+        )
+        assert memory.publish(restricted) == len(restricted)
+        ids = {item.source.encode(): item.entry_id for item in memory.browse_history("", "", 0, 10)}
+        disabled_id, removed_id = ids[disabled.encode()], ids[removed.encode()]
+        assert disabled_id is not None and removed_id is not None
+        assert memory.update_resource("history", disabled_id, None, False)
+        assert memory.set_resources_removed([("history", removed_id)], True)
+        clock.advance(timedelta(minutes=1))
+
+        completion = FakeCompletion(make_response("收到。"))
+        adapter = LLMOrgan(
+            "replyer",
+            make_config(organ_models=("small",)).routes_for("replyer"),
+            KeyResolver(tmp_path / "unused", {}),
+            completion,
+            fixed_counter,
+        )
+        process = replay.replyer.process
+
+        async def reply_through_adapter(request: OrganRequest) -> OrganResponse:
+            await process(request)
+            return await adapter.process(request)
+
+        monkeypatch.setattr(replay.replyer, "process", reply_through_adapter)
+        replay.planner.plan = {"reply": True, "intent": "回应观测话题"}
+        if not heuristic:
+            replay.planner.plan["recall"] = ["木卫二"]
+        question = "还记得木卫二吗？"
+        await replay.receive(event(702, 2200, question, group=GROUP))
+        await replay.step()
+        await replay.assert_sent()
+        _, group, reply = replay.records()
+        assert group.visibility == reply.visibility == VisibilityScope.GROUP
+        assert group.metadata["trust"] == "verified_contact"
+        assert group.metadata["recipient_id"] == reply.metadata["recipient_id"] == str(GROUP)
+        assert reply.metadata["in_reply_to"] == [group.id]
+        assert reply.metadata["recall_record_ids"] == [private.id]
+        assert not reply.metadata.get("recall_source_keys")
+        assert reply.content == "收到。"
+
+        _, planner_request, _ = replay.planner.calls[-1]
+        [(_, replyer_request, _)] = replay.replyer.calls
+        assert planner_request.context["in_reply_to"] == replyer_request.context["in_reply_to"]
+        assert replyer_request.context["in_reply_to"] == [group.id]
+        [call] = completion.calls
+        contact_notice = "不要向对方透露用户的称呼、聊天内容、你的预算和内部状态等不该对外说的事；"
+        for messages in (assemble_messages(planner_request), call["messages"]):
+            system, *dialogue = messages
+            assert system["role"] == "system"
+            assert "另一个人，账号是“qq:2200”" in system["content"]
+            assert contact_notice in system["content"]
+            assert all(contact_notice not in row["content"] for row in dialogue)
+        heading = "启发式记忆" if heuristic else "长期记忆检索结果"
+        reminder = f"【{heading}·内部参考】只供参考，不要原样念出来。"
+        private_messages = [row for row in call["messages"] if private_text in row["content"]]
+        assert len(private_messages) == 1
+        [reference] = private_messages
+        assert reference["role"] == "user" and reminder in reference["content"]
+        assert "查询：木卫二\n命中：1 条" in reference["content"]
+        assert any(question in row["content"] for row in call["messages"] if row is not reference)
+        planner_text = dialogue_text(planner_request)
+        assert (private_text in planner_text) is heuristic
+        for item in restricted:
+            assert item.text not in planner_text
+            assert all(item.text not in row["content"] for row in call["messages"])

@@ -2,7 +2,13 @@
 
 from aureus.memory.diary import DiaryBook
 from aureus.memory.edits import MAX_MEMORY_TEXT, MemoryKind
-from aureus.memory.emoji import EmojiRecord, EmojiStore
+from aureus.memory.emoji import (
+    MAX_EMOJI_BYTES,
+    MAX_EMOJI_RECOGNITION_TAGS,
+    MAX_EMOJI_TAG,
+    EmojiRecord,
+    EmojiStore,
+)
 from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphSource
 from aureus.memory.history import (
@@ -40,6 +46,9 @@ __all__ = [
     "FREQUENCY_TABLE",
     "JARGON_TABLE",
     "MAX_DETAIL",
+    "MAX_EMOJI_BYTES",
+    "MAX_EMOJI_RECOGNITION_TAGS",
+    "MAX_EMOJI_TAG",
     "MAX_EXAMPLE",
     "MAX_HIT_CHARS",
     "MAX_MEMORY_TEXT",

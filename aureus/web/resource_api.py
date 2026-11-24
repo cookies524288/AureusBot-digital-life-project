@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from pathlib import Path
@@ -643,6 +644,8 @@ def register_resource_routes(
             changed = await asyncio.to_thread(memory.set_resources_removed, targets, body.removed)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
+        except sqlite3.Error:
+            raise HTTPException(503, "暂时无法维护长期记忆，没有修改。") from None
         if not changed:
             raise HTTPException(409, "所选记录已变更，请刷新列表再试。")
         return {"changed": len(targets)}
