@@ -102,6 +102,7 @@ from aureus.heartbeat.perception import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.planner_tools import planner_tools
 from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
 from aureus.heartbeat.recall import MemoryTracker
 from aureus.heartbeat.reply_outbox import EmojiReplyPart, ReplyOutbox
@@ -125,7 +126,7 @@ from aureus.memory import (
     MemoryIndex,
 )
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
-from aureus.organs import CallPurpose, OrganRequest, OrganResponse
+from aureus.organs import CallPurpose, OrganRequest, OrganResponse, ToolDefinition
 from aureus.organs.topology import resolve_task_organ
 from aureus.people import (
     AffinityBook,
@@ -470,6 +471,26 @@ class Heartbeat:
                 resolve_task_organ(MEMORY_CONSOLIDATION_ORGAN, "memory_consolidation", available)
                 in available
             )
+
+    def _inbox_attention_enabled(self) -> bool:
+        return (
+            self._platform_inbox is not None
+            and self._config.inbox_attention_enabled
+            and not self._config.roleplay_mode
+        )
+
+    def planner_tool_definitions(self) -> tuple[ToolDefinition, ...]:
+        """返回当前运行中任一适用会话可声明的规划工具，不读取会话或调用模型。"""
+        if self._config.plan_organ not in self._available_organs:
+            return ()
+        options = self._conversation.planner_tool_options(
+            interests=interest_changes.interests_enabled(self._interests),
+            emoji=self._platform_inbox is not None,
+            inbox=self._inbox_attention_enabled(),
+            special_contact=self._people is not None,
+            stay_in_conversation=self._platform_inbox is not None,
+        )
+        return tuple(tool.definition() for tool in planner_tools(options))
 
     async def _call_organ(self, request: OrganRequest) -> OrganResponse:
         """在安全网关检查和记账之前选择实际承担该任务的器官。"""
@@ -2156,11 +2177,7 @@ class Heartbeat:
                 person_id, viewer_is_user=target.trust is TrustLevel.VERIFIED_USER
             ),
             agenda_for_context=self._agenda_hooks._agenda_for_context,
-            inbox_attention=(
-                self._platform_inbox is not None
-                and self._config.inbox_attention_enabled
-                and not self._config.roleplay_mode
-            ),
+            inbox_attention=self._inbox_attention_enabled(),
         )
 
     def _downtime_for_context(self) -> Downtime | None:

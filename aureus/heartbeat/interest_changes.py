@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 _CONTEXT_FINDINGS = 2
 
 
+def interests_enabled(interests: InterestStore | None) -> bool:
+    """兴趣建议是否已装配并开启，不读取任何实际兴趣。"""
+    return interests is not None and interests.config.enabled
+
+
 def interest_context(
     interests: InterestStore | None,
     findings: FindingStore | None,
@@ -31,8 +36,9 @@ def interest_context(
     """兴趣关着、群聊或非用户对话时完全不注入兴趣信息。"""
     if not is_user or visibility is not VisibilityScope.USER_ONLY:
         return ""
-    if interests is None or not interests.config.enabled:
+    if not interests_enabled(interests):
         return ""
+    assert interests is not None
     try:
         recent = findings.recent(_CONTEXT_FINDINGS) if findings is not None else []
         return describe_interests(interests.active(), recent, timezone)

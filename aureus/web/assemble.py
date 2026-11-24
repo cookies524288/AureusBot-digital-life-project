@@ -76,6 +76,7 @@ def open_web(
             config_files=ConfigService(core.paths, core.settings.runtime),
             model_runtime=core.models,
             prompt_identity=lambda: core.heartbeat.identity,
+            planner_tool_definitions=core.heartbeat.planner_tool_definitions,
             open_terminal=open_terminal,
             request_shutdown=core.heartbeat.request_stop,
             request_restart=request_restart,
