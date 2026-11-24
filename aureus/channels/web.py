@@ -12,13 +12,13 @@ import logging
 from collections.abc import Callable
 from typing import Protocol
 
+from aureus.common.web_identity import WEB_CHANNEL_NAME
+from aureus.common.web_identity import WEB_USER_ID as WEB_USER_ID
 from aureus.heartbeat import OutgoingMessage, Perception, TrustLevel, VisibilityScope
 
 logger = logging.getLogger(__name__)
 
-CHANNEL_NAME = "web"
-# 网页登录的只有用户本人，账号固定；核心组装时登记为用户的账号（D63 第 8 条）。
-WEB_USER_ID = "local"
+CHANNEL_NAME = WEB_CHANNEL_NAME
 # 一条消息最多多少字：超长的话会撑满上下文、多花 token。数字是按「聊天一条消息
 # 远用不到」估的，没有实测依据。
 MAX_MESSAGE_CHARS = 4000

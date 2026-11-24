@@ -70,7 +70,9 @@ _CONDITIONAL = {
     "reply": "有命中时附记忆、人际与习得表达。规划后附回复意图和再审协议，标记每次更新。",
     "reply_segments": "启用分段且有快速模型时，在回复再审通过后请求切点。",
     "language_learning": "启用增量学习且收到未处理的新样本时调用。",
-    "memory_consolidation": "夜间空闲且整理达到批量门槛，启用提取、有可用器官和可提取发言时调用。",
+    "memory_consolidation": (
+        "夜间空闲且获准的同会话消息达到批量门槛、启用提取且有可用总结器官时调用。"
+    ),
     "working_memory_summary": "工作记忆达到容量时由 utils 按来源分区压缩；预览只显示一份模拟分区。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
@@ -411,8 +413,8 @@ def build_prompt_scenes(
     add(
         "memory_consolidation",
         "memory_consolidation",
-        "夜间记忆提取",
-        build_extraction_prompt("〔编号发言 JSON〕"),
+        "夜间长期记忆增量总结",
+        build_extraction_prompt("〔合成会话窗口、历史摘要和图片目录 JSON〕"),
         "",
     )
     if "working_memory_summary" in tasks:

@@ -94,6 +94,7 @@ def open_web(
             read_inbox_attachment=core.qq.read_inbox_attachment if core.qq is not None else None,
             resource_language=core.language,
             resource_memory=core.memory,
+            memory_graph_display=core.memory.graph_display if core.memory is not None else None,
             resource_images=core.inbox_images,
             resource_people=core.people,
             resource_memory_dir=core.paths.memory_dir,

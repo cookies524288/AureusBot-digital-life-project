@@ -4,9 +4,10 @@ import json
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
-from sqlite3 import Row
+from sqlite3 import Connection, Row
 
 from aureus.common.sqlite import open_connection
+from aureus.common.web_identity import WEB_CHANNEL_NAME, WEB_USER_ID
 
 from .models import ActorType, TimelineRecord, VisibilityScope
 
@@ -39,6 +40,29 @@ WITH candidates AS ({_BASE}), routed AS (
 
 type LegacyRoute = tuple[str, str, str, str, str | None]
 
+_WEB_PRIVATE = """
+WITH records AS NOT MATERIALIZED (
+    SELECT id, timestamp, actor_type, actor_id, event_type, content, visibility,
+           CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END AS details
+    FROM timeline
+    WHERE visibility = 'user_only' AND event_type IN ('message', 'reply_delivered')
+) SELECT record.* FROM records record WHERE record.details ->> '$.channel' = :channel
+    AND NOT COALESCE(record.details ->> '$.outbox_internal', 0)
+    AND (
+        (record.event_type = 'message' AND record.actor_type = 'user'
+         AND record.actor_id = :account AND record.details ->> '$.trust' = 'verified_user'
+         AND record.details ->> '$.account_id' IS NULL
+         AND record.details ->> '$.inbox_message_id' IS NULL)
+        OR (record.event_type = 'reply_delivered' AND record.actor_type = 'me' AND EXISTS (
+            SELECT 1 FROM records draft WHERE draft.id = record.details ->> '$.reply_id'
+                AND draft.event_type = 'message' AND draft.actor_type = 'me'
+                AND draft.details ->> '$.channel' = :channel
+                AND draft.details ->> '$.to_user' = 1
+                AND draft.details ->> '$.account_id' IS NULL
+        ))
+    )
+"""
+
 
 def _record(row: Row) -> TimelineRecord:
     details = json.loads(row["details"])
@@ -66,6 +90,27 @@ class LegacyPlatformHistory:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+
+    def web_private_window(
+        self, after_id: int, limit: int, *, connection: Connection | None = None
+    ) -> tuple[TimelineRecord, ...]:
+        """只读取已验证本地网页用户及其已投递回复，按时间线序号推进。"""
+        if connection is None:
+            with closing(open_connection(self._path, read_only=True)) as database:
+                return self.web_private_window(after_id, limit, connection=database)
+        rows = connection.execute(
+            _WEB_PRIVATE + " AND record.id > :after ORDER BY record.id LIMIT :limit",
+            {"channel": WEB_CHANNEL_NAME, "account": WEB_USER_ID, "after": after_id, "limit": limit},
+        )
+        return tuple(map(_record, rows))
+
+    def web_private_evidence(self, connection: Connection, identifier: int) -> TimelineRecord | None:
+        """按网页私聊的权限和原件序号复核，不退回按可见性泛查。"""
+        row = connection.execute(
+            _WEB_PRIVATE + " AND record.id = :identifier",
+            {"channel": WEB_CHANNEL_NAME, "account": WEB_USER_ID, "identifier": identifier},
+        ).fetchone()
+        return _record(row) if row is not None else None
 
     def routes(self) -> list[tuple[LegacyRoute, int, datetime]]:
         """列出有完整路由的旧 QQ 会话，不含未知路由。"""

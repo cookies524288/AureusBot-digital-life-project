@@ -13,6 +13,12 @@ from aureus.memory.expression_clusters import ExpressionClusterStore, VisibleExp
 from aureus.memory.expression_index import ExpressionVectorIndex
 from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphNode, MemoryGraphSource
+from aureus.memory.graph_access import (
+    GRAPH_CATEGORIES,
+    GraphAccess,
+    GraphCategory,
+    MemoryGraphDisplay,
+)
 from aureus.memory.graph_query import MemoryGraphPage, MemoryGraphRelationDetail
 from aureus.memory.history import (
     HistoricalMemory,
@@ -42,11 +48,20 @@ from aureus.memory.language_import import (
     LanguageSnapshotConflictError,
 )
 from aureus.memory.language_online import JargonInference
+from aureus.memory.summary_protocol import (
+    MAX_MESSAGE_CHARS,
+    SummaryDelta,
+    SummaryMessage,
+    SummaryScope,
+    SummaryWindow,
+    parse_delta,
+)
 
 __all__ = [
     "BATCH_SIZE",
     "EXPRESSION_TABLE",
     "FREQUENCY_TABLE",
+    "GRAPH_CATEGORIES",
     "JARGON_TABLE",
     "MAX_DETAIL",
     "MAX_EMOJI_BYTES",
@@ -55,12 +70,15 @@ __all__ = [
     "MAX_EXAMPLE",
     "MAX_HIT_CHARS",
     "MAX_MEMORY_TEXT",
+    "MAX_MESSAGE_CHARS",
     "MAX_TEXT",
     "DiaryBook",
     "EmojiRecord",
     "EmojiStore",
     "ExpressionClusterStore",
     "ExpressionVectorIndex",
+    "GraphAccess",
+    "GraphCategory",
     "HistoricalMemory",
     "ImportedLanguageRow",
     "JargonInference",
@@ -76,6 +94,7 @@ __all__ = [
     "MemoryEventType",
     "MemoryEvidence",
     "MemoryGraph",
+    "MemoryGraphDisplay",
     "MemoryGraphEvidence",
     "MemoryGraphNode",
     "MemoryGraphPage",
@@ -87,5 +106,10 @@ __all__ = [
     "MemorySnapshotConflictError",
     "MemorySource",
     "MemoryStatus",
+    "SummaryDelta",
+    "SummaryMessage",
+    "SummaryScope",
+    "SummaryWindow",
     "VisibleExpressionCluster",
+    "parse_delta",
 ]

@@ -105,6 +105,9 @@ async def test_snowluma_components_are_scoped_archived_and_replayed(tmp_path: Pa
         "incoming", "incoming", "notice", "archived", "outgoing",
     ]
     assert [row.id for row in reopened.list_unread(source.conversation)] == [source.id, mixed.id]
+    assert [row.direction for row in reopened.summary_window(
+        source.conversation, VisibilityScope.GROUP, 0, 50
+    )] == ["incoming", "incoming", "outgoing"]
     components = group_rows[1].perception.components
     assert [part.position for part in components] == list(range(7))
     assert [part.kind for part in components] == [
@@ -142,7 +145,9 @@ async def test_snowluma_components_are_scoped_archived_and_replayed(tmp_path: Pa
         assert "personalized.png" not in response.text and "image-token" not in response.text
         assert rows[0]["platform_message_id"] == "6000"
         private_params = {**group_params, "kind": "private", "recipient_id": str(OWNER)}
-        private_rows = rig.client.get("/api/inbox/messages", params=private_params).json()["messages"]
+        private_response = rig.client.get("/api/inbox/messages", params=private_params)
+        assert private_response.status_code == 200
+        private_rows = private_response.json()["messages"]
         assert [
             (row["direction"], row["sender_id"], row["components"][0]["target_account_id"])
             for row in private_rows if row["event_type"] == "poke_notice"
