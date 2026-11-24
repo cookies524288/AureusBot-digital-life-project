@@ -79,7 +79,7 @@
 ### 6.4 安装和更新
 
 - 依赖用 uv 锁定版本（uv.lock），在新机器上运行 `uv sync` 装好依赖，再用初始化命令建好数据根目录。
-- Windows 下双击项目根目录的 `Aureus.exe`，网页开始监听后会打开浏览器。登录本机网页后，可从侧栏打开 CLI。关闭 CLI 窗口后网页继续运行，在 CLI 里输入 `/quit` 可关闭 Aureus。详见 [Windows 启动器](tasks/windows-launcher.md)。
+- Windows 下双击项目根目录的 `Aureus.exe`，网页开始监听后会打开浏览器。登录本机网页后，可从侧栏打开 CLI。关闭 CLI 窗口后网页继续运行，在 CLI 里输入 `/quit` 可关闭 Aureus。详见 [Windows 启动器](tasks/supplemental.md#windows-launcher)。
 - 更新软件按第 3 节：不碰数据根目录，数据版本落后就先备份再迁移。
 - 导出、导入按第 4 节：数据根目录自成一体，导出的文件在新机器上导入后就能继续运行。
 
