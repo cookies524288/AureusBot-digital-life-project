@@ -1070,6 +1070,8 @@ class Heartbeat:
             metadata["recall_feedback_refs"] = list(outcome.recall_feedback_refs)
         if outcome.effects is not None:
             metadata["hormones"] = outcome.effects.to_metadata()
+            if outcome.forced_reply:
+                metadata["forced_reply"] = True
             if self._hormones is not None:
                 retaliated = outcome.effects.retaliation is RetaliationMode.ALLOWED
                 self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)

@@ -8,7 +8,7 @@ import pytest
 
 from aureus.body import Body
 from aureus.common import BodyConfig, HeartbeatConfig, HormonesConfig, JudgeConfig, ManualClock
-from aureus.heartbeat import Heartbeat
+from aureus.heartbeat import Heartbeat, MessageKind
 from aureus.hormones import HormoneKind, Hormones, HormoneTrigger
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, OrganResponse
@@ -170,9 +170,25 @@ async def test_cold_shoulder_is_allowed_once_then_a_reply_is_forced(env: Env) ->
     # 第二次规划器还是想不回，但这场冲突里已经不回过一次，代码要求必须回。
     await rig.exchange("再骂你")
     assert len(rig.records(EVENT_REPLY_DECLINED)) == 1
+    assert rig.organ_ids() == ["judge", "planner", "judge", "planner", "replyer"]
+    [replyer] = [request for request in rig.organs.requests if request.organ_id == "replyer"]
+    assert "气得不想理" not in replyer.prompt
+    assert [message.content for message in rig.sent if message.kind is MessageKind.REPLY] == [
+        "好的。"
+    ]
     [reply] = [m for m in rig.records(EVENT_MESSAGE) if m.actor_type.value == "me"]
     assert reply.metadata["forced_reply"] is True
     assert reply.metadata["hormones"]["must_reply"] is True
+
+
+async def test_cold_shoulder_limit_does_not_force_a_reply_without_a_valid_plan(env: Env) -> None:
+    rig, _ = env.build([_judgment(1.0)] * 2, config=ANGRY, plans=[DECLINE, "无法解析"])
+    await rig.exchange("骂你骂你")
+    await rig.exchange("再骂你")
+
+    assert rig.organ_ids() == ["judge", "planner", "judge", "planner"]
+    assert len(rig.records(EVENT_REPLY_DECLINED)) == 1
+    assert rig.replies() == []
 
 
 async def test_without_anger_the_planner_may_still_decline_freely(env: Env) -> None:

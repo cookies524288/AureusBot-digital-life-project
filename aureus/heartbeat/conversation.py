@@ -194,6 +194,7 @@ class _ThoughtOutcome:
     judge: _JudgeAttempt | None = None
     # 这次回复用的激素影响；收结果的那一拍用它记回击次数和不回次数。
     effects: HormoneEffects | None = None
+    forced_reply: bool = False
     # 主动联系独立解析，不能拿普通回复的兜底来替它决定开口（D76）。
     initiative_plan: InitiativePlan | None = None
     recall_keywords: tuple[str, ...] = ()
@@ -593,9 +594,17 @@ class ConversationFlow:
             )
         if job.planner_run is not None and job.planner_run.restart_requested:
             return _ThoughtOutcome(declined=True)
-        if plan is None or not plan.should_reply:
+        forced_reply = (
+            plan is not None
+            and not plan.should_reply
+            and job.effects is not None
+            and job.effects.must_reply
+        )
+        if plan is None or (not plan.should_reply and not forced_reply):
             outcome = _ThoughtOutcome(plan=plan, declined=True)
         else:
+            if forced_reply:
+                plan = None
             outcome = await self._reply_with_review(job, plan, automatic)
             if outcome.response is not None:
                 outcome = await self._finish_reply(job, outcome, outcome.response)
@@ -604,12 +613,13 @@ class ConversationFlow:
             reference_plan=outcome.reference_plan or plan,
             judge=attempt,
             effects=job.effects,
+            forced_reply=forced_reply,
         )
 
     async def _reply_with_review(
         self,
         job: _ReplyJob,
-        plan: Plan,
+        plan: Plan | None,
         automatic: tuple[tuple[str, ...], list[MemoryHit]] | None,
     ) -> _ThoughtOutcome:
         """把有效的驳回理由交给规划器重审一次。"""
@@ -963,21 +973,21 @@ class ConversationFlow:
     async def _reply(
         self,
         job: _ReplyJob,
-        plan: Plan,
+        plan: Plan | None,
         automatic: tuple[tuple[str, ...], list[MemoryHit]] | None,
     ) -> _ThoughtOutcome:
-        """让回复器按规划写成发言，或通过内部标记驳回。"""
+        """让回复器按规划写成发言或通过内部标记驳回；D69 强制回复不传沉默计划。"""
         strategy = job.strategy
         length = (
             plan.length.capped_at(strategy.length_limit)
-            if plan.length is not None
+            if plan is not None and plan.length is not None
             else strategy.length_limit
         )
         sentinel = _REVIEW_SENTINEL_PREFIX + uuid4().hex
         recall_text = ""
         keywords: tuple[str, ...] = ()
         hits: Sequence[MemoryHit] = ()
-        if plan.recall and self._can_recall():
+        if plan is not None and plan.recall and self._can_recall():
             if (explicit := await self._retrieve(job, plan.recall)) is not None:
                 keywords = plan.recall
                 recall_text, hits = format_recall_hits(keywords, explicit, self._timezone)
@@ -995,8 +1005,8 @@ class ConversationFlow:
                 self._timezone,
                 system_context=job.replyer_context,
                 working_context=job.working_context,
-                intent=plan.intent,
-                plan_reason=plan.reason,
+                intent=plan.intent if plan is not None else "",
+                plan_reason=plan.reason if plan is not None else "",
                 review_sentinel=sentinel,
                 with_splits=self._config.split_reply_enabled,
                 length=length,
