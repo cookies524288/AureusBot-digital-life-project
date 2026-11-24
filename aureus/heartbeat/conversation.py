@@ -173,6 +173,7 @@ class _ReplyJob:
     planner_run: "_PlannerRun | None" = None
     emoji_history: Sequence[TimelineRecord] | None = None
     language_scope_key: str | None = None
+    can_quote: bool = False
 
 
 @dataclass(frozen=True)
@@ -424,6 +425,7 @@ class ConversationFlow:
         mood_state: str | None = None,
         agenda_state: str | None = None,
         inbox_attention: bool = False,
+        can_quote: bool = False,
     ) -> _ReplyJob:
         """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
         batch_ids = {record.id for record in messages}
@@ -530,6 +532,7 @@ class ConversationFlow:
             working_context=working_context,
             people_history=people_history,
             inbox_attention=inbox_attention,
+            can_quote=can_quote,
             language_scope_key=(
                 ConversationKey.from_perception(target).language_scope_key()
                 if target.route
@@ -858,6 +861,7 @@ class ConversationFlow:
         inbox: bool,
         special_contact: bool,
         stay_in_conversation: bool,
+        quote_source: bool,
     ) -> PlannerToolOptions:
         """把会话范围和已装配的能力合成对话规划的工具选项。"""
         return PlannerToolOptions(
@@ -869,6 +873,7 @@ class ConversationFlow:
             inbox=inbox,
             special_contact=special_contact,
             stay_in_conversation=stay_in_conversation,
+            quote_source=quote_source,
         )
 
     async def _plan(
@@ -886,6 +891,7 @@ class ConversationFlow:
             inbox=job.inbox_attention,
             special_contact=job.person_id is not None and not job.viewer_is_user,
             stay_in_conversation=any("inbox_message_id" in record.metadata for record in job.messages),
+            quote_source=job.can_quote,
         )
         tools = planner_tools(options)
         heuristic_recall = (

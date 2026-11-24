@@ -70,6 +70,7 @@ class FakeOneBot:
         self.connections: asyncio.Queue[ServerConnection] = asyncio.Queue()
         self.messages: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.reply_with = ["failed", "timeout"]
+        self.receipt_ids: list[int] = []
         self.handshakes: list[tuple[str, str | None]] = []
 
     async def send(self, remote: ServerConnection, **payload: Any) -> None:
@@ -94,7 +95,8 @@ class FakeOneBot:
             if behavior == "failed":
                 await self.send(remote, **{**response, "status": "failed", "retcode": 100})
             elif behavior == "ok":
-                await self.send(remote, **response, data={"message_id": 6000})
+                receipt_id = self.receipt_ids.pop(0) if self.receipt_ids else 6000
+                await self.send(remote, **response, data={"message_id": receipt_id})
 
 
 def available_port() -> int:
@@ -271,15 +273,12 @@ action_timeout_seconds = 0.4
                 remote, **{**event(6000, ACCOUNT, "机器人回显"), "post_type": "message_sent"}
             )
             private = await fake.messages.get()
-            assert first["message"][0]["data"]["id"] == "101"
+            assert [part["type"] for part in first["message"]] == ["text"]
             assert [part["type"] for part in second_reply["message"]] == ["text"]
             assert first["group_id"] == second_reply["group_id"] == str(GROUP)
             assert private["message_type"] == "private"
             assert private["user_id"] == "2100" and "group_id" not in private
-            assert private["message"][0]["data"]["id"] == "103"
-            assert all(
-                item["message"][-1]["type"] == "text" for item in (first, second_reply, private)
-            )
+            assert [part["type"] for part in private["message"]] == ["text"]
 
             await remote.close()
             remote = await fake.connections.get()
@@ -407,10 +406,7 @@ token_key = "{TOKEN_ENV}"
             reply = await fake.messages.get()
             assert reply == {
                 "message_type": "private",
-                "message": [
-                    {"type": "reply", "data": {"id": "105"}},
-                    {"type": "text", "data": {"text": "收到。"}},
-                ],
+                "message": [{"type": "text", "data": {"text": "收到。"}}],
                 "user_id": "2200",
             }
 
@@ -494,21 +490,25 @@ async def test_qq_emoji_order_scope_and_successful_use(tmp_path: Path) -> None:
                 delivered = core.heartbeat._deliver_reply
                 assert not delivered(other, record, ("拒绝",), emoji=EmojiReplyPart(digest))
 
-                assert delivered(target, record, ("前置",), emoji=EmojiReplyPart(digest, True))
-                assert delivered(target, record, ("后置",), emoji=EmojiReplyPart(digest))
+                assert delivered(
+                    target, record, ("前置",), emoji=EmojiReplyPart(digest, True), quote_source=True
+                )
+                assert delivered(
+                    target, record, ("后置",), emoji=EmojiReplyPart(digest), quote_source=True
+                )
                 messages = [await fake.messages.get() for _ in range(4)]
                 assert {message["group_id"] for message in messages} == {str(GROUP)}
-                parts = [message["message"][0] for message in messages]
-                assert all(len(message["message"]) == 1 for message in messages)
+                parts = [message["message"] for message in messages]
+                quote = {"type": "reply", "data": {"id": "1"}}
                 expected = {
                     "type": "image",
                     "data": {"file": "base64://" + b64encode(image).decode(), "sub_type": 1},
                 }
                 assert parts == [
-                    expected,
-                    {"type": "text", "data": {"text": "前置"}},
-                    {"type": "text", "data": {"text": "后置"}},
-                    expected,
+                    [quote, expected],
+                    [{"type": "text", "data": {"text": "前置"}}],
+                    [quote, {"type": "text", "data": {"text": "后置"}}],
+                    [expected],
                 ]
                 await asyncio.gather(*channel._sending)
                 assert store.browse("", 0, 10)[0].use_count == 1

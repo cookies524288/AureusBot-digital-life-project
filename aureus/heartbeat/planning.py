@@ -138,6 +138,7 @@ class Plan:
     expression_intent_lines: tuple[str, ...] = ()
     reply_reference: str = ""
     addressed_to_me: Literal["yes", "no", "uncertain"] | None = None
+    quote_source: bool = False
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -165,6 +166,8 @@ class Plan:
                 "emotion": self.emoji.emotion,
                 "before_text": self.emoji.before_text,
             }
+        if self.quote_source:
+            metadata["quote_source"] = True
         return metadata
 
 

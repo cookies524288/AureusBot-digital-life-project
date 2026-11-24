@@ -84,6 +84,10 @@ def test_planner_tool_catalog_uses_active_binding_and_runtime_capabilities(
             stay_in_conversation=True,
         ))
         assert rig.client.get(path).json()["tools"] == [asdict(tool.definition()) for tool in expected]
+        heartbeat.attach_channel("qq", lambda _message: None, can_quote=lambda _route: False)
+        reply = next(tool for tool in rig.client.get(path).json()["tools"] if tool["name"] == "reply")
+        reply_options = reply["parameters"]["properties"]
+        assert reply_options["quote_source"]["default"] is False
         assert rig.client.put(path, json={}).status_code == 405
     finally:
         if memory is not None:

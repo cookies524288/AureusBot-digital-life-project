@@ -83,6 +83,7 @@ class PlannerToolOptions:
     inbox: bool = False
     special_contact: bool = False
     stay_in_conversation: bool = False
+    quote_source: bool = False
 
 
 def _reply(arguments: _Arguments) -> Plan | None:
@@ -93,7 +94,9 @@ def _reply(arguments: _Arguments) -> Plan | None:
         return None
     if len(data.get("resolve", ())) != len(plan.resolutions):
         return None
-    return replace(plan, addressed_to_me=data["addressed_to_me"])
+    return replace(
+        plan, addressed_to_me=data["addressed_to_me"], quote_source=data.get("quote_source", False)
+    )
 
 
 def _stop(arguments: _Arguments) -> Plan:
@@ -151,6 +154,14 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
         extras["expression_intent"] = (_Expression | None, Field(default=None, description="可供选择习得表达的情景、语气等，只填相关项。"))
     if options.emoji:
         extras["select_emoji"] = (_Emoji | None, Field(default=None, description="仅 QQ 会话可建议按情绪匹配表情包，选择失败时仅发文字。"))
+    if options.quote_source:
+        extras["quote_source"] = (
+            bool,
+            Field(
+                default=False,
+                description="仅有可用平台路由时，选择在本次回复首段引用当前要回复的最新一条消息；默认不引用。",
+            ),
+        )
     tools = [
         PlannerTool(
             "reply", "仅在应该对当前会话发出可见回复时使用；提交回复方向，不写最终发言。",

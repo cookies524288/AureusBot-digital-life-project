@@ -132,7 +132,7 @@ def _read_segments(
 def encode_message(
     message: OutgoingMessage, route: MessageRoute, *, image: bytes | None = None
 ) -> dict[str, Any]:
-    """按 SnowLuma 的 send_msg 编码；群聊仅在明确需要时引用原消息。"""
+    """按 SnowLuma 的 send_msg 编码；仅按显式请求引用原消息。"""
     part = (
         {
             "type": "image",
@@ -142,7 +142,7 @@ def encode_message(
         else {"type": "text", "data": {"text": message.content}}
     )
     segments = [part]
-    if route.kind == "private" or message.quote_source:
+    if message.quote_source:
         segments.insert(0, {"type": "reply", "data": {"id": route.message_id}})
     params: dict[str, Any] = {"message_type": route.kind, "message": segments}
     if route.kind == "group":

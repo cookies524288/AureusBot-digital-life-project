@@ -427,7 +427,7 @@ def open_core(
             )
             heartbeat.set_inbox_image_indexer(inbox_images.index)
             heartbeat.set_inbox_attachment_reader(qq.read_inbox_attachment)
-            heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show)
+            heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show, can_quote=qq.can_quote_reply)
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
         )

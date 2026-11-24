@@ -44,8 +44,8 @@ class _Reply:
     parts: deque[tuple[_Part, float]]
     on_delivered: Callable[[], None] | None
     on_failed: Callable[[], None] | None
+    quote_source: bool = False
     delivered: bool = False
-    first_part: bool = True
     text_parts: int = 0
 
     def fail(self) -> None:
@@ -97,6 +97,7 @@ class ReplyOutbox:
         on_failed: Callable[[], None] | None,
         *,
         emoji: EmojiReplyPart | None = None,
+        quote_source: bool = False,
     ) -> bool:
         """同一次回复的后续段计入打字时间，并立即投递已到期的段。"""
         address = _address(target)
@@ -111,7 +112,7 @@ class ReplyOutbox:
                 timed_parts.appendleft((emoji, 0.0))
             else:
                 timed_parts.append((emoji, 0.0))
-        reply = _Reply(target, record, timed_parts, on_delivered, on_failed)
+        reply = _Reply(target, record, timed_parts, on_delivered, on_failed, quote_source)
         queue.replies.append(reply)
         self._deliver_due(address, queue)
         return reply.delivered
@@ -145,8 +146,8 @@ class ReplyOutbox:
             if isinstance(content, str):
                 reply.text_parts += 1
                 segment = reply.text_parts
-            delivered = self._send(reply.target, content, reply.record, reply.first_part, segment)
-            reply.first_part = False
+            delivered = self._send(reply.target, content, reply.record, reply.quote_source, segment)
+            reply.quote_source = False
             queue.last_sent_at = self._clock.now()
             if not reply.parts:
                 queue.replies.popleft()

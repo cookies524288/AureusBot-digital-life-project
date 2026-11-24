@@ -175,6 +175,18 @@ class QQChannel:
             and self._allows_route(conversation)
         )
 
+    def can_quote_reply(self, route: MessageRoute) -> bool:
+        """只允许已连接账号向原群聊或普通私聊显式引用。"""
+        return (
+            self._transport.socket is not None
+            and route.account_id == self._config.account_id
+            and route.kind in ("group", "private")
+            and route.temporary_group_id is None
+            and account_id(route.recipient_id) is not None
+            and message_id(route.message_id) is not None
+            and self._allows_route(route)
+        )
+
     async def read_inbox_attachment(
         self, perception: Perception, attachment: MediaReference
     ) -> tuple[bytes, str] | None:
@@ -269,6 +281,8 @@ class QQChannel:
             return
         if not self._allows_route(route):
             raise OneBotError("QQ 目的地超出允许范围")
+        if message.quote_source and not self.can_quote_reply(route):
+            raise OneBotError("此 QQ 回复路由不支持引用")
         if message.emoji_digest is not None and not self._allows_emoji(message, route):
             raise OneBotError("QQ 表情目的地或当前权限不允许发送")
         socket = self._transport.socket
@@ -355,9 +369,7 @@ class QQChannel:
             message.visibility,
             TrustLevel.VERIFIED_CONTACT,
             route=replace(route, message_id=identifier),
-            quoted_message_id=(
-                route.message_id if route.kind == "private" or message.quote_source else None
-            ),
+            quoted_message_id=route.message_id if message.quote_source else None,
         )
         try:
             await asyncio.to_thread(
