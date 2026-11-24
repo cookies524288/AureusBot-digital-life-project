@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from aureus.attention.working_memory import CHECKPOINT
 from aureus.common import AureusPaths, ConfigError, ManualClock, shutdown_logging
 from aureus.common.logging_setup import LOG_FILE_NAME
 from aureus.common.vault import VaultError
@@ -49,12 +50,18 @@ def paths(tmp_path: Path) -> AureusPaths:
     return paths
 
 
-def test_assembles_with_fake_organs_and_closes_cleanly(paths: AureusPaths) -> None:
+@pytest.mark.asyncio
+async def test_assembles_with_fake_organs_and_closes_cleanly(paths: AureusPaths) -> None:
     with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
         assert core.identity.facts.name == "测试豆"
         assert core.heartbeat.downtime is None  # 组装好了，但还没有醒来
         core.heartbeat.wake_up()
-        assert core.timeline.count_records() == 1
+        await core.heartbeat.shut_down()
+        assert [record.event_type for record in core.timeline.query(TimelineQuery())] == [
+            CHECKPOINT,
+            EVENT_WOKE_UP,
+            EVENT_SHUT_DOWN,
+        ]
     # 退出 with 块后数据库已经关掉：Windows 上文件没被锁住，能删掉。
     paths.database_file.unlink()
 
@@ -145,11 +152,13 @@ async def test_restart_reports_downtime(paths: AureusPaths) -> None:
         downtime = core.heartbeat.wake_up()
         records = core.timeline.query(TimelineQuery())
     assert [record.event_type for record in records] == [
+        CHECKPOINT,
         EVENT_WOKE_UP,
         EVENT_SHUT_DOWN,
         EVENT_WOKE_UP,
     ]
-    assert "1 小时" in downtime.describe()
+    assert downtime.shutdown_recorded
+    assert downtime.duration == timedelta(hours=1)
 
 
 def test_startup_prunes_snapshots_over_the_limit(paths: AureusPaths) -> None:

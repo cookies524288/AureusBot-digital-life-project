@@ -12,8 +12,8 @@ from random import Random
 from uuid import uuid4
 
 from aureus.common.sqlite import open_connection
-from aureus.memory.language import LanguageStore
-from aureus.memory.language_matching import LanguageEntry
+from aureus.memory.language import LanguageKind, LanguageStore
+from aureus.memory.language_matching import ExpressionReviewStatus, LanguageEntry
 
 _CLUSTER_SEED = 20260621
 _MAX_ITERATIONS = 100
@@ -71,6 +71,22 @@ class ExpressionClusters:
             if members:
                 result[cluster_id] = members
         return result
+
+
+@dataclass(frozen=True)
+class ExpressionClusterMember:
+    """获准展示的表达方式和使用情景，不含内部证据。"""
+
+    text: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class VisibleExpressionCluster:
+    """当前快照中有可见成员的一簇，定位键不能用作授权。"""
+
+    location: str
+    members: tuple[ExpressionClusterMember, ...]
 
 
 class ExpressionClusterStore:
@@ -135,6 +151,47 @@ class ExpressionClusterStore:
             if row["cluster_id"] is not None:
                 clusters[row["cluster_id"]].append(_Member(row["entry_key"], row["fingerprint"]))
         return ExpressionClusters(embedding_space, tuple(tuple(cluster) for cluster in clusters))
+
+    def browse(
+        self, language: LanguageStore, *, allowed_entry_keys: Collection[str]
+    ) -> tuple[VisibleExpressionCluster, ...]:
+        """用独立网页授权和实时条目投影当前快照，再交给调用方分页。"""
+        if not allowed_entry_keys:
+            return ()
+        allowed = frozenset(allowed_entry_keys)
+        with closing(open_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT snapshot.snapshot_id, member.cluster_id, member.entry_key, member.fingerprint
+                FROM expression_cluster_snapshots AS snapshot
+                JOIN expression_cluster_members AS member USING (snapshot_id)
+                WHERE snapshot.format_version = ?
+                ORDER BY snapshot.embedding_space, member.cluster_id, member.member_order
+                """,
+                (_SNAPSHOT_VERSION,),
+            ).fetchall()
+        if not rows:
+            return ()
+        current = {
+            entry.entry_key: entry
+            for entry in language.entries(LanguageKind.EXPRESSION)
+            if entry.entry_key in allowed
+            and not entry.is_removed
+            and not entry.pending_scope
+            and entry.review_status != ExpressionReviewStatus.REJECTED
+        }
+        visible: dict[tuple[str, int], list[ExpressionClusterMember]] = {}
+        for row in rows:
+            entry = current.get(row["entry_key"])
+            if entry is not None and _fingerprint(_embedding_text(entry)) == row["fingerprint"]:
+                key = (row["snapshot_id"], row["cluster_id"])
+                visible.setdefault(key, []).append(
+                    ExpressionClusterMember(entry.text, entry.detail)
+                )
+        return tuple(
+            VisibleExpressionCluster(_fingerprint(f"{snapshot_id}:{cluster_id}"), tuple(members))
+            for (snapshot_id, cluster_id), members in visible.items()
+        )
 
 
 async def build_expression_clusters(

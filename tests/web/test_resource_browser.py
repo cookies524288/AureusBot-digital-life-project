@@ -1402,6 +1402,163 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
     )
 
 
+def test_expression_clusters_paginate_and_discard_stale_results_at_390px(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => find('#learning-panel-jargon')?.querySelector('.resource-record'),
+        '学习页就绪');
+      const path = '/api/resources/learning/clusters';
+      let granted = true, size = 0, delay = '', resume;
+      const realFetch = window.fetch;
+      window.fetch = (resource, options) => {
+        const url = new URL(resource, location.origin);
+        if (![path, path + '/detail'].includes(url.pathname)) return realFetch(resource, options);
+        check(!options?.method || options.method === 'GET', '仅发出读请求');
+        let result, status = 200;
+        if (url.pathname.endsWith('/detail')) {
+          status = granted ? 200 : 404;
+          result = granted ? {total:1, offset:0, limit:3, next_offset:null,
+            members:[{text:'合成成员' + '长'.repeat(80), detail:'合成成员情景'}]}
+            : {detail:'找不到这个表达簇。'};
+        } else {
+          const offset = Number(url.searchParams.get('offset'));
+          size = Number(url.searchParams.get('limit'));
+          const total = granted ? size * 2 + 1 : 0;
+          result = {total, next_offset:offset + size < total ? offset + size : null,
+            items:Array.from({length:Math.max(0, Math.min(size, total - offset))}, (_, index) => ({
+              location:String(offset + index), number:offset + index + 1, count:1,
+              title:`合成簇${offset + index}`
+            }))};
+        }
+        const response = Response.json(result, {status});
+        if (delay === url.pathname) {
+          delay = '';
+          return new Promise(resolve => { resume = () => resolve(response); });
+        }
+        return Promise.resolve(response);
+      };
+      press('表达簇');
+      await waitFor(() => page() === '第 1 / 3 页' && text('合成簇0'), '首屏表达簇');
+      check(text(`共 ${size * 2 + 1} 个可见表达簇`), '正确可见总数');
+      check(innerWidth === 390 && root().scrollWidth <= innerWidth, '窄屏列表不横向溢出');
+      press('下一页');
+      await waitFor(() => page() === '第 2 / 3 页', '第二页');
+      press('下一页');
+      await waitFor(() => page() === '第 3 / 3 页' && button('下一页').disabled, '末页');
+      press('刷新');
+      await waitFor(() => text('合成簇0'), '刷新回到首屏');
+      const panel = find('#learning-panel-clusters');
+      const memberButton = () => panel.querySelector('.resource-record button');
+      const detail = () => document.querySelector('[data-cluster-detail]');
+      memberButton().click();
+      const dialog = document.querySelector('#editor-dialog');
+      await waitFor(() => dialog?.open && detail()?.textContent.includes('合成成员情景'),
+        '显示成员详情');
+      check(detail().scrollWidth <= detail().clientWidth + 1, '长成员文本可换行');
+      dialog.close();
+      delay = path + '/detail';
+      memberButton().click();
+      await waitFor(() => resume, '旧详情已发起');
+      const oldDetail = resume;
+      dialog.close();
+      resume = null;
+      delay = path;
+      press('刷新');
+      await waitFor(() => resume, '旧列表已发起');
+      const oldList = resume;
+      granted = false;
+      press('黑话');
+      press('表达簇');
+      await waitFor(() => text('当前没有可见的表达簇') && page() === '第 0 / 0 页', '撤权空态');
+      oldDetail();
+      oldList();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      check(!dialog.open && !detail(), '旧详情未重现');
+      check(!panel.textContent.includes('合成簇0') && page() === '第 0 / 0 页', '旧列表未重现');
+    """,
+    )
+
+
+def test_expression_cluster_members_paginate_at_390px(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => find('#learning-panel-jargon')?.querySelector('.resource-record'),
+        '学习页就绪');
+      const path = '/api/resources/learning/clusters';
+      const rows = Array.from({length:8}, (_, index) => ({
+        text:`合成分页成员${index}`, detail:'合成情景'
+      }));
+      let release, current = 'first';
+      const realFetch = window.fetch;
+      window.fetch = (resource, options) => {
+        const url = new URL(resource, location.origin);
+        if (url.pathname === path) return Promise.resolve(Response.json({total:2, next_offset:null,
+          items:[{location:current, number:1, count:8, title:'合成分页簇'},
+            {location:'other', number:2, count:1, title:'另一簇'}]}));
+        if (url.pathname !== path + '/detail') return realFetch(resource, options);
+        const offset = Number(url.searchParams.get('offset') ?? 0);
+        const limit = Number(url.searchParams.get('limit') ?? rows.length);
+        const clusterKey = url.searchParams.get('location');
+        if (clusterKey !== current && clusterKey !== 'other') {
+          return Promise.resolve(Response.json({detail:'找不到这个表达簇。'}, {status:404}));
+        }
+        const visible = clusterKey === 'other' ? [{text:'另一簇成员', detail:'合成情景'}] : rows;
+        const response = Response.json({members:visible.slice(offset, offset + limit),
+          total:visible.length, offset, limit,
+          next_offset:offset + limit < visible.length ? offset + limit : null});
+        if (offset === 3) return new Promise(resolve => { release = () => resolve(response); });
+        return Promise.resolve(response);
+      };
+      const dialog = () => document.querySelector('#editor-dialog');
+      const details = () => dialog()?.querySelector('[data-cluster-detail]');
+      const has = value => details()?.textContent.includes(value);
+      const nav = label => [...dialog().querySelectorAll('button')]
+        .find(node => node.textContent.trim() === label);
+      const pageStatus = value => dialog()?.textContent.includes(value);
+      const select = index => find('#learning-panel-clusters')
+        .querySelectorAll('.resource-record button')[index].click();
+      press('表达簇');
+      await waitFor(() => text('合成分页簇'), '簇列表');
+      select(0);
+      await waitFor(() => dialog()?.open && has('合成分页成员0'), '簇成员首页');
+      check(pageStatus('第 1 / 3 页'), '详情显示当前页和总页数');
+      check(!has('合成分页成员3') && nav('上一页').disabled, '首页有界');
+      const body = dialog().querySelector('.dialog-body');
+      check(body.scrollHeight <= body.clientHeight + 1, '大簇的详情不形成长滚动');
+      nav('下一页').click();
+      await waitFor(() => release, '第二页请求已发出');
+      check(nav('上一页').disabled && nav('下一页').disabled && !has('合成分页成员0'),
+        '加载期间不可翻页且清除旧成员');
+      release();
+      await waitFor(() => pageStatus('第 2 / 3 页') && has('合成分页成员3'), '详情第二页');
+      nav('下一页').click();
+      await waitFor(() => pageStatus('第 3 / 3 页') && has('合成分页成员7'), '详情末页');
+      check(nav('下一页').disabled && !nav('上一页').disabled && !has('合成分页成员3'), '末页有界');
+      release = null;
+      nav('上一页').click();
+      await waitFor(() => release, '关闭前仍有成员页在读取');
+      const old = release;
+      dialog().close();
+      select(1);
+      await waitFor(() => dialog().open && has('另一簇成员'), '切换簇');
+      old();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      check(pageStatus('第 1 / 1 页') && !has('合成分页成员3'), '旧成员页不覆盖新簇');
+      dialog().close();
+      select(0);
+      await waitFor(() => has('合成分页成员0'), '再次进入旧快照');
+      current = 'replacement';
+      nav('下一页').click();
+      await waitFor(() => !dialog().open && text('合成分页簇'), '快照替换关闭旧详情');
+      check(!has('合成分页成员0'), '快照替换不保留旧页');
+    """,
+    )
+
+
 def test_image_prompt_preview_displays_text_then_attachment(browser: Browser) -> None:
     browser.open("timeline", 390, 740)
     _run(
