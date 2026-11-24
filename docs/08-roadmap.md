@@ -269,7 +269,7 @@
 
 追加界面修复（同台账第 17、18 项）已分别合入 `9b3e3e9`、`9c29811`，可重启验收：右上及右下提示保留 5 秒；「观察」页只保留「仅用户可见」这一种可见性标签，不改变记录的实际权限。
 
-本地已合入[学习与记忆页面分区](tasks/3.15-resource-console.md)、[平台历史的显式读取](tasks/3.15-history-actions.md)、[桌面收发、附件及头像](tasks/3.15-platform.md)、[会话输入提示及原图描述](tasks/3.15-live-conversation.md)。剩余管理端按[表达质检](tasks/3.15-expression-quality.md)、[黑话与表情维护](tasks/3.15-learning-maintenance.md)、[事实与关系的非图形维护](tasks/3.15-resource-lifecycle.md)和[资料包互通](tasks/3.15-bundles.md)分别推进；不以页面可打开代替功能验收。
+本地已合入[学习与记忆页面分区](tasks/3.15-resource-console.md)、[表达质检、向量运维及展示授权](tasks/3.15-expression-quality.md)、[黑话与表情维护](tasks/3.15-learning-maintenance.md)、[平台历史的显式读取](tasks/3.15-history-actions.md)、[桌面收发、附件及头像](tasks/3.15-platform.md)及[会话输入提示与原图描述](tasks/3.15-live-conversation.md)。长期记忆的[派生事实召回](tasks/3.15-resource-lifecycle.md)和[资料包互通](tasks/3.15-bundles.md)已有隔离验证；非图形检修与最终公开检查仍在推进。
 
 维护者随后将**关系图的新 UI 设计暂缓**：保留已合入的代码，不追加视觉改版。关系资料、后端授权及非图形管理仍在第 4 项范围；学习、检修、包互通和平台历史边界继续推进。
 
