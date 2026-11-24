@@ -163,6 +163,7 @@ def register_config_routes(
     run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
     | None = None,
     *,
+    require_active: Callable[..., Awaitable[str]],
     planner_tool_definitions: Callable[[], tuple[ToolDefinition, ...]] | None = None,
 ) -> None:
     """注册配置接口；统一要求已登录且已修改默认密码。"""
@@ -380,7 +381,7 @@ def register_config_routes(
             return {"ok": True, "restart_required": service.restart_required}
 
     @app.get("/api/config")
-    async def view_config(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
+    async def view_config(_token: Annotated[str, Depends(require_active)]) -> dict[str, Any]:
         with _translate_errors(service):
             return await asyncio.to_thread(service.view_runtime)
 
@@ -413,6 +414,21 @@ def register_config_routes(
                 value, changed = await asyncio.to_thread(service.restore_runtime, field)
             return {
                 "value": value,
+                "changed": changed,
+                "restart_required": service.restart_required,
+            }
+
+    @app.post("/api/config/restore-defaults")
+    async def restore_runtime_defaults(
+        request: Request, _token: Annotated[str, Depends(require_active)]
+    ) -> dict[str, Any]:
+        with _translate_errors(service):
+            body = await _body(request)
+            async with service.write_lock:
+                _confirm(auth, body, request)
+                config, changed = await asyncio.to_thread(service.restore_all_runtime)
+            return {
+                "config": config,
                 "changed": changed,
                 "restart_required": service.restart_required,
             }

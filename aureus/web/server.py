@@ -542,6 +542,7 @@ def create_app(
             model_runtime,
             run_model_test,
             planner_tool_definitions=planner_tool_definitions,
+            require_active=require_inspection_access,
         )
         if (
             model_runtime is not None
