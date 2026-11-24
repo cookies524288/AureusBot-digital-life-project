@@ -3,7 +3,7 @@
 import json
 from collections.abc import Iterable
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection, Row
@@ -11,7 +11,14 @@ from sqlite3 import Connection, Row
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
 
-from .perception import MediaReference, MessageRoute, Perception, TrustLevel, VisibilityScope
+from .perception import (
+    MediaReference,
+    MessageComponent,
+    MessageRoute,
+    Perception,
+    TrustLevel,
+    VisibilityScope,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox_conversations (
@@ -27,6 +34,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
     mentioned INTEGER NOT NULL, quoted_message_id TEXT, source_timestamp INTEGER,
     source_message_id TEXT, timestamp TEXT NOT NULL,
     attachments TEXT NOT NULL DEFAULT '[]',
+    components TEXT NOT NULL DEFAULT '[]',
     direction TEXT NOT NULL DEFAULT 'incoming',
     UNIQUE (conversation_id, message_id)
 );
@@ -47,6 +55,7 @@ _KEY = (
 )
 _UNREAD = "m.direction = 'incoming' AND m.id > COALESCE(c.last_read_id, 0)"
 USER_VISIBLE_INBOX_MESSAGE = "m.visibility IN ('user_only', 'group', 'public')"
+_SUMMARY_MESSAGE = f"{USER_VISIBLE_INBOX_MESSAGE} AND m.direction IN ('incoming', 'outgoing')"
 _MESSAGES = f"""
 SELECT m.*, c.platform, c.account_id, c.kind, c.recipient_id, c.temporary_group_id, c.name,
        NOT ({_UNREAD}) AS is_read
@@ -150,6 +159,7 @@ def _message(row: Row) -> InboxMessage:
         source_timestamp=row["source_timestamp"],
         source_message_id=row["source_message_id"],
         attachments=tuple(MediaReference(*value) for value in json.loads(row["attachments"])),
+        components=tuple(MessageComponent(**value) for value in json.loads(row["components"])),
     )
     return InboxMessage(
         row["id"],
@@ -179,6 +189,25 @@ def _migrate_read_range(database: Connection) -> None:
     """)
     database.execute("DROP INDEX IF EXISTS inbox_messages_unread")
     database.execute("ALTER TABLE inbox_messages DROP COLUMN is_read")
+
+
+def _resolve_components(
+    database: Connection, conversation_id: int, perception: Perception
+) -> list[dict[str, object]]:
+    resolved: list[dict[str, object]] = []
+    for component in perception.components:
+        if component.kind == "reply" and component.target_message_id is not None:
+            original = database.execute(
+                """SELECT sender_id FROM inbox_messages WHERE conversation_id = ?
+                AND message_id = ? AND visibility = ? AND direction != 'notice'""",
+                (conversation_id, component.target_message_id, perception.visibility),
+            ).fetchone()
+            if original is not None:
+                component = replace(component, target_account_id=original["sender_id"] or None)
+        resolved.append({
+            key: value for key, value in asdict(component).items() if value is not None
+        })
+    return resolved
 
 
 def _advance_read_range(database: Connection, conversation_id: int, confirmed: set[int]) -> None:
@@ -225,6 +254,11 @@ class InboxStore:
                         "ALTER TABLE inbox_messages ADD COLUMN direction "
                         "TEXT NOT NULL DEFAULT 'incoming'"
                     )
+                if "components" not in columns:
+                    database.execute(
+                        "ALTER TABLE inbox_messages ADD COLUMN components "
+                        "TEXT NOT NULL DEFAULT '[]'"
+                    )
                 if "is_read" in columns:
                     database.execute(
                         "ALTER TABLE inbox_conversations ADD COLUMN first_read_id INTEGER"
@@ -243,6 +277,12 @@ class InboxStore:
     def add_delivered(self, perception: Perception, *, sender_name: str) -> None:
         """保存平台已确认的外发消息，不增加未读数。"""
         self._add(perception, sender_name, "", "outgoing")
+
+    def archive(
+        self, perception: Perception, *, sender_name: str, conversation_name: str, notice: bool
+    ) -> None:
+        """只保存平台事件，不进入未读、特别关心和回复流程。"""
+        self._add(perception, sender_name, conversation_name, "notice" if notice else "archived")
 
     def _add(
         self, perception: Perception, sender_name: str, conversation_name: str, direction: str
@@ -272,9 +312,9 @@ class InboxStore:
                 """INSERT INTO inbox_messages (id, conversation_id, message_id, sender_id,
                 sender_name,
                 content, visibility, trust, mentioned, quoted_message_id, source_timestamp,
-                source_message_id, timestamp, attachments, direction)
+                source_message_id, timestamp, attachments, direction, components)
                 VALUES ((SELECT high_water + 1 FROM inbox_message_sequence WHERE id=1),
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (conversation_id, message_id) DO NOTHING RETURNING id""",
                 (
                     conversation_id,
@@ -296,6 +336,7 @@ class InboxStore:
                         ]
                     ),
                     direction,
+                    json.dumps(_resolve_components(database, conversation_id, perception)),
                 ),
             ).fetchone()
             if added is None:
@@ -390,7 +431,9 @@ class InboxStore:
                 conversation.parameters(),
             ).fetchone()[0])
 
-    def get_visible_message(self, conversation: ConversationKey, identifier: int) -> InboxMessage | None:
+    def get_visible_message(
+        self, conversation: ConversationKey, identifier: int
+    ) -> InboxMessage | None:
         """用会话完整路由和原件序号读取可见消息；不推进未读进度。"""
         with closing(open_connection(self._path, read_only=True)) as database:
             row = database.execute(
@@ -434,7 +477,7 @@ class InboxStore:
             rows = database.execute(f"""
                 SELECT c.*, m.visibility FROM inbox_messages m
                 JOIN inbox_conversations c ON c.id = m.conversation_id
-                WHERE {USER_VISIBLE_INBOX_MESSAGE} GROUP BY c.id, m.visibility ORDER BY min(m.id)
+                WHERE {_SUMMARY_MESSAGE} GROUP BY c.id, m.visibility ORDER BY min(m.id)
             """).fetchall()
         return [(_conversation(row), VisibilityScope(row["visibility"])) for row in rows]
 
@@ -454,7 +497,7 @@ class InboxStore:
                     conversation, visibility, after_id, limit, connection=database
                 )
         rows = connection.execute(
-            f"""{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE}
+            f"""{_MESSAGES} WHERE {_KEY} AND {_SUMMARY_MESSAGE}
                 AND m.visibility=? AND m.id>?
                 ORDER BY m.id LIMIT ?""",
             (*conversation.parameters(), visibility, after_id, limit),
@@ -467,7 +510,7 @@ class InboxStore:
     ) -> InboxMessage | None:
         """在同一个读写事务定位证据；已清理原件不回退到缓存正文。"""
         row = connection.execute(
-            f"""{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE} AND m.visibility=?
+            f"""{_MESSAGES} WHERE {_KEY} AND {_SUMMARY_MESSAGE} AND m.visibility=?
             AND m.id=? AND m.message_id=?""",
             (*conversation.parameters(), visibility, sequence, message_id),
         ).fetchone()

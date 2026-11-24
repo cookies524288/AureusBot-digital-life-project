@@ -40,6 +40,7 @@ from .judging import (
 from .main_loop import Heartbeat, OrganCaller
 from .perception import (
     MediaReference,
+    MessageComponent,
     MessageKind,
     MessageRoute,
     MessageSink,
@@ -79,6 +80,7 @@ __all__ = [
     "Heartbeat",
     "Judgment",
     "MediaReference",
+    "MessageComponent",
     "MessageKind",
     "MessageRoute",
     "MessageSink",

@@ -15,6 +15,7 @@ from aureus.timeline import VisibilityScope
 
 __all__ = [
     "MediaReference",
+    "MessageComponent",
     "MessageKind",
     "MessageRoute",
     "MessageSink",
@@ -58,6 +59,22 @@ class MediaReference:
 
 
 @dataclass(frozen=True)
+class MessageComponent:
+    """有序的平台消息事实；来源账号、会话、参与者和消息键沿用所在的原件。"""
+
+    kind: Literal["text", "at", "reply", "image", "record", "poke", "unknown"]
+    position: int
+    text: str | None = None
+    attachment_index: int | None = None
+    target_account_id: str | None = None
+    target_message_id: str | None = None
+    all_members: bool = False
+    poke_type: int | None = None
+    action: str | None = None
+    suffix: str | None = None
+
+
+@dataclass(frozen=True)
 class Perception:
     """通道交给心跳的一条感知。"""
 
@@ -72,6 +89,7 @@ class Perception:
     source_timestamp: int | None = None
     source_message_id: str | None = None  # 通道提供的稳定入站消息键，用于语言学习去重。
     attachments: tuple[MediaReference, ...] = ()
+    components: tuple[MessageComponent, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.channel.strip():

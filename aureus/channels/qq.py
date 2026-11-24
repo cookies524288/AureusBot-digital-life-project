@@ -29,9 +29,11 @@ from .onebot import (
     QQ_CHANNEL_NAME,
     account_id,
     decode_message,
+    decode_poke_notice,
     encode_message,
     media_file_id,
     message_id,
+    read_message_segments,
 )
 from .onebot_transport import OneBotError, OneBotTransport, decode_media_base64
 from .web import HeartbeatHandle
@@ -130,7 +132,9 @@ class QQChannel:
         return route.kind == "private" and self._is_owner(route.recipient_id)
 
     def _receive(self, payload: dict[str, Any]) -> None:
-        perception = decode_message(payload, self._config.account_id)
+        notice = payload.get("post_type") == "notice"
+        decoder = decode_poke_notice if notice else decode_message
+        perception = decoder(payload, self._config.account_id)
         if perception is None or perception.route is None:
             return
         route = perception.route
@@ -139,13 +143,28 @@ class QQChannel:
             self._config.allowed_group_id is not None
             and route.kind == "private"
             and (
-                payload.get("sub_type") not in (None, "friend", "normal")
+                (not notice and payload.get("sub_type") not in (None, "friend", "normal"))
                 or payload.get("temp_source") not in (None, -1)
                 or payload.get("group_id") is not None
             )
         ):
             return
         if not self._allows_route(route):
+            return
+        archived = notice or (
+            not perception.attachments and not any(
+                (item.kind == "text" and item.text and item.text.strip())
+                or (item.kind == "at" and (item.all_members or item.target_account_id))
+                for item in perception.components
+            )
+        )
+        if archived:
+            if self._inbox_store is not None:
+                if route.kind == "private" and self._is_owner(route.recipient_id):
+                    perception = replace(perception, visibility=VisibilityScope.USER_ONLY)
+                self._save_inbox(
+                    perception, route, payload, archive="notice" if notice else "message"
+                )
             return
         key = ConversationKey.from_perception(perception), route.message_id
         if key in self._seen:
@@ -227,7 +246,8 @@ class QQChannel:
         return None
 
     def _save_inbox(
-        self, perception: Perception, route: MessageRoute, payload: dict[str, Any]
+        self, perception: Perception, route: MessageRoute, payload: dict[str, Any],
+        *, archive: str | None = None,
     ) -> bool:
         assert self._inbox_store is not None
         sender = payload.get("sender")
@@ -238,11 +258,19 @@ class QQChannel:
         name = _display_name(payload.get("group_name")) if group else nickname
         if group and name:
             self._group_names[group_id] = name
+        sender_name = (card or nickname) if group else nickname
+        conversation_name = (name or self._group_names.get(group_id, "")) if group else name
         try:
+            if archive is not None:
+                self._inbox_store.archive(
+                    perception, sender_name=sender_name, conversation_name=conversation_name,
+                    notice=archive == "notice",
+                )
+                return True
             message = self._inbox_store.add(
                 perception,
-                sender_name=(card or nickname) if group else nickname,
-                conversation_name=(name or self._group_names.get(group_id, "")) if group else name,
+                sender_name=sender_name,
+                conversation_name=conversation_name,
             )
         except SQLiteError:
             logger.exception("QQ 收件箱写入失败")
@@ -375,14 +403,14 @@ class QQChannel:
         except SQLiteError:
             logger.exception("QQ 消息已发送，但时间线确认记录写入失败")
         try:
-            await self._save_delivered(message, route, receipt.get("message_id"))
+            await self._save_delivered(message, route, receipt.get("message_id"), params["message"])
             if digest is not None and self._record_emoji_use is not None:
                 await asyncio.to_thread(self._record_emoji_use, digest)
         except SQLiteError:
             logger.exception("QQ 消息已发送，但外发附属记录写入失败")
 
     async def _save_delivered(
-        self, message: OutgoingMessage, route: MessageRoute, receipt_id: object
+        self, message: OutgoingMessage, route: MessageRoute, receipt_id: object, segments: object
     ) -> None:
         if self._inbox_store is None:
             return
@@ -390,6 +418,7 @@ class QQChannel:
         if identifier is None:
             logger.warning("QQ 发送回执缺少有效消息键，无法归档外发消息")
             return
+        _, _, quoted, _, components = read_message_segments(segments, route.account_id)
         perception = Perception(
             message.channel,
             route.account_id,
@@ -397,7 +426,8 @@ class QQChannel:
             message.visibility,
             TrustLevel.VERIFIED_CONTACT,
             route=replace(route, message_id=identifier),
-            quoted_message_id=route.message_id if message.quote_source else None,
+            quoted_message_id=quoted,
+            components=components,
         )
         try:
             await asyncio.to_thread(
