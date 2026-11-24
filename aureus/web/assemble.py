@@ -92,6 +92,8 @@ def open_web(
                 core.settings.runtime.qq.account_id if core.qq is not None else None
             ),
             read_inbox_attachment=core.qq.read_inbox_attachment if core.qq is not None else None,
+            qq_desktop=core.qq.desktop if core.qq is not None else None,
+            allows_qq_delivery=core.heartbeat.allows_emoji_delivery,
             resource_language=core.language,
             resource_memory=core.memory,
             memory_graph_display=core.memory.graph_display if core.memory is not None else None,
