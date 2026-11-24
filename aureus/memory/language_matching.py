@@ -53,12 +53,11 @@ class LanguageEntry:
     review_status: ExpressionReviewStatus | None = None
     scope_keys: tuple[str, ...] = ()
     package_source: str | None = None
+    learning_source: str | None = None
 
     def visible_in(self, conversation_key: str | None) -> bool:
-        """非包记录保持原可见性；包记录仅在明确绑定的会话中可用。"""
-        return self.package_source is None or (
-            conversation_key is not None and conversation_key in self.scope_keys
-        )
+        """在线来源仅用于管理筛选；导入包仍遵守显式授权。"""
+        return self.package_source is None or conversation_key in self.scope_keys
 
 
 @dataclass(frozen=True)

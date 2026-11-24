@@ -27,8 +27,9 @@ def test_jargon_match_keeps_senses_and_uses_frequency_and_position() -> None:
     assert [match.evidence_ids for match in matches] == [(32, 34), (33,), (35,), (31,)]
     assert match_jargons(["<message tag='XP'> 空白"], entries, {}) == []
     assert format_language(matches, jargon=True, budget=10) == ""
-    block = format_language([entries[0], entries[1]], jargon=True, budget=70)
-    assert len(block) <= 70
+    first_only = format_language([entries[0]], jargon=True, budget=700)
+    block = format_language([entries[0], entries[1]], jargon=True, budget=len(first_only))
+    assert block == first_only
     assert block.endswith("XP：本局胜负")
     assert "GO" not in block
 

@@ -373,7 +373,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const disabled = el('label', {}, el('input', {name:'disabled', type:'checkbox'}), ' 显示停用和待映射');
     const removed = el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除');
     const reviewFilter = kind === 'expression' ? el('select', {name:'review', 'aria-label':'审核状态'}, ...reviewOptions('全部')) : null;
-    const scopeDescription = '会话筛选只浏览明确绑定的资料，不代表当前实际召回范围。';
+    const scopeDescription = '会话筛选按学习来源或导入包授权浏览，不改变实际召回范围。';
     const scopeHint = el('p', {class:'muted', id:'learning-scope-hint-' + kind,
       'aria-live':'polite', text:scopeDescription});
     const all = el('option', {value:'', text:'全部资料'});
@@ -429,7 +429,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       return record(title, open, batch.checkbox(item));
     }
     const pager = searchable({panel, id:'learning-' + kind, render,
-      empty:() => scope.value ? '该会话没有符合条件的已绑定资料' : '没有符合条件的记录', prepare:() => {
+      empty:() => scope.value ? '该会话没有符合条件的资料' : '没有符合条件的记录', prepare:() => {
       batch.clear(); for (const tool of tools) tool.disabled = true;
     }, loaded:data => { for (const tool of tools) tool.disabled = !data.enabled; }}, toolbar, '/api/resources/learning',
     fields => ({kind, q:fields.q.value, recall:fields.disabled.checked || fields.removed.checked ? '' : 'enabled',

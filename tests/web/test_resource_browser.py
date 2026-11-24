@@ -621,7 +621,7 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
         '默认全部');
       check([...scope().options].slice(1, 3).map(option => option.textContent).join('|') ===
         '同名群 · 群聊 10|同名群 · 群聊 20', '同名群可区分');
-      check(text('不代表当前实际召回范围'), '说明浏览与召回的区别');
+      check(text('不改变实际召回范围'), '说明浏览与召回的区别');
       press('下一页');
       await waitFor(() => page() === `第 2 / ${allPages} 页`, '先翻到全部资料第二页');
       select('group-10');
@@ -646,7 +646,7 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
         await waitFor(() => delayed, '拦住旧会话请求');
         select('private-10');
         await waitFor(() => page() === '第 0 / 0 页' &&
-          text('该会话没有符合条件的已绑定资料'), '空结果');
+          text('该会话没有符合条件的资料'), '空结果');
         delayed();
         await waitFor(() => finished, '旧请求返回');
         await new Promise(resolve => setTimeout(resolve, 150));

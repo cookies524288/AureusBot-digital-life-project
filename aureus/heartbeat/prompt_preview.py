@@ -26,7 +26,12 @@ from aureus.heartbeat.context import (
 from aureus.heartbeat.downtime import Downtime
 from aureus.heartbeat.emoji_recognition import build_emoji_analysis_request
 from aureus.heartbeat.inbox_media import build_image_description_request
-from aureus.heartbeat.language_runner import build_language_learning_request
+from aureus.heartbeat.language_requests import (
+    build_comparison,
+    build_content_only,
+    build_extraction,
+    build_with_context,
+)
 from aureus.heartbeat.memory_consolidation import (
     EXTRACTION_FORMAT,
     EXTRACTION_PROMPT,
@@ -41,6 +46,7 @@ from aureus.heartbeat.recall import (
 )
 from aureus.heartbeat.reply_segments import SEGMENT_PROMPT, prepare_reply
 from aureus.identity import Identity
+from aureus.memory import LanguageKind
 from aureus.organs import EMPTY_SYSTEM_MESSAGE, OrganRequest, PromptTemplate, prompt_template_keys
 from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 
@@ -378,12 +384,18 @@ def build_prompt_scenes(
             build_prompt("〔可引用经历〕", identity),
             system(),
         )
-    add(
-        "language_learning",
-        "language_learning",
-        "增量语言学习",
-        build_language_learning_request(organ, ("〔新入站样本文本〕",)),
-    )
+    language_sample = ("〔新入站样本文本〕",)
+    for label, request in (
+        ("增量学习 · 表达抽取", build_extraction(organ, LanguageKind.EXPRESSION, language_sample)),
+        ("增量学习 · 黑话抽取", build_extraction(organ, LanguageKind.JARGON, language_sample)),
+        (
+            "黑话释义 · 根据上下文",
+            build_with_context(organ, "〔词条〕", ("〔会话证据〕",), "〔上次释义〕"),
+        ),
+        ("黑话释义 · 仅词条", build_content_only(organ, "〔词条〕")),
+        ("黑话释义 · 比较", build_comparison(organ, "〔根据上下文的释义〕", "〔仅词条的释义〕")),
+    ):
+        add("language_learning", str(request.context["task"]), label, request)
     add(
         "memory_consolidation",
         "memory_consolidation",

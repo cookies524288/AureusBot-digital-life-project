@@ -33,12 +33,20 @@ from aureus.memory.language_matching import (
     normalize,
     select_expressions,
 )
+from aureus.memory.language_online import (
+    ONLINE_BATCH_SIZE,
+    ONLINE_SCHEMA,
+    JargonInference,
+    online_entries,
+    ready_inferences,
+    save_online_term,
+)
 
 MAX_TEXT = 80
 MAX_DETAIL = 160
 MAX_EXAMPLE = 2000
 MAX_REVIEW_REASON = 500
-BATCH_SIZE = 16
+BATCH_SIZE = ONLINE_BATCH_SIZE
 _MEDIA_MARKERS = ("[表情包", "[图片")
 _EXCLUDED_MARKERS = ("SELF", *_MEDIA_MARKERS)
 _SCHEMA = """
@@ -219,6 +227,15 @@ def _supporting_samples(
     ]
 
 
+def _online_text(text: str, limit: int) -> bool:
+    return (
+        0 < len(text) <= limit
+        and any(character.isalnum() for character in text)
+        and not is_reference(text)
+        and not any(marker in text for marker in _EXCLUDED_MARKERS)
+    )
+
+
 class LanguageStore:
     """在同一个运行主库读写习得语言，连接只在当前操作内使用。"""
 
@@ -228,7 +245,7 @@ class LanguageStore:
     def open(self) -> None:
         """初始化语言子系统持有的表。"""
         with closing(open_connection(self._path)) as connection:
-            connection.executescript(_SCHEMA + IMPORT_SCHEMA)
+            connection.executescript(_SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA)
 
     def publish(
         self,
@@ -248,7 +265,7 @@ class LanguageStore:
                 is None
             ):
                 raise LanguageTargetError("language_target_not_runtime")
-            connection.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA)
+            connection.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA)
             return publish_rows(connection, instance, manifest, source_counts, rows)
 
     def unseen(self, samples: Sequence[LanguageSample]) -> list[LanguageSample]:
@@ -296,6 +313,104 @@ class LanguageStore:
                     }
                 for proposal in proposals:
                     self._save_proposal(connection, proposal, accepted, presented_content)
+
+    def pending_extraction(
+        self, kind: LanguageKind, samples: Sequence[LanguageSample]
+    ) -> list[LanguageSample]:
+        """取尚未被这条提取路消费的真实来源。"""
+        unique: dict[str, LanguageSample] = {}
+        for sample in samples:
+            if _is_learnable(sample):
+                unique.setdefault(sample.source_key, sample)
+        with closing(open_connection(self._path)) as connection:
+            return [
+                sample
+                for key, sample in unique.items()
+                if connection.execute(
+                    """SELECT 1 FROM language_observations AS observation
+                       WHERE source_key = ? AND record_id = ? AND NOT EXISTS (
+                           SELECT 1 FROM language_extractions AS extraction
+                           WHERE extraction.source_key = observation.source_key AND kind = ?
+                       )""",
+                    (key, sample.record_id, kind),
+                ).fetchone()
+                is not None
+            ]
+
+    def observe_extraction(
+        self,
+        kind: LanguageKind,
+        scope: str,
+        samples: Sequence[LanguageSample],
+        presented: Mapping[int, str],
+        proposals: Sequence[LanguageProposal],
+    ) -> list[JargonInference]:
+        """独立消费成功的抽取，并返回本轮达到门槛的黑话候选。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            accepted: dict[int, tuple[str, str]] = {}
+            for sample in samples:
+                fragment = presented.get(sample.record_id, "")
+                if (
+                    not fragment
+                    or not sample.content.startswith(fragment)
+                    or not _is_learnable(sample)
+                ):
+                    continue
+                changed = connection.execute(
+                    """INSERT OR IGNORE INTO language_extractions
+                       SELECT ?, source_key FROM language_observations
+                       WHERE source_key = ? AND record_id = ?""",
+                    (kind, sample.source_key, sample.record_id),
+                )
+                if changed.rowcount:
+                    accepted[sample.record_id] = (sample.source_key, fragment)
+            return self._save_extraction(connection, kind, scope, accepted, proposals)
+
+    @staticmethod
+    def _save_extraction(
+        connection: Connection,
+        kind: LanguageKind,
+        scope: str,
+        accepted: Mapping[int, tuple[str, str]],
+        proposals: Sequence[LanguageProposal],
+    ) -> list[JargonInference]:
+        terms: dict[int, str] = {}
+        for proposal in proposals:
+            text, detail = proposal.text.strip(), proposal.detail.strip()
+            if proposal.kind != kind or not _online_text(text, MAX_TEXT):
+                continue
+            if kind == LanguageKind.EXPRESSION and (
+                not _online_text(detail, MAX_DETAIL) or normalize(text) == normalize(detail)
+            ):
+                continue
+            sources = [
+                accepted[record_id]
+                for record_id in dict.fromkeys(proposal.record_ids)
+                if record_id in accepted
+                and (
+                    kind == LanguageKind.EXPRESSION
+                    or normalize(text) in normalize(accepted[record_id][1])
+                )
+            ]
+            if sources:
+                term = save_online_term(connection, kind, scope, text, detail, sources)
+                if term is not None:
+                    terms[term] = text
+        return ready_inferences(connection, terms) if kind == LanguageKind.JARGON else []
+
+    def record_jargon_inference(
+        self, attempt: JargonInference, outcome: str, meaning: str = ""
+    ) -> None:
+        """追加本档的有效判定；未能推断不改变此前生效的释义。"""
+        if outcome == "accepted" and (
+            not _online_text(meaning, MAX_DETAIL) or normalize(attempt.text) == normalize(meaning)
+        ):
+            outcome, meaning = "insufficient", ""
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO language_jargon_decisions VALUES (?, ?, ?, ?)",
+                (attempt.term_id, attempt.evidence_count, outcome, meaning),
+            )
 
     @staticmethod
     def _observe_existing(connection: Connection, samples: dict[int, LanguageSample]) -> None:
@@ -584,12 +699,16 @@ class LanguageStore:
         review: ExpressionReviewStatus | None = None,
         is_removed: bool = False,
     ) -> tuple[list[LanguageEntry], int]:
-        """按明确绑定和资料状态浏览，返回本页及筛选总数，不参与召回。"""
+        """按明确绑定或在线来源筛选，并返回本页及筛选总数。"""
         term = text.strip().casefold()
         matches = [
             entry
             for entry in self.entries(kind, include_disabled=True)
-            if (not conversation_key or conversation_key in entry.scope_keys)
+            if (
+                not conversation_key
+                or conversation_key == entry.learning_source
+                or conversation_key in entry.scope_keys
+            )
             and entry.is_removed == is_removed
             and (is_enabled is None or entry.is_enabled == is_enabled)
             and (review is None or entry.review_status == review)
@@ -648,6 +767,7 @@ class LanguageStore:
                     )
                 )
         source_table = JARGON_TABLE if kind == LanguageKind.JARGON else EXPRESSION_TABLE
+        entries.extend(online_entries(connection, kind))
         entries.extend(imported_entries(connection, source_table))
         entries.extend(LanguageStore._package_entries(connection, kind))
         entries.extend(
