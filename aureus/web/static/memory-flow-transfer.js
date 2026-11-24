@@ -185,6 +185,6 @@
     panel.replaceChildren(el('div', {class:'card stack'},
       el('p', {text:'文字记忆包包含原件、来源、证据和网页维护的修订及召回设置。已移除项留在本机，不随包导出；图片附件、媒体资产和本地时间线经历也不随包传输。'}),
       el('div', {class:'row'}, el('a', {class:'btn', href:transferPath, download:true, text:'导出文字记忆包'})),
-      controls));
+      controls), window.createMemoryBundlePanel());
   };
 })();

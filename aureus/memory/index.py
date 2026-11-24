@@ -10,6 +10,8 @@ from typing import Any, BinaryIO
 
 from aureus.common import Clock, MemoryConfig, SystemClock
 from aureus.common.sqlite import open_connection
+from aureus.memory import bundles
+from aureus.memory.bundle_format import BundleMode
 from aureus.memory.consolidation import (
     CandidateKind,
     ConsolidationBatch,
@@ -158,6 +160,7 @@ class MemoryIndex:
             open_history(conn)
             _open_live_index(conn)
             open_edits(conn)
+            bundles.open_bundles(conn)
             open_removal_operations(conn)
             open_consolidation(conn)
             open_flow(conn)
@@ -409,6 +412,33 @@ class MemoryIndex:
     def export_archive(self, output: BinaryIO) -> None:
         """将此运行库的长期记忆原件和维护覆盖写入文件。"""
         export_archive(self._db_path, output)
+
+    def preview_bundle(self, file: BinaryIO) -> dict[str, Any]:
+        """校验上传包并检查当前安装条件。"""
+        with closing(open_connection(self._db_path)) as connection:
+            return bundles.preview_bundle(connection, file)
+
+    def install_bundle(self, file: BinaryIO, mode: BundleMode) -> dict[str, Any]:
+        """将兼容的包安装到实际记忆原件和索引。"""
+        with closing(open_connection(self._db_path)) as connection:
+            return bundles.install_bundle(connection, file, mode, self._clock.now())
+
+    def list_bundles(self, offset: int, limit: int) -> list[dict[str, Any]]:
+        """浏览包安装记录。"""
+        with closing(open_connection(self._db_path)) as connection:
+            return bundles.list_bundles(connection, offset, limit)
+
+    def set_bundle_installed(self, installation_id: str, installed: bool) -> bool:
+        """可逆停用或恢复该包的独占资料。"""
+        with closing(open_connection(self._db_path)) as connection:
+            return bundles.set_bundle_installed(
+                connection, installation_id, installed, self._clock.now()
+            )
+
+    def export_bundle(self, installation_id: str, output: BinaryIO) -> bool:
+        """下载保存的原包资料。"""
+        with closing(open_connection(self._db_path)) as connection:
+            return bundles.export_bundle(connection, installation_id, output)
 
     def import_archive(self, file: BinaryIO) -> tuple[int, int]:
         """将文件追加到此运行库，返回新增和跳过条数。"""

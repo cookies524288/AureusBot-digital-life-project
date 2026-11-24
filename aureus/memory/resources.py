@@ -43,6 +43,7 @@ WITH catalog AS (
             AND coalesce(edit.is_enabled, 1) AND NOT coalesce(edit.is_removed, 0)) AS is_recallable
     FROM memory_history history
     LEFT JOIN memory_edits edit ON edit.kind = 'history' AND edit.entry_id = history.id
+    WHERE NOT coalesce(edit.is_bundle_removed, 0)
     UNION ALL
     SELECT 'live', live.rowid, live.content, live.actor_label,
            unixepoch(live.recorded_at, 'subsec'), NULL,

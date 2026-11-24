@@ -897,6 +897,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <script src="/assets/organ-graph.js"></script>
 <script src="/assets/resource-management.js"></script>
 <script src="/assets/memory-flow-transfer.js"></script>
+<script src="/assets/memory-bundles.js"></script>
 <script>
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
@@ -931,6 +932,8 @@ async function api(path, method, body, headers = {}, signal) {
     opt.headers['Content-Type'] = 'application/json'; opt.body = body;
   } else if ((path === '/api/resources/memory/transfer' || path === '/api/resources/memory/transfer/preview') && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/x-ndjson'; opt.body = body;
+  } else if (path.startsWith('/api/resources/memory/bundles') && method === 'POST' && body instanceof Blob) {
+    opt.headers['Content-Type'] = 'application/zip'; opt.body = body;
   } else if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   let r;
   try { r = await fetch(path, opt); } catch (e) { return { ok: false, status: 0, data: null }; }

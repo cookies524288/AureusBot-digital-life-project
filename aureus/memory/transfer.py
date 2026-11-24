@@ -109,6 +109,7 @@ def export_archive(db_path: Path, output: BinaryIO) -> None:
                  ON edit.kind = 'history' AND edit.entry_id = history.id
                WHERE json_extract(source_key, '$[2]') NOT IN (?, ?, ?, ?)
                  AND NOT coalesce(edit.is_removed, 0)
+                 AND NOT coalesce(edit.is_bundle_removed, 0)
                ORDER BY history.id""",
             MEDIA_ASSET_TABLES,
         )
