@@ -12,6 +12,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from functools import partial
 
 from loguru import logger
 
@@ -49,6 +50,7 @@ from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat, Perception, registered_templates
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.language_runner import previous_language_scope
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
@@ -302,7 +304,9 @@ def open_core(
         language: LanguageStore | None = None
         if runtime.language.recall_enabled or runtime.language.learning_enabled:
             try:
-                language = LanguageStore(paths.database_file)
+                language = LanguageStore(
+                    paths.database_file, old_source_scope=partial(previous_language_scope, timeline)
+                )
                 language.open()
             except sqlite3.Error:
                 language = None

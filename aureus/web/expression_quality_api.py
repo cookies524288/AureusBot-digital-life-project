@@ -15,7 +15,7 @@ from aureus.common import Clock, SystemClock
 from aureus.common.web_identity import WEB_CHANNEL_NAME, WEB_USER_ID
 from aureus.heartbeat.events import EVENT_MESSAGE
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
-from aureus.heartbeat.language_runner import language_sample
+from aureus.heartbeat.language_runner import language_sample, previous_language_scope
 from aureus.heartbeat.perception import TrustLevel
 from aureus.memory import ExpressionQualityAction, ExpressionQualityStatus, LanguageStore
 from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
@@ -99,13 +99,17 @@ def register_expression_quality_routes(
         ):
             return False
         message = inbox.get_visible_message(route, inbox_id)
-        return (
-            message is not None
-            and message.direction == "incoming"
-            and message.perception.sender_id == record.actor_id
-            and message.perception.content == record.content
-            and language_sample(record, message.perception.source_message_id, scope).source_key
-            == key
+        if (
+            message is None
+            or message.direction != "incoming"
+            or message.perception.sender_id != record.actor_id
+            or message.perception.content != record.content
+        ):
+            return False
+        sample = language_sample(record, message.perception.source_message_id, scope)
+        return sample.source_key == key or (
+            sample.previous_source_key == key
+            and previous_language_scope(timeline, record_id, key) == scope
         )
 
     @app.get(_PATH)

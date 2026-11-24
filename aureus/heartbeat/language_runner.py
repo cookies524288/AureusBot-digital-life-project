@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from aureus.common import Clock
-from aureus.heartbeat.inbox_store import InboxMessage
+from aureus.heartbeat.events import EVENT_MESSAGE
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage
 from aureus.heartbeat.language_requests import (
     build_comparison,
     build_content_only,
@@ -38,7 +39,7 @@ from aureus.memory import (
 )
 from aureus.organs import OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
-from aureus.timeline import TimelineRecord
+from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
 
 logger = logging.getLogger(__name__)
 TASK_NAME = "aureus-language-learning"
@@ -162,15 +163,54 @@ def language_sample(
     record: TimelineRecord, source_message_id: str | None, conversation: str | None = None
 ) -> LanguageSample:
     """保存可回查的首次入站记录；通道重投时沿用稳定来源键。"""
-    key = (
-        json.dumps(
-            (conversation, record.metadata.get("channel"), record.actor_id, source_message_id),
-            ensure_ascii=False,
+    if not source_message_id:
+        return LanguageSample(
+            f"timeline:{record.id}", record.id, speaker_key(record), record.content
         )
-        if source_message_id
-        else f"timeline:{record.id}"
+    parts = (record.metadata.get("channel"), record.actor_id, source_message_id)
+    key = json.dumps((conversation, *parts), ensure_ascii=False)
+    previous = json.dumps(parts, ensure_ascii=False)
+    return LanguageSample(
+        key, record.id, speaker_key(record), record.content, previous, conversation
     )
-    return LanguageSample(key, record.id, speaker_key(record), record.content)
+
+
+def previous_language_scope(
+    timeline: TimelineDatabase, record_id: int, previous_key: str
+) -> str | None:
+    """从旧观察的不可变时间线原件核对平台地址，不用当前重投地址猜。"""
+    record = timeline.get(record_id)
+    if record is None or record.event_type != EVENT_MESSAGE:
+        return None
+    if record.actor_type not in (ActorType.USER, ActorType.PERSON):
+        return None
+    metadata = record.metadata
+    source_message = metadata.get("source_message_id")
+    if not isinstance(source_message, str) or not source_message:
+        return None
+    if language_sample(record, source_message).previous_source_key != previous_key:
+        return None
+    channel, trust = metadata.get("channel"), metadata.get("trust")
+    if channel in ("web", "terminal") and trust == TrustLevel.VERIFIED_USER:
+        return json.dumps((channel, record.actor_id), separators=(",", ":"))
+    if channel != "qq" or type(metadata.get("inbox_message_id")) is not int:
+        return None
+    account, kind, recipient, temporary_group = (
+        metadata.get("account_id"),
+        metadata.get("message_type"),
+        metadata.get("recipient_id"),
+        metadata.get("temporary_group_id"),
+    )
+    if (
+        not isinstance(account, str)
+        or not account
+        or not isinstance(recipient, str)
+        or not recipient
+        or kind not in ("group", "private")
+        or (temporary_group is not None and not isinstance(temporary_group, str))
+    ):
+        return None
+    return ConversationKey(channel, account, kind, recipient, temporary_group).language_scope_key()
 
 
 def _decode(text: str) -> Any:

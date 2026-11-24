@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -184,6 +184,8 @@ class LanguageSample:
     record_id: int
     speaker: str
     content: str
+    previous_source_key: str | None = None
+    scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -276,8 +278,38 @@ def expression_proposals(
 class LanguageStore:
     """在同一个运行主库读写习得语言，连接只在当前操作内使用。"""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *, old_source_scope: Callable[[int, str], str | None] | None = None
+    ) -> None:
         self._path = path
+        self._old_source_scope = old_source_scope
+
+    def _observation(
+        self, connection: Connection, sample: LanguageSample
+    ) -> tuple[str, int | None] | None:
+        row = connection.execute(
+            "SELECT record_id FROM language_observations WHERE source_key = ?", (sample.source_key,)
+        ).fetchone()
+        if row is not None:
+            return sample.source_key, row["record_id"]
+        if sample.previous_source_key is None:
+            return None
+        previous = connection.execute(
+            "SELECT record_id FROM language_observations WHERE source_key = ?",
+            (sample.previous_source_key,),
+        ).fetchone()
+        if previous is None:
+            return None
+        old_scope = (
+            self._old_source_scope(previous["record_id"], sample.previous_source_key)
+            if self._old_source_scope
+            else None
+        )
+        if old_scope is None or sample.scope is None:
+            return sample.previous_source_key, None
+        if old_scope == sample.scope:
+            return sample.previous_source_key, previous["record_id"]
+        return None
 
     def open(self) -> None:
         """初始化语言子系统持有的表。"""
@@ -316,11 +348,8 @@ class LanguageStore:
         with closing(open_connection(self._path)) as connection:
             return [
                 sample
-                for key, sample in unique.items()
-                if connection.execute(
-                    "SELECT 1 FROM language_observations WHERE source_key = ?", (key,)
-                ).fetchone()
-                is None
+                for sample in unique.values()
+                if self._observation(connection, sample) is None
             ]
 
     def observe(
@@ -332,9 +361,10 @@ class LanguageStore:
     ) -> None:
         """一次事务记录原文观察；提议只从本轮展示的原文前缀取证。"""
         with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             accepted: dict[int, LanguageSample] = {}
             for sample in samples:
-                if not _is_learnable(sample):
+                if not _is_learnable(sample) or self._observation(connection, sample) is not None:
                     continue
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO language_observations VALUES (?, ?, ?)",
@@ -364,16 +394,14 @@ class LanguageStore:
         with closing(open_connection(self._path)) as connection:
             return [
                 sample
-                for key, sample in unique.items()
-                if connection.execute(
-                    """SELECT 1 FROM language_observations AS observation
-                       WHERE source_key = ? AND record_id = ? AND NOT EXISTS (
-                           SELECT 1 FROM language_extractions AS extraction
-                           WHERE extraction.source_key = observation.source_key AND kind = ?
-                       )""",
-                    (key, sample.record_id, kind),
+                for sample in unique.values()
+                if (observed := self._observation(connection, sample)) is not None
+                and observed[1] == sample.record_id
+                and connection.execute(
+                    "SELECT 1 FROM language_extractions WHERE kind = ? AND source_key = ?",
+                    (kind, observed[0]),
                 ).fetchone()
-                is not None
+                is None
             ]
 
     def observe_extraction(
@@ -388,6 +416,7 @@ class LanguageStore:
     ) -> list[JargonInference]:
         """独立消费成功的抽取，并返回本轮达到门槛的黑话候选。"""
         with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             accepted: dict[int, tuple[str, str]] = {}
             for sample in samples:
                 fragment = presented.get(sample.record_id, "")
@@ -397,14 +426,15 @@ class LanguageStore:
                     or not _is_learnable(sample)
                 ):
                     continue
+                observation = self._observation(connection, sample)
+                if observation is None or observation[1] != sample.record_id:
+                    continue
+                source_key = observation[0]
                 changed = connection.execute(
-                    """INSERT OR IGNORE INTO language_extractions
-                       SELECT ?, source_key FROM language_observations
-                       WHERE source_key = ? AND record_id = ?""",
-                    (kind, sample.source_key, sample.record_id),
+                    "INSERT OR IGNORE INTO language_extractions VALUES (?, ?)", (kind, source_key)
                 )
                 if changed.rowcount:
-                    accepted[sample.record_id] = (sample.source_key, fragment)
+                    accepted[sample.record_id] = (source_key, fragment)
             if kind == LanguageKind.EXPRESSION:
                 self._save_expressions(connection, scope, accepted, proposals, quality)
                 return []
