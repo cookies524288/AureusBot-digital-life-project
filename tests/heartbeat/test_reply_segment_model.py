@@ -56,9 +56,11 @@ class _Organ:
             text = f"<{sentinel[1]}>{_REVIEW}</{sentinel[1]}>"
         elif task == "reply_segments":
             text = '{"text":"剪掉原文，发出我写的文字"}'
-        return OrganResponse(
-            self.organ_id, text, attempts=[CallAttempt("合成模型", "测试服务商", 10, 1)]
-        )
+        from tests.planner_fixtures import plan_response
+
+        response = plan_response(request, text) if task == "plan" else OrganResponse(self.organ_id, text)
+        response.attempts.append(CallAttempt("合成模型", "测试服务商", 10, 1))
+        return response
 
 
 @pytest.fixture

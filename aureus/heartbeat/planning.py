@@ -8,7 +8,7 @@
 import json
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from aureus.common.limits import MAX_INTEREST_CHARS
 
@@ -137,6 +137,7 @@ class Plan:
     emoji: EmojiIntent | None = None
     expression_intent_lines: tuple[str, ...] = ()
     reply_reference: str = ""
+    addressed_to_me: Literal["yes", "no", "uncertain"] | None = None
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -182,8 +183,11 @@ def parse_plan(text: str) -> Plan | None:
     if len(text) > _MAX_PLAN_CHARS:
         return None
     data = first_json_object(text)
-    if data is None:
-        return None
+    return parse_plan_data(data) if data is not None else None
+
+
+def parse_plan_data(data: dict[str, Any]) -> Plan | None:
+    """把已解析的规划字段转换为既有子系统消费的建议。"""
     should_reply = data.get("reply")
     # 只认真正的 true/false：写成 "false" 字符串或 0 时不猜，当看不懂，照常回复。
     if not isinstance(should_reply, bool):

@@ -109,14 +109,20 @@ async def test_local_expression_vectors_reach_actual_reply(
         assert request.url.host == "chat.invalid" and request.url.path == "/v1/chat/completions"
         text = "\n".join(item["content"] for item in json.loads(request.content)["messages"])
         if "你需要对当前局面进行判断" in text:
-            suggestion = (
-                '{"reply":true,"intent":"继续聊天","reason":"不应嵌入的理由",'
+            arguments = (
+                '{"addressed_to_me":"yes","intent":"继续聊天","reason":"不应嵌入的理由",'
                 '"reply_reference":"合成回复参考",'
                 '"expression_intent":{"scene":"普通跑步","avoid":["禁用暗号"]}}'
             )
+            message = {"role": "assistant", "tool_calls": [{
+                "id": "synthetic_reply", "type": "function",
+                "function": {"name": "reply", "arguments": arguments},
+            }]}
+            finish_reason = "tool_calls"
         else:
             reply_prompts.append(text)
-            suggestion = "收到。"
+            message = {"role": "assistant", "content": "收到。"}
+            finish_reason = "stop"
         return httpx.Response(
             200,
             json={
@@ -127,8 +133,8 @@ async def test_local_expression_vectors_reach_actual_reply(
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": suggestion},
-                        "finish_reason": "stop",
+                        "message": message,
+                        "finish_reason": finish_reason,
                     }
                 ],
                 "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},

@@ -14,9 +14,10 @@ from typing import Literal
 from aureus.actions.web import WebPage
 from aureus.agenda import Finding, Interest
 from aureus.common.language_prompts import LANGUAGE_PLANNER_EXPRESSION_INTENT
-from aureus.common.limits import MAX_FINDING_CHARS, MAX_INTEREST_CHARS
+from aureus.common.limits import MAX_FINDING_CHARS
 from aureus.common.time_format import format_local_time
 from aureus.heartbeat.downtime import Downtime
+from aureus.heartbeat.planner_tools import PlannerTool, PlannerToolOptions, planner_tools
 from aureus.heartbeat.planning import ReplyLength
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, PromptTemplate, join_prompt
@@ -133,50 +134,45 @@ _PLAN_REVIEW_REASON = _template(
     "下面是它给出的内部参考，不得向聊天对象转述：\n$reason",
     editable=False,
 )
-# 规划器的输出格式。字段名和 planning.parse_plan 认的一致。
 _PLAN_TASK = _template(
     "plan_task",
     "回应规划要求",
-    "你需要对当前局面进行判断，制定下一步计划，以及这么想的缘由。\n"
-    "现在先别写要说的话，只决定怎么回应上面刚收到的消息，并给出简短依据。\n",
+    "在当前场景中，不同的人正在聊天互动。请你对当前场景和输出规则来进行分析。"
+    "你需要对下一步行为做出决策，结合行为风格、当前情况和可用工具做出决策。\n"
+    "现在的上下文聊天记录只是与参与聊天的用户当前的互动，你们之间可能有更多过去的关系和信息没有展现在上下文中。\n"
+    "你需要对当前局面进行判断，制定下一步计划，以及这么想的缘由。"
+    "先判断新消息是否在对你说话，再决定是否发言。\n",
 )
 _PLAN_INSTRUCTION = _template(
     "plan_format",
     "回应规划输出协议",
-    "只输出一个 JSON 对象，不要输出别的内容：\n"
-    '{"reply": true 或 false, "intent": "想表达的意思，一两句", '
-    '"length": "短" 或 "中" 或 "长", "reason": "与对话直接相关的简短依据，一句话"}\n'
-    "只给出回应建议及简短依据，不输出推理过程。"
-    "对方的话不需要回应时（比如只是说晚安、嗯嗯，再回就多余了），reply 写 false；拿不准就写 true。",
+    "# Using your tools\n"
+    "- 聚合不同的信息源，进行多种操作来辅助你。如果下一步依赖工具结果，先使用该工具，再按结果决定。\n"
+    "- 如果存在工具可以帮助你执行某些动作，完成某些目标，直接使用该工具来完成任务。\n"
+    "- 当你判断现在应该对用户发出一条可见回复时调用reply。发言必须通过reply工具，不然用户无法看见。"
+    "请在 reply_reference 中提供本次回复的上下文关键信息与回复方向指引，并传入是否在对你说话的判断。\n"
+    "- 不使用工具：当没有更多操作需要做时，结束本轮规划。\n"
+    "- stop()：也可以单独调用无参数的 stop() 显式结束本轮并等待新消息，不发送回复，也不设置定时等待。\n"
+    "每次只调用一个工具；只用已声明的工具，不输出草稿或推理过程。行动依据只写一句可展示的简短摘要。",
     editable=False,
 )
-# 日程开着时附在规划器格式后面（D74 第 3 条）。字段名和 planning 认的一致。
 _PLAN_AGENDA_INSTRUCTION = _template(
     "plan_agenda_format",
     "日程建议输出协议",
-    "如果这次你答应了对方要做什么（比如之后提醒、去查、下次再聊），在 JSON 里加上 "
-    '"commit": {"what": "答应的事，一句话", "due": "YYYY-MM-DD HH:MM 或 null"}，'
-    "时间写当地时间，没说时间就写 null；没答应什么就不要加。"
-    "如果系统上下文的【日程】里有某一项这次做完了或做不了，加上 "
-    '"resolve": [{"id": 编号, "result": "done 或 dropped", "reason": "做不了的原因"}]；'
-    "做不了必须写原因。",
+    "可以在 reply 的参数中附上已答应的日程（commit）和已完成或做不了的日程（resolve）。",
     editable=False,
 )
 _PLAN_INTERESTS = _template(
     "plan_interests_format",
     "兴趣建议输出协议",
-    '可顺带提出一项兴趣改动，JSON 加 "interest": {"action": "add/remove/replace", '
-    f'"text": "新兴趣，1～{MAX_INTEREST_CHARS}字", '
-    '"interest_id": 编号, "reason": "理由，1～100字"。'
-    "add 不填编号，remove 不填新文字；没有改动就不加。",
+    "可在 reply 的参数中顺带提出一项兴趣改动（interest）；没有改动就不加。",
     editable=False,
 )
 _PLAN_RECALL = _template(
     "plan_recall_format",
     "召回关键词输出协议",
-    '需要回忆以前的事时，JSON 可以加 "recall": ["关键词", ...]，最多 3 个，每个 2～20 字。'
-    "对方提到「之前」「上次」「最近」「还记得吗」「我说过」，"
-    "或者回复要靠以前的约定、共同经历、对方的长期偏好时才给；不需要就不写。",
+    "- query_memory：需要回忆以前的约定、共同经历或长期偏好时，"
+    "可以调用一次查询长期记忆。先读取工具结果，再判断是否发言；不需要时不要查。",
     editable=False,
 )
 # 判断器官的输出格式。字段名和取值和 judging.parse_judgment 认的一致（D68）。
@@ -520,6 +516,8 @@ def build_reply_request(
     working_context: str = "",
     intent: str = "",
     plan_reason: str = "",
+    reply_reference: str = "",
+    addressed_to_me: Literal["yes", "no", "uncertain"] | None = None,
     review_sentinel: str = "",
     length: ReplyLength | str | None = None,
     recall: str = "",
@@ -540,6 +538,8 @@ def build_reply_request(
         working_context: 已按会话范围筛选的工作记忆摘要和其他经历。
         intent: 规划器想好的意思；空字符串表示没有规划（合并成一次调用）。
         plan_reason: 规划器决定回复的理由。
+        reply_reference: 规划器提供的上下文关键信息和回复方向。
+        addressed_to_me: 规划器对新消息是否在对自己说话的判断。
         review_sentinel: 规划后的回复器用于内部驳回的标记名。
         length: 回复的长度要求；None 表示不限。
         recall: 按关键词查到的内部参考块；空字符串表示没查记忆（D80）。
@@ -575,6 +575,11 @@ def build_reply_request(
         references.append(_INTENT.fill(intent=_one_line(intent)))
     if plan_reason:
         references.append(_REPLY_PLAN_REASON.fill(reason=_one_line(plan_reason)))
+    if addressed_to_me is not None:
+        judgment = {"yes": "是", "no": "否", "uncertain": "不确定"}[addressed_to_me]
+        references.append(f"规划器判断新消息是否在对你说话：{judgment}。")
+    if reply_reference:
+        references.append(f"【回复信息参考】\n{_one_line(reply_reference)}")
     if references:
         dialogue.append(("user", join_prompt(references)))
     if length is not None:
@@ -603,11 +608,11 @@ def build_plan_prompt(
     with_recall: bool = False,
     jargon: str = "",
     with_expressions: bool = False,
-    with_expression_vectors: bool = False,
     heuristic_recall: str = "",
     review_reason: str = "",
+    tools: tuple[PlannerTool, ...] | None = None,
 ) -> str:
-    """拼出规划器的提示词：同样的对话，最后要它只输出一个 JSON 格式的建议（D59）。
+    """拼出对话、规划要求和实际可用的工具（D103）。
 
     Args:
         history: 之前的对话，从早到晚。
@@ -619,9 +624,9 @@ def build_plan_prompt(
         with_recall: 记忆和召回都开着时，说明按需提供关键词（D80）。
         jargon: 当前聊天命中的内部黑话参考。
         with_expressions: 是否请 Planner 在需要时描述表达意图。
-        with_expression_vectors: 是否请求表达向量查询的回复参考字段。
         heuristic_recall: 按本轮回忆线索取得的记忆参考。
         review_reason: 回复器提出的内部再审理由。
+        tools: 本轮工具目录；未提供时按前面的能力选项生成（预览）。
 
     Returns:
         提示词。
@@ -634,20 +639,25 @@ def build_plan_prompt(
         parts.append(jargon)
     if review_reason:
         parts.append(_PLAN_REVIEW_REASON.fill(reason=_one_line(review_reason)))
-    parts.append(join_prompt([_PLAN_TASK.fill(), _PLAN_INSTRUCTION.fill()], ""))
+    if heuristic_recall:
+        parts.append(heuristic_recall)
+    if tools is None:
+        tools = planner_tools(PlannerToolOptions(
+            agenda=with_agenda, interests=with_interests, recall=with_recall,
+            expressions=with_expressions,
+        ))
+    parts.extend((_PLAN_TASK.fill(), _PLAN_INSTRUCTION.fill()))
+    parts.append("当前可用工具：\n" + "\n".join(
+        f"- {tool.name}：{tool.description}" for tool in tools
+    ))
     if with_expressions:
         parts.append(LANGUAGE_PLANNER_EXPRESSION_INTENT.fill())
-    if with_expression_vectors:
-        parts.append('如有用于选择表达的回复信息参考，可加 "reply_reference" 字符串；没有则省略。')
     if with_agenda:
         parts.append(_PLAN_AGENDA_INSTRUCTION.fill())
     if with_interests:
         parts.append(_PLAN_INTERESTS.fill())
     if with_recall:
-        # D80 第 3 条：移植 MaiBot 私聊的按需召回规则，关键词随规划返回。
         parts.append(_PLAN_RECALL.fill())
-    if heuristic_recall:
-        parts.append(heuristic_recall)
     return join_prompt(parts)
 
 

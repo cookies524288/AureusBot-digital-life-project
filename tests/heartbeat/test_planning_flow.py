@@ -76,6 +76,10 @@ class ScriptedOrgans:
             raise outcome
         if callable(outcome):
             outcome = outcome(request)
+        from tests.planner_fixtures import plan_response
+
+        if request.context.get("task") == "plan":
+            return plan_response(request, outcome)
         return OrganResponse(organ_id=request.organ_id, suggestion=outcome)
 
 
@@ -200,8 +204,12 @@ async def test_normal_tier_plans_then_replies_with_the_planned_intent(
     planner, replyer = rig.organs.requests
     assert all(r.purpose is CallPurpose.USER_REPLY for r in rig.organs.requests)
     assert planner.model_preference is ModelPreference.PREFERRED
-    assert "JSON 对象" in planner.prompt
+    assert "# Using your tools" in planner.prompt
+    assert "是否在对你说话" in planner.prompt
+    assert "reply" in {tool.name for tool in planner.tools}
     assert "你已经想好要表达的意思：安慰一下，问问细节" in assemble_messages(replyer)[-2]["content"]
+    assert "规划器判断新消息是否在对你说话：是" in assemble_messages(replyer)[-2]["content"]
+    assert "【回复信息参考】" in assemble_messages(replyer)[-2]["content"]
     assert "长度：一两句话。" in replyer.prompt
     # 规划器看四层人设；回复器不看行为风格：什么时候开口、怎么回应已经由规划器定了。
     assert "【行为风格】" in planner.system_context
@@ -370,10 +378,8 @@ async def test_a_planner_that_declines_leaves_a_private_record_and_one_line_of_n
     assert rig.my_messages() == []
     [declined] = rig.records(EVENT_REPLY_DECLINED)
     assert declined.visibility is VisibilityScope.PRIVATE
-    assert "对方只是说了晚安" in declined.content
-    [notice] = rig.sent
-    assert notice.kind is MessageKind.NOTICE
-    assert "没有回复：对方只是说了晚安" in notice.content
+    assert "决定不回复" in declined.content
+    assert rig.sent == []
 
 
 async def test_a_gateway_rejection_of_the_planner_stops_before_the_replyer(

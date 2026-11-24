@@ -8,7 +8,7 @@ import pytest
 
 from aureus.body import Body
 from aureus.common import BodyConfig, HeartbeatConfig, HormonesConfig, JudgeConfig, ManualClock
-from aureus.heartbeat import Heartbeat, MessageKind
+from aureus.heartbeat import Heartbeat
 from aureus.hormones import HormoneKind, Hormones, HormoneTrigger
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, OrganResponse
@@ -55,7 +55,9 @@ class PlanOrgans(ScriptedOrgans):
     async def call(self, request: OrganRequest) -> OrganResponse:
         if request.organ_id == "planner" and self.plans:
             self.requests.append(request)
-            return OrganResponse(organ_id="planner", suggestion=self.plans.pop(0))
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(request, self.plans.pop(0))
         return await super().call(request)
 
 
@@ -157,7 +159,7 @@ async def test_retaliation_is_capped_by_code_not_by_the_model(env: Env) -> None:
     assert "允许质疑" not in replyers[2].system_context
 
 
-async def test_cold_shoulder_is_allowed_once_then_a_reply_is_forced(env: Env) -> None:
+async def test_cold_shoulder_limit_does_not_override_stop(env: Env) -> None:
     rig, _ = env.build([_judgment(1.0)] * 2, config=ANGRY, plans=[DECLINE, DECLINE])
     await rig.exchange("骂你骂你")
 
@@ -167,18 +169,11 @@ async def test_cold_shoulder_is_allowed_once_then_a_reply_is_forced(env: Env) ->
     assert declined.metadata["hormones"]["cold_shoulder_allowed"] is True
     assert rig.replies() == []
 
-    # 第二次规划器还是想不回，但这场冲突里已经不回过一次，代码要求必须回。
     await rig.exchange("再骂你")
-    assert len(rig.records(EVENT_REPLY_DECLINED)) == 1
-    assert rig.organ_ids() == ["judge", "planner", "judge", "planner", "replyer"]
-    [replyer] = [request for request in rig.organs.requests if request.organ_id == "replyer"]
-    assert "气得不想理" not in replyer.prompt
-    assert [message.content for message in rig.sent if message.kind is MessageKind.REPLY] == [
-        "好的。"
-    ]
-    [reply] = [m for m in rig.records(EVENT_MESSAGE) if m.actor_type.value == "me"]
-    assert reply.metadata["forced_reply"] is True
-    assert reply.metadata["hormones"]["must_reply"] is True
+    assert len(rig.records(EVENT_REPLY_DECLINED)) == 2
+    assert rig.organ_ids() == ["judge", "planner", "judge", "planner"]
+    assert rig.replies() == []
+    assert rig.records(EVENT_REPLY_DECLINED)[-1].metadata["hormones"]["must_reply"] is True
 
 
 async def test_cold_shoulder_limit_does_not_force_a_reply_without_a_valid_plan(env: Env) -> None:

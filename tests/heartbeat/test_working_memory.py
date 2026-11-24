@@ -187,7 +187,9 @@ class _Organs:
             await self.release.wait()
             return await _summary(request)
         if request.organ_id == "planner":
-            return OrganResponse(request.organ_id, '{"reply":true,"intent":"回应","length":"短"}')
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(request, {"reply": True, "intent": "回应", "length": "短"})
         return OrganResponse(request.organ_id, "收到。")
 
 

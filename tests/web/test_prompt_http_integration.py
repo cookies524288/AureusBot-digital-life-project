@@ -718,11 +718,20 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
         body = json.loads(request.content)
         assert not body.get("stream")
         captured.append(body["messages"])
-        suggestion = (
-            '{"reply":true,"intent":"聊聊观测计划","length":"短","recall":["木卫二"]}'
-            if len(captured) == 1
-            else "记得，之前聊的是观测计划。"
-        )
+        message: dict[str, object] = {"role": "assistant", "content": "记得，之前聊的是观测计划。"}
+        finish = "stop"
+        if body.get("tools"):
+            if len(captured) == 1:
+                name, arguments = "query_memory", {"keywords": ["木卫二"]}
+            else:
+                name, arguments = "reply", {
+                    "addressed_to_me": "yes", "reply_reference": "聊聊观测计划", "length": "短",
+                }
+            message = {"role": "assistant", "tool_calls": [{
+                "id": f"synthetic-{len(captured)}", "type": "function",
+                "function": {"name": name, "arguments": json.dumps(arguments)},
+            }]}
+            finish = "tool_calls"
         return httpx.Response(
             200,
             json={
@@ -733,8 +742,8 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": suggestion},
-                        "finish_reason": "stop",
+                        "message": message,
+                        "finish_reason": finish,
                     }
                 ],
                 "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
@@ -799,8 +808,10 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
             await heart.wait_for_thought()
             heart.beat()
 
-            plan, reply = captured
+            plan, continued, reply = captured
             assert [message["role"] for message in plan] == ["system", "user"]
+            assert [message["role"] for message in continued] == ["system", "user", "assistant", "tool"]
+            assert private_text in continued[-1]["content"]
             assert [message["role"] for message in reply] == [
                 "system",
                 "assistant",

@@ -41,7 +41,9 @@ class FixedOrgans:
     async def call(self, request: OrganRequest) -> OrganResponse:
         if request.context["task"] == "plan":
             self.plans.append(request)
-            return OrganResponse(request.organ_id, '{"reply":true,"intent":"回应"}')
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(request, {"reply": True, "intent": "回应"})
         return OrganResponse(request.organ_id, next(self.replies))
 
 

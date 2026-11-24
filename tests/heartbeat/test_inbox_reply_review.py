@@ -69,7 +69,9 @@ class _StreamingOrgans:
                 2: '{"reply":true,"intent":"用系统通知口吻确认"}',
                 3: '{"reply":true,"intent":"简短答应周六见"}' if self.speak else '{"reply":false}',
             }[turn]
-            return OrganResponse(request.organ_id, plan)
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(request, plan)
         assert task == "reply" and not request.stream
         self.replies.append(request)
         marker = re.search(r"<(reply_review_[0-9a-f]{32})>", request.prompt)

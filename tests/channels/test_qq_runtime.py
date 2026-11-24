@@ -188,9 +188,7 @@ def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None
                 return await FakePlanner(self.organ_id).process(request)
             response = await super().process(request)
             if browse_inbox and request.context["task"] == "plan":
-                plan = json.loads(response.suggestion)
-                plan["read_inbox"] = True
-                return OrganResponse(organ_id=self.organ_id, suggestion=json.dumps(plan))
+                response.tool_calls[0].arguments["read_inbox"] = True
             return response
 
     def build_bus(

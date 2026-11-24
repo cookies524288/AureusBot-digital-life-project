@@ -110,7 +110,9 @@ class ScriptedOrgans:
                 self.cancelled = True
                 raise
         if request.context.get("task") == "plan":
-            return OrganResponse(request.organ_id, '{"reply":true,"intent":"回应"}')
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(request, {"reply": True, "intent": "回应"})
         outcome = self.outcomes.pop(0) if self.outcomes else "嗯。"
         if isinstance(outcome, BaseException):
             raise outcome

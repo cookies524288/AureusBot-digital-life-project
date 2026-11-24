@@ -83,6 +83,10 @@ class InitiativeOrgans(ScriptedOrgans):
             result = self.normal_plans.pop(0) if self.normal_plans else PLAN
         else:
             result = "好的。"
+        from tests.planner_fixtures import plan_response
+
+        if task == "plan":
+            return plan_response(request, result)
         return OrganResponse(organ_id=request.organ_id, suggestion=result)
 
 

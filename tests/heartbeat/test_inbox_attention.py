@@ -21,6 +21,7 @@ from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.perception import MessageRoute
 from aureus.identity import Identity
 from aureus.organs import ModelPreference, OrganRequest, OrganResponse
+from tests.planner_fixtures import plan_response
 from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import TimelineDatabase, TimelineQuery, VisibilityScope
@@ -35,7 +36,9 @@ class Organs:
         self.requests.append(request)
         if request.context.get("task") == "inbox_select":
             return OrganResponse(request.organ_id, '{"conversations":[1,2,3]}')
-        suggestion = {"planner": self.plan, "vlm": "识别出的内容"}.get(request.organ_id, "收到。")
+        if request.context.get("task") == "plan":
+            return plan_response(request, self.plan)
+        suggestion = {"vlm": "识别出的内容"}.get(request.organ_id, "收到。")
         return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
 
 
@@ -189,10 +192,8 @@ async def test_active_conversation_debounces_and_limits_interruptions(tmp_path: 
                     cancellations.append(len(plans))
                     raise
                 if "离开当前群" in request.prompt:
-                    return OrganResponse("planner", '{"reply":false,"stay_in_conversation":false}')
-                return OrganResponse(
-                    "planner", '{"reply":true,"intent":"回应","stay_in_conversation":true}'
-                )
+                    return plan_response(request, {"reply": False, "stay_in_conversation": False})
+                return plan_response(request, {"reply": True, "intent": "回应", "stay_in_conversation": True})
             assert not request.stream
             replies.append(request)
             return OrganResponse("replyer", "收到。")
