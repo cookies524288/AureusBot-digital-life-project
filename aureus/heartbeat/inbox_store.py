@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
     mentioned INTEGER NOT NULL, quoted_message_id TEXT, source_timestamp INTEGER,
     source_message_id TEXT, timestamp TEXT NOT NULL,
     attachments TEXT NOT NULL DEFAULT '[]',
+    direction TEXT NOT NULL DEFAULT 'incoming',
     UNIQUE (conversation_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS inbox_messages_by_conversation
@@ -36,7 +37,8 @@ ON inbox_messages (conversation_id, id);
 _KEY = (
     "platform = ? AND account_id = ? AND kind = ? AND recipient_id = ? AND temporary_group_id = ?"
 )
-_UNREAD = "m.id > COALESCE(c.last_read_id, 0)"
+_UNREAD = "m.direction = 'incoming' AND m.id > COALESCE(c.last_read_id, 0)"
+_USER_VISIBLE = "m.visibility IN ('user_only', 'group', 'public')"
 _MESSAGES = f"""
 SELECT m.*, c.platform, c.account_id, c.kind, c.recipient_id, c.temporary_group_id, c.name,
        NOT ({_UNREAD}) AS is_read
@@ -105,6 +107,7 @@ class InboxMessage:
     conversation_name: str
     timestamp: datetime
     status: str
+    direction: str = "incoming"
 
 
 def _conversation(row: Row) -> ConversationKey:
@@ -142,6 +145,7 @@ def _message(row: Row) -> InboxMessage:
         row["name"],
         datetime.fromisoformat(row["timestamp"]),
         "read" if row["is_read"] else "unread",
+        row["direction"],
     )
 
 
@@ -202,6 +206,11 @@ class InboxStore:
                         "ALTER TABLE inbox_messages ADD COLUMN attachments "
                         "TEXT NOT NULL DEFAULT '[]'"
                     )
+                if "direction" not in columns:
+                    database.execute(
+                        "ALTER TABLE inbox_messages ADD COLUMN direction "
+                        "TEXT NOT NULL DEFAULT 'incoming'"
+                    )
                 if "is_read" in columns:
                     database.execute(
                         "ALTER TABLE inbox_conversations ADD COLUMN first_read_id INTEGER"
@@ -215,6 +224,15 @@ class InboxStore:
         self, perception: Perception, *, sender_name: str = "", conversation_name: str = ""
     ) -> InboxMessage | None:
         """保存入站消息，重复投递返回 None。"""
+        return self._add(perception, sender_name, conversation_name, "incoming")
+
+    def add_delivered(self, perception: Perception, *, sender_name: str) -> None:
+        """保存平台已确认的外发消息，不增加未读数。"""
+        self._add(perception, sender_name, "", "outgoing")
+
+    def _add(
+        self, perception: Perception, sender_name: str, conversation_name: str, direction: str
+    ) -> InboxMessage | None:
         key = ConversationKey.from_perception(perception)
         route = perception.route
         assert route is not None
@@ -239,8 +257,8 @@ class InboxStore:
             added = database.execute(
                 """INSERT INTO inbox_messages (conversation_id, message_id, sender_id, sender_name,
                 content, visibility, trust, mentioned, quoted_message_id, source_timestamp,
-                source_message_id, timestamp, attachments)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_message_id, timestamp, attachments, direction)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (conversation_id, message_id) DO NOTHING RETURNING id""",
                 (
                     conversation_id,
@@ -261,6 +279,7 @@ class InboxStore:
                             for item in perception.attachments
                         ]
                     ),
+                    direction,
                 ),
             ).fetchone()
             if added is None:
@@ -277,17 +296,20 @@ class InboxStore:
                 (name, *conversation.parameters()),
             )
 
-    def list_conversations(self) -> list[InboxConversation]:
+    def list_conversations(self, *, visible_to_user: bool = False) -> list[InboxConversation]:
         """按最后收到消息的顺序列出会话，最近的在前。"""
-        return self._list_conversations(only_unread=False)
+        return self._list_conversations(only_unread=False, visible_to_user=visible_to_user)
 
     def list_unread_conversations(self) -> list[InboxConversation]:
         """列出仍有未读的会话，各会话按最早未读的入箱序号排列。"""
         return self._list_conversations(only_unread=True)
 
-    def _list_conversations(self, *, only_unread: bool) -> list[InboxConversation]:
+    def _list_conversations(
+        self, *, only_unread: bool, visible_to_user: bool = False
+    ) -> list[InboxConversation]:
         condition = "WHERE summary.first_unread_id IS NOT NULL" if only_unread else ""
         order = "summary.first_unread_id" if only_unread else "m.id DESC"
+        visibility = f"WHERE {_USER_VISIBLE}" if visible_to_user else ""
         with closing(open_connection(self._path)) as database:
             rows = database.execute(f"""
                 SELECT c.*, summary.unread_count, m.id AS last_message_id, m.timestamp
@@ -296,6 +318,7 @@ class InboxStore:
                              COUNT(*) FILTER (WHERE {_UNREAD}) AS unread_count,
                              MIN(m.id) FILTER (WHERE {_UNREAD}) AS first_unread_id
                       FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
+                      {visibility}
                       GROUP BY m.conversation_id) summary
                 ON summary.conversation_id = c.id
                 JOIN inbox_messages m ON m.id = summary.last_id
@@ -313,12 +336,19 @@ class InboxStore:
         ]
 
     def list_messages(
-        self, conversation: ConversationKey, *, before_id: int | None = None, limit: int = 50
+        self,
+        conversation: ConversationKey,
+        *,
+        before_id: int | None = None,
+        limit: int = 50,
+        visible_to_user: bool = False,
     ) -> list[InboxMessage]:
         """按收件箱序号倒序读取一页，游标边界不重复。"""
+        visibility = f"AND {_USER_VISIBLE}" if visible_to_user else ""
         with closing(open_connection(self._path)) as database:
             rows = database.execute(
-                f"{_MESSAGES} WHERE {_KEY} AND (? IS NULL OR m.id < ?) ORDER BY m.id DESC LIMIT ?",
+                f"{_MESSAGES} WHERE {_KEY} {visibility} AND (? IS NULL OR m.id < ?) "
+                "ORDER BY m.id DESC LIMIT ?",
                 (*conversation.parameters(), before_id, before_id, limit),
             ).fetchall()
         return [_message(row) for row in rows]

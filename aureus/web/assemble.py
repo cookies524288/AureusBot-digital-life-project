@@ -84,6 +84,9 @@ def open_web(
             run_model_test=core.gateway.test_model,
             qq_link=core.qq_link,
             inbox_store=core.inbox_store,
+            allows_inbox_conversation=(
+                core.qq.allows_inbox_conversation if core.qq is not None else None
+            ),
             resource_language=core.language,
             resource_memory=core.memory,
             resource_images=core.inbox_images,

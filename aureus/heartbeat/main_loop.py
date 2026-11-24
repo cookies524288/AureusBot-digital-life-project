@@ -1161,6 +1161,7 @@ class Heartbeat:
             record,
             quote_source=quote_source,
             confirm_delivery=confirm_delivery,
+            visibility=target.visibility,
         )
 
     def _recall_delivery_receipt(self, reply: TimelineRecord, segment: int) -> Callable[[], None]:
