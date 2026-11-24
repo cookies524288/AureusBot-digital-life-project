@@ -100,7 +100,6 @@ def test_memory_diary_defaults_and_example(
         ("memory", "index_batch", "true"),
         ("memory", "unknown", "1"),
         ("diary", "enabled", "1"),
-        ("diary", "organ", "1"),
         ("diary", "write_after_hour", "-1"),
         ("diary", "write_after_hour", "24"),
         ("diary", "max_input_chars", "999"),
@@ -692,15 +691,12 @@ def test_judge_values_from_file_are_used(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(
         paths,
-        "[judge]\n"
-        "enabled = true\n"
-        'organ = "empathy_judge"\n'
-        "timeout_seconds = 3\n"
-        "context_messages = 0\n",
+        "[judge]\nenabled = false\ntimeout_seconds = 3\ncontext_messages = 0\n",
     )
     judge = load_runtime_config(paths).judge
-    assert judge.enabled is True
-    assert judge.organ == "empathy_judge"
+    assert judge.enabled is False
+    # organ 已固定为 "judge"（D107）
+    assert judge.organ == "judge"
     assert (judge.timeout_seconds, judge.context_messages) == (3.0, 0)
 
 
@@ -708,8 +704,6 @@ def test_judge_values_from_file_are_used(tmp_path: Path) -> None:
     ("field", "text"),
     [
         ("enabled", "1"),  # 数字 1 不是 true
-        ("organ", '""'),
-        ("organ", "5"),
         ("timeout_seconds", "0"),
         ("timeout_seconds", "-1.5"),
         ("timeout_seconds", '"10"'),
@@ -730,6 +724,41 @@ def test_judge_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None
 NEWLINE = chr(10)  # 拼配置文本用的换行
 
 HORMONES_FIELDS = tuple(HormonesConfig.model_fields)
+
+
+@pytest.mark.parametrize("switch", ("true", "false"))
+def test_legacy_removed_switches_ignored_d107(tmp_path: Path, switch: str) -> None:
+    """旧配置里的已删除开关和已固定器官被忽略，不报错（D107）。"""
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[heartbeat]\n"
+        f"qq_emoji_semantic_enabled = {switch}\n"
+        "[language]\n"
+        f"use_vector_expression = {switch}\n"
+        'organ = "custom_organ"\n'  # 已固定为 summarizer，应被忽略
+        'expression_quality_organ = "custom_judge"\n'  # 已固定为 judge，应被忽略
+        'expression_selector_organ = "selector"\n'  # 已固定为 None，应被忽略
+        "[judge]\n"
+        'organ = "custom_judge"\n'  # 已固定为 judge，应被忽略
+        "[exploration]\n"
+        'organ = "custom_explorer"\n'  # 已固定为 summarizer，应被忽略
+        "[diary]\n"
+        "organ = 1\n"  # 即使是旧规则下不合法的值，也不再校验
+        "[persona_growth]\n"
+        'organ = "custom_growth"\n',  # 已固定为 summarizer，应被忽略
+    )
+    config = load_runtime_config(paths)
+    assert "qq_emoji_semantic_enabled" not in config.heartbeat.model_dump()
+    assert "use_vector_expression" not in config.language.model_dump()
+    # 所有被删/被固定的字段都取默认值，不受 TOML 中的值影响
+    assert config.language.organ == "summarizer"
+    assert config.language.expression_quality_organ == "judge"
+    assert config.language.expression_selector_organ is None
+    assert config.judge.organ == "judge"
+    assert config.exploration.organ == "summarizer"
+    assert config.diary.organ == "summarizer"
+    assert config.persona_growth.organ == "summarizer"
 
 
 def test_hormones_defaults_follow_d69(tmp_path: Path) -> None:

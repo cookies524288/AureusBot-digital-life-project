@@ -399,9 +399,7 @@ class ConversationFlow:
         self._language_config = language_config or LanguageConfig()
         self.expression_recall = (
             ExpressionRecall(language, expression_index, self._language_config, call)
-            if language is not None
-            and expression_index is not None
-            and self._language_config.use_vector_expression
+            if language is not None and expression_index is not None
             else None
         )
         self._people = people

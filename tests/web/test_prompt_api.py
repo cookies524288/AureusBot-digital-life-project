@@ -76,20 +76,16 @@ def test_emoji_preview_routes_follow_active_selection_mode() -> None:
 
 
 @pytest.mark.parametrize(
-    ("enabled", "organ", "assigned"),
+    ("enabled", "assigned"),
     [
-        (False, "judge", None),
-        (True, None, None),
-        (True, "judge", "judge"),
-        (True, "reviewer", "reviewer"),
+        (False, None),
+        (True, "judge"),
     ],
 )
-def test_expression_quality_preview_uses_runtime_builder_and_explicit_route(
-    tmp_path: Path, enabled: bool, organ: str | None, assigned: str | None
+def test_expression_quality_preview_uses_runtime_builder_and_fixed_route(
+    tmp_path: Path, enabled: bool, assigned: str | None
 ) -> None:
-    runtime = RuntimeConfig(
-        language=LanguageConfig(expression_quality_enabled=enabled, expression_quality_organ=organ)
-    )
+    runtime = RuntimeConfig(language=LanguageConfig(expression_quality_enabled=enabled))
     rig = ConfigRig(tmp_path, prompt_identity=IDENTITY, runtime=runtime)
     try:
         rig.log_in()

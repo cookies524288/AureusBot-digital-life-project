@@ -20,8 +20,9 @@ from tests.test_exploration_runtime import _paths
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_switch", ("", "use_vector_expression = false\n"))
 async def test_local_expression_vectors_reach_actual_reply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_switch: str
 ) -> None:
     paths = _paths(tmp_path)
     config = (
@@ -29,9 +30,7 @@ async def test_local_expression_vectors_reach_actual_reply(
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
         "[language]\nreference_chars = 180\n"
     )
-    paths.runtime_config_file.write_text(
-        config + "use_vector_expression = true\n", encoding="utf-8"
-    )
+    paths.runtime_config_file.write_text(config + legacy_switch, encoding="utf-8")
     store = LanguageStore(paths.database_file)
     store.open()
     kind = LanguageKind.EXPRESSION
@@ -219,6 +218,16 @@ async def test_local_expression_vectors_reach_actual_reply(
                     if entry.organ_id == LOCAL_EXPRESSION_EMBEDDING
                 )
                 assert core.ledger.tokens_used_in_month(clock.now()) < 999
+                assert store.set_removed(kind, keys[:3], False)
+                assert core.models is not None
+                for number, expression_models in enumerate((("remote",), ()), start=5):
+                    organs = models.model_dump()["organs"]
+                    organs["text_embedding"]["models"] = list(expression_models)
+                    changed = ModelsConfig.model_validate({**models.model_dump(), "organs": organs})
+                    core.models.apply(core.models.prepare(changed))
+                    assert core.models.local_expression_space is None
+                    assert "词法暗号" in await reply(core, number)
+                    assert len(batches) == count
                 await core.heartbeat.shut_down()
         finally:
             litellm.in_memory_llm_clients_cache.flush_cache()

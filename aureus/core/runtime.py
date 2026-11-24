@@ -320,7 +320,6 @@ def open_core(
             not roleplay
             and runtime.language.recall_enabled
             and bool(runtime.language.reference_chars)
-            and runtime.language.use_vector_expression
         )
         if expression_enabled and language is not None:
             try:
@@ -450,9 +449,7 @@ def open_core(
             expression_index=expression_index,
             emoji_selector=(
                 heartbeat.emoji_selector
-                if qq is not None
-                and heartbeat_config.qq_emoji_semantic_enabled
-                and not heartbeat_config.qq_emoji_visual_enabled
+                if qq is not None and not heartbeat_config.qq_emoji_visual_enabled
                 else None
             ),
             memory_rerank_enabled=(
