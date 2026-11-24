@@ -148,7 +148,8 @@ def _evidence(
     return tuple(visible[key] for key in sorted(visible))
 
 
-def _project(rows: list[sqlite3.Row]) -> MemoryGraph:
+def project_graph(rows: list[sqlite3.Row]) -> MemoryGraph:
+    """将调用方已经筛选的原件投影为有向关系与可用证据。"""
     allowed = {row["source_key"]: row for row in rows}
     nodes: dict[str, MemoryGraphNode] = {}
     for key, row in allowed.items():
@@ -199,12 +200,7 @@ def read_graph(
     with closing(sqlite3.connect(uri, uri=True, timeout=SQLITE_BUSY_TIMEOUT_SECONDS)) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("BEGIN")
-        if (
-            connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE name = 'memory_graph_sources' AND type = 'table'"
-            ).fetchone()
-            is None
-        ):
+        if not has_graph_sources(connection):
             return MemoryGraph()
         rows = connection.execute(
             """SELECT history.source_key, graph.kind, graph.status AS graph_status, graph.name,
@@ -227,4 +223,12 @@ def read_graph(
                 now.timestamp(),
             ),
         ).fetchall()
-        return _project(rows)
+        return project_graph(rows)
+
+
+def has_graph_sources(connection: sqlite3.Connection) -> bool:
+    """不初始化旧库，仅识别是否已经保留结构化原件。"""
+    row = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'memory_graph_sources' AND type = 'table'"
+    ).fetchone()
+    return row is not None

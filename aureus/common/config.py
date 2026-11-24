@@ -600,6 +600,7 @@ class MemoryConfig(BaseModel):
     enabled: bool = True
     recall_enabled: bool = True
     heuristic_recall_enabled: bool = False
+    graph_recall_enabled: bool = True
     recall_feedback_enabled: bool = True
     removal_operations_enabled: bool = True
     max_results: int = Field(default=5, ge=1, le=20)

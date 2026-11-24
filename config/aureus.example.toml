@@ -370,6 +370,7 @@ config_version = 1
 # 只关召回仍继续建索引。
 # recall_enabled = true
 # heuristic_recall_enabled = false  # 在规划前按本轮回忆提示词检索
+# graph_recall_enabled = true  # 将已发布迁移图中的有向关系作为内部回复材料
 # recall_feedback_enabled = true    # 人工评价已投递回复的召回依据；不参与排序
 # removal_operations_enabled = true # 记录本地文字记忆的移除和恢复；不影响批量维护
 # 一次最多给回复器几条，1～20。

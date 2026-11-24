@@ -939,10 +939,21 @@ class ConversationFlow:
             )
             if self.has_text_embedding and len(hits) > 1:
                 hits = await self._rerank_memory(words, hits)
-            return hits[:limit]
         except Exception:
             logger.exception("记忆检索失败，这次检索不附记忆")
             return None
+        if person_keys is not None or not self._memory_config.graph_recall_enabled:
+            return hits[:limit]
+        try:
+            graph_hits = await asyncio.to_thread(self._memory.search_graph_recall, words, limit)
+        except sqlite3.Error:
+            logger.exception("关系图召回失败，仅保留文字检索")
+            return hits[:limit]
+        relation_keys = {hit.source.encode() for hit in graph_hits if hit.source is not None}
+        hits = [
+            hit for hit in hits if hit.source is None or hit.source.encode() not in relation_keys
+        ]
+        return [*graph_hits, *hits][:limit]
 
     async def _rerank_memory(
         self, words: tuple[str, ...], hits: list[MemoryHit]
