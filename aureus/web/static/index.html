@@ -512,7 +512,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-message.outgoing .inbox-bubble{border-color:var(--accent);border-radius:8px 2px 8px 8px}
 .inbox-bubble p,.inbox-component{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
 .inbox-component.event{display:block}
-.inbox-image{display:grid;justify-items:end;gap:5px;margin:6px 0 0}
+.inbox-image{display:grid;justify-content:start;justify-items:end;gap:5px;margin:6px 0 0}
 .inbox-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}
 .inbox-image .btn{justify-self:end}
 .inbox-pagination{margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -809,9 +809,13 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
     <div id="learning-panel-expression" class="stack resource-panel">
       <div class="row resource-navigation" role="group" aria-label="表达浏览">
         <button class="btn small primary" type="button" data-expression-view="list" aria-pressed="true" aria-disabled="true" aria-controls="learning-expression-list">表达列表</button>
+        <button class="btn small" type="button" data-expression-view="quality" aria-pressed="false" aria-controls="learning-panel-quality">质检记录</button>
+        <button class="btn small" type="button" data-expression-view="vectors" aria-pressed="false" aria-controls="learning-panel-vectors">向量空间</button>
         <button class="btn small" type="button" data-expression-view="clusters" aria-pressed="false" aria-controls="learning-panel-clusters">表达簇</button>
       </div>
       <div id="learning-expression-list" class="stack resource-panel"></div>
+      <div id="learning-panel-quality" class="stack resource-panel hidden"></div>
+      <div id="learning-panel-vectors" class="stack resource-panel hidden"></div>
       <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
     </div>
     <div id="learning-panel-jargon" class="stack resource-panel hidden"></div>
@@ -1111,7 +1115,7 @@ async function api(path, method, body, headers = {}, signal) {
     opt.body = body;
   } else if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/octet-stream'; opt.body = body;
-  } else if (path.startsWith('/api/resources/learning/package/') && method === 'POST' && body instanceof Blob) {
+  } else if ((path.startsWith('/api/resources/learning/package/') || path.startsWith('/api/resources/emoji/materials/import?')) && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/json'; opt.body = body;
   } else if ((path === '/api/resources/memory/transfer' || path === '/api/resources/memory/transfer/preview') && method === 'POST' && body instanceof Blob) {
     opt.headers['Content-Type'] = 'application/x-ndjson'; opt.body = body;
@@ -2344,7 +2348,7 @@ function openInboxView(view) {
   return rendered;
 }
 
-function renderInboxImage(message, attachment, position) {
+function renderInboxImage(message, position) {
   const label = `图片 ${position + 1}`;
   const unavailable = el('p', {class:'muted hidden', text:'原图暂不可读取。'});
   const picture = el('img', {alt:label, loading:'lazy', onerror:() => {
@@ -2361,24 +2365,30 @@ function renderInboxImage(message, attachment, position) {
     picture.classList.add('hidden');
     unavailable.classList.remove('hidden');
   }
-  const description = el('p', {class:'muted hidden', text:'这张图片没有保存可核验的 VLM 或规划器描述。'});
-  const toggle = el('button', {type:'button', class:'btn small', 'aria-pressed':'false', text:'查看描述'});
-  let descriptionRequested = false;
+  const noDescription = '这张图片没有可核验的已有描述；不会再次识别。';
+  const description = el('p', {class:'muted hidden'});
+  const toggle = el('button', {type:'button', class:'btn small', hidden:!sourceURL,
+    'aria-label':`查看${label}描述`, 'aria-pressed':'false', text:'查看描述'});
+  let controller;
   toggle.addEventListener('click', async () => {
     const showing = description.classList.contains('hidden');
     description.classList.toggle('hidden', !showing);
     preview.classList.toggle('hidden', showing);
     toggle.setAttribute('aria-pressed', String(showing));
+    toggle.setAttribute('aria-label', showing ? `查看${label}原图` : `查看${label}描述`);
     toggle.textContent = showing ? '查看原图' : '查看描述';
-    if (!showing || !sourceURL || !attachment.is_emoji || descriptionRequested) return;
-    descriptionRequested = true;
-    description.textContent = '正在查找已有表情描述…';
+    controller?.abort();
+    description.textContent = '';
+    if (!showing || !sourceURL) return;
+    const current = controller = new AbortController();
+    description.textContent = '正在查找已有描述…';
     const request = inbox.messageRequest, session = state.loaded;
-    const res = await api(sourceURL + '&view=description');
-    if (request !== inbox.messageRequest || session !== state.loaded) return;
-    description.textContent = res.ok && res.data.source === 'emoji_catalog' && res.data.description
-      ? '来源：表情资料库（相同图片）\n' + res.data.description
-      : '没有可核验的会话描述或表情资料；不会再次识别。';
+    const res = await api(sourceURL + '&view=description', undefined, undefined, {}, current.signal);
+    if (current.signal.aborted || request !== inbox.messageRequest || session !== state.loaded) return;
+    const sources = {vlm:'视觉模型（VLM）', emoji_catalog:'表情资料库（相同图片）'};
+    const source = res.ok && Object.hasOwn(sources, res.data?.source) && sources[res.data.source];
+    description.textContent = source && res.data.description
+      ? `来源：${source}\n${res.data.description}` : noDescription;
   });
   return el('figure', {class:'inbox-image', 'aria-label':label}, preview, description, toggle);
 }
@@ -2403,7 +2413,7 @@ function renderInboxComponent(message, item) {
       break;
     }
     case 'image':
-      if (attachment?.kind === 'image') return renderInboxImage(message, attachment, item.attachment_index);
+      if (attachment?.kind === 'image') return renderInboxImage(message, item.attachment_index);
       text = '图片原件未保存';
       break;
     case 'record': text = '语音消息'; break;
@@ -3691,6 +3701,8 @@ const CFG_FIELDS = {
   'heartbeat.qq_emoji_collection_enabled': ['QQ 表情收集', '允许从收到的 QQ 消息收集表情，并识别表情内容。'],
   'heartbeat.qq_emoji_selection_enabled': ['QQ 回复表情选择', '回复计划需要表情时，允许从可发送的候选中选取。'],
   'heartbeat.qq_emoji_maintenance_enabled': ['QQ 表情定期复查', '定期检查表情库候选的可用状态，更新可发送的候选。'],
+  'heartbeat.qq_emoji_registration_limit': ['表情登记上限', '限制新增活跃登记；不自动撤销旧登记。'],
+  'heartbeat.qq_emoji_replacement_suggestion_enabled': ['表情替换建议', '默认关闭。只在手动请求时通过表情器官建议一个旧登记，可能收费，不自动改动目录。'],
   'heartbeat.qq_emoji_visual_enabled': ['QQ 表情视觉选择', '让视觉模型直接看候选表情图片来选择，开启后不走语义或文字选择。'],
   'heartbeat.qq_emoji_semantic_enabled': ['QQ 表情语义匹配', '未开启视觉选择时，使用已配置的向量模型匹配表情；没有合适的语义结果时仍可按文字挑选。'],
   'heartbeat.qq_emoji_semantic_refresh_seconds': ['表情语义缓存刷新间隔（秒）', '表情描述的向量候选使用多久后需要重新检查。'],
@@ -3825,6 +3837,8 @@ const CFG_FIELDS = {
   'language.recall_enabled': ['回复参考习得语言', '回复前是否检索可用的表达方式和黑话作为语言参考。'],
   'language.learning_enabled': ['自动学习语言资料', '允许从符合条件的对话提取新的表达方式和黑话。'],
   'language.organ': ['语言学习器官', '指定整理候选表达和黑话时使用的器官。'],
+  'language.expression_quality_enabled': ['独立质检表达', '默认关闭。开启后，学习每批最多额外检查 10 个表达，按可选模型预算计费。不合适、检查失败或预算拒绝的条目不入库；模型通过仍需人工批准才用于回复。'],
+  'language.expression_quality_organ': ['表达质检器官', '独立判断说法是否适合情境及是否过于特指。开启后若未指定或器官未配置，则不采纳新表达；不影响黑话学习。'],
   'language.reference_chars': ['语言参考字数上限', '每种语言参考块最多可带多少字符；设为零时不带入参考。'],
   'language.use_vector_expression': ['表达向量检索', '开启后优先用本地向量索引匹配与当前语境相近的表达候选。'],
   'language.expression_selector_organ': ['表达筛选器官', '指定从向量候选中筛选表达的器官；不填写时不启用该筛选器官。'],

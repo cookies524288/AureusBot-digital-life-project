@@ -181,6 +181,16 @@ def _read_records(staging: Path, instance: str, work_parent: Path) -> list[Histo
                 records.append(_decode_record(instance, kind, source_key, encoded))
         if missing and "memory" in roles:
             records.extend(_read_snapshot_profiles(database, instance, missing, work_parent))
+        if {"main", "memory"} <= roles:
+            from aureus.tools.migrate.maibot_memory_rows import MemoryRows
+
+            origin = MemoryRows(database, instance).bundle_origin()
+            records = [
+                record.model_copy(update={"bundle_origin": origin})
+                if record.kind == HistoricalKind.PROFILE_SNAPSHOT
+                else record
+                for record in records
+            ]
     return records
 
 

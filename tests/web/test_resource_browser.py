@@ -717,6 +717,52 @@ def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browse
     """)
 
 
+def test_narrow_inbox_captions_are_independent_and_ignore_stale_requests(browser: Browser) -> None:
+    browser.open("inbox", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof renderInboxImage === 'function' && state.loggedIn, '页面未就绪');
+      const key = {platform:'qq',account_id:'bot',kind:'group',recipient_id:'A'};
+      const requests = [];
+      window.api = (path, method, body, headers, signal) => {
+        if (path.includes('view=description')) {
+          return new Promise(resolve => requests.push({path, resolve, signal}));
+        }
+        return Promise.resolve({ok:true,data:{messages:[],enabled:false}});
+      };
+      inbox.view = 'qq';
+      inbox.enabled = true;
+      inbox.conversations = [{key,name:'甲'}, {key:{...key,recipient_id:'B'},name:'乙'}];
+      await renderInboxView();
+      const message = {source:'inbox',id:20,conversation:key};
+      const list = document.querySelector('#inbox-messages');
+      const images = [renderInboxImage(message, 0), renderInboxImage(message, 1)];
+      list.append(...images);
+      const first = images[0].querySelector('button');
+      const second = images[1].querySelector('button');
+      first.click();
+      second.click();
+      check(requests[0].path.includes('/images/0?') && requests[1].path.includes('/images/1?'), '位置独立');
+      first.click();
+      check(requests[0].signal.aborted && first.textContent === '查看描述', '第一张可独立返回');
+      requests[0].resolve({ok:true,data:{description:'过期图注',source:'vlm'}});
+      requests[1].resolve({ok:true,data:{description:'第二张描述',source:'vlm'}});
+      await waitFor(() => images[1].textContent.includes('第二张描述'), '第二张显示真实来源');
+      check(images[1].textContent.includes('视觉模型') && !list.textContent.includes('过期图注'), '不串附件');
+      first.click();
+      requests[2].resolve({ok:true,data:{description:null,source:null}});
+      await waitFor(() => images[0].textContent.includes('没有可核验'), '缺图注如实显示');
+      first.click();
+      check(!images[0].firstElementChild.classList.contains('hidden'), '缺图注仍能返回原图');
+      second.click();
+      second.click();
+      await selectInboxConversation(inbox.conversations[1]);
+      requests[3].resolve({ok:true,data:{description:'旧会话图注',source:'vlm'}});
+      await new Promise(resolve => setTimeout(resolve, 50));
+      check(!list.textContent.includes('旧会话图注'), '切会话丢弃迟到结果');
+      check(root().scrollWidth <= root().clientWidth, '窄屏没有横向溢出');
+    """)
+
+
 def test_narrow_qq_desktop_confirms_and_keeps_operations_in_selected_conversation(
     browser: Browser,
 ) -> None:
@@ -1162,6 +1208,51 @@ def test_learning_scope_shows_preview_and_cancel_never_confirms(browser: Browser
     )
 
 
+def test_expression_quality_jumps_pages_and_cancels_rescue(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成表达000'), '表达列表已就绪');
+      const nativeFetch = window.fetch;
+      const calls = [];
+      let offset;
+      const row = {id:2, text:'合成候选', detail:'庆祝', status:'rejected', reason:'mismatch',
+        recorded_at:'2026-11-24T00:00:00Z', source_label:'同名群 · 群聊 10', actions:[]};
+      window.fetch = (url, options) => {
+        const request = new URL(url, location.href);
+        if (!request.pathname.startsWith('/api/resources/learning/quality')) return nativeFetch(url, options);
+        if (options.method === 'POST') {
+          calls.push(JSON.parse(options.body));
+          return Promise.resolve(new Response(JSON.stringify({...row, version:'0'.repeat(64)})));
+        }
+        offset = Number(request.searchParams.get('offset'));
+        const payload = {enabled:true, total:320, sources:[{key:'group10', label:row.source_label}],
+          items:[{...row, text:row.text + offset}]};
+        return Promise.resolve(new Response(JSON.stringify(payload)));
+      };
+      try {
+        press('质检记录');
+        await waitFor(() => text('模型拒绝 · 合成候选0') && page()?.startsWith('第 1 /'), '质检首页');
+        const jump = find('#learning-panel-quality .resource-page-jump');
+        jump.value = '3';
+        jump.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+        await waitFor(() => page()?.startsWith('第 3 /') && offset > 0 && text('合成候选' + offset), '输入页码直达');
+        press('模型拒绝 · 合成候选' + offset + ' · ' + row.source_label);
+        const dialog = document.querySelector('#editor-dialog');
+        const dialogButton = label => [...dialog.querySelectorAll('button')]
+          .find(node => node.textContent.trim() === label);
+        dialogButton('预览挽回').click();
+        await waitFor(() => dialogButton('确认挽回'), '挽回预览');
+        check(dialog.innerText.includes('仅此来源会话可用'), '说明范围');
+        dialogButton('取消').click();
+        check(!dialog.open && calls.length === 1 && calls[0].action === 'rescued' &&
+          !('version' in calls[0]), '取消不发确认');
+      } finally { window.fetch = nativeFetch; }
+    """,
+    )
+
+
 def test_learning_package_entry_previews_without_writing(browser: Browser) -> None:
     browser.open("learning", 1280, 900)
     _run(
@@ -1351,6 +1442,49 @@ def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Brow
         check(page() === '第 1 / 1 页' && button('已登记 · 合成表情000') && !text('迟到的合成表情'),
           '审批不改登记，迟到的翻页不覆盖筛选');
       } finally { window.fetch = original; }
+    """,
+    )
+
+
+def test_emoji_material_preview_and_cancel_on_narrow_screen(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '表情入口');
+      const original = window.fetch;
+      let writes = 0;
+      window.fetch = async (url, options) => {
+        if (url === '/api/resources/emoji/thumbnail-cache') {
+          return new Response(JSON.stringify({persistent:false, total:0}));
+        }
+        if (!url.startsWith('/api/resources/emoji/materials/import?')) return original(url, options);
+        check(options.body instanceof File && await options.body.text() === '{"format":"fixture"}', '提交文件原字节');
+        check(options.headers['Content-Type'] === 'application/json', 'JSON 文件类型');
+        if (new URL(url, location.origin).searchParams.has('confirmed')) writes++;
+        return new Response(JSON.stringify({digest:'stamp', added:1, registered:0, skipped:0,
+          capacity_blocked:0, missing_description:0, members:[{description:'合成图片', bytes:1,
+            digest:'short', source_license:'测试 CC0'}]}));
+      };
+      click('[data-learning-tab="emoji"]');
+      await waitFor(() => button('导入素材集') && !button('导入素材集').disabled, '表情列表可用');
+      button('缩略图缓存').click();
+      const dialog = document.querySelector('#editor-dialog');
+      const dialogButton = label => [...dialog.querySelectorAll('button')]
+        .find(item => item.textContent.trim() === label);
+      await waitFor(() => dialog.innerText.includes('无需预热或清理'), '没有持久缓存');
+      document.querySelector('#editor-close').click();
+      button('导入素材集').click();
+      const input = dialog.querySelector('input[type=file]');
+      const files = new DataTransfer();
+      files.items.add(new File(['{"format":"fixture"}'], 'fixture.json', {type:'application/json'}));
+      input.files = files.files;
+      input.dispatchEvent(new Event('change', {bubbles:true}));
+      dialogButton('预检').click();
+      await waitFor(() => dialogButton('确认导入') && dialog.innerText.includes('测试 CC0'), '实际成员的许可');
+      check(dialog.getBoundingClientRect().right <= innerWidth, '窄屏弹窗不横向溢出');
+      dialogButton('取消').click();
+      check(writes === 0 && !dialog.open, '取消不提交');
     """,
     )
 

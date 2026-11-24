@@ -7,6 +7,7 @@ import asyncio
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
+from hashlib import sha256
 
 from aureus.memory import EmojiStore
 from aureus.organs import CallPurpose, ModelPreference, OrganCallError, OrganRequest, OrganResponse
@@ -14,6 +15,7 @@ from aureus.safety import CallRejectedError
 from aureus.timeline import TimelineRecord
 
 from .emoji_recognition import build_emoji_analysis_request, parse_emoji_tags, prepare_emoji_image
+from .inbox_store import InboxImageNote, InboxStore
 from .perception import MediaReference, Perception
 
 logger = logging.getLogger(__name__)
@@ -47,9 +49,13 @@ def build_image_description_request(
 class InboxMedia:
     """接收部署时绑定的媒体读取器及热更新的模型可用状态。"""
 
-    def __init__(self, call: OrganCall, emoji_store: EmojiStore | None = None) -> None:
+    def __init__(
+        self, call: OrganCall, emoji_store: EmojiStore | None = None,
+        inbox_store: InboxStore | None = None,
+    ) -> None:
         self._call = call
         self._emoji_store = emoji_store
+        self._inbox_store = inbox_store
         self.read: AttachmentReader | None = None
         self.index_image: ImageIndexer | None = None
         self.available: frozenset[str] = frozenset()
@@ -65,7 +71,10 @@ class InboxMedia:
             return messages
         enriched: list[TimelineRecord] = []
         for message, source in zip(messages, sources, strict=True):
-            notes = await self._describe(source, preference, self.read)
+            identifier = message.metadata.get("inbox_message_id")
+            notes = await self._describe(
+                source, preference, self.read, identifier if type(identifier) is int else None
+            )
             if notes:
                 content = "\n".join([message.content, *notes])
                 message = message.model_copy(update={"content": content})
@@ -73,10 +82,11 @@ class InboxMedia:
         return enriched
 
     async def _describe(
-        self, source: Perception, preference: ModelPreference, read: AttachmentReader
+        self, source: Perception, preference: ModelPreference, read: AttachmentReader,
+        identifier: int | None,
     ) -> list[str]:
         notes: list[str] = []
-        for attachment in source.attachments:
+        for position, attachment in enumerate(source.attachments):
             image = attachment.kind == "image"
             is_emoji = image and source.channel == "qq" and attachment.is_emoji
             organ = "vlm" if image else "voice"
@@ -89,6 +99,11 @@ class InboxMedia:
                 continue
             data, mime = media
             if is_emoji:
+                if collect is not None:
+                    await self._save_image_note(
+                        identifier, source, position,
+                        InboxImageNote("emoji_catalog", sha256(data).hexdigest()),
+                    )
                 if description := await self._recognize_emoji(collect, preference, data, mime):
                     notes.append(f"[表情识别] {description}")
             elif organ in self.available:
@@ -107,9 +122,23 @@ class InboxMedia:
                 if description := await self._suggest(request):
                     label = "图片识别" if image else "语音转写"
                     notes.append(f"[{label}] {description}")
+                    if image:
+                        await self._save_image_note(
+                            identifier, source, position, InboxImageNote("vlm", description)
+                        )
             if index is not None:
                 await index(source, attachment, data)
         return notes
+
+    async def _save_image_note(
+        self, identifier: int | None, source: Perception, position: int, note: InboxImageNote
+    ) -> None:
+        if self._inbox_store is None or identifier is None:
+            return
+        try:
+            await asyncio.to_thread(self._inbox_store.save_image_note, identifier, source, position, note)
+        except sqlite3.Error:
+            logger.warning("未保存收件箱附件的已有描述")
 
     async def _recognize_emoji(
         self, store: EmojiStore | None, preference: ModelPreference, data: bytes, mime: str

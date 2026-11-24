@@ -32,6 +32,7 @@ from aureus.heartbeat.inbox_media import build_image_description_request
 from aureus.heartbeat.language_requests import (
     build_comparison,
     build_content_only,
+    build_expression_quality,
     build_extraction,
     build_with_context,
 )
@@ -71,6 +72,7 @@ _CONDITIONAL = {
     "reply": "有命中时附记忆、人际与习得表达。规划后附回复意图和再审协议，标记每次更新。",
     "reply_segments": "启用分段且有快速模型时，在回复再审通过后请求切点。",
     "language_learning": "启用增量学习且收到未处理的新样本时调用。",
+    "expression_quality": "开启独立质检后，每批最多单独检查 10 个表达；只附一组情境与说法。",
     "memory_consolidation": (
         "夜间空闲且获准的同会话消息达到批量门槛、启用提取且有可用总结器官时调用。"
     ),
@@ -428,6 +430,10 @@ def build_prompt_scenes(
         ("黑话释义 · 比较", build_comparison(organ, "〔根据上下文的释义〕", "〔仅词条的释义〕")),
     ):
         add("language_learning", str(request.context["task"]), label, request)
+    add(
+        "expression_quality", "expression_quality", "表达方式 · 独立质检",
+        build_expression_quality(organ, "〔使用情境〕", "〔候选说法〕"),
+    )
     add(
         "memory_consolidation",
         "memory_consolidation",

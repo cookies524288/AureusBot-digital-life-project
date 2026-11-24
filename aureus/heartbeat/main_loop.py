@@ -90,6 +90,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_attention import (
     SELECTION_TASK,
@@ -404,6 +405,7 @@ class Heartbeat:
                 HistoryRetention(inbox_store, timeline.platform_history, clock, timezone)
                 if inbox_store is not None else None
             ),
+            inbox_store=inbox_store,
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._memory_consolidator = (
@@ -554,6 +556,11 @@ class Heartbeat:
         if organ != request.organ_id:
             request = replace(request, organ_id=organ)
         return await self._organs.call(request)
+
+    @property
+    def expression_recall(self) -> ExpressionRecall | None:
+        """网页维护与心跳共用同一个表达索引补建器。"""
+        return self._conversation.expression_recall
 
     def attach_channel(
         self, name: str, sink: MessageSink, *, can_quote: Callable[[MessageRoute], bool] | None = None
@@ -1946,6 +1953,12 @@ class Heartbeat:
                 samples,
                 conversation_key=scope,
                 bot_names=(self._identity.facts.name, *self._identity.facts.alias_names),
+                expression_quality=(
+                    language_runner.ExpressionQuality(
+                        self._language_config.expression_quality_organ, self._clock
+                    )
+                    if self._language_config.expression_quality_enabled else None
+                ),
             ),
             name=language_runner.TASK_NAME,
         )

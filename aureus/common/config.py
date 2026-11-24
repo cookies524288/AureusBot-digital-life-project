@@ -24,6 +24,7 @@ CONFIG_FORMAT_VERSION = 1
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 DEFAULT_WEB_PORT = 28976
+DEFAULT_EMOJI_REGISTRATION_LIMIT = 64
 
 
 class ConfigError(Exception):
@@ -80,6 +81,8 @@ class HeartbeatConfig(BaseModel):
     qq_emoji_collection_enabled: bool = True
     qq_emoji_selection_enabled: bool = True
     qq_emoji_maintenance_enabled: bool = True
+    qq_emoji_registration_limit: int = Field(default=DEFAULT_EMOJI_REGISTRATION_LIMIT, ge=1)
+    qq_emoji_replacement_suggestion_enabled: bool = False
     qq_emoji_visual_enabled: bool = False
     qq_emoji_semantic_enabled: bool = False
     qq_emoji_semantic_refresh_seconds: float = Field(default=300.0, gt=0, allow_inf_nan=False)
@@ -622,6 +625,8 @@ class LanguageConfig(BaseModel):
     recall_enabled: bool = True
     learning_enabled: bool = False
     organ: str = "summarizer"
+    expression_quality_enabled: bool = False
+    expression_quality_organ: str | None = None
     reference_chars: int = Field(default=700, ge=0, le=2000)
     use_vector_expression: bool = False
     expression_selector_organ: str | None = None

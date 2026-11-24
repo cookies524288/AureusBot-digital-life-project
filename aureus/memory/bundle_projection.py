@@ -13,6 +13,7 @@ from aureus.memory.bundle_format import (
     bundle_digest,
     paragraph_hash,
 )
+from aureus.memory.bundle_image_projection import project_images
 from aureus.memory.graph import MemoryGraphEvidence, MemoryGraphSource
 from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource, MemoryStatus
 
@@ -317,6 +318,7 @@ def project_bundle(bundle: MemoryBundle) -> BundleProjection:
         }
         if state_paragraphs != docs or len(docs) != len(bundle.knowledge["docs"]):
             raise MemoryBundleError("完整包的知识段落和 state.json 不一致。")
+    project_images(bundle, projection.records)
     if not projection.records and not projection.profiles:
         raise MemoryBundleError("记忆包没有可安装的资料。")
     return projection

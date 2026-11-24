@@ -37,6 +37,7 @@ from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
+from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
@@ -52,7 +53,7 @@ from aureus.memory import (
     MemoryIndex,
 )
 from aureus.memory.imported_messages import ImportedPlatformHistory
-from aureus.organs import OrganResponse, ToolDefinition
+from aureus.organs import OrganRequest, OrganResponse, ToolDefinition
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 
@@ -66,7 +67,14 @@ from .auth import (
 )
 from .config_api import register_config_routes
 from .config_files import ConfigService
-from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
+from .expression_cluster_api import (
+    ExpressionClusterGrants,
+    register_expression_cluster_grants,
+    register_expression_cluster_routes,
+)
+from .expression_cluster_grants import ExpressionClusterDisplay
+from .expression_quality_api import register_expression_quality_routes
+from .expression_vector_api import register_expression_vector_routes
 from .inbox_api import register_inbox_routes
 from .inbox_operations import register_inbox_operations
 from .inbox_retention_api import register_inbox_retention_routes
@@ -268,13 +276,16 @@ def create_app(
     resource_people: PeopleDirectory | None = None,
     resource_memory_dir: Path | None = None,
     resource_emojis: EmojiStore | None = None,
+    suggest_emoji_replacement: Callable[[OrganRequest], Awaitable[OrganResponse]] | None = None,
     resource_database: Path | None = None,
     recall_feedback_enabled: bool = False,
     memory_graph_grants: GraphGrants | None = None,
     memory_graph_display: MemoryGraphDisplay | None = None,
     expression_cluster_store: ExpressionClusterStore | None = None,
     expression_cluster_grants: ExpressionClusterGrants | None = None,
+    expression_cluster_display: ExpressionClusterDisplay | None = None,
     embedding_progress: EmbeddingProgress | None = None,
+    expression_recall: ExpressionRecall | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -568,6 +579,17 @@ def create_app(
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock
     )
+    register_expression_quality_routes(
+        app,
+        require_ready,
+        _same_http_origin,
+        sessions.is_active,
+        resource_language,
+        timeline,
+        inbox_store,
+        allows_inbox_conversation,
+        clock,
+    )
     register_memory_transfer_routes(
         app,
         require_ready,
@@ -588,9 +610,20 @@ def create_app(
         app,
         require_ready,
         resource_language,
-        expression_cluster_store,
+        expression_cluster_store
+        or (embedding_progress.expression_index if embedding_progress else None),
         expression_cluster_grants,
         sessions.is_active,
+        display=expression_cluster_display,
+        scopes=embedding_progress.expression_scopes if embedding_progress else None,
+    )
+    register_expression_cluster_grants(
+        app, require_ready, sessions.is_active, _same_http_origin, auth,
+        expression_cluster_display, embedding_progress.expression_scopes if embedding_progress else None,
+    )
+    register_expression_vector_routes(
+        app, require_ready, _same_http_origin, sessions.is_active, embedding_progress,
+        expression_recall,
     )
     register_memory_inspection_routes(
         app, require_inspection_access, resource_memory, channel.user_visibility
@@ -619,6 +652,7 @@ def create_app(
         clock=clock,
         inbox=inbox_store,
         can_show_summary=can_show_summary,
+        suggest_emoji_replacement=suggest_emoji_replacement,
     )
     register_memory_lifecycle_routes(
         app, require_ready, resource_memory, _same_http_origin, sessions.is_active, can_show_summary

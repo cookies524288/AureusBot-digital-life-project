@@ -11,8 +11,18 @@ from typing import Any, BinaryIO
 from aureus.common import Clock, MemoryConfig, SystemClock
 from aureus.common.sqlite import open_connection
 from aureus.memory import bundles
-from aureus.memory.bundle_export import export_knowledge
-from aureus.memory.bundle_format import BundleMode
+from aureus.memory.bundle_closure import BundleProfileSource
+from aureus.memory.bundle_export import export_knowledge, generate_bundle
+from aureus.memory.bundle_format import BundleMode, ContentLevel
+from aureus.memory.bundle_images import read_bundle_image
+from aureus.memory.bundle_sources import (
+    EXPORT_TABLES,
+    BundleSource,
+    list_bundle_sources,
+    open_bundle_sources,
+    register_bundle_source,
+)
+from aureus.memory.bundle_vectors import search_vectors
 from aureus.memory.bundles import BundlePeople
 from aureus.memory.consolidation import (
     CandidateKind,
@@ -176,9 +186,10 @@ class MemoryHit:
     is_recallable: bool = True
     original_text: str | None = None
 
-
-def _is_summary_hit(hit: MemoryHit) -> bool:
-    return hit.source is not None and hit.source.table == "summary_facts"
+    @property
+    def is_summary_fact(self) -> bool:
+        """是否来自需要在对话消费时重验的增量事实。"""
+        return self.source is not None and self.source.table == "summary_facts"
 
 
 def _search_extracted(
@@ -248,10 +259,14 @@ class MemoryIndex:
         clock: Clock | None = None,
         *,
         config: MemoryConfig | None = None,
+        bundle_vector_spaces: dict[str, dict[str, Any]] | None = None,
+        bundle_attachment_root: Path | None = None,
     ) -> None:
         self._db_path, self._timeline = db_path, timeline
         self._clock = clock if clock is not None else SystemClock()
         self._config = config or MemoryConfig()
+        self._bundle_vector_spaces = bundle_vector_spaces or {}
+        self._bundle_attachment_root = bundle_attachment_root
         self._conn: sqlite3.Connection | None = None
         self.graph_display = MemoryGraphDisplay(db_path, self._clock)
         self.summary_evidence: EvidenceCheck | None = None
@@ -269,6 +284,7 @@ class MemoryIndex:
             open_edits(conn)
             open_graph_access(conn)
             bundles.open_bundles(conn)
+            open_bundle_sources(conn)
             open_removal_operations(conn)
             open_consolidation(conn)
             open_summaries(conn)
@@ -329,16 +345,23 @@ class MemoryIndex:
         *,
         snapshot: tuple[str, str] | None = None,
         graph_sources: Iterable[MemoryGraphSource] = (),
+        bundle_origin: str = "",
     ) -> int:
         """写入长期记忆原件及派生索引，保留归档记录。"""
         if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
         published: set[str] = set()
+        portable: set[str] = set()
 
         def published_records() -> Iterator[HistoricalMemory]:
             for record in records:
                 if snapshot is not None and record.source.role == "memory":
                     published.add(record.source.encode())
+                    if (
+                        record.source.instance == snapshot[0]
+                        and record.source.table in EXPORT_TABLES
+                    ):
+                        portable.add(record.source.encode())
                 yield record
 
         with self._conn:
@@ -351,6 +374,7 @@ class MemoryIndex:
                 put_graph_sources(self._conn, projected)
                 members = collect_graph_batch_members(snapshot[0], published, projected)
                 save_graph_batch(self._conn, snapshot, members)
+                register_bundle_source(self._conn, snapshot[0], portable, bundle_origin)
         return written
 
     def read_graph(self, *, allowed_sources: Collection[MemorySource] | GraphAccess) -> MemoryGraph:
@@ -568,23 +592,23 @@ class MemoryIndex:
         self, hits: Sequence[MemoryHit], target: SummaryScope | None
     ) -> list[MemoryHit]:
         """规划之后再次核对已选会话事实，不把撤权的材料送给回复器。"""
-        if not any(_is_summary_hit(hit) for hit in hits):
+        if not any(hit.is_summary_fact for hit in hits):
             return list(hits)
         allows, check = self.summary_scope_allowed, self.summary_evidence
         if allows is None or check is None or target is None or not allows(target):
-            return [hit for hit in hits if not _is_summary_hit(hit)]
+            return [hit for hit in hits if not hit.is_summary_fact]
         with closing(open_connection(self._db_path)) as conn:
             conn.execute("BEGIN")
             verified = []
             for hit in hits:
-                if not _is_summary_hit(hit) or hit.source is None:
+                if not hit.is_summary_fact or hit.source is None:
                     verified.append(hit)
                     continue
                 row = summary_detail(conn, hit.source, allows, check)
                 if row is not None and row.is_recallable and row.text[:MAX_HIT_CHARS] == hit.text:
                     verified.append(hit)
             if not allows(target):
-                return [hit for hit in verified if not _is_summary_hit(hit)]
+                return [hit for hit in verified if not hit.is_summary_fact]
             return verified
 
     def set_resources_removed(
@@ -658,14 +682,44 @@ class MemoryIndex:
     def preview_bundle(self, file: BinaryIO, people: BundlePeople | None = None) -> dict[str, Any]:
         """校验上传包并检查当前安装条件。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.preview_bundle(connection, file, people)
+            return bundles.preview_bundle(connection, file, people, self._bundle_vector_spaces)
 
     def install_bundle(
         self, file: BinaryIO, mode: BundleMode, people: BundlePeople | None = None
     ) -> dict[str, Any]:
         """将兼容的包安装到实际记忆原件和索引。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.install_bundle(connection, file, mode, self._clock.now(), people)
+            return bundles.install_bundle(
+                connection, file, mode, self._clock.now(), people, self._bundle_vector_spaces
+            )
+
+    def read_bundle_image(self, digest: str) -> tuple[bytes, str] | None:
+        """按摘要读取当前仍有有效包归属的图片。"""
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return read_bundle_image(connection, digest)
+
+    def search_bundle_vectors(
+        self,
+        scope: str,
+        query: Sequence[float],
+        limit: int,
+        *,
+        allowed_sources: Collection[MemorySource] = (),
+    ) -> list[tuple[MemorySource, float]]:
+        """在独立启用的配置空间召回；图空间仍需调用方明确授权。"""
+        fingerprint = self._bundle_vector_spaces.get(scope)
+        if not fingerprint or limit <= 0 or (scope == "graph" and not allowed_sources):
+            return []
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return search_vectors(
+                connection,
+                scope,
+                fingerprint,
+                query,
+                limit,
+                self._clock.now().timestamp(),
+                allowed_sources,
+            )
 
     def list_bundles(self, offset: int, limit: int) -> list[dict[str, Any]]:
         """浏览包安装记录。"""
@@ -690,6 +744,35 @@ class MemoryIndex:
         """把当前可用知识段落和证据关系打包。"""
         with closing(open_connection(self._db_path)) as connection:
             export_knowledge(connection, output, self._clock.now())
+
+    def list_bundle_sources(self) -> list[BundleSource]:
+        """列出已可信登记、可供明确选择的资料包来源。"""
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return list_bundle_sources(connection)
+
+    def generate_bundle(
+        self,
+        source_ids: Sequence[str],
+        level: ContentLevel,
+        people: BundleProfileSource | None,
+        *,
+        output: BinaryIO | None = None,
+        expected_digest: str | None = None,
+        include_images: bool = False,
+    ) -> dict[str, Any]:
+        """预检或下载从此库当前可重建语义生成的新包。"""
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return generate_bundle(
+                connection,
+                source_ids,
+                level,
+                self._clock.now(),
+                people,
+                output=output,
+                expected_digest=expected_digest,
+                include_images=include_images,
+                attachment_root=self._bundle_attachment_root,
+            )
 
     def import_archive(self, file: BinaryIO) -> tuple[int, int]:
         """将文件追加到此运行库，返回新增和跳过条数。"""

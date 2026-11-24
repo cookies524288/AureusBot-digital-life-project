@@ -78,11 +78,11 @@ def register_prompt_routes(
 
     @app.get("/api/prompts", dependencies=guard)
     async def list_prompts() -> dict[str, Any]:
+        catalog = {
+            name: catalog_template_keys(name, tasks) for name, tasks in (await organs()).items()
+        }
         return {
-            "organs": {
-                name: sorted(catalog_template_keys(name, tasks))
-                for name, tasks in (await organs()).items()
-            },
+            "organs": {name: sorted(keys) for name, keys in catalog.items()},
             "templates": [view(key) for key in store.templates],
         }
 

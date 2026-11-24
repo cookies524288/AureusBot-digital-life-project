@@ -6,14 +6,22 @@ SQLite 替代 JSON/NPZ；键、有效范围及向量计算接 Aureus，不复制
 
 import json
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from math import sumprod
 from pathlib import Path
+from sqlite3 import Connection
 
 from aureus.common.sqlite import open_connection
-from aureus.memory.expression_clusters import _embedding_text, _fingerprint, _fit_clusters, _unit
+from aureus.memory.expression_clusters import (
+    ExpressionClusterMember,
+    VisibleExpressionCluster,
+    _embedding_text,
+    _fingerprint,
+    _fit_clusters,
+    _unit,
+)
 from aureus.memory.language import LanguageStore
 from aureus.memory.language_matching import LanguageEntry, format_language, normalize
 
@@ -36,6 +44,15 @@ class IndexedExpression:
     entry: LanguageEntry
     vector: Vector
     cluster: int
+
+
+@dataclass(frozen=True)
+class ExpressionSpaceCoverage:
+    """真实空间当前授权候选的写入覆盖，不暴露条目或模型地址。"""
+
+    space: str
+    established: int
+    eligible: int
 
 
 class ExpressionVectorIndex:
@@ -124,25 +141,100 @@ class ExpressionVectorIndex:
         self, language: LanguageStore, space: str, scopes: frozenset[str]
     ) -> tuple[int, int]:
         """从同一个只读快照统计各授权范围内可选候选的并集。"""
+        [row] = self._coverage(language, scopes, space, include_saved=False)
+        return row.established, row.eligible
+
+    def spaces(
+        self, language: LanguageStore, scopes: frozenset[str], available: str | None
+    ) -> list[ExpressionSpaceCoverage]:
+        """列运行空间及确有已写向量的历史空间，仅统计当前授权候选。"""
+        return self._coverage(language, scopes, available, include_saved=True)
+
+    def _coverage(
+        self,
+        language: LanguageStore,
+        scopes: frozenset[str],
+        space: str | None,
+        *,
+        include_saved: bool,
+    ) -> list[ExpressionSpaceCoverage]:
         with closing(open_connection(self._path, read_only=True)) as connection:
             connection.execute("BEGIN")
-            pool = language.expression_pool(connection)
-            active_scopes = scopes.intersection(
-                scope for entry in pool for scope in entry.scope_keys
-            )
-            candidates = {
-                entry.entry_key: entry
-                for scope in (None, *active_scopes)
-                for entry in distinct_expressions(
-                    [entry for entry in pool if entry.visible_in(scope)], ()
+            candidates = self.candidates(language, scopes, connection)
+            eligible = {entry.entry_key: fingerprint(entry) for entry in candidates}
+            counts = {} if space is None else {space: 0}
+            if include_saved:
+                rows = connection.execute(
+                    "SELECT space, entry_key, fingerprint FROM expression_runtime_vectors "
+                    "ORDER BY space"
                 )
+            else:
+                rows = connection.execute(
+                    "SELECT space, entry_key, fingerprint FROM expression_runtime_vectors "
+                    "WHERE space = ?",
+                    (space,),
+                )
+            for key, entry_key, mark in rows:
+                matched = eligible.get(entry_key) == mark
+                counts[key] = counts.get(key, 0) + matched
+            return [
+                ExpressionSpaceCoverage(key, count, len(eligible)) for key, count in counts.items()
+            ]
+
+    @staticmethod
+    def candidates(
+        language: LanguageStore, scopes: frozenset[str], connection: Connection | None = None
+    ) -> list[LanguageEntry]:
+        """取普通候选和已授权会话候选的并集，包括仅限原会话的人工挽回表达。"""
+        pool = language.expression_pool(connection)
+        scoped = {scope for entry in pool for scope in entry.scope_keys}
+        scoped.update(entry.restricted_scope for entry in pool if entry.restricted_scope)
+        candidates: dict[str, LanguageEntry] = {}
+        for scope in (None, *sorted(scopes & scoped)):
+            visible = [entry for entry in pool if entry.visible_in(scope)]
+            for entry in distinct_expressions(visible, ()):
+                candidates[entry.entry_key] = entry
+        return list(candidates.values())
+
+    def browse(
+        self,
+        language: LanguageStore,
+        *,
+        allowed_entry_keys: Collection[str],
+        authorized_versions: Mapping[str, str] | None = None,
+    ) -> tuple[VisibleExpressionCluster, ...]:
+        """只投影网页明确获准展示且当前指纹有效的运行索引成员。"""
+        if not allowed_entry_keys:
+            return ()
+        with closing(open_connection(self._path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            eligible = {
+                entry.entry_key: entry
+                for entry in language.expression_pool(connection)
+                if entry.entry_key in allowed_entry_keys
             }
-            eligible = {key: fingerprint(entry) for key, entry in candidates.items()}
             rows = connection.execute(
-                "SELECT entry_key, fingerprint FROM expression_runtime_vectors WHERE space = ?",
-                (space,),
+                "SELECT space, cluster, entry_key, fingerprint FROM expression_runtime_vectors "
+                "ORDER BY space, cluster, entry_key"
             )
-            return sum(eligible.get(key) == mark for key, mark in rows), len(eligible)
+            clusters: dict[tuple[str, int], list[tuple[LanguageEntry, str]]] = defaultdict(list)
+            for space, cluster, key, mark in rows:
+                if (
+                    (entry := eligible.get(key)) is not None
+                    and fingerprint(entry) == mark
+                    and (
+                        authorized_versions is None
+                        or authorized_versions.get(key) == display_version(entry)
+                    )
+                ):
+                    clusters[space, cluster].append((entry, mark))
+        return tuple(
+            VisibleExpressionCluster(
+                _fingerprint(f"{space}:{cluster}:" + ":".join(mark for _, mark in group)),
+                tuple(ExpressionClusterMember(entry.text, entry.detail) for entry, _ in group),
+            )
+            for (space, cluster), group in clusters.items()
+        )
 
 
 def embedding_text(entry: LanguageEntry) -> str:
@@ -153,6 +245,11 @@ def embedding_text(entry: LanguageEntry) -> str:
 def fingerprint(entry: LanguageEntry) -> str:
     """使用本地稳定键及规范化的情景、风格。"""
     return _fingerprint(f"{entry.entry_key}\n{embedding_text(entry)}")
+
+
+def display_version(entry: LanguageEntry) -> str:
+    """授权绑定精确展示内容，不把向量规范化后的文本当作人工确认。"""
+    return _fingerprint(json.dumps([entry.entry_key, entry.text, entry.detail], ensure_ascii=False))
 
 
 def distinct_expressions(

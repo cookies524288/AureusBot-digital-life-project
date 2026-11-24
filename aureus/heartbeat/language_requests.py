@@ -1,9 +1,10 @@
-"""心跳语言学习的五个实际请求及其共用预览构建器。"""
+"""心跳语言学习的实际请求及其共用预览构建器。"""
 
 import json
 from collections.abc import Sequence
 
 from aureus.common.language_prompts import (
+    EXPRESSION_QUALITY,
     JARGON_COMPARE,
     JARGON_CONTENT_ONLY,
     JARGON_WITH_CONTEXT,
@@ -63,6 +64,18 @@ def build_with_context(
     )
     return _request(
         organ, JARGON_WITH_CONTEXT.key, prompt, LANGUAGE_LEARNER_FORMAT.fill(), _numbered(evidence)
+    )
+
+
+def build_expression_quality(organ: str, detail: str, text: str) -> OrganRequest:
+    """只交给质检器官一组已经筛选的情境和说法。"""
+    data = json.dumps({"situation": detail, "style": text}, ensure_ascii=False)
+    return _request(
+        organ,
+        EXPRESSION_QUALITY.key,
+        EXPRESSION_QUALITY.fill(),
+        LANGUAGE_LEARNER_FORMAT.fill(),
+        (data,),
     )
 
 

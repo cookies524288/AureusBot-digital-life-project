@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from aureus.actions.web import WebPage
-from aureus.common import HeartbeatConfig, RuntimeConfig
+from aureus.common import HeartbeatConfig, LanguageConfig, RuntimeConfig
 from aureus.common.time_format import format_local_time
-from aureus.heartbeat import ReplyLength, registered_templates
+from aureus.heartbeat import ReplyLength, build_prompt_scenes, registered_templates
 from aureus.heartbeat.context import (
     build_diary_prompt,
     build_exploration_prompt,
@@ -23,7 +23,9 @@ from aureus.heartbeat.context import (
     build_reply_request,
     build_system_context,
 )
+from aureus.heartbeat.language_requests import build_expression_quality
 from aureus.heartbeat.persona_growth import MaterialLine, build_prompt
+from aureus.heartbeat.planner_tools import PlannerToolOptions, planner_tools
 from aureus.identity import Identity
 from aureus.organs import (
     BUILTIN_ORGANS,
@@ -73,12 +75,55 @@ def test_emoji_preview_routes_follow_active_selection_mode() -> None:
     assert "emoji_visual_selection" not in organ_tasks(disabled)
 
 
+@pytest.mark.parametrize(
+    ("enabled", "organ", "assigned"),
+    [
+        (False, "judge", None),
+        (True, None, None),
+        (True, "judge", "judge"),
+        (True, "reviewer", "reviewer"),
+    ],
+)
+def test_expression_quality_preview_uses_runtime_builder_and_explicit_route(
+    tmp_path: Path, enabled: bool, organ: str | None, assigned: str | None
+) -> None:
+    runtime = RuntimeConfig(
+        language=LanguageConfig(expression_quality_enabled=enabled, expression_quality_organ=organ)
+    )
+    rig = ConfigRig(tmp_path, prompt_identity=IDENTITY, runtime=runtime)
+    try:
+        rig.log_in()
+        catalog = rig.client.get("/api/prompts").json()
+        assert any(item["key"] == "expression_quality" for item in catalog["templates"])
+        assert {
+            name for name, keys in catalog["organs"].items() if "expression_quality" in keys
+        } == ({assigned} if assigned else set())
+        response = rig.client.get(f"/api/organs/{assigned or 'judge'}/prompt-preview")
+        assert response.status_code == 200
+        previews = [
+            scene for scene in response.json()["scenes"] if scene["id"] == "expression_quality"
+        ]
+        if assigned is None:
+            assert not previews
+            return
+        [preview] = previews
+        [scene] = build_prompt_scenes(assigned, {"expression_quality"}, IDENTITY, NOW)
+        assert scene.request == build_expression_quality(assigned, "〔使用情境〕", "〔候选说法〕")
+        assert json.loads(preview["messages"][1]["content"]) == {
+            "situation": "〔使用情境〕",
+            "style": "〔候选说法〕",
+        }
+    finally:
+        rig.close()
+
+
 def test_prompt_access_and_catalog(rig: ConfigRig, tmp_path: Path) -> None:
     listing = rig.client.get("/api/prompts").json()
     assert set(listing["organs"]) == set(BUILTIN_ORGANS)
-    assert set().union(*map(set, listing["organs"].values())) == {
+    assert set().union(*map(set, listing["organs"].values())) | {"expression_quality"} == {
         template["key"] for template in listing["templates"]
     }
+    assert all("expression_quality" not in keys for keys in listing["organs"].values())
     assert rig.client.get("/api/organs/missing/prompt-preview").status_code == 404
     assert rig.client.delete("/api/prompts/missing").status_code == 404
     assert rig.client.put("/api/prompts/plan_format", json={"source": "改格式"}).status_code == 422
@@ -244,10 +289,6 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
             expected.append({"role": message["role"], "content": content})
         assert completion.calls[-1]["messages"] == expected
 
-    plan = previews["planner"]["plan_context"][1]["content"]
-    for field in ["commit", "resolve", "interest", "query_memory"]:
-        assert f'"{field}"' in plan
-        assert f'"{field}"' not in previews["planner"]["plan"][1]["content"]
     planned = previews["replyer"]["reply_planned"]
     assert "〔记忆召回：查询词、命中数、时间、说话人和记录〕" in planned[-2]["content"]
     assert "〔回复长度〕" in planned[-1]["content"]
@@ -257,6 +298,62 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
     assert "先听完。" not in planned[0]["content"]
     assert "不得" not in previews["replyer"]["reply"][0]["content"]
     assert "不要向对方透露" in previews["replyer"]["reply_contact"][0]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_planner_preview_and_captured_schema_follow_available_tools(
+    rig: ConfigRig, enabled: bool
+) -> None:
+    scene = "plan_context" if enabled else "plan"
+    preview = rig.client.get("/api/organs/planner/prompt-preview")
+    assert preview.status_code == 200
+    [messages] = [item["messages"] for item in preview.json()["scenes"] if item["id"] == scene]
+    tools = planner_tools(
+        PlannerToolOptions(agenda=enabled, interests=enabled, recall=enabled, expressions=enabled)
+    )
+    prompt = build_plan_prompt(
+        [],
+        [_record(2, "当前说话人", "当前材料")],
+        IDENTITY.user.name,
+        UTC,
+        with_agenda=enabled,
+        with_interests=enabled,
+        with_recall=enabled,
+        with_expressions=enabled,
+        tools=tools,
+    )
+    completion = FakeCompletion(make_response("模拟输出"))
+    adapter = LLMOrgan(
+        "planner",
+        make_config().routes_for("replyer"),
+        rig.models.key_resolver,
+        completion,
+        prompts=rig.models.prompts,
+    )
+    await adapter.process(
+        OrganRequest("planner", prompt, tools=tuple(tool.definition() for tool in tools))
+    )
+
+    [captured] = completion.calls
+    schemas = {
+        tool["function"]["name"]: tool["function"]["parameters"] for tool in captured["tools"]
+    }
+    assert set(schemas) == ({"reply", "stop", "query_memory"} if enabled else {"reply", "stop"})
+    assert set(schemas["reply"]["required"]) == {"addressed_to_me", "reply_reference"}
+    assert not schemas["reply"]["additionalProperties"]
+    assert not schemas["stop"]["properties"]
+    if enabled:
+        assert set(schemas["query_memory"]["required"]) == {"keywords"}
+        assert schemas["query_memory"]["properties"]["keywords"]["maxItems"] == 3
+    for text in (messages[1]["content"], captured["messages"][1]["content"]):
+        assert "发言必须通过reply工具" in text
+        for name in schemas:
+            assert f"- {name}：" in text
+        for field in ("commit", "resolve", "interest", "expression_intent"):
+            assert (field in schemas["reply"]["properties"]) is enabled
+            assert (field in text) is enabled
+        assert ("query_memory" in text) is enabled
 
 
 @pytest.mark.asyncio

@@ -31,7 +31,10 @@ PICTURE_ARCHIVE = """
               AND substr(value ->> '$.reference', 13) NOT GLOB '*[^0-9a-f]*'
             LIMIT 1)
     FROM memory_history history
+    LEFT JOIN memory_edits edit ON edit.kind = 'history' AND edit.entry_id = history.id
     WHERE json_extract(history.source_key, '$[2]') = 'image_assets'
+      AND coalesce(edit.is_enabled, 1) AND NOT coalesce(edit.is_removed, 0)
+      AND NOT coalesce(edit.is_bundle_removed, 0)
 """
 
 _TEXT_CATALOG = f"""

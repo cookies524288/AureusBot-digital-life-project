@@ -11,9 +11,11 @@ from aureus.channels import WEB_CHANNEL_NAME, QQAvatars, WebChannel
 from aureus.common import Clock
 from aureus.core.runtime import Core
 from aureus.identity import IdentityEditor
+from aureus.organs import OrganCallError, OrganRequest, OrganResponse
 
 from .auth import LoginLimiter, PasswordStore, WebAuth
 from .config_files import ConfigService
+from .expression_cluster_grants import ExpressionClusterDisplay
 from .runner import WebServer, check_can_start
 from .server import create_app
 from .session import SessionStore
@@ -55,6 +57,12 @@ def open_web(
     sessions = SessionStore(core.paths.database_file, clock, config.session_days)
     sessions.open()
     try:
+
+        async def suggest_emoji_replacement(request: OrganRequest) -> OrganResponse:
+            if core.models is None or "emoji" not in core.models.available_organs:
+                raise OrganCallError("emoji", ["表情器官尚未配置。"])
+            return await core.gateway.call(request)
+
         auth = WebAuth(passwords, sessions, LoginLimiter(config, clock))
         channel = WebChannel(core.heartbeat)
         core.heartbeat.attach_channel(WEB_CHANNEL_NAME, channel.show)
@@ -96,7 +104,8 @@ def open_web(
             qq_desktop=core.qq.desktop if core.qq is not None else None,
             qq_avatars=(
                 QQAvatars(core.qq.desktop, clock)
-                if core.qq is not None and config.qq_avatars_enabled else None
+                if core.qq is not None and config.qq_avatars_enabled
+                else None
             ),
             allows_qq_delivery=core.heartbeat.allows_emoji_delivery,
             resource_language=core.language,
@@ -106,9 +115,21 @@ def open_web(
             resource_people=core.people,
             resource_memory_dir=core.paths.memory_dir,
             resource_emojis=core.emoji_store,
+            suggest_emoji_replacement=(
+                suggest_emoji_replacement
+                if core.settings.runtime.heartbeat.qq_emoji_replacement_suggestion_enabled
+                else None
+            ),
             resource_database=core.paths.database_file,
             recall_feedback_enabled=core.settings.runtime.memory.recall_feedback_enabled,
             embedding_progress=core.embedding_progress,
+            expression_recall=core.heartbeat.expression_recall,
+            expression_cluster_display=(
+                ExpressionClusterDisplay(core.paths.database_file, core.language)
+                if core.language is not None and core.embedding_progress is not None
+                and core.embedding_progress.expression_index is not None
+                else None
+            ),
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:
