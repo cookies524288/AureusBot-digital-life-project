@@ -19,6 +19,7 @@ from aureus.heartbeat.memory_summary_source import PlatformSummarySource, summar
 from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception, TrustLevel
 from aureus.memory import (
     HistoricalMemory,
+    LifecycleAction,
     LifecycleConflictError,
     MemoryIndex,
     MemorySource,
@@ -634,6 +635,37 @@ def test_history_preview_and_undo_reject_a_value_changed_back_by_legacy_edits(ri
     assert rig.index.update_resource("history", item.entry_id, "修订值", None)
     with pytest.raises(LifecycleConflictError):
         rig.index.apply_lifecycle(current_id, None, lambda: True, undo=True)
+
+
+def test_older_plan_can_be_undone_after_newer_plan_is_undone(rig: Rig) -> None:
+    source = MemorySource("fixture", "formal", "fact_claims", (27,))
+    assert rig.index.publish([HistoricalMemory(source, "原值")]) == 1
+
+    def preview(action: LifecycleAction, text: str | None = None) -> str:
+        plan = rig.index.preview_lifecycle(source, action, text, None, lambda: True)
+        assert plan is not None
+        return str(plan["plan_id"])
+
+    def run(plan: str, *, undo: bool = False) -> None:
+        assert rig.index.apply_lifecycle(plan, None, lambda: True, undo=undo)
+        rig.clock.advance(timedelta(seconds=1))
+
+    older = preview("disable")
+    run(older)
+    newer = preview("correct", "较新的修订")
+    run(newer)
+    run(newer, undo=True)
+    run(older, undo=True)
+    [restored] = rig.index.browse_history("", "", 0, 10)
+    assert restored.text == "原值" and restored.is_enabled
+
+    late = preview("correct", "迟到的修订")
+    interim = preview("disable")
+    run(interim)
+    run(interim, undo=True)
+    run(late)
+    [changed] = rig.index.browse_history("", "", 0, 10)
+    assert changed.text == "迟到的修订" and changed.is_enabled
 
 
 @pytest.mark.asyncio

@@ -390,21 +390,11 @@ def _profile_target(
     summary, positions, anchor = profile_maintenance.content(conn, key)
     current_anchor = primary.id if primary is not None else None
     aliases = profile_aliases.for_person(conn, person_id).get(key)
-    latest = conn.execute(
-        """SELECT rowid, undone_at FROM people_profile_plans WHERE instance=? AND person_key=?
-           AND applied_at IS NOT NULL ORDER BY rowid DESC LIMIT 1""",
-        key,
-    ).fetchone()
     edit = ProfileEdit(summary=summary, aliases=aliases, evidence=positions, anchor=anchor)
+    # 版本只取来源组与生效覆盖，不含计划行；撤销较新的计划后能还原较早计划的版本（3.15 自检）。
     version = sha256(
         json.dumps(
-            [
-                person_id,
-                [item.id for item in group.values()],
-                current_anchor,
-                edit.model_dump(),
-                list(latest) if latest else None,
-            ],
+            [person_id, [item.id for item in group.values()], current_anchor, edit.model_dump()],
             sort_keys=True,
         ).encode()
     ).hexdigest()

@@ -85,6 +85,9 @@ def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(directory
         assert client.post(f"{endpoint}/{plan}/undo").status_code == 409
         assert client.post(f"{endpoint}/{latest}/undo").status_code == 200
         assert client.get(endpoint, params={"source": first}).json()["effective"] == effective
+        assert client.post(f"{endpoint}/{plan}/undo").status_code == 200
+        restored = client.get(endpoint, params={"source": first}).json()
+        assert restored["effective"] == original["effective"]
         stored = directory.historical_record("old", HistoricalKind.PROFILE_SNAPSHOT, "[1]")
         assert stored is not None and stored.record == records[1]
         pending = preview("待处理旧版本")

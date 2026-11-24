@@ -132,22 +132,11 @@ def _target(
         flags is not None and bool(flags["is_frozen"]),
         flags is not None and bool(flags["is_protected"]),
     )
-    latest = connection.execute(
-        """SELECT rowid, applied_at, undone_at FROM memory_lifecycle_plans
-           WHERE source_key=? AND applied_at IS NOT NULL
-           ORDER BY applied_at DESC, rowid DESC LIMIT 1""",
-        (source.encode(),),
-    ).fetchone()
+    # 版本只取原件、生效状态和旧入口写入计数；不含计划行，撤销较新的计划后才能还原较早计划的版本（3.15 自检）。
+    # 计数只由旧入口递增，用来识别改回同一个值；应用与撤销不改它。
+    legacy_writes = edit["revision"] if edit is not None else 0
     version = sha256(
-        _json(
-            [
-                list(original),
-                list(edit) if edit else None,
-                asdict(state),
-                list(latest) if latest else None,
-                current,
-            ]
-        ).encode()
+        _json([list(original), legacy_writes, asdict(state), current]).encode()
     ).hexdigest()
     text = original["text"] if kind == "summary" else original["content"]
     return LifecycleTarget(kind, entry_id, state, version, text, current)
