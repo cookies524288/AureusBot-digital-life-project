@@ -215,6 +215,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .ov-meta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px;color:var(--text-2);font-size:12px}.ov-meta b{color:var(--text);letter-spacing:.06em}.ov-meta time{padding-left:12px;border-left:1px solid var(--stitch)}
 .ov-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px;align-items:stretch}.ov-slot{position:relative;min-width:0;perspective:1100px}
 .ov-face{position:relative;height:100%;padding:20px 22px 25px;filter:drop-shadow(0 4px 1px var(--tile-shadow));transform:var(--ov-tilt,none);transition:transform .18s var(--ease),translate .18s var(--ease)}
+.ov-reference{align-self:start}.ov-reference>.ov-face{height:auto}
 .ov-label,.ov-card-head{display:flex;align-items:center;gap:9px}.ov-label{color:var(--tile-muted);font-size:14px;font-weight:600}.ov-card-head{justify-content:space-between;margin-bottom:12px}
 .ov-status-body{display:flex;align-items:center;gap:clamp(16px,2.5vw,32px)}.ov-emitter{display:block;flex:none;width:160px;height:auto;shape-rendering:crispEdges;color:var(--signal)}
 /* 所有轮廓和位移都落在 32 格画布的整格上；四象限复用同一块像素图形。 */
@@ -651,7 +652,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="ov-task"><span>当前任务</span><strong id="ov-task"></strong></div></div></article>
 <article class="ov-slot ov-energy"><div class="ov-face"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-zap"/></svg>精力</h3><div class="ov-energy-line"><strong id="ov-energy" class="ov-readout"></strong><span id="ov-tier" class="ov-tier"></span></div><div class="ov-gauge" aria-hidden="true"><div class="ov-cells"><i id="ov-meter"></i></div></div></div></article>
 <article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg>状态摘要</h3></div><div id="ov-state" class="ov-state"></div></div></article>
-<article class="ov-slot"><div class="ov-face"><h3 class="ov-label">回复参考</h3><p id="ov-reference" class="tl-content">暂无回复参考</p><p id="ov-reference-source" class="muted"></p></div></article>
+<article class="ov-slot ov-reference"><div class="ov-face"><h3 class="ov-label">回复参考</h3><p id="ov-reference" class="tl-content">暂无回复参考</p><p id="ov-reference-source" class="muted"></p></div></article>
 <article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-timeline"/></svg>最近动态</h3><span class="ov-period">近 24 小时</span></div><ul id="ov-activity" class="ov-activity"></ul></div></article>
 <div class="ov-links"><button type="button" class="ov-slot ov-link" data-go="chat"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg><span>私聊</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
 <button type="button" class="ov-slot ov-link" data-go="monitor"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg><span>内部状态</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
@@ -1364,7 +1365,6 @@ function renderOverview(d) {
   updateLiveRegion(box, () => {
     const expanded = box.querySelector('details')?.open;
     const lines = (d.state_text || '').split('\n').map(line => line.trim()).filter(Boolean);
-    lines.unshift(d.working_memory_capacity == null ? '工作记忆：已关闭' : '工作记忆容量：' + d.working_memory_capacity + ' 条经历');
     const row = line => el('div', {class:'state-line', text:line});
     box.replaceChildren(...lines.slice(0, 3).map(row));
     if (!lines.length) box.append(el('span', {class:'ov-empty', text:'暂无状态记录'}));
