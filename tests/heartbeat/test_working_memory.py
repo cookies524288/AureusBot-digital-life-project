@@ -129,7 +129,9 @@ async def test_scope_isolation_and_failed_batch_retry(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", ["", "摘" * 501, None], ids=["empty", "too-long", "failed"])
-async def test_legacy_summary_is_preserved_until_success(tmp_path: Path, invalid: str | None) -> None:
+async def test_legacy_summary_is_preserved_until_success(
+    tmp_path: Path, invalid: str | None
+) -> None:
     clock = ManualClock(NOW)
     timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
     timeline.open()

@@ -264,7 +264,9 @@ class TimelineDatabase:
             )
             params.append(_encode_metadata({key: value}))
         for key in query.without_metadata:
-            conditions.append("NOT EXISTS (SELECT 1 FROM json_each(timeline.metadata) WHERE key = ?)")
+            conditions.append(
+                "NOT EXISTS (SELECT 1 FROM json_each(timeline.metadata) WHERE key = ?)"
+            )
             params.append(key)
 
         where_clause = " AND ".join(conditions)

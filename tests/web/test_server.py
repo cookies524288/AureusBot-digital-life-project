@@ -113,7 +113,9 @@ def test_emoji_integrity_preview_requires_ready_same_origin_login(rig: Rig) -> N
         assert client.post(endpoint, headers=origin).status_code == 409
 
 
-def test_emoji_review_persists_and_gates_sending_without_changing_registration(tmp_path: Path) -> None:
+def test_emoji_review_persists_and_gates_sending_without_changing_registration(
+    tmp_path: Path,
+) -> None:
     database = tmp_path / "emoji.db"
     store = EmojiStore(database, tmp_path, ManualClock(START))
     store.open()
@@ -876,11 +878,16 @@ def test_chat_history_and_reconnect_include_only_confirmed_reply_segments(rig: R
     set_password(rig)
     add_message(rig, "来信", ActorType.USER, "web")
     reply = rig.timeline.append(
-        EVENT_MESSAGE, "首段\n取消的第二段", ActorType.ME,
-        visibility=VisibilityScope.USER_ONLY, metadata={INTERNAL_REPLY_RECORD: True},
+        EVENT_MESSAGE,
+        "首段\n取消的第二段",
+        ActorType.ME,
+        visibility=VisibilityScope.USER_ONLY,
+        metadata={INTERNAL_REPLY_RECORD: True},
     )
     delivery = rig.timeline.append(
-        EVENT_REPLY_DELIVERED, "首段", ActorType.ME,
+        EVENT_REPLY_DELIVERED,
+        "首段",
+        ActorType.ME,
         visibility=VisibilityScope.USER_ONLY,
         metadata={"reply_id": reply.id, "segment": 1, "channel": "web"},
     )
@@ -915,7 +922,9 @@ def test_chat_recovery_pages_confirmed_user_visible_segments_in_cursor_order(rig
     set_password(rig)
     logged = [
         rig.timeline.append(
-            EVENT_REPLY_DELIVERED, f"分段 {part}", ActorType.ME,
+            EVENT_REPLY_DELIVERED,
+            f"分段 {part}",
+            ActorType.ME,
             visibility=VisibilityScope.USER_ONLY,
             metadata={"reply_id": 32, "segment": part, "channel": "web"},
         )

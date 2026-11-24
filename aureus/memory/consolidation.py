@@ -122,7 +122,7 @@ def read_batch(conn: sqlite3.Connection, size: int) -> ConsolidationBatch | None
                CASE WHEN json_valid(t.metadata)
                     THEN json_extract(t.metadata, '$.conversation_id') END AS conversation
         FROM memory_index m JOIN timeline t ON t.id = m.record_id
-        WHERE m.rowid > ? AND NOT ({is_message_event('t.event_type')}) ORDER BY m.rowid LIMIT ?
+        WHERE m.rowid > ? AND NOT ({is_message_event("t.event_type")}) ORDER BY m.rowid LIMIT ?
         """,
         (start[1], size),
     ).fetchall()
@@ -264,7 +264,7 @@ def read_candidates(
         WHERE (t.id IS NOT NULL AND coalesce(live_edit.is_enabled, 1)
                AND NOT coalesce(live_edit.is_removed, 0)
                AND live_edit.edited_content IS NULL
-               AND (NOT ({is_message_event('t.event_type')}) OR (
+               AND (NOT ({is_message_event("t.event_type")}) OR (
                    t.event_type = '{MESSAGE_EVENT_TYPE}'
                    AND c.kind IN ('fact', 'preference') AND t.visibility = 'user_only'
                    AND t.actor_type = 'user' AND NOT is_message_excerpt(c.content, t.content))))

@@ -164,7 +164,8 @@ def register_memory_graph_routes(
             original = await snapshot(token)
             try:
                 result = await asyncio.to_thread(
-                    memory.graph_detail, location,
+                    memory.graph_detail,
+                    location,
                     allowed_sources=original if display is not None else original.sources,
                 )
             except sqlite3.Error:
@@ -241,10 +242,14 @@ def _grant_request(body: object) -> tuple[str, tuple[GraphCategory, ...]]:
     if isinstance(body, dict) and body.keys() == {"password", "categories"}:
         password, categories = body["password"], body["categories"]
         if (
-            isinstance(password, str) and len(password) <= MAX_PASSWORD_LENGTH
-            and isinstance(categories, list) and len(categories) <= len(GRAPH_CATEGORIES)
+            isinstance(password, str)
+            and len(password) <= MAX_PASSWORD_LENGTH
+            and isinstance(categories, list)
+            and len(categories) <= len(GRAPH_CATEGORIES)
             and all(category in GRAPH_CATEGORIES for category in categories)
         ):
-            selected = tuple(category for category in GRAPH_CATEGORIES if category in categories)
+            selected: tuple[GraphCategory, ...] = tuple(
+                category for category in GRAPH_CATEGORIES if category in categories
+            )
             return password, selected
     raise HTTPException(422, "请选择展示类别并确认密码。", headers=_NO_STORE)

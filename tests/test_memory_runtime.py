@@ -47,10 +47,12 @@ async def test_runtime_opens_memory_and_diary_in_roleplay(
         index = core.heartbeat._memory.index
         assert index is not None
         core.heartbeat.wake_up()
-        core.timeline.append("message", "曾经说过木卫二", ActorType.USER)
+        original = core.timeline.append("message", "曾经说过木卫二", ActorType.USER)
+        experience = core.timeline.append("diary_written", "记录木卫二观测计划", ActorType.ME)
         clock.advance(timedelta(hours=10))
         core.heartbeat.beat()
-        assert index.search(["木卫二"], (), 5)
+        assert [hit.record_id for hit in index.search(["木卫二"], (), 5)] == [experience.id]
+        assert core.timeline.get(original.id) == original
         await core.heartbeat.wait_for_thought()
         core.heartbeat.beat()
         assert (paths.diary_dir / "2026-11-17.md").is_file()

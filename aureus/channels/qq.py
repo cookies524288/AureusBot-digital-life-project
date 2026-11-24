@@ -156,7 +156,8 @@ class QQChannel:
         if not self._allows_route(route):
             return
         archived = notice or (
-            not perception.attachments and not any(
+            not perception.attachments
+            and not any(
                 (item.kind == "text" and item.text and item.text.strip())
                 or (item.kind == "at" and (item.all_members or item.target_account_id))
                 for item in perception.components
@@ -250,8 +251,12 @@ class QQChannel:
         return None
 
     def _save_inbox(
-        self, perception: Perception, route: MessageRoute, payload: dict[str, Any],
-        *, archive: str | None = None,
+        self,
+        perception: Perception,
+        route: MessageRoute,
+        payload: dict[str, Any],
+        *,
+        archive: str | None = None,
     ) -> bool:
         assert self._inbox_store is not None
         sender = payload.get("sender")
@@ -267,7 +272,9 @@ class QQChannel:
         try:
             if archive is not None:
                 self._inbox_store.archive(
-                    perception, sender_name=sender_name, conversation_name=conversation_name,
+                    perception,
+                    sender_name=sender_name,
+                    conversation_name=conversation_name,
                     notice=archive == "notice",
                 )
                 return True

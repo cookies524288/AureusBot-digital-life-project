@@ -10,26 +10,36 @@ from aureus.heartbeat.planner_tools import (
 )
 from aureus.organs import OrganRequest, OrganResponse, ToolCall
 
-_REPLY = ToolCall("reply", "reply-1", {"addressed_to_me": "no", "reply_reference": "只补充相关信息"})
+_REPLY = ToolCall(
+    "reply", "reply-1", {"addressed_to_me": "no", "reply_reference": "只补充相关信息"}
+)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("calls, invalid", [
-    ((), False),
-    ((_REPLY,), True),
-    ((ToolCall("reply", "malformed", {"addressed_to_me": "yes"}),), False),
-    ((ToolCall("reply", "bad-type", {"addressed_to_me": True, "reply_reference": "回应"}),), False),
-    ((ToolCall("stop", "wrong-stop", {"unexpected": True}),), False),
-    ((_REPLY, ToolCall("stop", "stop-1", {})), False),
-    ((ToolCall("query_memory", "undeclared", {"keywords": ["木卫二"]}),), False),
-])
+@pytest.mark.parametrize(
+    "calls, invalid",
+    [
+        ((), False),
+        ((_REPLY,), True),
+        ((ToolCall("reply", "malformed", {"addressed_to_me": "yes"}),), False),
+        (
+            (ToolCall("reply", "bad-type", {"addressed_to_me": True, "reply_reference": "回应"}),),
+            False,
+        ),
+        ((ToolCall("stop", "wrong-stop", {"unexpected": True}),), False),
+        ((_REPLY, ToolCall("stop", "stop-1", {})), False),
+        ((ToolCall("query_memory", "undeclared", {"keywords": ["木卫二"]}),), False),
+    ],
+)
 async def test_missing_or_invalid_tool_cannot_authorize_reply(
     calls: tuple[ToolCall, ...], invalid: bool
 ) -> None:
     async def call(request: OrganRequest) -> OrganResponse:
         return OrganResponse(
-            request.organ_id, '{"reply":true,"intent":"不要采用普通输出"}',
-            metadata={"tool_calls_invalid": invalid}, tool_calls=calls,
+            request.organ_id,
+            '{"reply":true,"intent":"不要采用普通输出"}',
+            metadata={"tool_calls_invalid": invalid},
+            tool_calls=calls,
         )
 
     async def retrieve(words: tuple[str, ...]) -> tuple[str, str] | None:
@@ -37,7 +47,10 @@ async def test_missing_or_invalid_tool_cannot_authorize_reply(
 
     actions: list[PlannerAction] = []
     assert await dispatch_planner_tools(
-        OrganRequest("planner", "当前消息"), planner_tools(), call, retrieve,
+        OrganRequest("planner", "当前消息"),
+        planner_tools(),
+        call,
+        retrieve,
         actions=actions,
     ) == (None, None)
     assert actions[-1].status == ("rejected" if calls or invalid else "not_run")
@@ -45,14 +58,19 @@ async def test_missing_or_invalid_tool_cannot_authorize_reply(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("available, value, accepted", [
-    (False, True, False),
-    (True, True, True),
-    (True, False, True),
-    (True, "701", False),
-])
+@pytest.mark.parametrize(
+    "available, value, accepted",
+    [
+        (False, True, False),
+        (True, True, True),
+        (True, False, True),
+        (True, "701", False),
+    ],
+)
 async def test_reply_quote_requires_capability_and_boolean(
-    available: bool, value: bool | str, accepted: bool,
+    available: bool,
+    value: bool | str,
+    accepted: bool,
 ) -> None:
     tools = planner_tools(PlannerToolOptions(quote_source=available))
     reply_tool = next(tool for tool in tools if tool.name == "reply")
@@ -68,7 +86,9 @@ async def test_reply_quote_requires_capability_and_boolean(
     async def retrieve(words: tuple[str, ...]) -> tuple[str, str] | None:
         pytest.fail(f"不应读取记忆：{words}")
 
-    plan, _ = await dispatch_planner_tools(OrganRequest("planner", "当前消息"), tools, call, retrieve)
+    plan, _ = await dispatch_planner_tools(
+        OrganRequest("planner", "当前消息"), tools, call, retrieve
+    )
     if accepted:
         assert plan is not None and plan.quote_source is value
     else:
@@ -83,7 +103,9 @@ async def test_only_explicit_terminal_choice_after_real_tool_result(finish: Tool
 
     async def call(request: OrganRequest) -> OrganResponse:
         requests.append(request)
-        return OrganResponse(request.organ_id, "", tool_calls=(finish if request.tool_history else query,))
+        return OrganResponse(
+            request.organ_id, "", tool_calls=(finish if request.tool_history else query,)
+        )
 
     async def retrieve(words: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
         assert words == ("木卫二",)
@@ -91,7 +113,10 @@ async def test_only_explicit_terminal_choice_after_real_tool_result(finish: Tool
 
     actions: list[PlannerAction] = []
     plan, recalled = await dispatch_planner_tools(
-        OrganRequest("planner", "当前消息"), planner_tools(PlannerToolOptions(recall=True)), call, retrieve,
+        OrganRequest("planner", "当前消息"),
+        planner_tools(PlannerToolOptions(recall=True)),
+        call,
+        retrieve,
         actions=actions,
     )
     first, second = requests
@@ -104,8 +129,10 @@ async def test_only_explicit_terminal_choice_after_real_tool_result(finish: Tool
     assert plan is not None and plan.should_reply is (finish.name == "reply")
     assert plan.addressed_to_me == ("no" if finish.name == "reply" else None)
     assert [(action.action, action.status) for action in actions] == [
-        ("query_memory", "requested"), ("query_memory", "completed"),
-        (finish.name, "requested"), (finish.name, "completed"),
+        ("query_memory", "requested"),
+        ("query_memory", "completed"),
+        (finish.name, "requested"),
+        (finish.name, "completed"),
     ]
     assert actions[-1].reference == ("只补充相关信息" if finish.name == "reply" else "")
     assert "限量内部记忆" not in str(actions)

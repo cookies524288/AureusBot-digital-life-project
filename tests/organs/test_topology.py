@@ -3,7 +3,12 @@
 import pytest
 
 from aureus.common.config import RuntimeConfig
-from aureus.organs.topology import ORGAN_DEFINITIONS, OrganDefinition, organ_connections, organ_tasks
+from aureus.organs.topology import (
+    ORGAN_DEFINITIONS,
+    OrganDefinition,
+    organ_connections,
+    organ_tasks,
+)
 
 
 def test_registered_organ_inherits_core_ports_and_declares_its_successor(

@@ -226,8 +226,12 @@ def read_graph(
     调用者只可传入已独立获准的原件；端点可见或知晓来源键均不是关系授权。
     未解析端点不返回，段落证据另按目标及关联行过滤。库不可读时抛 SQLite 错误。
     """
-    expected = allowed_sources if isinstance(allowed_sources, GraphAccess) else None
-    selected = expected.sources if expected is not None else allowed_sources
+    if isinstance(allowed_sources, GraphAccess):
+        expected = allowed_sources
+        selected = expected.sources
+    else:
+        expected = None
+        selected = allowed_sources
     if not selected:
         return MemoryGraph()
     uri = database.resolve().as_uri() + "?mode=ro"

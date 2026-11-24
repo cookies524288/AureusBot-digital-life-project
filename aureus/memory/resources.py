@@ -66,7 +66,7 @@ WITH catalog AS (
     FROM memory_index live
     JOIN timeline event ON event.id = live.record_id
     LEFT JOIN memory_edits edit ON edit.kind = 'live' AND edit.entry_id = live.rowid
-    WHERE NOT ({is_message_event('event.event_type')})
+    WHERE NOT ({is_message_event("event.event_type")})
     UNION ALL
     SELECT 'summary', fact.id,
            CASE WHEN current.value ->> '$[1]' = 'active' THEN fact.text ELSE '' END,
@@ -143,7 +143,8 @@ def browse_text_resources(
             params,
         ).fetchall()
         resources = [
-            resource for row in rows
+            resource
+            for row in rows
             if (resource := _text_resource(connection, row, summary_access)) is not None
         ]
         if access and (
@@ -176,7 +177,8 @@ def _text_resource(
     elif row["kind"] == "summary":
         detail = (
             summary_detail(connection, MemorySource.decode(row["source_key"]), *summary_access)
-            if summary_access else None
+            if summary_access
+            else None
         )
         if detail is None or detail.status != row["status"]:
             return None
@@ -213,7 +215,9 @@ def set_resources_removed(
         raise ValueError("请选择不重复的文字记忆。")
     pairs = ", ".join(f"(:kind{index}, :entry{index})" for index in range(len(targets)))
     params: dict[str, str | int | float] = {
-        "now": now.timestamp(), "prior": not removed, "summaries": "[]",
+        "now": now.timestamp(),
+        "prior": not removed,
+        "summaries": "[]",
     }
     for index, (kind, entry_id) in enumerate(targets):
         params[f"kind{index}"] = kind

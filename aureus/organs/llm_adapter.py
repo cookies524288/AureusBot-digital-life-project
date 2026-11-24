@@ -994,7 +994,9 @@ class LLMOrgan:
                 if self.organ_id == "voice":
                     assert media is not None
                     kwargs["file"] = _SpeechFile(media)
-                return await self._request(route, kwargs, messages, attempts, extra_bytes, tool_names)
+                return await self._request(
+                    route, kwargs, messages, attempts, extra_bytes, tool_names
+                )
             except _RouteFailureError as failure:
                 if not failure.retryable or number == requests:
                     raise

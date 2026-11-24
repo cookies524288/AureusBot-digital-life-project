@@ -349,10 +349,15 @@ async def test_qq_reply_parts_quote_only_on_request(
             str(2100 if is_private else GROUP),
         )
         archived = [
-            row.perception for row in store.list_messages(conversation) if row.direction == "outgoing"
+            row.perception
+            for row in store.list_messages(conversation)
+            if row.direction == "outgoing"
         ]
         assert [part.content for part in archived] == ["后续段", "第一段"]
-        assert [part.quoted_message_id for part in archived] == [None, "701" if request_quote else None]
+        assert [part.quoted_message_id for part in archived] == [
+            None,
+            "701" if request_quote else None,
+        ]
         assert all(part.visibility is answer.visibility for part in archived)
 
 

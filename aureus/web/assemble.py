@@ -126,7 +126,8 @@ def open_web(
             expression_recall=core.heartbeat.expression_recall,
             expression_cluster_display=(
                 ExpressionClusterDisplay(core.paths.database_file, core.language)
-                if core.language is not None and core.embedding_progress is not None
+                if core.language is not None
+                and core.embedding_progress is not None
                 and core.embedding_progress.expression_index is not None
                 else None
             ),

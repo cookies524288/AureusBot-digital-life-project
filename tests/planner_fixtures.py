@@ -26,9 +26,11 @@ def plan_response(request: OrganRequest, fixture: str | dict[str, Any]) -> Organ
         data.setdefault("reply_reference", data.get("intent"))
         call = ToolCall("reply", "synthetic_reply", data)
     elif reply is False:
-        attention = {key: data[key] for key in (
-            "read_inbox", "special_contact", "stay_in_conversation"
-        ) if key in data}
+        attention = {
+            key: data[key]
+            for key in ("read_inbox", "special_contact", "stay_in_conversation")
+            if key in data
+        }
         call = ToolCall("inbox_attention" if attention else "stop", "synthetic_stop", attention)
     else:
         return OrganResponse(request.organ_id, json.dumps(data))

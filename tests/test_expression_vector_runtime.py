@@ -114,10 +114,16 @@ async def test_local_expression_vectors_reach_actual_reply(
                 '"reply_reference":"合成回复参考",'
                 '"expression_intent":{"scene":"普通跑步","avoid":["禁用暗号"]}}'
             )
-            message = {"role": "assistant", "tool_calls": [{
-                "id": "synthetic_reply", "type": "function",
-                "function": {"name": "reply", "arguments": arguments},
-            }]}
+            message = {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "synthetic_reply",
+                        "type": "function",
+                        "function": {"name": "reply", "arguments": arguments},
+                    }
+                ],
+            }
             finish_reason = "tool_calls"
         else:
             reply_prompts.append(text)

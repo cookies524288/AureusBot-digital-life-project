@@ -290,7 +290,7 @@ def test_restore_all_removes_only_settings_overrides(rig: ConfigRig) -> None:
     kept_files = {
         paths.identity_file: IDENTITY.encode("utf-8"),
         paths.models_config_file: b'# synthetic model settings\n[[providers]]\nname = "sample"\n',
-        paths.home / "prompts.toml": b'# synthetic prompt settings\n',
+        paths.home / "prompts.toml": b"# synthetic prompt settings\n",
         paths.data_dir / "sample.txt": b"synthetic data",
     }
     for path, content in kept_files.items():
@@ -298,12 +298,12 @@ def test_restore_all_removes_only_settings_overrides(rig: ConfigRig) -> None:
     paths.runtime_config_file.write_bytes(
         b'# keep this note\nconfig_version = 1\nlog_level = "DEBUG"\n'
         b'[heartbeat]\nadvance_biomodel = true\nplan_organ = "old"\n'
-        b'inbox_read_limit = 72\n[cortisol]\nenabled = true\n'
-        b'[hormones]\nanger_half_life_seconds = 731.0 # keep duration\njoy_enabled = false\n'
-        b'[mood]\nhalf_life_seconds = 18000.0\nenabled = false\n'
+        b"inbox_read_limit = 72\n[cortisol]\nenabled = true\n"
+        b"[hormones]\nanger_half_life_seconds = 731.0 # keep duration\njoy_enabled = false\n"
+        b"[mood]\nhalf_life_seconds = 18000.0\nenabled = false\n"
         b'[exploration]\nsearch_endpoint = "https://search.example.test"\n'
-        b'[web]\nport = 30000 # keep this comment\nsession_days = 12\n'
-        b'[safety]\nmax_calls_per_minute = 21\n'
+        b"[web]\nport = 30000 # keep this comment\nsession_days = 12\n"
+        b"[safety]\nmax_calls_per_minute = 21\n"
     )
     response = rig.client.post(
         RUNTIME_RESTORE_ALL, json={"password": GOOD, "changes": {"web": {"port": 12345}}}

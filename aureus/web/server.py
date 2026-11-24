@@ -494,7 +494,8 @@ def create_app(
         records = timeline.query(
             TimelineQuery(
                 event_types=(EVENT_REPLY_DELIVERED,)
-                if replies_only else (EVENT_MESSAGE, EVENT_REPLY_DELIVERED),
+                if replies_only
+                else (EVENT_MESSAGE, EVENT_REPLY_DELIVERED),
                 since_id=since_id if since_id is not None else 0,
                 latest=since_id is None,
                 limit=bounded,
@@ -512,7 +513,8 @@ def create_app(
                 **(
                     {"delivery_key": f"{record.metadata['reply_id']}:{record.metadata['segment']}"}
                     if record.event_type == EVENT_REPLY_DELIVERED
-                    and "reply_id" in record.metadata and "segment" in record.metadata
+                    and "reply_id" in record.metadata
+                    and "segment" in record.metadata
                     else {}
                 ),
             }
@@ -524,9 +526,10 @@ def create_app(
     @app.get("/api/chat/typing")
     async def chat_typing(_token: Annotated[str, Depends(require_ready)]) -> JSONResponse:
         return JSONResponse(
-            {"typing": heartbeat is not None and heartbeat.is_replying_to(
-                web_visibility=channel.user_visibility
-            )},
+            {
+                "typing": heartbeat is not None
+                and heartbeat.is_replying_to(web_visibility=channel.user_visibility)
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -569,12 +572,23 @@ def create_app(
         is_replying=(lambda key: heartbeat.is_replying_to(conversation=key)) if heartbeat else None,
     )
     register_inbox_operations(
-        app, require_ready, sessions.is_active, _same_http_origin,
-        inbox_store, qq_desktop, clock, allows_qq_delivery,
+        app,
+        require_ready,
+        sessions.is_active,
+        _same_http_origin,
+        inbox_store,
+        qq_desktop,
+        clock,
+        allows_qq_delivery,
     )
     register_inbox_retention_routes(
-        app, require_ready, sessions.is_active, _same_http_origin, auth,
-        inbox_retention, allows_inbox_conversation,
+        app,
+        require_ready,
+        sessions.is_active,
+        _same_http_origin,
+        auth,
+        inbox_retention,
+        allows_inbox_conversation,
     )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock
@@ -600,7 +614,11 @@ def create_app(
         people=resource_people,
     )
     register_memory_graph_routes(
-        app, require_ready, resource_memory, memory_graph_grants, sessions.is_active,
+        app,
+        require_ready,
+        resource_memory,
+        memory_graph_grants,
+        sessions.is_active,
         display=memory_graph_display,
     )
     register_memory_graph_grant_routes(
@@ -618,23 +636,35 @@ def create_app(
         scopes=embedding_progress.expression_scopes if embedding_progress else None,
     )
     register_expression_cluster_grants(
-        app, require_ready, sessions.is_active, _same_http_origin, auth,
-        expression_cluster_display, embedding_progress.expression_scopes if embedding_progress else None,
+        app,
+        require_ready,
+        sessions.is_active,
+        _same_http_origin,
+        auth,
+        expression_cluster_display,
+        embedding_progress.expression_scopes if embedding_progress else None,
     )
     register_expression_vector_routes(
-        app, require_ready, _same_http_origin, sessions.is_active, embedding_progress,
+        app,
+        require_ready,
+        _same_http_origin,
+        sessions.is_active,
+        embedding_progress,
         expression_recall,
     )
     register_memory_inspection_routes(
         app, require_inspection_access, resource_memory, channel.user_visibility
     )
+
     def can_show_summary(scope: tuple[str, str]) -> bool:
         if scope == WEB_PRIVATE_SCOPE:
             return channel.user_visibility is VisibilityScope.USER_ONLY
         route, visibility = scope
         return (
-            allows_inbox_conversation is not None and inbox_store is not None
-            and visibility in VISIBLE_SUMMARY_SCOPES and route.startswith("[")
+            allows_inbox_conversation is not None
+            and inbox_store is not None
+            and visibility in VISIBLE_SUMMARY_SCOPES
+            and route.startswith("[")
             and allows_inbox_conversation(ConversationKey.from_scope_key(route))
         )
 

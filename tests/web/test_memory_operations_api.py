@@ -35,7 +35,7 @@ def _client(rig: Rig, memory: MemoryIndex) -> TestClient:
 
 def _append(rig: Rig, visibility: VisibilityScope) -> int:
     return rig.timeline.append(
-        "message", "合成不可泄露正文", ActorType.USER, visibility=visibility
+        "diary_written", "合成不可泄露正文", ActorType.ME, visibility=visibility
     ).id
 
 
@@ -54,7 +54,10 @@ def test_memory_operations_show_only_visible_changes_before_paging(tmp_path: Pat
         legacy = _append(rig, VisibilityScope.USER_ONLY)
         group = _append(rig, VisibilityScope.GROUP)
         private = _append(rig, VisibilityScope.PRIVATE)
-        assert memory.index_more(10, lambda record: MemoryEntry("合成", record.content)) == 5
+        message = rig.timeline.append(
+            "message", "合成平台原件", ActorType.USER, visibility=VisibilityScope.USER_ONLY
+        )
+        assert memory.index_more(10, lambda record: MemoryEntry("合成", record.content)) == 6
         memory.publish(
             [HistoricalMemory(MemorySource("合成", "memory", "paragraphs", (1,)), "迁入")]
         )
@@ -84,6 +87,10 @@ def test_memory_operations_show_only_visible_changes_before_paging(tmp_path: Pat
                 "removed": True,
                 "targets": [_target(first), _target(second), _target(group), _target(1, "history")],
             }
+            with_message = {**mixed, "targets": [*mixed["targets"], _target(message.id)]}
+            assert client.patch(BATCH, json=with_message, headers=ORIGIN).status_code == 409
+            assert client.get(OPERATIONS).json()["total"] == 0
+            assert rig.timeline.get(message.id) == message
             assert (
                 client.patch(
                     BATCH, json=mixed, headers={"origin": "http://foreign.test"}

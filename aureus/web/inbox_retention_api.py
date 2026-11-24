@@ -39,8 +39,13 @@ def register_inbox_retention_routes(
     """展示已发表提议；必须通过同源和当前密码核验才能确认。"""
 
     def permitted(key: ConversationKey, token: str) -> bool:
-        return (key.platform == "qq" and allows is not None and allows(key)
-                and session_is_active(token) and not auth.password_is_default)
+        return (
+            key.platform == "qq"
+            and allows is not None
+            and allows(key)
+            and session_is_active(token)
+            and not auth.password_is_default
+        )
 
     def current_preview(key: ConversationKey) -> CleanupPreview | None:
         preview = retention.pending(key) if retention is not None else None
@@ -58,15 +63,25 @@ def register_inbox_retention_routes(
         preview = current_preview(key)
         if retention is None or not permitted(key, token):
             return JSONResponse({"preview": None}, headers=_NO_STORE)
-        return JSONResponse({"preview": {
-            **preview.summary(), "conversation": asdict(key),
-            "expires_at": preview.expires_at.isoformat(),
-        } if preview else None}, headers=_NO_STORE)
+        return JSONResponse(
+            {
+                "preview": {
+                    **preview.summary(),
+                    "conversation": asdict(key),
+                    "expires_at": preview.expires_at.isoformat(),
+                }
+                if preview
+                else None
+            },
+            headers=_NO_STORE,
+        )
 
     @app.post(_CLEANUP_PATH)
     async def confirm(
-        key: Annotated[ConversationKey, Depends(_conversation_key)], body: _Confirmation,
-        request: Request, token: Annotated[str, Depends(require_ready)],
+        key: Annotated[ConversationKey, Depends(_conversation_key)],
+        body: _Confirmation,
+        request: Request,
+        token: Annotated[str, Depends(require_ready)],
     ) -> JSONResponse:
         if not same_origin(request) or retention is None:
             raise HTTPException(403, "当前会话没有历史清理权限。", headers=_NO_STORE)
@@ -74,7 +89,8 @@ def register_inbox_retention_routes(
         if not permitted(key, token):
             raise HTTPException(403, "当前会话没有历史清理权限。", headers=_NO_STORE)
         if (
-            preview is None or preview.id != body.proposal_id
+            preview is None
+            or preview.id != body.proposal_id
             or not (preview.originals or preview.timeline_only)
         ):
             raise HTTPException(409, "没有可确认的预览，请让助手重新预览。", headers=_NO_STORE)
@@ -83,23 +99,33 @@ def register_inbox_retention_routes(
         except LoginRejectedError:
             raise HTTPException(403, "密码不对。", headers=_NO_STORE) from None
         except LoginLockedError as error:
-            raise HTTPException(429, str(error), headers={
-                **_NO_STORE,
-                "Retry-After": str(max(1, math.ceil(error.retry_after.total_seconds()))),
-            }) from None
+            raise HTTPException(
+                429,
+                str(error),
+                headers={
+                    **_NO_STORE,
+                    "Retry-After": str(max(1, math.ceil(error.retry_after.total_seconds()))),
+                },
+            ) from None
         try:
             result = await asyncio.to_thread(
-                retention.confirm, preview, lambda: permitted(key, token),
+                retention.confirm,
+                preview,
+                lambda: permitted(key, token),
             )
         except sqlite3.Error:
             raise HTTPException(
-                503, "无法完成历史清理，未修改记录。", headers=_NO_STORE,
+                503,
+                "无法完成历史清理，未修改记录。",
+                headers=_NO_STORE,
             ) from None
         retention.forget(preview)
         if result == "denied":
             raise HTTPException(403, "登录或会话授权已变化。", headers=_NO_STORE)
         if result == "changed":
             raise HTTPException(
-                409, "原件、来源或读水位已有变化，请让助手重新预览。", headers=_NO_STORE,
+                409,
+                "原件、来源或读水位已有变化，请让助手重新预览。",
+                headers=_NO_STORE,
             )
         return JSONResponse({"completed": True, **preview.summary()}, headers=_NO_STORE)

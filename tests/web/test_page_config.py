@@ -70,7 +70,9 @@ def test_reset_updates_settings_and_browser_font_only_after_server_accepts() -> 
         password.value = 'synthetic password';
         const accepted = submit(event);
         assert.equal(preferences.get('aureus-font'), 'system');
-        respond({ok:true, data:{config:{log_level:'INFO'}, changed:['log_level'], restart_required:true}});
+        respond({ok:true, data:{
+          config:{log_level:'INFO'}, changed:['log_level'], restart_required:true,
+        }});
         await accepted;
         assert.equal(dialog.open, false);
         assert.equal(cf.data.log_level, 'INFO');

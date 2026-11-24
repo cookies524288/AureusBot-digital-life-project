@@ -244,9 +244,9 @@ def _resolve_components(
             ).fetchone()
             if original is not None:
                 component = replace(component, target_account_id=original["sender_id"] or None)
-        resolved.append({
-            key: value for key, value in asdict(component).items() if value is not None
-        })
+        resolved.append(
+            {key: value for key, value in asdict(component).items() if value is not None}
+        )
     return resolved
 
 
@@ -303,7 +303,8 @@ class InboxStore:
                     database.execute("ALTER TABLE inbox_messages ADD COLUMN received_at TEXT")
                 if "image_notes" not in columns:
                     database.execute(
-                        "ALTER TABLE inbox_messages ADD COLUMN image_notes TEXT NOT NULL DEFAULT '{}'"
+                        "ALTER TABLE inbox_messages ADD COLUMN image_notes "
+                        "TEXT NOT NULL DEFAULT '{}'"
                     )
                 database.execute(_INVALIDATE_IMAGE_NOTES)
                 if "is_read" in columns:
@@ -348,10 +349,14 @@ class InboxStore:
         fallback = f"群 {key.recipient_id}" if key.kind == "group" else key.recipient_id
         with closing(open_connection(self._path)) as database, database:
             database.execute("BEGIN IMMEDIATE")
-            if database.execute(
-                "SELECT 1 FROM inbox_history_exclusions WHERE scope=? AND source='platform' AND source_key=?",
-                (key.language_scope_key(), route.message_id),
-            ).fetchone() is not None:
+            if (
+                database.execute(
+                    "SELECT 1 FROM inbox_history_exclusions "
+                    "WHERE scope=? AND source='platform' AND source_key=?",
+                    (key.language_scope_key(), route.message_id),
+                ).fetchone()
+                is not None
+            ):
                 return None
             conversation_id, _ = database.execute(
                 """INSERT INTO inbox_conversations
@@ -480,15 +485,22 @@ class InboxStore:
     def count_visible_messages(self, conversation: ConversationKey) -> int:
         """统计完整路由中可供网页读取的规范原件。"""
         with closing(open_connection(self._path, read_only=True)) as database:
-            return int(database.execute(
-                f"SELECT COUNT(*) FROM inbox_messages m JOIN inbox_conversations c "
-                f"ON c.id = m.conversation_id WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE}",
-                conversation.parameters(),
-            ).fetchone()[0])
+            return int(
+                database.execute(
+                    f"SELECT COUNT(*) FROM inbox_messages m JOIN inbox_conversations c "
+                    f"ON c.id = m.conversation_id WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE}",
+                    conversation.parameters(),
+                ).fetchone()[0]
+            )
 
     def list_read_history(
-        self, conversation: ConversationKey, visibility: VisibilityScope, *,
-        before_id: int | None, keyword: str | None, limit: int,
+        self,
+        conversation: ConversationKey,
+        visibility: VisibilityScope,
+        *,
+        before_id: int | None,
+        keyword: str | None,
+        limit: int,
     ) -> list[InboxMessage]:
         """读取同一可见范围内连续已读的来信与实际送达的回信，不改变水位。"""
         with closing(open_connection(self._path, read_only=True)) as database:
@@ -497,7 +509,15 @@ class InboxStore:
                     AND m.visibility = ? AND (? IS NULL OR m.id < ?)
                     AND (? IS NULL OR instr(lower(m.content), lower(?)) > 0)
                     ORDER BY m.id DESC LIMIT ?""",
-                (*conversation.parameters(), visibility, before_id, before_id, keyword, keyword, limit),
+                (
+                    *conversation.parameters(),
+                    visibility,
+                    before_id,
+                    before_id,
+                    keyword,
+                    keyword,
+                    limit,
+                ),
             )
             return [_message(row) for row in rows]
 
@@ -545,9 +565,15 @@ class InboxStore:
                       AND {USER_VISIBLE_INBOX_MESSAGE}
                       AND conversation_id IN (SELECT id FROM inbox_conversations WHERE {_KEY})
                       AND json_extract(attachments, ?) = json(?)""",
-                (f'$."{position}"', json.dumps((note.source, note.value), ensure_ascii=False),
-                 identifier, source.route.message_id, *ConversationKey.from_perception(source).parameters(),
-                 f"$[{position}]", json.dumps([attachment.kind, attachment.file_id, attachment.is_emoji])),
+                (
+                    f'$."{position}"',
+                    json.dumps((note.source, note.value), ensure_ascii=False),
+                    identifier,
+                    source.route.message_id,
+                    *ConversationKey.from_perception(source).parameters(),
+                    f"$[{position}]",
+                    json.dumps([attachment.kind, attachment.file_id, attachment.is_emoji]),
+                ),
             )
 
     def list_unread(self, conversation: ConversationKey, *, limit: int = 50) -> list[InboxMessage]:
@@ -613,8 +639,12 @@ class InboxStore:
         return tuple(_message(row) for row in rows)
 
     def summary_evidence(
-        self, connection: Connection, conversation: ConversationKey, visibility: VisibilityScope,
-        sequence: int, message_id: str,
+        self,
+        connection: Connection,
+        conversation: ConversationKey,
+        visibility: VisibilityScope,
+        sequence: int,
+        message_id: str,
     ) -> InboxMessage | None:
         """在同一个读写事务定位证据；已清理原件不回退到缓存正文。"""
         row = connection.execute(
@@ -633,7 +663,8 @@ class InboxStore:
                 JOIN inbox_conversations c ON c.id = m.conversation_id WHERE {_KEY}
                 AND m.message_id IN (SELECT value FROM json_each(?))
                 UNION SELECT source_key FROM inbox_history_exclusions
-                WHERE scope = ? AND source = 'platform' AND source_key IN (SELECT value FROM json_each(?))""",
+                WHERE scope = ? AND source = 'platform'
+                AND source_key IN (SELECT value FROM json_each(?))""",
                 (*conversation.parameters(), encoded, conversation.language_scope_key(), encoded),
             ).fetchall()
         return {row[0] for row in rows}
@@ -641,11 +672,15 @@ class InboxStore:
     def excluded_timeline_ids(self, conversation: ConversationKey, ids: Iterable[int]) -> set[int]:
         """读取已从该会话平台视图移除的旧时间线定位。"""
         with closing(open_connection(self._path, read_only=True)) as database:
-            return {int(row[0]) for row in database.execute(
-                """SELECT source_key FROM inbox_history_exclusions WHERE scope = ? AND source = 'timeline'
-                AND source_key IN (SELECT CAST(value AS TEXT) FROM json_each(?))""",
-                (conversation.language_scope_key(), json.dumps(tuple(ids))),
-            )}
+            return {
+                int(row[0])
+                for row in database.execute(
+                    """SELECT source_key FROM inbox_history_exclusions
+                       WHERE scope = ? AND source = 'timeline'
+                       AND source_key IN (SELECT CAST(value AS TEXT) FROM json_each(?))""",
+                    (conversation.language_scope_key(), json.dumps(tuple(ids))),
+                )
+            }
 
     @property
     def database_path(self) -> Path:

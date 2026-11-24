@@ -53,25 +53,46 @@ async def test_snowluma_components_are_scoped_archived_and_replayed(tmp_path: Pa
             endpoint=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/onebot",
         )
         async with QQChannel(
-            config, None, Receiver(), lambda account: account == str(OWNER),
-            inbox_store=store, on_inbox_message=notified.put_nowait,
+            config,
+            None,
+            Receiver(),
+            lambda account: account == str(OWNER),
+            inbox_store=store,
+            on_inbox_message=notified.put_nowait,
         ) as channel:
             remote = await fake.connections.get()
             await fake.send(remote, **event(10, THIRD_PARTY, "原件", group=GROUP))
             await fake.send(remote, **event(11, OWNER, "同键的普通私聊"))
             source = await notified.get()
             private = await notified.get()
-            await fake.send(remote, **event(12, FRIEND, "", group=GROUP, message=[
-                segment("reply", id=10), segment("text", text="第一段"),
-                segment("at", qq=ACCOUNT), segment("image", file="image-token"),
-                segment("reply", id=11, qq=OWNER), segment("at", qq="all"),
-                segment("text", text="最后一段"),
-            ]))
+            await fake.send(
+                remote,
+                **event(
+                    12,
+                    FRIEND,
+                    "",
+                    group=GROUP,
+                    message=[
+                        segment("reply", id=10),
+                        segment("text", text="第一段"),
+                        segment("at", qq=ACCOUNT),
+                        segment("image", file="image-token"),
+                        segment("reply", id=11, qq=OWNER),
+                        segment("at", qq="all"),
+                        segment("text", text="最后一段"),
+                    ],
+                ),
+            )
             mixed = await notified.get()
             for notice in (
-                poke(group_id=GROUP, user_id=FRIEND, target_id=THIRD_PARTY,
-                     action="<img src=https://invalid.example/>", suffix="肩膀",
-                     action_img_url="https://invalid.example/personalized.png"),
+                poke(
+                    group_id=GROUP,
+                    user_id=FRIEND,
+                    target_id=THIRD_PARTY,
+                    action="<img src=https://invalid.example/>",
+                    suffix="肩膀",
+                    action_img_url="https://invalid.example/personalized.png",
+                ),
                 poke(user_id=OWNER, sender_id=OWNER, target_id=ACCOUNT),
                 poke(user_id=OWNER, sender_id=ACCOUNT, target_id=OWNER),
                 poke(group_id=GROUP + 1, user_id=OWNER, target_id=ACCOUNT),
@@ -81,19 +102,36 @@ async def test_snowluma_components_are_scoped_archived_and_replayed(tmp_path: Pa
                 poke(group_id=0, user_id=OWNER, sender_id=OWNER, target_id=ACCOUNT),
             ):
                 await fake.send(remote, **notice)
-            await fake.send(remote, **event(13, FRIEND, "", group=GROUP, message=[
-                segment("poke", type=42),
-            ]))
+            await fake.send(
+                remote,
+                **event(
+                    13,
+                    FRIEND,
+                    "",
+                    group=GROUP,
+                    message=[
+                        segment("poke", type=42),
+                    ],
+                ),
+            )
             await fake.send(remote, **event(14, OWNER, "同步屏障"))
             assert (await notified.get()).perception.content == "同步屏障"
             assert notified.empty() and fake.messages.empty()
             route = mixed.perception.route
             assert route is not None
             for text in ("桥拒绝", "已发回复", "重复回执"):
-                channel.show(OutgoingMessage(
-                    "qq", str(FRIEND), text, MessageKind.REPLY, "自己", route=route,
-                    quote_source=True, visibility=VisibilityScope.GROUP,
-                ))
+                channel.show(
+                    OutgoingMessage(
+                        "qq",
+                        str(FRIEND),
+                        text,
+                        MessageKind.REPLY,
+                        "自己",
+                        route=route,
+                        quote_source=True,
+                        visibility=VisibilityScope.GROUP,
+                    )
+                )
             await asyncio.gather(*channel._sending)
             actual = [await fake.messages.get() for _ in range(3)]
             assert actual[1]["message"][0] == segment("reply", id="12")
@@ -102,16 +140,27 @@ async def test_snowluma_components_are_scoped_archived_and_replayed(tmp_path: Pa
     assert reopened.add(mixed.perception) is None
     group_rows = list(reversed(reopened.list_messages(source.conversation)))
     assert [row.direction for row in group_rows] == [
-        "incoming", "incoming", "notice", "archived", "outgoing",
+        "incoming",
+        "incoming",
+        "notice",
+        "archived",
+        "outgoing",
     ]
     assert [row.id for row in reopened.list_unread(source.conversation)] == [source.id, mixed.id]
-    assert [row.direction for row in reopened.summary_window(
-        source.conversation, VisibilityScope.GROUP, 0, 50
-    )] == ["incoming", "incoming", "outgoing"]
+    assert [
+        row.direction
+        for row in reopened.summary_window(source.conversation, VisibilityScope.GROUP, 0, 50)
+    ] == ["incoming", "incoming", "outgoing"]
     components = group_rows[1].perception.components
     assert [part.position for part in components] == list(range(7))
     assert [part.kind for part in components] == [
-        "reply", "text", "at", "image", "reply", "at", "text",
+        "reply",
+        "text",
+        "at",
+        "image",
+        "reply",
+        "at",
+        "text",
     ]
     assert components[0].target_message_id == "10"
     assert components[0].target_account_id == str(THIRD_PARTY)
@@ -150,7 +199,8 @@ async def test_snowluma_components_are_scoped_archived_and_replayed(tmp_path: Pa
         private_rows = private_response.json()["messages"]
         assert [
             (row["direction"], row["sender_id"], row["components"][0]["target_account_id"])
-            for row in private_rows if row["event_type"] == "poke_notice"
+            for row in private_rows
+            if row["event_type"] == "poke_notice"
         ] == [("outgoing", str(ACCOUNT), str(OWNER)), ("incoming", str(OWNER), str(ACCOUNT))]
         allowed.remove(source.conversation)
         assert rig.client.get("/api/inbox/messages", params=group_params).json()["messages"] == []

@@ -394,7 +394,11 @@ def build_prompt_scenes(
                 build_judge_prompt(_HISTORY, _JUDGE_INPUT, user),
                 build_judge_context(
                     identity,
-                    ("疲劳 〔身体读数〕", "情绪（0 至 1）：〔情绪读数〕", "心情（−1 至 1）：〔心情读数〕"),
+                    (
+                        "疲劳 〔身体读数〕",
+                        "情绪（0 至 1）：〔情绪读数〕",
+                        "心情（−1 至 1）：〔心情读数〕",
+                    ),
                 ),
             )
     if "exploration_summary" in tasks:
@@ -431,7 +435,9 @@ def build_prompt_scenes(
     ):
         add("language_learning", str(request.context["task"]), label, request)
     add(
-        "expression_quality", "expression_quality", "表达方式 · 独立质检",
+        "expression_quality",
+        "expression_quality",
+        "表达方式 · 独立质检",
         build_expression_quality(organ, "〔使用情境〕", "〔候选说法〕"),
     )
     add(

@@ -50,11 +50,17 @@ class CleanupPreview:
 
     def summary(self) -> dict[str, str | int]:
         """返回网页及模型所需的范围计数；不返回内部指纹。"""
-        return {"id": self.id, "cutoff": self.scope.cutoff.isoformat(),
-                "visibility": self.scope.visibility.value, "read_water": self.read_water,
-                "inbox_water": self.inbox_water, "timeline_water": self.timeline_water,
-                "originals": self.originals, "timeline_only": self.timeline_only,
-                "image_vectors": self.image_vectors}
+        return {
+            "id": self.id,
+            "cutoff": self.scope.cutoff.isoformat(),
+            "visibility": self.scope.visibility.value,
+            "read_water": self.read_water,
+            "inbox_water": self.inbox_water,
+            "timeline_water": self.timeline_water,
+            "originals": self.originals,
+            "timeline_only": self.timeline_only,
+            "image_vectors": self.image_vectors,
+        }
 
 
 @dataclass(frozen=True)
@@ -74,10 +80,18 @@ class HistoryRetention:
     """预览无副作用；心跳接受后才发表，已认证确认在事务中重新复核。"""
 
     def __init__(
-        self, store: InboxStore, legacy: LegacyPlatformHistory, clock: Clock,
+        self,
+        store: InboxStore,
+        legacy: LegacyPlatformHistory,
+        clock: Clock,
         timezone: tzinfo | None,
     ) -> None:
-        self._store, self._legacy, self._clock, self._timezone = store, legacy, clock, timezone or UTC
+        self._store, self._legacy, self._clock, self._timezone = (
+            store,
+            legacy,
+            clock,
+            timezone or UTC,
+        )
         self._pending: dict[ConversationKey, CleanupPreview] = {}
         self._pending_lock = Lock()
 
@@ -86,7 +100,10 @@ class HistoryRetention:
         return self._legacy.shares_database(self._store.database_path)
 
     def preview(
-        self, key: ConversationKey, visibility: VisibilityScope, cutoff: date,
+        self,
+        key: ConversationKey,
+        visibility: VisibilityScope,
+        cutoff: date,
     ) -> CleanupPreview | None:
         """截止日期自身不包含，按运行实例时区转换为确定的时间。"""
         if not self.available() or key.platform != "qq" or visibility not in _VISIBLE:
@@ -98,14 +115,27 @@ class HistoryRetention:
         with closing(open_connection(self._store.database_path, read_only=True)) as connection:
             connection.execute("BEGIN")
             read_water = self._read_water(connection, key)
-            inbox_water = int(connection.execute(
-                "SELECT high_water FROM inbox_message_sequence WHERE id=1"
-            ).fetchone()[0])
+            inbox_water = int(
+                connection.execute(
+                    "SELECT high_water FROM inbox_message_sequence WHERE id=1"
+                ).fetchone()[0]
+            )
             timeline_water = self._legacy.high_water(connection)
-            candidates = self._candidates(connection, scope, read_water, inbox_water, timeline_water)
-        return CleanupPreview(uuid4().hex, scope, now + _PROPOSAL_TTL,
-                              read_water, inbox_water, timeline_water, len(candidates.originals),
-                              len(candidates.legacy), candidates.vectors, candidates.fingerprint())
+            candidates = self._candidates(
+                connection, scope, read_water, inbox_water, timeline_water
+            )
+        return CleanupPreview(
+            uuid4().hex,
+            scope,
+            now + _PROPOSAL_TTL,
+            read_water,
+            inbox_water,
+            timeline_water,
+            len(candidates.originals),
+            len(candidates.legacy),
+            candidates.vectors,
+            candidates.fingerprint(),
+        )
 
     def publish(self, preview: CleanupPreview) -> None:
         """只发布当前未被抢占的轮次所接受的预览；每会话至多一份。"""
@@ -122,7 +152,9 @@ class HistoryRetention:
         return preview if preview and preview.expires_at > self._clock.now() else None
 
     def confirm(
-        self, preview: CleanupPreview, permits: Callable[[], bool],
+        self,
+        preview: CleanupPreview,
+        permits: Callable[[], bool],
     ) -> Literal["completed", "changed", "denied"]:
         """独占事务复核候选、当前读水位及授权；不接受客户端自定义水位。"""
         scope = preview.scope
@@ -131,15 +163,22 @@ class HistoryRetention:
             if not permits():
                 return "denied"
             if (
-                self.pending(scope.key) != preview or not (preview.originals or preview.timeline_only)
+                self.pending(scope.key) != preview
+                or not (preview.originals or preview.timeline_only)
                 or self._read_water(connection, scope.key) != preview.read_water
                 or connection.execute(
-                    "SELECT 1 FROM inbox_history_cleanup_audit WHERE proposal_id=?", (preview.id,),
-                ).fetchone() is not None
+                    "SELECT 1 FROM inbox_history_cleanup_audit WHERE proposal_id=?",
+                    (preview.id,),
+                ).fetchone()
+                is not None
             ):
                 return "changed"
             candidates = self._candidates(
-                connection, scope, preview.read_water, preview.inbox_water, preview.timeline_water,
+                connection,
+                scope,
+                preview.read_water,
+                preview.inbox_water,
+                preview.timeline_water,
             )
             if candidates.fingerprint() != preview.fingerprint:
                 return "changed"
@@ -168,18 +207,25 @@ class HistoryRetention:
     def _read_water(connection: Connection, key: ConversationKey) -> int:
         row = connection.execute(
             """SELECT last_read_id FROM inbox_conversations WHERE platform=? AND account_id=?
-                AND kind=? AND recipient_id=? AND temporary_group_id=?""", key.parameters(),
+                AND kind=? AND recipient_id=? AND temporary_group_id=?""",
+            key.parameters(),
         ).fetchone()
         return int(row[0] or 0) if row else 0
 
     def _candidates(
-        self, connection: Connection, scope: CleanupScope, read_water: int,
-        inbox_water: int, timeline_water: int,
+        self,
+        connection: Connection,
+        scope: CleanupScope,
+        read_water: int,
+        inbox_water: int,
+        timeline_water: int,
     ) -> _Candidates:
         key = scope.key
         cutoff_epoch = scope.cutoff.timestamp()
-        originals = tuple((row[0], row[1]) for row in connection.execute(
-            """SELECT m.id, m.message_id FROM inbox_messages m JOIN inbox_conversations c
+        originals = tuple(
+            (row[0], row[1])
+            for row in connection.execute(
+                """SELECT m.id, m.message_id FROM inbox_messages m JOIN inbox_conversations c
                 ON c.id=m.conversation_id WHERE c.platform=? AND c.account_id=? AND c.kind=?
                 AND c.recipient_id=? AND c.temporary_group_id=? AND m.visibility=?
                 AND ((m.direction='incoming' AND m.id<=?) OR m.direction='outgoing')
@@ -187,39 +233,70 @@ class HistoryRetention:
                 AND unixepoch(COALESCE(m.received_at,
                     CASE WHEN m.source_timestamp IS NULL THEN m.timestamp END),'subsec')<?
                 ORDER BY m.id""",
-            (*key.parameters(), scope.visibility, read_water, inbox_water,
-             cutoff_epoch, cutoff_epoch),
-        ))
+                (
+                    *key.parameters(),
+                    scope.visibility,
+                    read_water,
+                    inbox_water,
+                    cutoff_epoch,
+                    cutoff_epoch,
+                ),
+            )
+        )
         legacy = self._legacy.retention_candidates(
-            connection, (key.platform, key.account_id, key.kind, key.recipient_id, key.temporary_group_id),
-            scope.visibility, cutoff_epoch, timeline_water,
+            connection,
+            (key.platform, key.account_id, key.kind, key.recipient_id, key.temporary_group_id),
+            scope.visibility,
+            cutoff_epoch,
+            timeline_water,
         )
         linked_now = self._present_platform_ids(connection, key, legacy)
-        hidden = {row[0] for row in connection.execute(
-            "SELECT source_key FROM inbox_history_exclusions WHERE scope=? AND source='timeline'",
-            (key.language_scope_key(),),
-        )}
-        remaining = tuple(item for item in legacy if str(item[0]) not in hidden and item[1] not in linked_now)
+        hidden = {
+            row[0]
+            for row in connection.execute(
+                "SELECT source_key FROM inbox_history_exclusions "
+                "WHERE scope=? AND source='timeline'",
+                (key.language_scope_key(),),
+            )
+        }
+        remaining = tuple(
+            item for item in legacy if str(item[0]) not in hidden and item[1] not in linked_now
+        )
         selected = _Candidates(originals, remaining, 0)
-        return _Candidates(originals, remaining, InboxImageIndex.retention_vectors(connection, selected.inbox_ids()))
+        return _Candidates(
+            originals,
+            remaining,
+            InboxImageIndex.retention_vectors(connection, selected.inbox_ids()),
+        )
 
     @staticmethod
     def _present_platform_ids(
-        connection: Connection, key: ConversationKey, legacy: list[tuple[int, str | None]],
+        connection: Connection,
+        key: ConversationKey,
+        legacy: list[tuple[int, str | None]],
     ) -> set[str]:
         if not legacy:
             return set()
-        return {row[0] for row in connection.execute(
-            """SELECT m.message_id FROM inbox_messages m JOIN inbox_conversations c
+        return {
+            row[0]
+            for row in connection.execute(
+                """SELECT m.message_id FROM inbox_messages m JOIN inbox_conversations c
                 ON c.id=m.conversation_id WHERE c.platform=? AND c.account_id=? AND c.kind=?
                 AND c.recipient_id=? AND c.temporary_group_id=?
                 AND m.message_id IN (SELECT value FROM json_each(?))
-                UNION SELECT source_key FROM inbox_history_exclusions WHERE scope=? AND source='platform'""",
-            (*key.parameters(),
-             json.dumps([identifier for _, identifier in legacy if identifier]), key.language_scope_key()),
-        )}
+                UNION SELECT source_key FROM inbox_history_exclusions
+                WHERE scope=? AND source='platform'""",
+                (
+                    *key.parameters(),
+                    json.dumps([identifier for _, identifier in legacy if identifier]),
+                    key.language_scope_key(),
+                ),
+            )
+        }
 
-    def _remove(self, connection: Connection, preview: CleanupPreview, candidates: _Candidates) -> None:
+    def _remove(
+        self, connection: Connection, preview: CleanupPreview, candidates: _Candidates
+    ) -> None:
         scope = preview.scope
         key = scope.key.language_scope_key()
         exclusions = [(key, "platform", identifier) for _, identifier in candidates.originals]
@@ -227,13 +304,27 @@ class HistoryRetention:
             exclusions.append((key, "timeline", str(identifier)))
             if platform_id:
                 exclusions.append((key, "platform", platform_id))
-        connection.executemany("INSERT OR IGNORE INTO inbox_history_exclusions VALUES (?, ?, ?)", exclusions)
+        connection.executemany(
+            "INSERT OR IGNORE INTO inbox_history_exclusions VALUES (?, ?, ?)", exclusions
+        )
         InboxImageIndex.retention_vectors(connection, candidates.inbox_ids(), remove=True)
-        connection.execute("DELETE FROM inbox_messages WHERE id IN (SELECT value FROM json_each(?))",
-                           (candidates.inbox_ids(),))
+        connection.execute(
+            "DELETE FROM inbox_messages WHERE id IN (SELECT value FROM json_each(?))",
+            (candidates.inbox_ids(),),
+        )
         connection.execute(
             """INSERT INTO inbox_history_cleanup_audit VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (preview.id, key, scope.visibility, scope.cutoff.isoformat(), preview.read_water,
-             preview.inbox_water, preview.timeline_water, preview.originals, preview.timeline_only,
-             preview.image_vectors, self._clock.now().isoformat()),
+            (
+                preview.id,
+                key,
+                scope.visibility,
+                scope.cutoff.isoformat(),
+                preview.read_water,
+                preview.inbox_water,
+                preview.timeline_water,
+                preview.originals,
+                preview.timeline_only,
+                preview.image_vectors,
+                self._clock.now().isoformat(),
+            ),
         )
