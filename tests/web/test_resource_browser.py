@@ -63,6 +63,7 @@ def _item(path: str, kind: str, label: str, number: int) -> dict[str, object]:
     if path.endswith("/media"):
         digest = sha256(f"browser-emoji-{number}".encode()).hexdigest()
         return {
+            "entry_key": f"asset:{digest}",
             "text": text,
             "description": text,
             "tags": [],
@@ -118,6 +119,7 @@ def _item(path: str, kind: str, label: str, number: int) -> dict[str, object]:
 
 class ResourceServer(ThreadingHTTPServer):
     emoji_uploads: dict[str, dict[str, object]]
+    emoji_reviews: dict[str, str]
     removed_memories: set[tuple[str, int]]
     expression_reviews: dict[str, list[dict[str, str]]]
     recall_rating: str | None
@@ -128,6 +130,10 @@ class ResourceFixture(SimpleHTTPRequestHandler):
     @property
     def emoji_uploads(self) -> dict[str, dict[str, object]]:
         return cast(ResourceServer, self.server).emoji_uploads
+
+    @property
+    def emoji_reviews(self) -> dict[str, str]:
+        return cast(ResourceServer, self.server).emoji_reviews
 
     @property
     def removed_memories(self) -> set[tuple[str, int]]:
@@ -316,6 +322,12 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         if not self.path.startswith(prefix):
             self.send_error(404)
             return
+        if self.path.endswith("/review"):
+            digest = self.path.removeprefix(prefix).removesuffix("/review")
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            self.emoji_reviews[digest] = body["verdict"]
+            self._send_json({"review": body["verdict"]})
+            return
         digest = self.path.removeprefix(prefix)
         item = self.emoji_uploads.get(digest)
         if item is None:
@@ -367,6 +379,10 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         if path.endswith("/media") and kind == "emoji":
             uploads = [item for item in self.emoji_uploads.values() if query in str(item)]
             results = uploads + results
+            for item in results:
+                item["review"] = self.emoji_reviews.get(str(item["digest"]), "unreviewed")
+            if review := params.get("review"):
+                results = [item for item in results if item["review"] == review[0]]
             all_uploads = list(self.emoji_uploads.values())
             counts = {
                 "total": TOTAL + len(all_uploads),
@@ -532,6 +548,7 @@ def _open_browser(profile: Path, memory_transfer: TestClient | None = None) -> I
     chrome = _chrome()
     server = ResourceServer(("127.0.0.1", 0), partial(ResourceFixture, directory=STATIC))
     server.emoji_uploads = {}
+    server.emoji_reviews = {}
     server.removed_memories = set()
     server.expression_reviews = {}
     server.recall_rating = None
@@ -991,6 +1008,83 @@ def test_emoji_filters_sort_and_keep_global_counts_on_narrow_screen(browser: Bro
       document.querySelector('#editor-close').click();
       check(counts() === initialCounts, '切换排序后继续显示全库统计');
       check(button('下一页').getBoundingClientRect().bottom <= innerHeight, '窄屏分页仍可见');
+    """,
+    )
+
+
+def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      const review = () => find('button[aria-label="表情审批 · 未人工审核 · 合成表情000"]');
+      await waitFor(review, '表情卡有审批入口');
+      press('小');
+      await waitFor(() => review() && button('下一页')?.disabled === false, '小号缩略图已载入');
+      const frame = review().parentElement.getBoundingClientRect();
+      const spot = review().getBoundingClientRect();
+      check(spot.right <= frame.right && frame.right - spot.right <= 5 &&
+        spot.bottom <= frame.bottom && frame.bottom - spot.bottom <= 5 &&
+        document.documentElement.scrollWidth <= innerWidth, '小屏右下角内可点击');
+      review().focus();
+    """,
+    )
+    for event_type in ("keyDown", "keyUp"):
+        browser.command(
+            "Input.dispatchKeyEvent",
+            type=event_type,
+            key="Enter",
+            code="Enter",
+            windowsVirtualKeyCode=13,
+        )
+    _run(
+        browser,
+        """
+      const dialog = document.querySelector('#editor-dialog');
+      const reject = () => [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent === '拒绝审批');
+      await waitFor(() => dialog.open && reject(), '键盘直接打开审批而不是详情');
+      const original = window.fetch;
+      let save, oldPage, writes = 0;
+      window.fetch = (url, options) => {
+        const path = new URL(url, location.href);
+        if (path.pathname.endsWith('/review') && options.method === 'PATCH') {
+          check(JSON.parse(options.body).verdict === 'rejected', '发送独立审批结论');
+          if (++writes === 1) return Promise.resolve(Response.json({detail:'合成审批失败'}, {status:503}));
+          return new Promise(resolve => { save = () => resolve(original(url, options)); });
+        }
+        if (path.pathname === '/api/resources/media' && Number(path.searchParams.get('offset')) > 0) {
+          return new Promise(resolve => { oldPage = resolve; });
+        }
+        return original(url, options);
+      };
+      try {
+        reject().click();
+        await waitFor(() => dialog.innerText.includes('合成审批失败') && !reject().matches(':disabled'),
+          '失败保留审批操作，可重试');
+        check(!document.querySelector('#toasts').textContent.includes('表情审批：已拒绝'),
+          '失败不报告保存成功');
+        reject().click();
+        await waitFor(() => save && reject().matches(':disabled'), '同一份审批不能重复提交');
+        document.querySelector('#editor-close').click();
+        press('下一页');
+        await waitFor(() => oldPage, '保存未完成时可抢先翻页');
+        const filter = find('select[name="review"]');
+        filter.value = 'rejected';
+        filter.dispatchEvent(new Event('change', {bubbles:true}));
+        await waitFor(() => page() === '第 0 / 0 页', '拒绝筛选先返回空结果');
+        save();
+        await waitFor(() => page() === '第 1 / 1 页' &&
+          find('button[aria-label="表情审批 · 已拒绝 · 合成表情000"]'), '保存刷新当前筛选并回显');
+        oldPage(Response.json({enabled:true, total:320, items:[{
+          text:'迟到的合成表情', media_kind:'emoji', is_registered:true,
+        }]}));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        check(page() === '第 1 / 1 页' && button('已登记 · 合成表情000') && !text('迟到的合成表情'),
+          '审批不改登记，迟到的翻页不覆盖筛选');
+      } finally { window.fetch = original; }
     """,
     )
 

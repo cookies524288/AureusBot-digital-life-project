@@ -716,18 +716,66 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     actions.append(update(item.is_banned ? '恢复' : '禁用', {is_banned:!item.is_banned}));
     return actions;
   }
-  function renderMedia(item, refresh, batch) {
+  const emojiReviewLabels = {unreviewed:'未人工审核', approved:'已通过', rejected:'已拒绝'};
+  const emojiReviewBadges = {unreviewed:'未审', approved:'通过', rejected:'拒绝'};
+  function emojiReviewForm(item, refresh, pending) {
+    if (pending.has(item.digest)) return;
+    const title = item.text || '未填写描述';
+    const review = item.review ?? 'unreviewed';
+    const message = el('p', {class:'muted', role:'status'});
+    async function submit(verdict) {
+      if (pending.has(item.digest)) return;
+      pending.add(item.digest);
+      controls.disabled = true;
+      message.textContent = '正在保存审批…';
+      try {
+        const response = await api('/api/resources/emoji/' + encodeURIComponent(item.digest) + '/review',
+          'PATCH', {verdict});
+        if (!response.ok || response.data?.review !== verdict) {
+          message.textContent = response.ok ? '无法确认审批结果，请刷新后重试。' : errorText(response);
+          if (!controls.isConnected || !$('editor-dialog').open) toast(message.textContent, 'error');
+          return;
+        }
+        toast('表情审批：' + emojiReviewLabels[verdict]);
+        if (controls.isConnected && $('editor-dialog').open) $('editor-dialog').close();
+        await refresh();
+      } finally { pending.delete(item.digest); controls.disabled = false; }
+    }
+    const controls = el('fieldset', {class:'row'},
+      el('button', {type:'button', class:'btn primary small', text:'通过审批', disabled:review === 'approved',
+        onclick:() => submit('approved')}),
+      el('button', {type:'button', class:'btn danger small', text:'拒绝审批', disabled:review === 'rejected',
+        onclick:() => submit('rejected')}));
+    detail('表情审批', fullImage('/api/resources/media/' + encodeURIComponent(item.digest) + '?kind=emoji'),
+      field('描述', title), field('当前结论', emojiReviewLabels[review]),
+      el('p', {class:'muted', text:'拒绝后不再选用。通过不改变登记或禁用状态；仍须已登记、未禁用且原图可用才能发送。'}),
+      controls, message);
+  }
+  function renderMedia(item, refresh, batch, openReview) {
     const emoji = item.media_kind === 'emoji';
     const status = emoji ? (item.is_removed ? '已移除' : item.is_banned ? '已禁用' : item.is_registered ? '已登记' : '未登记') : item.status;
     const title = item.text || '未填写描述';
+    const review = item.review ?? 'unreviewed';
     const url = item.digest ? '/api/resources/media/' + encodeURIComponent(item.digest) + (emoji ? '?kind=emoji' : '') : null;
     const tile = mediaTile(emoji ? status + ' · ' + title : title, url, '原图不可用', () => detail(emoji ? '表情详情' : '图片详情', fullImage(url),
       field('描述', title), field('状态', term(status)), field('来源', sourceText(item.source)),
+      emoji && field('审批', emojiReviewLabels[review]),
       emoji && field('格式', item.media_type?.split('/')[1]?.toUpperCase()),
       emoji && field('标签', item.tags?.join('、')),
       emoji && field('收集次数', item.collection_count), emoji && field('使用次数', item.use_count),
       !url && field('原图', '缺少原件'), emoji && url && !item.is_removed && emojiActions(item, refresh)));
-    return batch && item.entry_key ? el('div', {class:'resource-tile-selection'}, tile, batch.checkbox(item)) : tile;
+    if (!batch || !item.entry_key) return tile;
+    const approval = url && !item.is_removed && action(emojiReviewBadges[review], () => openReview(item));
+    if (approval) {
+      const label = '表情审批 · ' + emojiReviewLabels[review] + ' · ' + title;
+      approval.classList.add('emoji-review-control');
+      approval.classList.toggle('danger', review === 'rejected');
+      approval.setAttribute('aria-label', label);
+      approval.title = label;
+      tile.classList.add('emoji-reviewable');
+      tile.title = title;
+    }
+    return el('div', {class:'resource-tile-selection'}, tile, batch.checkbox(item), approval || null);
   }
   function mediaView(panel, kind) {
     const emoji = kind === 'emoji';
@@ -735,12 +783,13 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       ...Object.entries(options).map(([value, text]) => el('option', {value, text}))));
     const status = emoji ? select('表情状态', 'status',
       {'':'全部', registered:'已登记', unregistered:'未登记', banned:'已禁用'}) : null;
+    const review = emoji ? select('人工审批', 'review', {'':'全部', ...emojiReviewLabels}) : null;
     const format = emoji ? select('表情格式', 'format', {'':'全部', png:'PNG', jpeg:'JPEG', gif:'GIF', webp:'WebP'}) : null;
     const sort = emoji ? select('表情排序', 'sort',
       {recent:'最近收集', most_used:'使用最多', most_collected:'收集最多', last_used:'最近使用'}) : null;
     const label = kind === 'emoji' ? '搜索表情包' : '搜索迁入图片';
     const removed = kind === 'emoji' ? el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除') : null;
-    const form = searchForm(label, label, status, format, sort, removed);
+    const form = searchForm(label, label, status, review, format, sort, removed);
     const counts = emoji ? el('div', {class:'muted', id:'emoji-library-counts'}) : null;
     const batch = kind === 'emoji' ? batchControls(item => item.entry_key, '/api/resources/emoji/batch',
       (entry_keys, removed) => ({entry_keys, removed}), () => pager.read()) : null;
@@ -748,6 +797,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const batchUpload = kind === 'emoji' ? action('批量上传', () => emojiBatchForm(pager.read)) : null;
     let checkingIntegrity = false;
     let emojiEnabled = false;
+    const pendingReviews = new Set();
+    const openReview = item => emojiReviewForm(item, pager.read, pendingReviews);
     const integrity = emoji ? action('完整性预览', async event => {
       if (checkingIntegrity || !emojiEnabled) return;
       const button = event.currentTarget;
@@ -767,7 +818,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     panel.append(form);
     if (counts) panel.append(counts);
     const pager = searchable({panel, grid:true, id:kind === 'emoji' ? 'learning-emoji' : 'archived-images',
-      render:item => renderMedia(item, pager.read, batch), prepare:() => {
+      render:item => renderMedia(item, pager.read, batch, openReview),
+      prepare:() => {
         batch?.clear();
         syncEmojiActions(false);
       },
@@ -779,7 +831,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         }
       }},
       form, '/api/resources/media', fields => ({kind, q:fields.q.value, ...(emoji ? {
-        status:fields.status.value, format:fields.format.value, sort:fields.sort.value,
+        status:fields.status.value, review:fields.review.value, format:fields.format.value, sort:fields.sort.value,
         removed:fields.removed.checked,
       } : {})}));
     return pager;

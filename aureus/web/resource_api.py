@@ -35,8 +35,10 @@ from aureus.memory.emoji import (
     MAX_EMOJI_TAGS,
     EmojiFormat,
     EmojiIntegrityPreview,
+    EmojiReview,
     EmojiSort,
     EmojiStatus,
+    EmojiVerdict,
     emoji_media_type,
 )
 from aureus.memory.language import MAX_REVIEW_REASON
@@ -155,6 +157,14 @@ class EmojiUpdate(BaseModel):
     is_banned: bool | None = None
 
 
+class EmojiReviewUpdate(BaseModel):
+    """用户对单份表情的审批结论，不接受登记或禁用字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: EmojiVerdict
+
+
 class ProfileAliasUpdate(BaseModel):
     """更新完整的本机覆盖，显式 null 只撤销本机维护。"""
 
@@ -270,6 +280,20 @@ def register_resource_routes(
             raise HTTPException(404, "找不到这条表情记录。")
         return {"ok": True}
 
+    @app.patch("/api/resources/emoji/{digest}/review")
+    async def review_emoji(
+        digest: str,
+        body: EmojiReviewUpdate,
+        store: Annotated[EmojiStore, Depends(require_emoji_editor)],
+    ) -> dict[str, EmojiVerdict]:
+        try:
+            found = await asyncio.to_thread(store.review_catalog, digest, body.verdict)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        if not found:
+            raise HTTPException(404, "找不到可以审批的表情记录。")
+        return {"review": body.verdict}
+
     @app.get("/api/resources/media")
     async def browse_media(
         _token: Annotated[str, Depends(require_ready)],
@@ -281,6 +305,7 @@ def register_resource_routes(
         removed: bool = False,
         image_format: Annotated[EmojiFormat, Query(alias="format")] = "",
         sort: EmojiSort = "recent",
+        review: EmojiReview | Literal[""] = "",
     ) -> dict[str, Any]:
         if kind == "emoji":
             entries, total = (
@@ -293,6 +318,7 @@ def register_resource_routes(
                     removed=removed,
                     image_format=image_format,
                     sort=sort,
+                    review=review,
                 )
                 if emojis is not None
                 else ([], 0)
