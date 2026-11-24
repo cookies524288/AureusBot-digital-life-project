@@ -17,6 +17,7 @@ from aureus.common import Clock, SystemClock
 from aureus.common.clock import ensure_aware
 from aureus.common.sqlite import open_connection
 from aureus.timeline.models import ActorType, TimelineQuery, TimelineRecord, VisibilityScope
+from aureus.timeline.platform_history import LegacyPlatformHistory
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ class TimelineDatabase:
         self._db_path = db_path
         self._clock = clock or SystemClock()
         self._conn: sqlite3.Connection | None = None
+        self.platform_history = LegacyPlatformHistory(db_path)
 
     def open(self) -> None:
         """打开数据库连接并初始化表结构。"""

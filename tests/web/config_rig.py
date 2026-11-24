@@ -72,6 +72,7 @@ class ConfigRig:
             inbox_store=inbox_store,
             allows_inbox_conversation=allows_inbox_conversation,
             resource_emojis=emoji_store,
+            resource_database=self.paths.database_file,
         )
         self.client = TestClient(self.app, client=("127.0.0.1", 50000))
 
