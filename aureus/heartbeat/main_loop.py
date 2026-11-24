@@ -1895,6 +1895,12 @@ class Heartbeat:
                 samples,
                 conversation_key=scope,
                 bot_names=(self._identity.facts.name, *self._identity.facts.alias_names),
+                expression_quality=(
+                    language_runner.ExpressionQuality(
+                        self._language_config.expression_quality_organ, self._clock
+                    )
+                    if self._language_config.expression_quality_enabled else None
+                ),
             ),
             name=language_runner.TASK_NAME,
         )

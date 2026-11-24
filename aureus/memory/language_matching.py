@@ -54,10 +54,20 @@ class LanguageEntry:
     scope_keys: tuple[str, ...] = ()
     package_source: str | None = None
     learning_source: str | None = None
+    requires_approval: bool = False
+    restricted_scope: str | None = None
 
     def visible_in(self, conversation_key: str | None) -> bool:
         """在线来源仅用于管理筛选；导入包仍遵守显式授权。"""
-        return self.package_source is None or conversation_key in self.scope_keys
+        return (self.restricted_scope is None or conversation_key == self.restricted_scope) and (
+            self.package_source is None or conversation_key in self.scope_keys
+        )
+
+    def can_reference_expression(self) -> bool:
+        """受质检管理的新表达必须另获人工批准；旧条目沿用原规则。"""
+        return self.review_status != ExpressionReviewStatus.REJECTED and (
+            not self.requires_approval or self.review_status == ExpressionReviewStatus.APPROVED
+        )
 
 
 @dataclass(frozen=True)

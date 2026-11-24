@@ -390,6 +390,8 @@ config_version = 1
 
 # 每日日记（D80）：失败当天不再试，不补写；与记忆开关相互独立。
 [language]
+expression_quality_enabled = false  # 可选付费调用：每批表达最多另检查 10 条。
+# expression_quality_organ = "judge"  # 必须显式绑定；缺失或调用失败不采纳新表达。
 recall_enabled = true
 # 可选调用，启用后配置的学习器官须可用。
 learning_enabled = false

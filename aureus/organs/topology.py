@@ -89,6 +89,8 @@ def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict
     }
     if runtime.heartbeat.split_reply_enabled:
         tasks["reply_segments"] = "fast_model"
+    if runtime.language.expression_quality_enabled and runtime.language.expression_quality_organ:
+        tasks["expression_quality"] = runtime.language.expression_quality_organ
     if runtime.heartbeat.qq_emoji_selection_enabled:
         if runtime.heartbeat.qq_emoji_visual_enabled:
             tasks["emoji_visual_selection"] = "vlm"

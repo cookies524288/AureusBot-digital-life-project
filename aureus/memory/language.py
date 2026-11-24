@@ -14,6 +14,13 @@ from pathlib import Path
 from sqlite3 import Connection, Row, connect
 
 from aureus.common.sqlite import open_connection
+from aureus.memory.expression_quality import (
+    QUALITY_SCHEMA,
+    ExpressionQualityDecision,
+    ExpressionQualityStatus,
+    save_quality_decision,
+    save_quality_term,
+)
 from aureus.memory.language_import import (
     EXPRESSION_TABLE,
     IMPORT_SCHEMA,
@@ -236,6 +243,29 @@ def _online_text(text: str, limit: int) -> bool:
     )
 
 
+def expression_proposals(
+    proposals: Sequence[LanguageProposal], presented: Mapping[int, str]
+) -> list[LanguageProposal]:
+    """抽取、质检和写入共用同一个决定性表达筛选与稳定去重规则。"""
+    candidates: dict[tuple[int, str, str], LanguageProposal] = {}
+    for proposal in proposals:
+        text, detail = proposal.text.strip(), proposal.detail.strip()
+        if (
+            proposal.kind != LanguageKind.EXPRESSION
+            or not _online_text(text, MAX_TEXT)
+            or not _online_text(detail, MAX_DETAIL)
+            or normalize(text) == normalize(detail)
+        ):
+            continue
+        for record_id in proposal.record_ids:
+            if presented.get(record_id):
+                candidates.setdefault(
+                    (record_id, normalize(text), detail),
+                    LanguageProposal(proposal.kind, text, detail, (record_id,)),
+                )
+    return list(candidates.values())
+
+
 class LanguageStore:
     """在同一个运行主库读写习得语言，连接只在当前操作内使用。"""
 
@@ -245,7 +275,7 @@ class LanguageStore:
     def open(self) -> None:
         """初始化语言子系统持有的表。"""
         with closing(open_connection(self._path)) as connection:
-            connection.executescript(_SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA)
+            connection.executescript(_SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA)
 
     def publish(
         self,
@@ -265,7 +295,9 @@ class LanguageStore:
                 is None
             ):
                 raise LanguageTargetError("language_target_not_runtime")
-            connection.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA)
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA
+            )
             return publish_rows(connection, instance, manifest, source_counts, rows)
 
     def unseen(self, samples: Sequence[LanguageSample]) -> list[LanguageSample]:
@@ -344,6 +376,8 @@ class LanguageStore:
         samples: Sequence[LanguageSample],
         presented: Mapping[int, str],
         proposals: Sequence[LanguageProposal],
+        *,
+        quality: Mapping[LanguageProposal, ExpressionQualityDecision] | None = None,
     ) -> list[JargonInference]:
         """独立消费成功的抽取，并返回本轮达到门槛的黑话候选。"""
         with closing(open_connection(self._path)) as connection, connection:
@@ -364,12 +398,47 @@ class LanguageStore:
                 )
                 if changed.rowcount:
                     accepted[sample.record_id] = (sample.source_key, fragment)
-            return self._save_extraction(connection, kind, scope, accepted, proposals)
+            if kind == LanguageKind.EXPRESSION:
+                self._save_expressions(connection, scope, accepted, proposals, quality)
+                return []
+            return self._save_jargons(connection, scope, accepted, proposals)
 
     @staticmethod
-    def _save_extraction(
+    def _save_expressions(
         connection: Connection,
-        kind: LanguageKind,
+        scope: str,
+        accepted: Mapping[int, tuple[str, str]],
+        proposals: Sequence[LanguageProposal],
+        quality: Mapping[LanguageProposal, ExpressionQualityDecision] | None,
+    ) -> None:
+        candidates = expression_proposals(
+            proposals, {record_id: fragment for record_id, (_, fragment) in accepted.items()}
+        )
+        for candidate in candidates:
+            record_id = candidate.record_ids[0]
+            source_key, fragment = accepted[record_id]
+            if quality is None:
+                save_online_term(
+                    connection,
+                    candidate.kind,
+                    scope,
+                    candidate.text,
+                    candidate.detail,
+                    ((source_key, fragment),),
+                )
+                continue
+            decision = quality.get(candidate)
+            if decision is None:
+                continue
+            save_quality_decision(
+                connection, scope, source_key, record_id, candidate.text, candidate.detail, decision
+            )
+            if decision.status == ExpressionQualityStatus.PASSED:
+                save_quality_term(connection, scope, candidate.text, candidate.detail, source_key)
+
+    @staticmethod
+    def _save_jargons(
+        connection: Connection,
         scope: str,
         accepted: Mapping[int, tuple[str, str]],
         proposals: Sequence[LanguageProposal],
@@ -377,26 +446,18 @@ class LanguageStore:
         terms: dict[int, str] = {}
         for proposal in proposals:
             text, detail = proposal.text.strip(), proposal.detail.strip()
-            if proposal.kind != kind or not _online_text(text, MAX_TEXT):
-                continue
-            if kind == LanguageKind.EXPRESSION and (
-                not _online_text(detail, MAX_DETAIL) or normalize(text) == normalize(detail)
-            ):
+            if proposal.kind != LanguageKind.JARGON or not _online_text(text, MAX_TEXT):
                 continue
             sources = [
                 accepted[record_id]
                 for record_id in dict.fromkeys(proposal.record_ids)
-                if record_id in accepted
-                and (
-                    kind == LanguageKind.EXPRESSION
-                    or normalize(text) in normalize(accepted[record_id][1])
-                )
+                if record_id in accepted and normalize(text) in normalize(accepted[record_id][1])
             ]
             if sources:
-                term = save_online_term(connection, kind, scope, text, detail, sources)
+                term = save_online_term(connection, proposal.kind, scope, text, detail, sources)
                 if term is not None:
                     terms[term] = text
-        return ready_inferences(connection, terms) if kind == LanguageKind.JARGON else []
+        return ready_inferences(connection, terms)
 
     def record_jargon_inference(
         self, attempt: JargonInference, outcome: str, meaning: str = ""
@@ -665,9 +726,7 @@ class LanguageStore:
         edits = {
             row["entry_key"]: row for row in connection.execute("SELECT * FROM language_edits")
         }
-        removed = {
-            row["entry_key"] for row in connection.execute("SELECT * FROM language_removed")
-        }
+        removed = {row["entry_key"] for row in connection.execute("SELECT * FROM language_removed")}
         if kind == LanguageKind.EXPRESSION:
             reviews = {
                 row["entry_key"]: ExpressionReviewStatus(row["status"])
@@ -676,10 +735,18 @@ class LanguageStore:
                        GROUP BY entry_key"""
                 )
             }
+            checked = {
+                f"online:{row['term_id']}": bool(row["is_scoped"])
+                for row in connection.execute("SELECT * FROM language_expression_quality_terms")
+            }
             entries = [
                 replace(
                     entry,
                     review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
+                    requires_approval=entry.entry_key in checked,
+                    restricted_scope=entry.learning_source
+                    if checked.get(entry.entry_key)
+                    else None,
                 )
                 for entry in entries
             ]
@@ -863,9 +930,7 @@ class LanguageStore:
             if connection is None
             else self._catalog_entries(connection, LanguageKind.EXPRESSION)
         )
-        return [
-            entry for entry in entries if entry.review_status != ExpressionReviewStatus.REJECTED
-        ]
+        return [entry for entry in entries if entry.can_reference_expression()]
 
     def _visible_entries(
         self, kind: LanguageKind, conversation_key: str | None

@@ -11,6 +11,11 @@ from aureus.memory.emoji import (
 )
 from aureus.memory.expression_clusters import ExpressionClusterStore, VisibleExpressionCluster
 from aureus.memory.expression_index import ExpressionVectorIndex
+from aureus.memory.expression_quality import (
+    ExpressionQualityDecision,
+    ExpressionQualityReason,
+    ExpressionQualityStatus,
+)
 from aureus.memory.flow import MemoryEvent, MemoryEventType
 from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphNode, MemoryGraphSource
 from aureus.memory.graph_access import (
@@ -39,6 +44,7 @@ from aureus.memory.language import (
     LanguageSample,
     LanguageStore,
     LanguageTargetError,
+    expression_proposals,
 )
 from aureus.memory.language_import import (
     EXPRESSION_TABLE,
@@ -76,6 +82,9 @@ __all__ = [
     "EmojiRecord",
     "EmojiStore",
     "ExpressionClusterStore",
+    "ExpressionQualityDecision",
+    "ExpressionQualityReason",
+    "ExpressionQualityStatus",
     "ExpressionVectorIndex",
     "GraphAccess",
     "GraphCategory",
@@ -111,5 +120,6 @@ __all__ = [
     "SummaryScope",
     "SummaryWindow",
     "VisibleExpressionCluster",
+    "expression_proposals",
     "parse_delta",
 ]
