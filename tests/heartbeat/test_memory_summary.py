@@ -462,7 +462,8 @@ def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> Non
         assert client.post(f"{endpoint}/{race}/apply").status_code == 409
         assert not rig.index.search(["晴桂巷"], (), 5, summary_scope=rig.scope)
         assert "栖松巷" in rig.index.search(["栖松巷"], (), 5, summary_scope=rig.scope)[0].text
-        assert rig.index.summary_reference(rig.scope)[1:] == ((), ())
+        _start, summaries, facts = rig.index.summary_reference(rig.scope)
+        assert summaries == () and [fact.text for fact in facts] == ["阿青：居住地点是栖松巷。"]
         assert client.get(catalog, params={"q": "晴桂巷"}).json()["items"] == []
         assert client.post(f"{endpoint}/{preview('disable')}/apply").status_code == 200
         removed = preview("remove")
@@ -635,6 +636,32 @@ def test_history_preview_and_undo_reject_a_value_changed_back_by_legacy_edits(ri
     assert rig.index.update_resource("history", item.entry_id, "修订值", None)
     with pytest.raises(LifecycleConflictError):
         rig.index.apply_lifecycle(current_id, None, lambda: True, undo=True)
+
+
+def test_corrected_fact_enters_the_next_summary_reference_as_revised_text(rig: Rig) -> None:
+    excerpt = "我目前住在晴桂巷。"
+    rig.add("m1", excerpt)
+    rig.add("m2", "合成上下文")
+    window = rig.window()
+    assert rig.index.commit_summary(
+        window, parse_delta(_answer("晴桂巷", excerpt), window), rig.source.check_window
+    )
+    [hit] = rig.index.search(["晴桂巷"], (), 5, summary_scope=rig.scope)
+    assert hit.source is not None
+    rig.index.summary_scope_allowed = rig.source.allows_scope
+
+    def can_show(scope: SummaryScope) -> bool:
+        return scope == rig.scope
+
+    revised = "阿青：居住地点是栖松巷。"
+    plan = rig.index.preview_lifecycle(hit.source, "correct", revised, can_show, lambda: True)
+    assert plan is not None
+    assert rig.index.apply_lifecycle(str(plan["plan_id"]), can_show, lambda: True, undo=False)
+    rig.add("m3", "今天天气不错。")
+    rig.add("m4", "另一条合成上下文")
+    following = rig.window()
+    assert [fact.text for fact in following.previous_facts] == [revised]
+    assert following.previous_summaries == ()
 
 
 def test_older_plan_can_be_undone_after_newer_plan_is_undone(rig: Rig) -> None:

@@ -196,12 +196,18 @@ def previous_summary(
         )
         if all(_source_exists(connection, scope, row, check) for row in evidence):
             summaries.append(delta["summary"])
+    # 修正过的事实以修订正文进入参考，值也取修订正文，不把旧值交回总结器（3.15 自检）。
     facts = [
-        PreviousFact(row["id"], row["text"], row["sender_id"], row["predicate"], row["value"])
+        PreviousFact(
+            row["id"],
+            row["edited_content"] or row["text"],
+            row["sender_id"],
+            row["predicate"],
+            row["edited_content"] or row["value"],
+        )
         for row in _facts(connection, scope, _REFERENCE_LIMIT)
         if row["is_enabled"]
         and not row["is_removed"]
-        and row["edited_content"] is None
         and _source_exists(connection, scope, row, check)
     ]
     return tuple(summaries), tuple(facts)
