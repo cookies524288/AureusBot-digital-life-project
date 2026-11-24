@@ -32,7 +32,7 @@ def inspect_live_memory(database: Path, visibility: VisibilityScope) -> LiveMemo
                FROM memory_index entry
                JOIN timeline event ON event.id = entry.record_id AND event.id = entry.rowid
                LEFT JOIN memory_edits edit ON edit.kind = 'live' AND edit.entry_id = event.id
-               WHERE event.visibility = ? AND NOT ({is_message_event('event.event_type')})""",
+               WHERE event.visibility = ? AND NOT ({is_message_event("event.event_type")})""",
             (visibility.value,),
         ).fetchone()
     return LiveMemoryInspection(*row)

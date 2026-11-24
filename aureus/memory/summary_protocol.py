@@ -253,7 +253,9 @@ def _validate_corrections(
         raise ValueError("历史事实没有变化")
     changed = any(_CORRECTION.search(part) for part in parts)
     retired = {item.value for item in old if item.identifier == fact.replaces}
-    ambiguous = len(old) > 1 and not any(_denies(part, value) for part in parts for value in retired)
+    ambiguous = len(old) > 1 and not any(
+        _denies(part, value) for part in parts for value in retired
+    )
     if (fact.replaces is not None and (not changed or not retired or ambiguous)) or (
         fact.replaces is None and old and changed
     ):

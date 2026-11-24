@@ -50,11 +50,15 @@ def test_platform_originals_do_not_enter_memory_catalog_search_or_exports(
         conn.executemany(
             "INSERT INTO memory_index(rowid, record_id, content, actor_label, recorded_at) "
             "VALUES (?, ?, ?, '同名', ?)",
-            [(record.id, record.id, record.content, record.timestamp.isoformat())
-             for record in (old, delivered)],
+            [
+                (record.id, record.id, record.content, record.timestamp.isoformat())
+                for record in (old, delivered)
+            ],
         )
     batch = index.consolidation_batch(1)
-    assert batch is not None and [item.reference for item in batch.items] == [f"timeline:{experience.id}"]
+    assert batch is not None and [item.reference for item in batch.items] == [
+        f"timeline:{experience.id}"
+    ]
 
     imported = [
         HistoricalMemory(MemorySource(account, "main", table, (1,)), text, "同名")
