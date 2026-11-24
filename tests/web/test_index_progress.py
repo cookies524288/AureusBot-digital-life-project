@@ -243,9 +243,7 @@ async def test_emoji_progress_only_counts_valid_cached_descriptions_in_the_same_
             embeddings=((1.0, 0.0),) * len(request.embedding_inputs),
         )
 
-    selector = EmojiSelector(
-        store, embed, clock, HeartbeatConfig(qq_emoji_semantic_enabled=True), None
-    )
+    selector = EmojiSelector(store, embed, clock, HeartbeatConfig(), None)
     spaces = ((1, "new-space"), (2, "test-space"))
     assert await selector.cache_coverage(spaces) == [(1, 0, 1), (2, 0, 1)]
     assert not calls
@@ -326,25 +324,25 @@ def test_editor_ignores_responses_after_close_organ_change_and_model_edit() -> N
     """)
 
 
-def test_disabled_rows_name_the_setting_that_turns_them_on() -> None:
+def test_disabled_rows_name_the_remaining_requirements() -> None:
     run_page_script(r"""
     const textOf = node => (node.textContent || '') + node.children.map(textOf).join('');
     const row = (kind, state) => textOf(renderIndexProgress(
       {kind, state, route:null, established:0, eligible:null}));
     const name = key => CFG_FIELDS[key][0];
     const group = key => CFG_SECTIONS.find(([sec]) => sec === key.split('.')[0])[1];
-    const vector = 'language.use_vector_expression';
-    const semantic = 'heartbeat.qq_emoji_semantic_enabled';
+    const recall = 'language.recall_enabled';
+    const visual = 'heartbeat.qq_emoji_visual_enabled';
     const expression = row('expression', 'disabled');
-    assert.equal(name(vector), '表达向量检索');
-    for (const part of [name(vector), group(vector), name('language.recall_enabled'),
-      name('language.reference_chars'), '保存后重启生效']) {
+    assert.equal(name(recall), '回复参考习得语言');
+    for (const part of [name(recall), group(recall), name('language.reference_chars'),
+      '配置嵌入模型后自动建立', '保存后重启生效']) {
       assert.ok(expression.includes(part), part);
     }
     const emoji = row('emoji_cache', 'disabled');
-    assert.equal(name(semantic), 'QQ 表情语义匹配');
-    for (const part of [name(semantic), group(semantic), name('qq.enabled'),
-      name('heartbeat.qq_emoji_visual_enabled'), '保存后重启生效']) {
+    assert.equal(name(visual), 'QQ 表情视觉选择');
+    for (const part of [name(visual), group(visual), name('qq.enabled'),
+      name('heartbeat.qq_emoji_selection_enabled'), '配置嵌入模型后自动建立', '保存后重启生效']) {
       assert.ok(emoji.includes(part), part);
     }
     const others = ['no_model', 'unavailable', 'on_demand', 'empty', 'missing', 'partial',
@@ -353,7 +351,6 @@ def test_disabled_rows_name_the_setting_that_turns_them_on() -> None:
       for (const state of others) {
         const text = row(kind, state);
         assert.ok(!text.includes('保存后重启生效'), kind + state);
-        assert.ok(![name(vector), name(semantic)].some(part => text.includes(part)), kind + state);
       }
     }
     for (const kind of ['images', 'memory_rerank']) {
@@ -366,17 +363,17 @@ def test_disabled_hint_link_closes_editor_and_locates_the_setting() -> None:
     run_page_script(r"""
     const findButton = node => node.tagName === 'BUTTON'
       ? node : node.children.map(findButton).find(Boolean);
-    const key = 'language.use_vector_expression';
+    const recall = 'language.recall_enabled';
     const shown = [], located = [];
     showPage = (name, onShown) => { shown.push(name); onShown(); };
     locateConfigField = entry => located.push(entry);
-    cf.searchEntries = [{key:'heartbeat.qq_emoji_semantic_enabled', sec:'heartbeat', id:'other'},
-      {key, sec:'language', id:'cf-field-' + key}];
+    cf.searchEntries = [{key:'heartbeat.qq_emoji_visual_enabled', sec:'heartbeat', id:'other'},
+      {key: recall, sec:'language', id:'cf-field-' + recall}];
     $('editor-dialog').showModal();
     const hint = renderIndexProgress({kind:'expression', state:'disabled', route:null,
       established:0, eligible:null});
     findButton(hint).click();
     assert.equal($('editor-dialog').open, false);
     assert.deepEqual(shown, ['config']);
-    assert.deepEqual(located.map(entry => entry.id), ['cf-field-' + key]);
+    assert.deepEqual(located.map(entry => entry.id), ['cf-field-' + recall]);
     """)

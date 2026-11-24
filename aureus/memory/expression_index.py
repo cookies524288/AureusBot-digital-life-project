@@ -56,7 +56,7 @@ class ExpressionSpaceCoverage:
 
 
 class ExpressionVectorIndex:
-    """当前本地模型的派生数据；开关为 language.use_vector_expression。"""
+    """供 D101 本机嵌入路线使用的派生数据。"""
 
     def __init__(self, path: Path) -> None:
         self._path = path

@@ -55,7 +55,8 @@ async def test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success(
         store, channel = replay.core.emoji_store, replay.core.qq
         assert store is not None and channel is not None
         assert replay.core.settings.runtime.heartbeat.qq_emoji_selection_enabled
-        assert not replay.core.settings.runtime.heartbeat.qq_emoji_semantic_enabled
+        models = replay.core.models
+        assert models is not None and "text_embedding" not in models.available_organs
         media = synthetic_emoji("red") if visual else b"GIF89a synthetic reply"
         store.collect(media, description="高兴地挥手", register=True)
         replay.planner.plan = {

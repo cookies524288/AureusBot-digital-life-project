@@ -114,7 +114,7 @@ async def test_visual_no_selection_and_late_moderation_do_not_try_text(
             store.set_status(digest, is_registered=True, is_banned=True)
         return OrganResponse(request.organ_id, answer)
 
-    config = HeartbeatConfig(qq_emoji_visual_enabled=True, qq_emoji_semantic_enabled=True)
+    config = HeartbeatConfig(qq_emoji_visual_enabled=True)
     selector = EmojiSelector(store, call, clock, config, UTC)
     result = await selector.select(
         EmojiIntent(), (), "用户", ModelPreference.PREFERRED, has_embedding=True
@@ -197,9 +197,7 @@ async def test_semantic_selection_refreshes_incrementally_and_falls_back(tmp_pat
             embeddings=tuple(vectors[str(text)] for text in request.embedding_inputs),
         )
 
-    selector = EmojiSelector(
-        store, call, clock, HeartbeatConfig(qq_emoji_semantic_enabled=True), UTC
-    )
+    selector = EmojiSelector(store, call, clock, HeartbeatConfig(), UTC)
 
     async def select(emotion: str) -> EmojiReplyPart | None:
         return await selector.select(
@@ -229,7 +227,9 @@ async def test_semantic_selection_refreshes_incrementally_and_falls_back(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_default_uses_text_and_skips_missing_or_invalid_selection(tmp_path: Path) -> None:
+async def test_no_embedding_uses_text_and_skips_missing_or_invalid_selection(
+    tmp_path: Path,
+) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     store = EmojiStore(tmp_path / "test.db", tmp_path, clock)
     store.open()
@@ -250,7 +250,7 @@ async def test_default_uses_text_and_skips_missing_or_invalid_selection(tmp_path
 
     async def select() -> EmojiReplyPart | None:
         return await selector.select(
-            intent, (), "用户", ModelPreference.PREFERRED, has_embedding=True
+            intent, (), "用户", ModelPreference.PREFERRED, has_embedding=False
         )
 
     assert await select() is None

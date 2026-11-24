@@ -31,6 +31,13 @@ class ConfigError(Exception):
     """配置文件或密钥有问题。消息是中文，说明是哪个文件的哪个字段。"""
 
 
+def drop_legacy_keys(value: object, legacy_keys: tuple[str, ...]) -> object:
+    """旧配置里已删除或已固定的键照常读取、静默丢弃，不报错（D107）。"""
+    if isinstance(value, Mapping):
+        return {key: item for key, item in value.items() if key not in legacy_keys}
+    return value
+
+
 class SafetyConfig(BaseModel):
     """安全网关的配置（aureus.toml 的 [safety]，设计见 docs/06-safety.md 第 12 节，D39）。
 
@@ -84,7 +91,6 @@ class HeartbeatConfig(BaseModel):
     qq_emoji_registration_limit: int = Field(default=DEFAULT_EMOJI_REGISTRATION_LIMIT, ge=1)
     qq_emoji_replacement_suggestion_enabled: bool = False
     qq_emoji_visual_enabled: bool = False
-    qq_emoji_semantic_enabled: bool = False
     qq_emoji_semantic_refresh_seconds: float = Field(default=300.0, gt=0, allow_inf_nan=False)
     qq_emoji_semantic_threshold: float = Field(default=0.3, ge=0, le=1, allow_inf_nan=False)
     # 节省档、低电量（含透支保护）时带上最近多少条对话；都不会超过 recent_message_limit。
@@ -115,12 +121,11 @@ class HeartbeatConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def ignore_legacy_organ_names(cls, value: object) -> object:
-        """旧配置可照常读取，但规划和回复固定走内置器官的模型绑定。"""
-        if isinstance(value, Mapping):
-            return {
-                key: item for key, item in value.items() if key not in ("plan_organ", "reply_organ")
-            }
-        return value
+        """旧配置可照常读取，但规划和回复固定走内置器官的模型绑定。
+
+        表情语义开关已删，向量模型配好后自动启用，旧键同样丢弃（D107）。
+        """
+        return drop_legacy_keys(value, ("plan_organ", "reply_organ", "qq_emoji_semantic_enabled"))
 
     @model_validator(mode="after")
     def validate_typing_jitter(self) -> Self:
@@ -371,13 +376,19 @@ class JudgeConfig(BaseModel):
     # 没配 judge 器官时会跳过判断并只记一次日志，不报错。
     enabled: bool = True
     state_context_enabled: bool = True
-    # models.toml 里的器官名；没配这个器官时跳过判断，不报错（D68 第 7 条）。
-    organ: str = Field(default="judge", min_length=1)
+    # 固定使用 models.toml 里的 judge 器官（D107）；没配时跳过判断，不报错（D68 第 7 条）。
+    organ: ClassVar[str] = "judge"
     # 判断最多等多久。判断只是回复前的参考，等太久不如直接回复，所以给一个不长的上限；
     # 10 秒是随手挑的，没有实测依据。
     timeout_seconds: float = Field(default=10.0, gt=0)
     # 除了这次要回复的消息，再带之前几条对话；0 表示只看这一条。
     context_messages: int = Field(default=5, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_organ(cls, value: object) -> object:
+        """旧配置里的 organ 照常读取、忽略（D107）。"""
+        return drop_legacy_keys(value, ("organ",))
 
 
 class HormonesConfig(BaseModel):
@@ -563,7 +574,8 @@ class ExplorationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     enabled: bool = False
-    organ: str = "summarizer"
+    # 固定使用 summarizer 器官（D107）。
+    organ: ClassVar[str] = "summarizer"
     search_provider: Literal["none", "searxng"] = "none"
     search_endpoint: str = ""
     max_per_day: int = Field(default=3, ge=1)
@@ -573,6 +585,12 @@ class ExplorationConfig(BaseModel):
     max_page_bytes: int = Field(default=1048576, ge=1024, le=10485760)
     max_page_chars: int = Field(default=6000, ge=200, le=20000)
     share_within_days: float = Field(default=3.0, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_organ(cls, value: object) -> object:
+        """旧配置里的 organ 照常读取、忽略（D107）。"""
+        return drop_legacy_keys(value, ("organ",))
 
     @model_validator(mode="after")
     def _check_search_endpoint(self) -> Self:
@@ -624,12 +642,28 @@ class LanguageConfig(BaseModel):
 
     recall_enabled: bool = True
     learning_enabled: bool = False
-    organ: str = "summarizer"
+    # 器官绑定固定（D107）；向量索引随嵌入模型自动启用，不再有开关。
+    organ: ClassVar[str] = "summarizer"
     expression_quality_enabled: bool = False
-    expression_quality_organ: str | None = None
+    # 质检固定走 judge：原默认为空时，开启质检会拒收全部新表达。
+    expression_quality_organ: ClassVar[str] = "judge"
     reference_chars: int = Field(default=700, ge=0, le=2000)
-    use_vector_expression: bool = False
-    expression_selector_organ: str | None = None
+    # 表达筛选不使用单独器官，直接用排好的候选。
+    expression_selector_organ: ClassVar[str | None] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_keys(cls, value: object) -> object:
+        """旧配置里已删除或已固定的键照常读取、忽略（D107）。"""
+        return drop_legacy_keys(
+            value,
+            (
+                "organ",
+                "expression_quality_organ",
+                "expression_selector_organ",
+                "use_vector_expression",
+            ),
+        )
 
 
 class DiaryConfig(BaseModel):
@@ -638,10 +672,17 @@ class DiaryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     enabled: bool = True
-    organ: str = "summarizer"
+    # 固定使用 summarizer 器官（D107）。
+    organ: ClassVar[str] = "summarizer"
     write_after_hour: int = Field(default=22, ge=0, le=23)
     max_input_chars: int = Field(default=6000, ge=1000, le=50000)
     max_chars: int = Field(default=1500, ge=100, le=10000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_organ(cls, value: object) -> object:
+        """旧配置里的 organ 照常读取、忽略（D107）。"""
+        return drop_legacy_keys(value, ("organ",))
 
 
 class PersonaGrowthConfig(BaseModel):
@@ -650,12 +691,19 @@ class PersonaGrowthConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     enabled: bool = False
-    organ: str = "summarizer"
+    # 固定使用 summarizer 器官（D107）。
+    organ: ClassVar[str] = "summarizer"
     max_input_chars: int = Field(default=6000, ge=1000, le=50000)
     layer_cooldown_days: int = Field(default=7, ge=1, le=365)
     min_similarity: float = Field(default=0.7, ge=0.3, le=0.99)
     max_chars_from_empty: int = Field(default=200, ge=20, le=1000)
     max_layer_chars: int = Field(default=1000, ge=100, le=5000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_organ(cls, value: object) -> object:
+        """旧配置里的 organ 照常读取、忽略（D107）。"""
+        return drop_legacy_keys(value, ("organ",))
 
 
 class RuntimeConfig(BaseModel):
