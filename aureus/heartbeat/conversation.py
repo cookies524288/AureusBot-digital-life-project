@@ -25,7 +25,7 @@ from aureus.common import (
     PeopleConfig,
 )
 from aureus.heartbeat import exploration_runner, interest_changes
-from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state
+from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state, describe_judge_body
 from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
@@ -132,6 +132,21 @@ def _person_id_of(record: TimelineRecord) -> int | None:
     return None
 
 
+def _same_judge_source(record: TimelineRecord, target: Perception) -> bool:
+    """判断用的历史只取同一个会话，不使用工作记忆中的跨会话材料。"""
+    metadata, route = record.metadata, target.route
+    if record.visibility is not target.visibility or metadata.get("channel") != target.channel:
+        return False
+    if route is None:
+        return metadata.get("account_id") is None
+    return (
+        metadata.get("account_id") == route.account_id
+        and metadata.get("recipient_id") == route.recipient_id
+        and metadata.get("message_type") == route.kind
+        and metadata.get("temporary_group_id") == route.temporary_group_id
+    )
+
+
 @dataclass(frozen=True)
 class _Heard:
     """已经记进时间线、还没回复的一条消息。"""
@@ -156,7 +171,7 @@ class _ReplyJob:
     full_context: str
     # 规划之后的回复器看的背景：没有行为风格，什么时候开口、怎么回应已经由规划器定了。
     replyer_context: str
-    # 判断器官看的背景：只有不变人格和可变人格（D68 第 6 条）。
+    # 判断器官看的背景：两层人格和允许附加的本轮自身读数（D68、3.15）。
     judge_context: str
     # 判断器官要带的之前的对话；已经按 [judge] context_messages 截好。
     judge_history: Sequence[TimelineRecord]
@@ -168,6 +183,7 @@ class _ReplyJob:
     # 把激素的文字（规划器和合并调用用的、回复器用的）放进系统上下文，返回两份新的上下文。
     build_contexts: Callable[[str, str, str | None], tuple[str, str]]
     read_mood: Callable[[datetime, Sequence[HormoneTrigger]], MoodReading] | None = None
+    mood_reading: MoodReading | None = None
     empathy_detail_for_all: bool = False
     # 此刻激素对这次回复的影响；激素没开时是 None。
     effects: HormoneEffects | None = None
@@ -522,7 +538,11 @@ class ConversationFlow:
             )
 
         judge_count = self._judge.context_messages if self._judge is not None else 0
-        judge_history = list(history)[-judge_count:] if judge_count > 0 else []
+        judge_history = (
+            [record for record in history if _same_judge_source(record, target)][-judge_count:]
+            if judge_count > 0
+            else []
+        )
         people_history = (
             tuple(
                 self._people.history_for(
@@ -580,9 +600,33 @@ class ConversationFlow:
                 else None
             ),
         )
-        return self._apply_hormones(job, ())
+        job = self._apply_hormones(job, (), now=now)
+        owner_private = not contact and target.visibility is VisibilityScope.USER_ONLY
+        if (
+            messages
+            and (owner_private or target.route is not None)
+            and target.trust is not TrustLevel.UNVERIFIED
+            and not self._config.roleplay_mode
+            and self._judge is not None
+            and self._judge.enabled
+            and self._judge.state_context_enabled
+        ):
+            state = (
+                describe_judge_body(reading, body.config, owner_private=owner_private)
+                if body is not None and reading is not None
+                else []
+            )
+            if job.effects is not None and (levels := job.effects.describe_levels()):
+                state.append(f"情绪（0 至 1）：{levels}")
+            if job.mood_reading is not None:
+                state.append(f"心情（−1 至 1）：{job.mood_reading.valence:+.2f}")
+            if state:
+                job = replace(job, judge_context=build_judge_context(identity, state))
+        return job
 
-    def _apply_hormones(self, job: _ReplyJob, extra: Sequence[HormoneTrigger]) -> _ReplyJob:
+    def _apply_hormones(
+        self, job: _ReplyJob, extra: Sequence[HormoneTrigger], *, now: datetime
+    ) -> _ReplyJob:
         """把激素的影响放进这次回复：摘要和行为说明进上下文，低落时回复长度降一档（D69 第 3 条）。
 
         Args:
@@ -591,7 +635,6 @@ class ConversationFlow:
                 所以先拿它们临时算，正式写入在收结果的那一拍。
         """
         hormones = self._hormones
-        now = self._clock.now()
         empathic = self._empathy_focus.active(trigger for trigger in extra if trigger.is_empathy)
         if not job.empathy_detail_for_all:
             visible_ids = set(job.history_ids)
@@ -601,24 +644,34 @@ class ConversationFlow:
                 else replace(trigger, person_id=None, reason="另一段对话里的事")
                 for trigger in empathic
             )
+        effective_triggers = (*empathic, *(trigger for trigger in extra if not trigger.is_empathy))
         effects = (
             hormones.effects(
                 now,
                 person_id=job.person_id,
                 viewer_is_user=job.viewer_is_user,
-                extra=(*empathic, *(trigger for trigger in extra if not trigger.is_empathy)),
+                extra=effective_triggers,
             )
             if hormones is not None
             else None
         )
         strategy = job.base_strategy
+        length_note = ""
         if effects is not None and effects.shorten_reply:
             current = strategy.length_limit or ReplyLength.LONG
-            strategy = replace(strategy, length_limit=current.lowered())
+            length = current.lowered()
+            strategy = replace(strategy, length_limit=length)
+            length_note = f"低落使本轮回复长度上限调整为：{length.describe()}。"
+        def hormone_context(*, plan_first: bool) -> str:
+            if effects is None:
+                return ""
+            return "\n".join(filter(None, (effects.context_text(plan_first=plan_first), length_note)))
+
+        mood = job.read_mood(now, effective_triggers) if job.read_mood is not None else None
         full_context, replyer_context = job.build_contexts(
-            effects.context_text(plan_first=strategy.plan_first) if effects is not None else "",
-            effects.context_text(plan_first=False) if effects is not None else "",
-            job.read_mood(now, empathic).summary if job.read_mood is not None else None,
+            hormone_context(plan_first=strategy.plan_first),
+            hormone_context(plan_first=False),
+            mood.summary if mood is not None else None,
         )
         return replace(
             job,
@@ -626,6 +679,7 @@ class ConversationFlow:
             full_context=full_context,
             replyer_context=replyer_context,
             effects=effects,
+            mood_reading=mood,
         )
 
     def _body_state_for_context(
@@ -654,7 +708,9 @@ class ConversationFlow:
         if job.round_trace is not None:
             job.round_trace.judge = attempt
         if attempt is not None or job.media_sources:
-            job = self._apply_hormones(job, attempt.triggers if attempt is not None else ())
+            job = self._apply_hormones(
+                job, attempt.triggers if attempt is not None else (), now=self._clock.now()
+            )
         automatic: _Recall | None = None
         if self._memory_config.heuristic_recall_enabled and self._can_recall():
             words = heuristic_keywords(job.messages)

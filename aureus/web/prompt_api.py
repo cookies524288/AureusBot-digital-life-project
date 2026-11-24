@@ -114,6 +114,7 @@ def register_prompt_routes(
             identity(),
             clock.now(),
             roleplay=runtime.heartbeat.roleplay_mode,
+            judge_state_enabled=runtime.judge.state_context_enabled,
         )
         return {
             "scenes": [
