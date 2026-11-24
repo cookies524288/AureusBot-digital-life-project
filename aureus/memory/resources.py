@@ -1,5 +1,6 @@
 """文字记忆的统一维护目录；按业务类型浏览，不区分写入原件的路径。"""
 
+import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import asdict, replace
@@ -7,9 +8,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from aureus.memory.edits import MemoryKind
-from aureus.memory.history import decode_history_row
+from aureus.memory.history import MemorySource, decode_history_row
 from aureus.memory.message_boundary import is_message_event, is_message_source
 from aureus.memory.removal_operations import append_removal_operation
+from aureus.memory.summary_store import EvidenceCheck, ScopeCheck, summary_catalog, summary_detail
 
 PICTURE_ARCHIVE = """
     SELECT 'archive', history.id, history.recorded_at, history.content, history.source_key,
@@ -55,6 +57,16 @@ WITH catalog AS (
     JOIN timeline event ON event.id = live.record_id
     LEFT JOIN memory_edits edit ON edit.kind = 'live' AND edit.entry_id = live.rowid
     WHERE NOT ({is_message_event('event.event_type')})
+    UNION ALL
+    SELECT 'summary', fact.id,
+           CASE WHEN current.value ->> '$[1]' = 'active' THEN fact.text ELSE '' END,
+           '会话事实', unixepoch(delta.recorded_at, 'subsec'),
+           json_array('aureus', 'memory', 'summary_facts', json_array(fact.id)),
+           'fact_claims', current.value ->> '$[1]', NULL,
+           current.value ->> '$[1]' = 'active', 0, NULL, current.value ->> '$[1]' = 'active'
+    FROM json_each(:summaries) current JOIN memory_summary_facts fact
+        ON fact.id = current.value ->> '$[0]'
+    JOIN memory_summary_deltas delta ON delta.id = fact.delta_id
 )
 """
 _MATCHING = (
@@ -86,6 +98,7 @@ def browse_text_resources(
     now: datetime,
     *,
     removed: bool = False,
+    summary_access: tuple[ScopeCheck, EvidenceCheck] | None = None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
     """同一数据库快照返回文字目录、准确总数和当前匹配的类型计数。"""
     params = {
@@ -100,6 +113,11 @@ def browse_text_resources(
     }
     with connection:
         connection.execute("BEGIN")
+        params["summaries"] = json.dumps(
+            summary_catalog(connection, *summary_access)
+            if summary_access and not removed and category in ("", "fact_claims")
+            else []
+        )
         counts = dict(
             connection.execute(
                 _MATCHING + "SELECT category, count(*) FROM matching GROUP BY category", params
@@ -111,10 +129,18 @@ def browse_text_resources(
             + " LIMIT :limit OFFSET :offset",
             params,
         ).fetchall()
-        return [_text_resource(connection, row) for row in rows], sum(counts.values()), counts
+        resources = [
+            resource for row in rows
+            if (resource := _text_resource(connection, row, summary_access)) is not None
+        ]
+        return resources, sum(counts.values()), counts
 
 
-def _text_resource(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+def _text_resource(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    summary_access: tuple[ScopeCheck, EvidenceCheck] | None,
+) -> dict[str, Any] | None:
     entry_id = row["entry_id"]
     text = row["edited_content"] if row["edited_content"] is not None else row["content"]
     original = row["content"] if row["edited_content"] is not None else None
@@ -123,6 +149,14 @@ def _text_resource(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str
             "SELECT * FROM memory_history WHERE id = ?", (entry_id,)
         ).fetchone()
         resource = asdict(replace(decode_history_row(stored), text=text, original_text=original))
+    elif row["kind"] == "summary":
+        detail = (
+            summary_detail(connection, MemorySource.decode(row["source_key"]), *summary_access)
+            if summary_access else None
+        )
+        if detail is None or detail.status != row["status"]:
+            return None
+        resource = asdict(detail)
     else:
         stamp = row["recorded_at"]
         resource = {
@@ -154,7 +188,9 @@ def set_resources_removed(
     if not targets or len(set(targets)) != len(targets):
         raise ValueError("请选择不重复的文字记忆。")
     pairs = ", ".join(f"(:kind{index}, :entry{index})" for index in range(len(targets)))
-    params: dict[str, str | int | float] = {"now": now.timestamp(), "prior": not removed}
+    params: dict[str, str | int | float] = {
+        "now": now.timestamp(), "prior": not removed, "summaries": "[]",
+    }
     for index, (kind, entry_id) in enumerate(targets):
         params[f"kind{index}"] = kind
         params[f"entry{index}"] = entry_id

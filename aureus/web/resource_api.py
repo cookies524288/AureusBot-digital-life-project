@@ -27,6 +27,7 @@ from aureus.memory import (
     LanguageStore,
     MemoryIndex,
     MemoryKind,
+    MemorySource,
 )
 from aureus.memory.emoji import (
     MAX_EMOJI_BYTES,
@@ -695,6 +696,25 @@ def register_resource_routes(
             "total": total,
             "next_offset": offset + limit if offset + limit < total else None,
         }
+
+    @app.get("/api/resources/memory/facts/detail")
+    async def browse_summary_fact(
+        _token: Annotated[str, Depends(require_ready)],
+        response: Response,
+        source: Annotated[str, Query(min_length=1, max_length=4096)],
+    ) -> dict[str, Any]:
+        row = None
+        if memory is not None:
+            try:
+                location = MemorySource.decode(source)
+            except (ValueError, TypeError):
+                location = None
+            if location is not None:
+                row = await asyncio.to_thread(memory.summary_resource, location)
+        if row is None:
+            raise HTTPException(404, "未找到事实。", headers={"Cache-Control": "no-store"})
+        response.headers["Cache-Control"] = "no-store"
+        return asdict(row)
 
     @app.post("/api/resources/learning", status_code=201)
     async def add_learning(

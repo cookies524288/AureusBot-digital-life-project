@@ -1249,6 +1249,11 @@ class ConversationFlow:
     ) -> _ThoughtOutcome:
         """让回复器按明确的发言规划写成发言或通过内部标记驳回（D103）。"""
         strategy = job.strategy
+        recall = recalled if recalled is not None else automatic
+        if recall is not None and self._memory is not None:
+            verified = await asyncio.to_thread(self._memory.recheck_summary_hits, recall[1])
+            if len(verified) != len(recall[1]):
+                return _ThoughtOutcome(declined=True)
         length = (
             plan.length.capped_at(strategy.length_limit)
             if plan.length is not None

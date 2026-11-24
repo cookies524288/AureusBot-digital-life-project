@@ -5,8 +5,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from sqlite3 import Connection, Cursor, Row
+from typing import Literal
 
-from aureus.memory.history import MemoryEvidence, MemorySource
+from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource
 from aureus.memory.summary_protocol import (
     PreviousFact,
     SummaryDelta,
@@ -18,6 +19,7 @@ from aureus.memory.summary_protocol import (
 _REFERENCE_LIMIT = 16
 type WindowCheck = Callable[[Connection, SummaryWindow], bool]
 type EvidenceCheck = Callable[[Connection, SummaryScope, int, str, tuple[str, ...]], bool]
+type ScopeCheck = Callable[[SummaryScope], bool]
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,10 @@ class SummaryHit:
     text: str
     evidence: tuple[MemoryEvidence, ...]
     relevance: float
+
+
+def _summary_source(identifier: int) -> MemorySource:
+    return MemorySource("aureus", "memory", "summary_facts", (identifier,))
 
 
 def open_summaries(connection: Connection) -> None:
@@ -70,9 +76,74 @@ def _locations(row: Row) -> list[tuple[int, str, list[str]]]:
 def _source_exists(
     connection: Connection, scope: SummaryScope, row: Row, check: EvidenceCheck
 ) -> bool:
-    return all(
+    locations = _locations(row)
+    return bool(locations) and all(
         check(connection, scope, sequence, message_id, tuple(paths))
-        for sequence, message_id, paths in _locations(row)
+        for sequence, message_id, paths in locations
+    )
+
+
+def _evidence(scope: SummaryScope, row: Row) -> tuple[MemoryEvidence, ...]:
+    evidence: list[MemoryEvidence] = []
+    for sequence, identifier, paths in _locations(row):
+        table = "timeline" if scope[0].startswith("web:") else "inbox_messages"
+        location = MemorySource("aureus", "platform", table, (*scope, sequence, identifier))
+        evidence.append(MemoryEvidence("platform_message", identifier, location))
+        evidence.extend(MemoryEvidence("platform_image", path, location) for path in paths)
+    return tuple(evidence)
+
+
+def _scope(row: Row) -> SummaryScope:
+    return row["route"], row["visibility"]
+
+
+_RESOURCE_ROWS = """SELECT fact.*, delta.route, delta.visibility, delta.recorded_at
+    FROM memory_summary_facts fact JOIN memory_summary_deltas delta ON delta.id=fact.delta_id"""
+
+
+def summary_catalog(
+    connection: Connection, allow_scope: ScopeCheck, check: EvidenceCheck
+) -> list[tuple[int, str]]:
+    """列出当前管理者可知的键与状态；授权范围外不返回键或计数。"""
+    return [
+        (row["id"], _resource_status(connection, row, check))
+        for row in connection.execute(_RESOURCE_ROWS)
+        if allow_scope(_scope(row))
+    ]
+
+
+def _resource_status(
+    connection: Connection, row: Row, check: EvidenceCheck
+) -> Literal["active", "missing", "superseded"]:
+    if row["superseded_by"] is not None:
+        return "superseded"
+    return "active" if _source_exists(connection, _scope(row), row, check) else "missing"
+
+
+def summary_detail(
+    connection: Connection, source: MemorySource, allow_scope: ScopeCheck, check: EvidenceCheck
+) -> HistoricalMemory | None:
+    """只返回对当前管理者可知的派生值，绝不返回平台证据正文。"""
+    if (len(source.key) != 1 or type(source.key[0]) is not int
+        or source != _summary_source(source.key[0])):
+        return None
+    row = connection.execute(_RESOURCE_ROWS + " WHERE fact.id=?", source.key).fetchone()
+    if row is None or not allow_scope(_scope(row)):
+        return None
+    status = _resource_status(connection, row, check)
+    if not allow_scope(_scope(row)):
+        return None
+    evidence = _evidence(_scope(row), row) if status == "active" else ()
+    return HistoricalMemory(
+        source,
+        row["text"] if status == "active" else "",
+        "会话事实",
+        recorded_at=datetime.fromisoformat(row["recorded_at"]),
+        status=status,
+        evidence=evidence,
+        entry_id=row["id"],
+        is_enabled=status == "active",
+        is_recallable=status == "active",
     )
 
 
@@ -227,13 +298,44 @@ def search_summaries(
             or not _source_exists(connection, scope, row, check)
         ):
             continue
-        source = MemorySource("aureus", "memory", "summary_facts", (row["id"],))
-        evidence: list[MemoryEvidence] = []
-        for _, identifier, paths in _locations(row):
-            table = "timeline" if scope[0].startswith("web:") else "inbox_messages"
-            location = MemorySource("aureus", "platform", table, (*scope, identifier))
-            evidence.append(MemoryEvidence("platform_message", identifier, location))
-            evidence.extend(MemoryEvidence("platform_image", path, location) for path in paths)
-        hits.append(SummaryHit(source, timestamp, row["text"], tuple(evidence), relevance))
+        hits.append(
+            SummaryHit(_summary_source(row["id"]), timestamp, row["text"], _evidence(scope, row),
+                       relevance)
+        )
+    hits.sort(key=lambda hit: (hit.relevance, hit.recorded_at), reverse=True)
+    return hits[:limit]
+
+
+def search_authorized_summaries(
+    connection: Connection,
+    keywords: Sequence[str],
+    check: EvidenceCheck,
+    allow_scope: ScopeCheck,
+    limit: int,
+    *,
+    since: datetime | None,
+    before: datetime | None,
+) -> list[SummaryHit]:
+    """跨会话读取获准的派生事实，不开放平台原文。"""
+    scopes = [
+        (row["route"], row["visibility"])
+        for row in connection.execute(
+            "SELECT DISTINCT route, visibility FROM memory_summary_deltas"
+        )
+    ]
+    hits: list[SummaryHit] = []
+    for scope in scopes:
+        if allow_scope(scope):
+            hits.extend(
+                search_summaries(
+                    connection,
+                    scope,
+                    keywords,
+                    check,
+                    limit,
+                    since=since,
+                    before=before,
+                )
+            )
     hits.sort(key=lambda hit: (hit.relevance, hit.recorded_at), reverse=True)
     return hits[:limit]

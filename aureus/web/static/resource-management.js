@@ -174,6 +174,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   const terms = {...labels, messages:'消息', mai_messages:'消息', active:'有效', inactive:'已停用', conflicted:'有冲突', superseded:'已替代',
     retracted:'已撤回', deleted:'已删除', missing:'缺失', image_assets:'图片资产', message:'消息',
+    summary_facts:'会话总结事实', platform_message:'平台消息定位', platform_image:'图片组件定位',
     attachment_archived:'归档附件', media_type:'媒体类型', source_key:'原记录编号', reference:'引用',
     evidence:'证据', name:'名称', id:'编号', kind:'类别', status:'状态', profile:'人物画像'};
   const term = key => terms[key] ?? key;
@@ -897,6 +898,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   function renderMemory(item) {
     const type = labels[item.labels?.[0] ?? item.source?.table ?? 'live'] || item.source?.table;
+    if (item.kind === 'summary') return renderSummaryFact(item);
     const box = el('input', {type:'checkbox', 'aria-label':'选择' + type});
     box.addEventListener('change', () => {
       if (box.checked) selected.set(box, item); else selected.delete(box);
@@ -915,6 +917,27 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           if (await change('/api/resources/memory', 'PATCH', {...memoryTarget(item), is_enabled:!item.is_enabled},
             memory.read, button) && button.isConnected) $('editor-dialog').close();
         }))), box);
+  }
+  function renderSummaryFact(item) {
+    const title = item.text || (item.status === 'superseded' ? '已更正的事实' : '没有证据的事实');
+    return record(title, async () => {
+      const state = el('p', {class:'muted', role:'status', text:'正在复核事实来源…'});
+      detail('会话总结事实', state);
+      const {instance, role, table, key} = item.source;
+      const params = new URLSearchParams({source:JSON.stringify([instance, role, table, key])});
+      const response = await api('/api/resources/memory/facts/detail?' + params);
+      if (!state.isConnected || !$('editor-dialog').open) return;
+      if (!response.ok) {
+        state.textContent = response.status === 404 ? '没有此事实，或当前不可见。' : errorText(response);
+        if (response.status === 404) await memory.read();
+        return;
+      }
+      const fact = response.data;
+      detail('会话总结事实', field('事实', fact.text), field('事实来源', sourceText(fact.source)),
+        field('状态', fact.status === 'superseded' ? '已更正' : term(fact.status)),
+        field('证据定位', fact.evidence.map(entry => [term(entry.kind), entry.reference,
+          sourceText(entry.source)].join(' · ')).join('\n') || '没有可用证据'));
+    });
   }
   const counts = $('memory-counts');
   const memory = searchable({panel:$('memory-query-text'), id:'memory', render:renderMemory, prepare:() => {

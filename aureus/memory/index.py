@@ -82,12 +82,15 @@ from aureus.memory.sparse import keyword_conditions, relevance_expression
 from aureus.memory.summary_protocol import PreviousFact, SummaryDelta, SummaryScope, SummaryWindow
 from aureus.memory.summary_store import (
     EvidenceCheck,
+    ScopeCheck,
     WindowCheck,
     open_summaries,
     previous_summary,
     save_summary,
+    search_authorized_summaries,
     search_summaries,
     summary_cursor,
+    summary_detail,
 )
 from aureus.memory.transfer import export_archive, import_archive
 from aureus.timeline import TimelineDatabase, TimelineQuery, TimelineRecord, VisibilityScope
@@ -166,6 +169,10 @@ class MemoryHit:
     original_text: str | None = None
 
 
+def _is_summary_hit(hit: MemoryHit) -> bool:
+    return hit.source is not None and hit.source.table == "summary_facts"
+
+
 def _search_extracted(
     conn: sqlite3.Connection,
     keywords: Sequence[str],
@@ -240,6 +247,7 @@ class MemoryIndex:
         self._conn: sqlite3.Connection | None = None
         self.graph_display = MemoryGraphDisplay(db_path, self._clock)
         self.summary_evidence: EvidenceCheck | None = None
+        self.summary_scope_allowed: ScopeCheck | None = None
 
     def open(self) -> None:
         """创建派生表；SQLite 不支持 trigram 时抛 sqlite3.Error。"""
@@ -491,7 +499,40 @@ class MemoryIndex:
                 limit,
                 self._clock.now(),
                 removed=removed,
+                summary_access=self._summary_access(),
             )
+
+    def _summary_access(self) -> tuple[ScopeCheck, EvidenceCheck] | None:
+        allows, check = self.summary_scope_allowed, self.summary_evidence
+        if allows is None or check is None:
+            return None
+        return allows, check
+
+    def summary_resource(self, source: MemorySource) -> HistoricalMemory | None:
+        """读取当前管理者可知的派生事实详情，不查原文正文。"""
+        access = self._summary_access()
+        if access is None:
+            return None
+        with closing(open_connection(self._db_path)) as conn:
+            conn.execute("BEGIN")
+            return summary_detail(conn, source, *access)
+
+    def recheck_summary_hits(self, hits: Sequence[MemoryHit]) -> list[MemoryHit]:
+        """规划之后再次核对已选会话事实，不把撤权的材料送给回复器。"""
+        access = self._summary_access()
+        if access is None or not any(_is_summary_hit(hit) for hit in hits):
+            return list(hits)
+        with closing(open_connection(self._db_path)) as conn:
+            conn.execute("BEGIN")
+            verified = []
+            for hit in hits:
+                if not _is_summary_hit(hit) or hit.source is None:
+                    verified.append(hit)
+                    continue
+                row = summary_detail(conn, hit.source, *access)
+                if row is not None and row.is_recallable and row.text[:MAX_HIT_CHARS] == hit.text:
+                    verified.append(hit)
+            return verified
 
     def set_resources_removed(
         self, targets: Sequence[tuple[MemoryKind, int]], removed: bool
@@ -780,15 +821,22 @@ class MemoryIndex:
                 and self._config.consolidation_enabled
                 and self._config.consolidation_extract_enabled
             ):
+                if self.summary_scope_allowed is not None:
+                    facts = search_authorized_summaries(
+                        conn, keywords, self.summary_evidence, self.summary_scope_allowed, limit,
+                        since=since, before=before,
+                    )
+                else:
+                    facts = search_summaries(
+                        conn, summary_scope, keywords, self.summary_evidence, limit,
+                        since=since, before=before,
+                    )
                 hits.extend(
                     MemoryHit(
                         None, item.recorded_at, "会话事实", item.text[:MAX_HIT_CHARS], item.source,
                         evidence=item.evidence, relevance=item.relevance,
                     )
-                    for item in search_summaries(
-                        conn, summary_scope, keywords, self.summary_evidence, limit,
-                        since=since, before=before,
-                    )
+                    for item in facts
                 )
             history = search_history(
                 conn,

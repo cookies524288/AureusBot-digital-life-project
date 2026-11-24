@@ -6,20 +6,112 @@ from pathlib import Path
 
 import pytest
 
-from aureus.common import HeartbeatConfig, ManualClock
+from aureus.common import HeartbeatConfig, ManualClock, MemoryConfig
 from aureus.heartbeat import Heartbeat, MessageRoute, Perception, TrustLevel
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.memory_summary_source import PlatformSummarySource
 from aureus.heartbeat.planner_tools import PlannerToolOptions, dispatch_planner_tools, planner_tools
 from aureus.heartbeat.platform_history import HistoryBoundary, HistoryQuery, PlatformHistory
 from aureus.heartbeat.recall import MAX_RECALL_CHARS
 from aureus.identity import Identity
+from aureus.memory import MemoryIndex, parse_delta
 from aureus.organs import OrganRequest, OrganResponse, ToolCall
 from aureus.safety import EmergencyStop, PermissionChecker
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from tests.planner_fixtures import plan_response
+from tests.prompt_assertions import dialogue_text
 
 NOW = datetime(2026, 11, 24, tzinfo=UTC)
 KEY = ConversationKey("qq", "bot", "group", "target")
 VISIBILITY = VisibilityScope.GROUP
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoke_after_query", [False, True])
+async def test_private_fact_reaches_group_planner_and_replyer(
+    tmp_path: Path, revoke_after_query: bool
+) -> None:
+    path = tmp_path / "summary.db"
+    clock = ManualClock(NOW)
+    store, timeline = InboxStore(path, clock), TimelineDatabase(path, clock)
+    timeline.open()
+    config = MemoryConfig(consolidation_enabled=True, consolidation_extract_enabled=True)
+    index = MemoryIndex(path, timeline, clock, config=config)
+    index.open()
+    private = ConversationKey("qq", "bot", "private", "sender")
+    allowed = {private, KEY}
+    original = "每回拍照时我最爱用的是远晴镜头。"
+    fact = "阿禾的常用摄影器材是远晴镜头。"
+    private_message = Perception(
+        "qq", "sender", original, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_CONTACT,
+        route=MessageRoute("bot", "private", "sender", "private-origin"),
+    )
+    requests: list[OrganRequest] = []
+
+    class Organs:
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            requests.append(request)
+            if request.organ_id == "replyer":
+                assert fact in dialogue_text(request)
+                assert original not in dialogue_text(request)
+                assert "不要向对方透露" in request.system_context
+                return OrganResponse("replyer", "合成回复")
+            assert original not in request.prompt
+            if request.tool_history:
+                result = request.tool_history[0].results[0].content
+                assert fact in result and original not in result and "private-origin" not in result
+                if revoke_after_query:
+                    allowed.remove(private)
+            return plan_response(request, {
+                "reply": True, "recall": ["远晴镜头"], "intent": "回答摄影话题",
+            })
+
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    heart = Heartbeat(
+        clock=clock, timeline=timeline, organs=Organs(),
+        identity=Identity.model_validate({
+            "facts": {"name": "测试", "birthday": "2026-11-24"}, "user": {"name": "维护者"},
+            "persona": {"immutable": "温和。"},
+        }),
+        config=HeartbeatConfig(inbox_debounce_enabled=False),
+        permissions=PermissionChecker(stop), emergency_stop=stop, inbox_store=store,
+        memory=index, memory_config=config,
+    )
+    heart.attach_channel("qq", lambda outgoing: None)
+    heart.set_inbox_route_filter(lambda key: key in allowed)
+    try:
+        old = store.add(private_message, sender_name="阿禾")
+        assert old is not None
+        store.mark_read([old.id])
+        source = PlatformSummarySource(store, index, timeline)
+        source.allows = lambda key: key in allowed
+        window = source.next_window(1)
+        assert window is not None
+        proposal = {"summary": fact, "entities": [], "relations": [], "facts": [{
+            "fact_id": "lens", "text": fact, "predicate": "器材", "value": "远晴镜头",
+            "source": {
+                "message_id": "private-origin", "sender_id": "sender", "excerpt": "远晴镜头",
+            },
+            "image_evidence": [],
+        }]}
+        delta = parse_delta(json.dumps(proposal), window)
+        assert index.commit_summary(window, delta, source.check_window)
+        heart.wake_up()
+        heart.submit(Perception(
+            "qq", "group-member", "聊聊摄影器材。", VISIBILITY, TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "target", "current"),
+        ))
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        assert [request.organ_id for request in requests] == (
+            ["planner", "planner"] if revoke_after_query else ["planner", "planner", "replyer"]
+        )
+        assert requests[1].tool_history and "不要向对方透露" in requests[1].system_context
+    finally:
+        await heart.shut_down()
+        index.close()
+        timeline.close()
 
 
 def perception(key: ConversationKey, identifier: str, content: str) -> Perception:

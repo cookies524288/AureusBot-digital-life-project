@@ -20,7 +20,7 @@ def summary_scope_for(
     visibility: VisibilityScope,
     route_key: str | None,
 ) -> SummaryScope | None:
-    """回复只召回与当前感知绑定的平台事实；网页私聊要求固定的经验证账号。"""
+    """平台召回需要真实的目标路由；网页私聊要求固定的经验证账号。"""
     if route_key is not None and channel == "qq":
         return route_key, visibility
     if (channel, sender_id, trust, visibility) == (
@@ -111,7 +111,11 @@ class PlatformSummarySource:
         """授权随通道改变，不能以曾经成功的窗口代替。"""
         if scope == WEB_PRIVATE_SCOPE:
             return self.timeline is not None and self.web_enabled is not None and self.web_enabled()
-        if self.allows is None or self.store is None or not scope[0].startswith("["):
+        visible = (VisibilityScope.USER_ONLY, VisibilityScope.GROUP, VisibilityScope.PUBLIC)
+        if (
+            self.allows is None or self.store is None
+            or not scope[0].startswith("[") or scope[1] not in visible
+        ):
             return False
         return self.allows(ConversationKey.from_scope_key(scope[0]))
 

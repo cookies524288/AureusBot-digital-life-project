@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from aureus.common import ManualClock, MemoryConfig
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
@@ -18,6 +20,7 @@ from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception
 from aureus.memory import MemoryIndex, SummaryScope, SummaryWindow, parse_delta
 from aureus.organs import ModelPreference, OrganCallError, OrganRequest, OrganResponse
 from aureus.timeline import TimelineDatabase, VisibilityScope
+from aureus.web.resource_api import register_resource_routes
 
 _EMPTY = '{"summary":"","entities":[],"relations":[],"facts":[]}'
 _SCOPE = VisibilityScope.GROUP
@@ -45,6 +48,8 @@ class Rig:
         sender: str = "200",
         name: str = "阿青",
         account: str = "100",
+        kind: str = "group",
+        recipient: str = "300",
         visibility: VisibilityScope = _SCOPE,
         image: bool = False,
         outgoing: bool = False,
@@ -56,7 +61,7 @@ class Rig:
             content,
             visibility,
             TrustLevel.VERIFIED_CONTACT,
-            route=MessageRoute(account, "group", "300", message_id),
+            route=MessageRoute(account, kind, recipient, message_id),
             quoted_message_id=quote,
             attachments=(MediaReference("image", "asset"),) if image else (),
         )
@@ -215,6 +220,51 @@ async def test_same_window_once_and_image_not_interchangeable(rig: Rig) -> None:
     rig.add("m3", "我目前住在晴桂巷。")
     rig.add("m4", "其他合成上下文")
     assert rig.window().messages[0].sequence == 5
+
+
+def test_authorized_cross_scope_recall_keeps_platform_text_private(rig: Rig) -> None:
+    private = ConversationKey("qq", "100", "private", "200")
+    rig.source.allows = lambda candidate: candidate in (rig.key, private)
+    for identifier, content in (("m1", "我住在晴桂巷。"), ("m2", "确认住在晴桂巷。")):
+        rig.add(identifier, content, kind="private", recipient="200",
+                visibility=VisibilityScope.USER_ONLY)
+    window = rig.window()
+    assert window.scope == (private.language_scope_key(), VisibilityScope.USER_ONLY)
+    delta = parse_delta(_answer("晴桂巷", "我住在晴桂巷。"), window)
+    assert rig.index.commit_summary(window, delta, rig.source.check_window)
+    rig.index.summary_scope_allowed = rig.source.allows_scope
+    hits = rig.index.search(["晴桂巷"], (), 4, summary_scope=rig.scope)
+    assert len(hits) == 1
+    assert hits[0].text == "阿青：居住地点是晴桂巷。"
+    assert "我住在晴桂巷" not in hits[0].text
+    assert hits[0].source is not None
+
+    async def require_ready() -> str:
+        return "synthetic-session"
+
+    app = FastAPI()
+    register_resource_routes(app, require_ready, None, rig.index)
+    endpoint = "/api/resources/memory"
+    detail = endpoint + "/facts/detail"
+    location = {"source": hits[0].source.encode()}
+    with TestClient(app) as client:
+        [fact] = client.get(endpoint, params={"category": "fact_claims"}).json()["items"]
+        assert fact["source"]["table"] == "summary_facts"
+        response = client.get(detail, params=location)
+        assert response.json()["text"] == hits[0].text
+        assert response.json()["evidence"][0]["reference"] == "m1"
+        assert "我住在晴桂巷。" not in response.text
+        rig.source.allows = lambda candidate: candidate == rig.key
+        assert rig.index.search(["晴桂巷"], (), 4, summary_scope=rig.scope) == []
+        assert not rig.index.recheck_summary_hits(hits)
+        assert client.get(endpoint, params={"category": "fact_claims"}).json()["counts"] == {}
+        assert client.get(detail, params=location).status_code == 404
+        rig.source.allows = lambda candidate: candidate in (rig.key, private)
+        with sqlite3.connect(rig.path) as connection:
+            connection.execute("DELETE FROM inbox_messages WHERE message_id = 'm1'")
+        unavailable = client.get(detail, params=location).json()
+        assert unavailable["status"] == "missing"
+        assert unavailable["text"] == "" and unavailable["evidence"] == []
 
 
 @pytest.mark.parametrize(

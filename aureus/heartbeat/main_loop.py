@@ -418,6 +418,7 @@ class Heartbeat:
             source.web_enabled = lambda: WEB_CHANNEL_NAME in self._sinks
             self._memory_consolidator.source = source
             memory.summary_evidence = source.check_evidence
+            memory.summary_scope_allowed = source.allows_scope
         self._diary: DiaryTracker | None = None
         diary_config = diary_config or DiaryConfig()
         if diary is not None:
