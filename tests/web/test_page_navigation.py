@@ -192,6 +192,53 @@ def test_monitor_visibility_tags_do_not_change_timeline_or_overview_labels() -> 
     )
 
 
+def test_timeline_rounds_merge_across_pages_and_never_label_plans_as_sent() -> None:
+    run_page_script(
+        r"""
+        const time = '2026-11-24T10:00:00Z';
+        const record = (id, event_type, round_id, extra = {}) => ({id, time, actor:'me',
+          visibility:'user_only', event_type, content:'正文 ' + id,
+          ...(round_id ? {round_id} : {}), ...extra});
+        const planning = record(3, 'reply_reference', 5, {metadata:{actions:[
+          {action:'query_memory', status:'completed'},
+          {action:'reply', status:'completed', reference:'只是参考'}]}});
+        // 两个来源的轮次 5、6 交错，第 5 轮被翻页边界从中间切开，另有一条无轮次旧记录。
+        const older = [record(1, 'message', null), record(2, 'judgment', 5), planning];
+        const latest = [record(4, 'judgment', 6), record(5, 'reply_delivered', 5),
+          record(6, 'reply_delivery_failed', 6), record(7, 'reply_delivered', 5)];
+        const pages = [{records:latest, next_before_id:4}, {records:older, next_before_id:null}];
+        Object.defineProperty($('tl-list'), 'textContent', {set() { this.children = []; }});
+        api = async () => ({ok:true, data:{...pages.shift(), context:{message_limit:2,
+          boundary_id:6}}});
+        await loadTimeline(false);
+        await loadTimeline(true);
+        const list = $('tl-list').children;
+        const descendants = node => [node, ...node.children.flatMap(descendants)];
+        const texts = node => descendants(node).map(item => item.textContent);
+        const sections = list.filter(node => node.className === 'tl-round');
+        const ids = section => section.children.filter(node => node.className.startsWith('tl-item'))
+          .map(item => texts(item).find(text => /^#\d+$/.test(text)));
+        // 上下文分界内外各画一次边框；翻页拼接后同一轮的记录合在一组，标题只出现一次。
+        assert.deepEqual(sections.map(section => section.attributes['aria-label']),
+          ['对话轮次 #5', '对话轮次 #6', '对话轮次 #5', '对话轮次 #6']);
+        assert.equal(JSON.stringify(sections.map(ids)),
+          JSON.stringify([['#7'], ['#6'], ['#2', '#3', '#5'], ['#4']]));
+        for (const title of ['对话轮次 #5', '对话轮次 #6']) {
+          assert.equal(list.filter(node => texts(node).includes(title)).length, 1, title);
+        }
+        const legacy = list.at(-1);
+        assert.equal(legacy.className, 'tl-item');
+        assert.ok(texts(legacy).includes('历史回复 · 未标投递'));
+        const all = list.flatMap(texts);
+        assert.ok(all.includes('本轮行动记录'));
+        assert.ok(all.includes('回复参考（不是已发正文）：只是参考'));
+        assert.ok(all.includes('选择回复（不是发送） · 完成'));
+        assert.ok(all.includes('回复 · 未确认投递'));
+        assert.equal(all.filter(text => text === '回复 · 已投递').length, 2);
+        """
+    )
+
+
 def test_model_probe_details_describe_media_and_embedding_dimensions() -> None:
     run_page_script(
         r"""
