@@ -3701,6 +3701,8 @@ const CFG_FIELDS = {
   'heartbeat.qq_emoji_collection_enabled': ['QQ 表情收集', '允许从收到的 QQ 消息收集表情，并识别表情内容。'],
   'heartbeat.qq_emoji_selection_enabled': ['QQ 回复表情选择', '回复计划需要表情时，允许从可发送的候选中选取。'],
   'heartbeat.qq_emoji_maintenance_enabled': ['QQ 表情定期复查', '定期检查表情库候选的可用状态，更新可发送的候选。'],
+  'heartbeat.qq_emoji_registration_limit': ['表情登记上限', '限制新增活跃登记；不自动撤销旧登记。'],
+  'heartbeat.qq_emoji_replacement_suggestion_enabled': ['表情替换建议', '默认关闭。只在手动请求时通过表情器官建议一个旧登记，可能收费，不自动改动目录。'],
   'heartbeat.qq_emoji_visual_enabled': ['QQ 表情视觉选择', '让视觉模型直接看候选表情图片来选择，开启后不走语义或文字选择。'],
   'heartbeat.qq_emoji_semantic_enabled': ['QQ 表情语义匹配', '未开启视觉选择时，使用已配置的向量模型匹配表情；没有合适的语义结果时仍可按文字挑选。'],
   'heartbeat.qq_emoji_semantic_refresh_seconds': ['表情语义缓存刷新间隔（秒）', '表情描述的向量候选使用多久后需要重新检查。'],

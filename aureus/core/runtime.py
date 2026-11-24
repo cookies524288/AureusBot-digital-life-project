@@ -328,7 +328,12 @@ def open_core(
             except sqlite3.Error:
                 logger.exception("表达向量索引打不开，本次运行使用普通表达候选")
         inbox_store = InboxStore(paths.database_file, the_clock) if runtime.qq.enabled else None
-        emoji_store = EmojiStore(paths.database_file, paths.memory_dir, the_clock)
+        emoji_store = EmojiStore(
+            paths.database_file,
+            paths.memory_dir,
+            the_clock,
+            registration_limit=heartbeat_config.qq_emoji_registration_limit,
+        )
         emoji_store.open()
         heartbeat = Heartbeat(
             clock=the_clock,
