@@ -92,6 +92,30 @@ def runtime_field_names(changes: dict[str, Any]) -> list[str]:
     return names
 
 
+def _runtime_restore_fields() -> set[str]:
+    schema = RuntimeConfig.model_json_schema()
+    fields: list[str] = []
+    for name, prop in schema["properties"].items():
+        if "$ref" in prop:
+            definition = prop["$ref"].rsplit("/", 1)[-1]
+            fields.extend(
+                f"{name}.{field}"
+                for field, item in schema["$defs"][definition]["properties"].items()
+                if "default" in item
+            )
+        elif "default" in prop:
+            fields.append(name)
+    return set(fields).difference(READONLY_CONFIG, HIDDEN_CONFIG, NO_DEFAULT_CONFIG)
+
+
+def _visible_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
+    values = config.model_dump(mode="json")
+    for key in HIDDEN_CONFIG:
+        section, _, field = key.partition(".")
+        values[section].pop(field, None)
+    return values
+
+
 def _read_toml(path: Path, source: str) -> tuple[bool, dict[str, Any]]:
     try:
         return True, tomllib.loads(path.read_bytes().decode("utf-8"))
@@ -338,16 +362,14 @@ class ConfigService:
     def view_runtime(self) -> dict[str, Any]:
         """提供当前文件配置、自动生成的 schema、只读项和需密码的节。"""
         exists, config = self.read_runtime()
-        values = config.model_dump(mode="json")
         schema = RuntimeConfig.model_json_schema()
         for key in HIDDEN_CONFIG:
             section, _, field = key.partition(".")
             definition = schema["properties"][section]["$ref"].rsplit("/", 1)[-1]
             schema["$defs"][definition]["properties"].pop(field, None)
-            values[section].pop(field, None)
         return {
             "exists": exists,
-            "config": values,
+            "config": _visible_runtime_values(config),
             "schema": schema,
             "readonly": list(READONLY_CONFIG),
             "no_default": sorted(NO_DEFAULT_CONFIG),
@@ -404,28 +426,33 @@ class ConfigService:
     def restore_runtime(self, key: str) -> tuple[Any, bool]:
         """仅删除一个运行配置覆盖，返回有效值和覆盖是否存在。"""
         check_biochemical_write([key])
-        if key in NO_DEFAULT_CONFIG or key in HIDDEN_CONFIG:
+        if key not in _runtime_restore_fields():
             raise ConfigError("这项设置没有可恢复的默认值。")
         section, separator, field = key.rpartition(".")
-        defaults = RuntimeConfig().model_dump(mode="json")
-        fields = defaults.get(section) if separator else defaults
-        if not isinstance(fields, dict) or field not in fields or isinstance(fields[field], dict):
-            raise ConfigError("这项设置没有可恢复的默认值。")
-        changed = False
+        config, removed = self._restore_runtime_fields({key})
+        return (config[section] if separator else config)[field], bool(removed)
+
+    def restore_all_runtime(self) -> tuple[dict[str, Any], list[str]]:
+        """一次移除设置页可恢复的运行覆盖，返回页面有效值与实际移除的字段。"""
+        return self._restore_runtime_fields(_runtime_restore_fields())
+
+    def _restore_runtime_fields(self, keys: set[str]) -> tuple[dict[str, Any], list[str]]:
+        removed: list[str] = []
 
         def edit(document: TOMLDocument) -> None:
-            nonlocal changed
-            table = document.get(section, {}) if section else document
-            if isinstance(table, MutableMapping) and field in table:
-                del table[field]
-                changed = True
+            for key in sorted(keys):
+                section, _, field = key.rpartition(".")
+                table = document.get(section) if section else document
+                if isinstance(table, MutableMapping) and field in table:
+                    del table[field]
+                    removed.append(key)
 
         config = apply_toml_edit(
             self.paths.runtime_config_file,
             edit,
             lambda raw: validate_runtime_config(raw, "恢复默认后的配置"),
-        ).model_dump(mode="json")
-        if changed:
+        )
+        if removed:
             self.restart_required = True
-            logger.info("网页恢复运行配置：%s", key)
-        return (config[section] if section else config)[field], changed
+            logger.info("网页恢复运行配置：%s", "、".join(removed))
+        return _visible_runtime_values(config), removed

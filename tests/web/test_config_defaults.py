@@ -14,6 +14,7 @@ from tests.web.test_timeline_api import GOOD
 from tests.web.test_web_acceptance_flow import IDENTITY
 
 RUNTIME_RESTORE = "/api/config/restore-default"
+RUNTIME_RESTORE_ALL = "/api/config/restore-defaults"
 MODEL_RESTORE = "/api/models/restore-default"
 
 
@@ -245,11 +246,119 @@ def test_restore_permissions_unknown_keys_and_invalid_result_keep_files(rig: Con
 def test_restore_requires_login_and_non_default_password(tmp_path: Path) -> None:
     rig = ConfigRig(tmp_path, password_set=False)
     try:
-        assert rig.client.post(RUNTIME_RESTORE, json={}).status_code == 401
+        for endpoint in (RUNTIME_RESTORE, RUNTIME_RESTORE_ALL):
+            assert rig.client.post(endpoint, json={}).status_code == 401
         rig.log_in("admin")
-        assert rig.client.post(RUNTIME_RESTORE, json={}).status_code == 403
+        for endpoint in (RUNTIME_RESTORE, RUNTIME_RESTORE_ALL):
+            assert rig.client.post(endpoint, json={}).status_code == 403
     finally:
         rig.close()
+
+
+def test_restore_all_requires_password_and_honors_the_shared_limit(
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = rig.paths.runtime_config_file
+    before = b'log_level = "DEBUG"\n'
+    path.write_bytes(before)
+
+    def reject_touch(_token: str) -> bool:
+        pytest.fail("加载设置和执行总重置不应续期或清理登录状态")
+
+    with monkeypatch.context() as context:
+        context.setattr(rig.sessions, "touch", reject_touch)
+        assert rig.client.get("/api/config").status_code == 200
+        for body in ({}, {"password": "wrong"}, {"password": "wrong"}):
+            response = rig.client.post(RUNTIME_RESTORE_ALL, json=body)
+            assert response.status_code == 403
+            assert response.json()["detail"] == "密码不对。"
+            assert path.read_bytes() == before
+        response = rig.client.post(RUNTIME_RESTORE_ALL, json={"password": GOOD})
+        assert response.status_code == 429 and "Retry-After" in response.headers
+    assert (
+        rig.client.post(
+            RUNTIME_RESTORE, json={"field": "web.session_days", "password": GOOD}
+        ).status_code
+        == 429
+    )
+    assert path.read_bytes() == before
+    assert not rig.service.restart_required
+
+
+def test_restore_all_removes_only_settings_overrides(rig: ConfigRig) -> None:
+    paths = rig.paths
+    kept_files = {
+        paths.identity_file: IDENTITY.encode("utf-8"),
+        paths.models_config_file: b'# synthetic model settings\n[[providers]]\nname = "sample"\n',
+        paths.home / "prompts.toml": b'# synthetic prompt settings\n',
+        paths.data_dir / "sample.txt": b"synthetic data",
+    }
+    for path, content in kept_files.items():
+        path.write_bytes(content)
+    paths.runtime_config_file.write_bytes(
+        b'# keep this note\nconfig_version = 1\nlog_level = "DEBUG"\n'
+        b'[heartbeat]\nadvance_biomodel = true\nplan_organ = "old"\n'
+        b'inbox_read_limit = 72\n[cortisol]\nenabled = true\n'
+        b'[exploration]\nsearch_endpoint = "https://search.example.test"\n'
+        b'[web]\nport = 30000 # keep this comment\nsession_days = 12\n'
+        b'[safety]\nmax_calls_per_minute = 21\n'
+    )
+    response = rig.client.post(
+        RUNTIME_RESTORE_ALL, json={"password": GOOD, "changes": {"web": {"port": 12345}}}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["changed"] == [
+        "heartbeat.inbox_read_limit",
+        "log_level",
+        "safety.max_calls_per_minute",
+        "web.session_days",
+    ]
+    assert data["restart_required"] is True
+    assert data["config"] == rig.client.get("/api/config").json()["config"]
+    assert "advance_biomodel" not in data["config"]["heartbeat"]
+    assert data["config"]["log_level"] == RuntimeConfig().log_level
+    assert data["config"]["heartbeat"]["inbox_read_limit"] == HeartbeatConfig().inbox_read_limit
+    text = paths.runtime_config_file.read_text(encoding="utf-8")
+    raw = tomllib.loads(text)
+    assert raw.pop("safety", {}) == {}
+    assert raw == {
+        "config_version": 1,
+        "heartbeat": {"advance_biomodel": True, "plan_organ": "old"},
+        "cortisol": {"enabled": True},
+        "exploration": {"search_endpoint": "https://search.example.test"},
+        "web": {"port": 30000},
+    }
+    assert "# keep this note" in text and "# keep this comment" in text
+    assert all(path.read_bytes() == content for path, content in kept_files.items())
+    assert rig.timeline.count_records() == 0
+    rig.auth.confirm_password(GOOD, "127.0.0.1")
+
+
+def test_restore_all_with_nothing_to_restore_does_not_create_a_file(rig: ConfigRig) -> None:
+    response = rig.client.post(RUNTIME_RESTORE_ALL, json={"password": GOOD})
+    assert response.status_code == 200
+    assert response.json()["changed"] == []
+    assert response.json()["restart_required"] is False
+    assert not rig.paths.runtime_config_file.exists()
+
+
+def test_restore_all_disk_failure_keeps_every_override(
+    rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = rig.paths.runtime_config_file
+    before = b'log_level = "DEBUG"\n[web]\nsession_days = 12\n'
+    path.write_bytes(before)
+
+    def fail_replace(_source: str, _destination: Path) -> None:
+        raise OSError("synthetic replacement error")
+
+    monkeypatch.setattr("aureus.common.toml_edit.os.replace", fail_replace)
+    response = rig.client.post(RUNTIME_RESTORE_ALL, json={"password": GOOD})
+    assert response.status_code == 500
+    assert path.read_bytes() == before
+    assert not rig.service.restart_required
+    assert list(rig.paths.config_dir.glob("*.tmp")) == []
 
 
 def test_web_keeps_legacy_settings_off_the_page_and_preserves_file(rig: ConfigRig) -> None:

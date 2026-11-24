@@ -534,7 +534,13 @@ def create_app(
 
     if config_files is not None:
         register_config_routes(
-            app, config_files, auth, require_ready, model_runtime, run_model_test
+            app,
+            config_files,
+            auth,
+            require_ready,
+            model_runtime,
+            run_model_test,
+            require_active=require_inspection_access,
         )
         if (
             model_runtime is not None

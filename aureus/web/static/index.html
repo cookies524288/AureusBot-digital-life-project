@@ -833,7 +833,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary" disabled><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
-<div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
+<div class="row"><button id="cf-restore-all" class="btn danger" disabled>恢复默认设置</button><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
 <div class="page-body cfg-layout">
 <div id="cf-tabs" class="cfg-tabs"></div>
 <div id="cf-details" class="cfg-details" role="region" aria-label="设置项" tabindex="0"><div class="stack">
@@ -889,6 +889,14 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text" closedby="any"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
+<dialog id="cf-restore-all-dialog" class="editor-dialog" aria-labelledby="cf-restore-all-title" aria-describedby="cf-restore-all-scope"><form id="cf-restore-all-form" class="dialog-shell">
+<header class="dialog-head"><h3 id="cf-restore-all-title">恢复默认设置</h3></header>
+<div class="dialog-body stack"><div class="stack" id="cf-restore-all-scope"><p>已保存的可恢复运行设置将恢复为默认值，重启后生效；此浏览器的界面字体会立即恢复默认，未保存的修改会丢弃。</p>
+<p>只读项、没有默认值的设置、账户凭据和绑定、人设、密钥、模型及其它页面的配置和数据均保留。</p></div>
+<label class="field"><span>当前密码</span><input id="cf-restore-all-password" type="password" autocomplete="current-password" required></label>
+<div id="cf-restore-all-error" class="banner danger hidden" role="alert"></div></div>
+<footer class="dialog-foot"><button id="cf-restore-all-cancel" class="btn" type="button" autofocus>取消</button><button id="cf-restore-all-submit" class="btn danger" type="submit">确认恢复</button></footer>
+</form></dialog>
 <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
 <dialog id="provider-key-dialog" class="editor-dialog" aria-labelledby="provider-key-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="provider-key-title"></h3><form method="dialog"><button class="btn small" aria-label="关闭新增 API 密钥"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header><div id="provider-key-body" class="dialog-body"></div><footer id="provider-key-footer" class="dialog-foot"></footer></div></dialog>
 <dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title" closedby="any"><div class="dialog-shell">
@@ -1184,7 +1192,7 @@ function showAuth(view, message) {
   pageNavigation = null;
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
-  for (const id of ['provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview']) if ($(id).open) $(id).close();
+  for (const id of ['provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview', 'cf-restore-all-dialog']) if ($(id).open) $(id).close();
   $('ky-add').disabled = true;
   if (typeof closeSocket === 'function') closeSocket();
   $('app').classList.add('hidden');
@@ -3123,6 +3131,7 @@ function refreshConfigDirty() {
   const keys = Object.keys(cf.changes);
   $('cf-save').disabled = cf.busy || (!keys.length && !cf.invalid.size);
   $('cf-reset').disabled = cf.busy || (!keys.length && !cf.invalid.size);
+  $('cf-restore-all').disabled = cf.busy || !cf.data;
   $('cf-section').inert = cf.busy;
   $('cf-tabs').inert = cf.busy;
   const needPassword = cf.pwSections.has(cf.tab) || keys.some(key => key.includes('.') && cf.pwSections.has(key.split('.')[0]));
@@ -3215,6 +3224,10 @@ function cfRow(sec, field) {
       !readonly && !cf.noDefault.has(key) && Object.hasOwn(prop, 'default')
         ? restoreButton(name, key, button => restoreConfigField(sec, field, button)) : null));
 }
+function restoreConfigFont() {
+  document.documentElement.dataset.font = DEFAULT_UI_FONT;
+  try { localStorage.removeItem('aureus-font'); } catch (e) { /* 当前页面仍可恢复 */ }
+}
 function renderConfigSection(sec) {
   $('cf-details').scrollTop = 0;
   const container = $('cf-section');
@@ -3235,8 +3248,8 @@ function renderConfigSection(sec) {
       try { localStorage.setItem('aureus-font', font.value); } catch (e) { /* 当前页面仍可切换 */ }
     });
     const resetFont = restoreButton('界面字体', 'font', () => {
-      document.documentElement.dataset.font = font.value = DEFAULT_UI_FONT;
-      try { localStorage.removeItem('aureus-font'); } catch (e) { /* 当前页面仍可恢复 */ }
+      restoreConfigFont();
+      font.value = DEFAULT_UI_FONT;
     });
     container.append(el('div', { class: 'cfg-field' }, el('label', {class:'name', for:'cf-font'}, settingTerm('界面字体', '选择这台浏览器显示 Aureus 时使用的字体。', 'font')),
       el('div', { class: 'cfg-control' }, font, resetFont)));
@@ -3326,6 +3339,56 @@ $('cf-reset').addEventListener('click', async () => {
   cf.busy = true; refreshConfigDirty();
   try { await loadConfigPage(true); }
   finally { cf.busy = false; refreshConfigDirty(); }
+});
+
+const configRestoreDialog = $('cf-restore-all-dialog');
+function clearConfigRestoreDialog() {
+  $('cf-restore-all-password').value = '';
+  showBanner('cf-restore-all-error', '');
+}
+$('cf-restore-all').addEventListener('click', () => {
+  if (cf.busy || !cf.data || configRestoreDialog.open) return;
+  clearConfigRestoreDialog();
+  configRestoreDialog.showModal();
+});
+$('cf-restore-all-cancel').addEventListener('click', () => {
+  if (!cf.busy) configRestoreDialog.close();
+});
+configRestoreDialog.addEventListener('close', () => {
+  if (!configRestoreDialog.open) clearConfigRestoreDialog();
+});
+configRestoreDialog.addEventListener('cancel', event => { if (cf.busy) event.preventDefault(); });
+$('cf-restore-all-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const input = $('cf-restore-all-password');
+  const password = input.value;
+  if (cf.busy || !configRestoreDialog.open || !password) return;
+  const session = state.loaded;
+  clearConfigRestoreDialog();
+  const controls = [input, $('cf-restore-all-cancel'), $('cf-restore-all-submit')];
+  for (const control of controls) control.disabled = true;
+  cf.busy = true; refreshConfigDirty();
+  let restored = false;
+  try {
+    const res = await api('/api/config/restore-defaults', 'POST', { password });
+    if (session !== state.loaded) return;
+    if (!res.ok) { showBanner('cf-restore-all-error', errorText(res)); return; }
+    configLoadRevision++;
+    cf.data = res.data.config;
+    cf.changes = {};
+    cf.invalid.clear();
+    $('cf-password').value = '';
+    restoreConfigFont();
+    renderConfigSection(cf.tab);
+    if (res.data.restart_required) showRestart();
+    restored = true;
+    toast(res.data.changed.length ? '已恢复默认设置，重启后运行设置生效。' : '已恢复默认设置。', 'ok');
+  } finally {
+    for (const control of controls) control.disabled = false;
+    cf.busy = false; refreshConfigDirty();
+    if (restored) configRestoreDialog.close();
+    else if (configRestoreDialog.open) input.focus();
+  }
 });
 // ---------- 观察：只读，用 /api/overview 和 /api/timeline（D85）；曲线和花费没有网页接口，不假造 ----------
 const MONITOR_REFRESH_MS = 10000;
