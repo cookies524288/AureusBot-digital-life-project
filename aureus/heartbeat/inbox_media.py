@@ -50,7 +50,9 @@ class InboxMedia:
     """接收部署时绑定的媒体读取器及热更新的模型可用状态。"""
 
     def __init__(
-        self, call: OrganCall, emoji_store: EmojiStore | None = None,
+        self,
+        call: OrganCall,
+        emoji_store: EmojiStore | None = None,
         inbox_store: InboxStore | None = None,
     ) -> None:
         self._call = call
@@ -82,7 +84,10 @@ class InboxMedia:
         return enriched
 
     async def _describe(
-        self, source: Perception, preference: ModelPreference, read: AttachmentReader,
+        self,
+        source: Perception,
+        preference: ModelPreference,
+        read: AttachmentReader,
         identifier: int | None,
     ) -> list[str]:
         notes: list[str] = []
@@ -101,7 +106,9 @@ class InboxMedia:
             if is_emoji:
                 if collect is not None:
                     await self._save_image_note(
-                        identifier, source, position,
+                        identifier,
+                        source,
+                        position,
                         InboxImageNote("emoji_catalog", sha256(data).hexdigest()),
                     )
                 if description := await self._recognize_emoji(collect, preference, data, mime):
@@ -136,7 +143,9 @@ class InboxMedia:
         if self._inbox_store is None or identifier is None:
             return
         try:
-            await asyncio.to_thread(self._inbox_store.save_image_note, identifier, source, position, note)
+            await asyncio.to_thread(
+                self._inbox_store.save_image_note, identifier, source, position, note
+            )
         except sqlite3.Error:
             logger.warning("未保存收件箱附件的已有描述")
 

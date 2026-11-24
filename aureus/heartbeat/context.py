@@ -147,12 +147,15 @@ _PLAN_INSTRUCTION = _template(
     "plan_format",
     "回应规划输出协议",
     "# Using your tools\n"
-    "- 聚合不同的信息源，进行多种操作来辅助你。如果下一步依赖工具结果，先使用该工具，再按结果决定。\n"
+    "- 聚合不同的信息源，进行多种操作来辅助你。"
+    "如果下一步依赖工具结果，先使用该工具，再按结果决定。\n"
     "- 如果存在工具可以帮助你执行某些动作，完成某些目标，直接使用该工具来完成任务。\n"
     "- 当你判断现在应该对用户发出一条可见回复时调用reply。发言必须通过reply工具，不然用户无法看见。"
-    "请在 reply_reference 中提供本次回复的上下文关键信息与回复方向指引，并传入是否在对你说话的判断。\n"
+    "请在 reply_reference 中提供本次回复的上下文关键信息与回复方向指引，"
+    "并传入是否在对你说话的判断。\n"
     "- 不使用工具：当没有更多操作需要做时，结束本轮规划。\n"
-    "- stop()：也可以单独调用无参数的 stop() 显式结束本轮并等待新消息，不发送回复，也不设置定时等待。\n"
+    "- stop()：也可以单独调用无参数的 stop() 显式结束本轮并等待新消息，"
+    "不发送回复，也不设置定时等待。\n"
     "每次只调用一个工具；只用已声明的工具，不输出草稿或推理过程。行动依据只写一句可展示的简短摘要。",
     editable=False,
 )
@@ -193,7 +196,8 @@ _JUDGE_INSTRUCTION = _template(
     "只输出一个 JSON 对象，不要输出别的内容：\n"
     '{"others": [{"subject": "sender 或消息里提到的人、动物的称呼", '
     '"emotion": "anger 或 joy 或 hurt 或 surprise", '
-    '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数, "source_record_id": 最新来信区的记录序号}], '
+    '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数, '
+    '"source_record_id": 最新来信区的记录序号}], '
     '"toward_me": [{"kind": "offense 或 praise 或 rejection", '
     '"intensity": 0 到 1 的数, "confidence": 0 到 1 的数}]}\n'
     "others 写最新来信中有依据的真实情绪，sender 指该条记录的发信人；同一来源同一对象只写一次。"
@@ -650,14 +654,18 @@ def build_plan_prompt(
     if heuristic_recall:
         parts.append(heuristic_recall)
     if tools is None:
-        tools = planner_tools(PlannerToolOptions(
-            agenda=with_agenda, interests=with_interests, recall=with_recall,
-            expressions=with_expressions,
-        ))
+        tools = planner_tools(
+            PlannerToolOptions(
+                agenda=with_agenda,
+                interests=with_interests,
+                recall=with_recall,
+                expressions=with_expressions,
+            )
+        )
     parts.extend((_PLAN_TASK.fill(), _PLAN_INSTRUCTION.fill()))
-    parts.append("当前可用工具：\n" + "\n".join(
-        f"- {tool.name}：{tool.description}" for tool in tools
-    ))
+    parts.append(
+        "当前可用工具：\n" + "\n".join(f"- {tool.name}：{tool.description}" for tool in tools)
+    )
     if with_expressions:
         parts.append(LANGUAGE_PLANNER_EXPRESSION_INTENT.fill())
     if with_agenda:
@@ -775,9 +783,13 @@ def build_judge_prompt(
     Raises:
         ValueError: 没有要回复的消息。
     """
-    labeled = new_messages if isinstance(new_messages, str) else "\n".join(
-        f"记录序号 {record.id} {_dialogue_line(record, user_name, timezone)}"
-        for record in new_messages
+    labeled = (
+        new_messages
+        if isinstance(new_messages, str)
+        else "\n".join(
+            f"记录序号 {record.id} {_dialogue_line(record, user_name, timezone)}"
+            for record in new_messages
+        )
     )
     parts = _dialogue_sections(history, labeled, user_name, timezone)
     parts.append(join_prompt([_JUDGE_TASK.fill(), _JUDGE_INSTRUCTION.fill()], ""))
