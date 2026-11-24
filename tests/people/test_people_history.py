@@ -1,12 +1,17 @@
 """3.3 人际发布和按账号查询，数据均为合成记录。"""
 
+import json
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from aureus.common import ManualClock
 from aureus.people import HistoricalKind, HistoricalRecord, PeopleDirectory, PeopleError
+from aureus.web.memory_lifecycle_api import register_profile_lifecycle_routes
 from tests.heartbeat.test_people_flow import NOW
 
 
@@ -18,6 +23,78 @@ def directory(tmp_path: Path) -> Iterator[PeopleDirectory]:
         yield people
     finally:
         people.close()
+
+
+def test_profile_maintenance_uses_stable_source_and_rejects_stale_undo(directory: PeopleDirectory) -> None:
+    sources = []
+    records = []
+    for name, account in (("old", "110"), ("other", "220")):
+        records.extend([
+            HistoricalRecord(instance=name, kind=HistoricalKind.PROFILE, source_key="1",
+                             subject_key="same-key", account=("qq", account), name="同名者"),
+            HistoricalRecord(instance=name, kind=HistoricalKind.PROFILE_SNAPSHOT, source_key="[1]",
+                             subject_key="same-key", profile_version=1, summary=f"旧画像 {name}",
+                             aliases=["同名者"], evidence=["旧证据一", "旧证据二"],
+                             occurred_at=NOW.timestamp(),
+                             expires_at=(NOW + timedelta(hours=1)).timestamp()),
+        ])
+        sources.append(json.dumps([name, HistoricalKind.PROFILE_SNAPSHOT, "[1]"]))
+    directory.publish_history(records)
+    first, second = sources
+    person = directory.find("qq", "110")
+    assert person is not None
+    app = FastAPI()
+    session_active = True
+
+    async def ready() -> str:
+        return "synthetic-session"
+
+    register_profile_lifecycle_routes(app, ready, directory, lambda _: True, lambda _: session_active)
+    endpoint = "/api/resources/profiles/maintenance"
+    with TestClient(app) as client:
+        def preview(text: str) -> str:
+            response = client.post(endpoint + "/preview", json={"source": first, "edit": {
+                "summary": text, "aliases": ["可信别名"], "evidence": [1],
+            }})
+            assert response.status_code == 200, response.text
+            return response.json()["plan_id"]
+
+        original = client.get(endpoint, params={"source": first}).json()
+        assert original["effective"]["summary"] == "旧画像 old"
+        plan = preview("修订画像")
+        competing = preview("竞争画像")
+        assert client.get(endpoint, params={"source": first}).json() == original
+        session_active = False
+        assert client.get(endpoint, params={"source": first}).status_code == 404
+        assert client.post(f"{endpoint}/{plan}/apply").status_code == 404
+        session_active = True
+        assert client.post(f"{endpoint}/{plan}/apply").status_code == 200
+        assert client.post(f"{endpoint}/{competing}/apply").status_code == 409
+        effective = client.get(endpoint, params={"source": first}).json()["effective"]
+        assert effective == {"summary": "修订画像", "aliases": ["可信别名"], "evidence": [1]}
+        assert client.get(endpoint, params={"source": second}).json()["effective"]["summary"] == "旧画像 other"
+        recalled = directory.history_for(person.id, limit=10)
+        [local] = [entry.record for entry in recalled if entry.record.kind is HistoricalKind.LOCAL_PROFILE_OVERRIDE]
+        assert local.summary == "修订画像" and local.evidence == ["旧证据二"]
+        assert all(entry.record.summary != "旧画像 old" for entry in recalled)
+        assert any(entry.record.summary == "旧画像 old" for entry in directory.history_for(
+            person.id, limit=10, use_local_content=False,
+        ))
+        latest = preview("再修订画像")
+        assert client.post(f"{endpoint}/{latest}/apply").status_code == 200
+        assert client.post(f"{endpoint}/{plan}/undo").status_code == 409
+        assert client.post(f"{endpoint}/{latest}/undo").status_code == 200
+        assert client.get(endpoint, params={"source": first}).json()["effective"] == effective
+        stored = directory.historical_record("old", HistoricalKind.PROFILE_SNAPSHOT, "[1]")
+        assert stored is not None and stored.record == records[1]
+        pending = preview("待处理旧版本")
+        directory.publish_history([records[1].model_copy(update={
+            "source_key": "[2]", "profile_version": 2, "summary": "新来源画像",
+            "evidence": ["新证据"],
+        })])
+        assert client.post(f"{endpoint}/{pending}/apply").status_code == 409
+        assert client.get(endpoint, params={"source": first}).json()["effective"]["summary"] == "新来源画像"
+        assert any(entry.record.summary == "新来源画像" for entry in directory.history_for(person.id, limit=10))
 
 
 def test_publish_profiles_and_directed_evidence(directory: PeopleDirectory) -> None:

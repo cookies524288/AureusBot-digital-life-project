@@ -1067,6 +1067,69 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   const profilePanel = $('memory-query-profiles');
   const profileForm = searchForm('搜索人物画像', '搜索人物、画像或来源 ID');
   profilePanel.append(profileForm);
+  const profileMaintenance = '/api/resources/profiles/maintenance';
+  async function openProfileMaintenance(item) {
+    const profile = item.record;
+    const source = JSON.stringify([profile.instance, profile.kind, profile.source_key]);
+    const status = el('p', {role:'status', text:'正在复核画像来源…'});
+    openEditor('检修人物画像', status);
+    const response = await api(profileMaintenance + '?' + new URLSearchParams({source}));
+    if (!status.isConnected || !$('editor-dialog').open) return;
+    if (!response.ok) { showLifecycleError(response, status, status); return; }
+    const {effective, choices, history, edit} = response.data;
+    const summary = textControl('画像正文（留空使用来源值）', effective.summary || '', 20000);
+    const aliases = textControl('人工别名（每行一个，留空使用来源值）', effective.aliases.join('\n'), 13000);
+    const selected = choices.map((choice, index) => {
+      const input = el('input', {type:'checkbox', checked:effective.evidence.includes(index)});
+      return {input, label:el('label', {class:'row'}, input, readable(choice))};
+    });
+    const message = el('p', {role:'status'});
+    const submit = el('button', {class:'btn primary small', text:'生成预览'});
+    const form = el('form', {class:'stack resource-detail'}, field('画像来源', sourceText(profile)),
+      summary.field, aliases.field, el('fieldset', {}, el('legend', {text:'引用已有证据'}),
+        selected.map(entry => entry.label)), submit, message);
+    async function operate(plan, operation, container, feedback, button) {
+      button.disabled = true;
+      try {
+        const changed = await api(`${profileMaintenance}/${encodeURIComponent(plan)}/${operation}`, 'POST');
+        if (!changed.ok) { showLifecycleError(changed, feedback, container); return; }
+        toast(operation === 'apply' ? '画像检修已应用' : '画像检修已撤销');
+        if (container.isConnected && $('editor-dialog').open) await openProfileMaintenance(item);
+        await profiles.read();
+      } finally { button.disabled = false; }
+    }
+    form.append(el('h4', {text:'纠错历史'}), ...history.map(operation => el('div', {class:'row'},
+      field('执行日期', fmtTime(operation.applied_at, true)),
+      field('撤销日期', operation.undone_at && fmtTime(operation.undone_at, true)),
+      operation.can_undo && action('撤销此操作', event =>
+        operate(operation.id, 'undo', form, message, event.currentTarget)))));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      submit.disabled = true;
+      try {
+        const names = aliases.input.value.split('\n').map(name => name.trim()).filter(Boolean);
+        const evidence = selected.flatMap(({input}, index) => input.checked ? [index] : []);
+        const text = summary.input.value.trim() || null;
+        const unchanged = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+        const planned = await api(profileMaintenance + '/preview', 'POST', {source, edit:{
+          summary:text === effective.summary ? edit.summary : text,
+          aliases:unchanged(names, effective.aliases) ? edit.aliases : names.length ? names : null,
+          evidence:unchanged(evidence, effective.evidence) ? edit.evidence
+            : evidence.length === choices.length ? null : evidence,
+        }});
+        if (!form.isConnected || !$('editor-dialog').open) return;
+        if (!planned.ok) { showLifecycleError(planned, message, form); return; }
+        const preview = planned.data;
+        const feedback = el('p', {role:'status'});
+        const pane = el('div', {class:'stack resource-detail'}, field('原件版本', preview.version),
+          field('旧画像', preview.before), field('新画像', preview.after), feedback);
+        pane.append(actions('画像纠错计划', action('返回草稿', () => openEditor('检修人物画像', form)),
+          action('确认应用', event => operate(preview.plan_id, 'apply', pane, feedback, event.currentTarget))));
+        openEditor('画像检修预览', pane);
+      } finally { submit.disabled = false; }
+    });
+    openEditor('检修人物画像', form);
+  }
   async function openProfileAliases(item, button) {
     const endpoint = `/api/resources/profiles/${item.id}/aliases`;
     const generation = editorGeneration;
@@ -1123,7 +1186,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     return record(caption, () => detail(title, field('画像', profile.summary || profile.impression),
       field('人物', item.person_id), field('原件别名', profile.aliases?.join('、')),
       field('关联状态', item.pending_reason), field('证据', readable(profile.evidence)), field('来源', sourceText(profile)),
-      item.can_edit_aliases ? action('维护别名', event => openProfileAliases(item, event.currentTarget)) : null));
+      item.can_edit_aliases ? actions('画像检修', action('检修画像', () => openProfileMaintenance(item)),
+        action('维护别名', event => openProfileAliases(item, event.currentTarget))) : null));
   }}, profileForm, '/api/resources/profiles', fields => ({q:fields.q.value}));
 
   const picturePanel = $('memory-pictures');

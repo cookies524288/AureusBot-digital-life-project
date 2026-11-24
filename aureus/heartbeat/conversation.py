@@ -560,6 +560,7 @@ class ConversationFlow:
                     person_id,
                     limit=self._memory_config.max_results,
                     use_local_aliases=self._people_config.profile_alias_maintenance_in_reply_enabled,
+                    use_local_content=self._people_config.profile_content_maintenance_in_reply_enabled,
                 )
             )
             if messages

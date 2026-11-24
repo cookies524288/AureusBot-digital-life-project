@@ -40,6 +40,7 @@ def _line(entry: HistoricalEntry, person_id: int) -> str:
         HistoricalKind.PROFILE_OVERRIDE,
         HistoricalKind.ALIAS_OVERRIDE,
         HistoricalKind.LOCAL_ALIAS_OVERRIDE,
+        HistoricalKind.LOCAL_PROFILE_OVERRIDE,
     ):
         fields = [("画像", record.summary), ("别名", record.aliases)]
     else:

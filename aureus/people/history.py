@@ -1,19 +1,24 @@
 """人际 people：从迁移暂存发布的人物资料与关系依据（路线图 3.3）。"""
 
+import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from enum import StrEnum
+from hashlib import sha256
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
-from aureus.people import profile_aliases
+from aureus.people import profile_aliases, profile_maintenance
 from aureus.people.profile_aliases import ProfileAliases
+from aureus.people.profile_maintenance import ProfileChangedError, ProfileEdit, ProfileSource
 
 # A_Memorix query_person_profile 对未设 expires_at 的快照使用此默认期限。
 _AUTOMATIC_PROFILE_TTL_SECONDS = 6 * 60 * 60
 _EDITABLE_PROFILE = """
-    history.pending_reason IS NULL AND EXISTS (
+    history.pending_reason IS NULL AND NOT history.bundle_disabled AND EXISTS (
         SELECT 1 FROM historical_person_keys keys
         JOIN accounts ON accounts.person_id = keys.person_id
         WHERE keys.instance = history.instance AND keys.person_id = history.person_id
@@ -38,6 +43,7 @@ class HistoricalKind(StrEnum):
     PROFILE_OVERRIDE = "person_profile_overrides"
     ALIAS_OVERRIDE = "person_profile_alias_overrides"
     LOCAL_ALIAS_OVERRIDE = "local_profile_aliases"
+    LOCAL_PROFILE_OVERRIDE = "local_profile_content"
 
     @property
     def is_profile(self) -> bool:
@@ -144,6 +150,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS people_history_other ON people_history(other_person_id)"
     )
+    profile_maintenance.init_schema(conn)
 
 
 def open_flow(conn: sqlite3.Connection) -> None:
@@ -326,6 +333,177 @@ def _latest_profiles(
     return profiles
 
 
+@dataclass(frozen=True)
+class ProfileTarget:
+    """当前可信来源组及其生效值。"""
+
+    key: tuple[str, str]
+    version: str
+    edit: ProfileEdit
+    summary: str | None
+    aliases: list[str]
+    evidence: list[JsonValue]
+    anchor: int | None
+
+
+def _base_profile(
+    group: dict[HistoricalKind, HistoricalEntry], now: float,
+) -> tuple[HistoricalEntry | None, HistoricalEntry | None, list[str]]:
+    snapshot = group.get(HistoricalKind.PROFILE_SNAPSHOT)
+    if snapshot is not None and not _snapshot_is_current(snapshot.record, now):
+        snapshot = None
+    manual = group.get(HistoricalKind.PROFILE_OVERRIDE)
+    primary = manual if manual is not None and manual.record.summary else snapshot
+    explicit_alias = group.get(HistoricalKind.ALIAS_OVERRIDE)
+    aliases = explicit_alias.record.aliases if explicit_alias is not None else None
+    original_aliases = snapshot.record.aliases or [] if snapshot is not None else []
+    return primary, snapshot, aliases if aliases is not None else original_aliases
+
+
+def _evidence_choices(evidence: JsonValue) -> list[JsonValue]:
+    return evidence if isinstance(evidence, list) else ([] if evidence is None else [evidence])
+
+
+def _profile_target(
+    conn: sqlite3.Connection, source: ProfileSource, now: datetime,
+) -> ProfileTarget | None:
+    row = conn.execute(
+        f"""SELECT history.person_id, json_extract(record, '$.subject_key') AS person_key
+            FROM people_history history WHERE instance=? AND kind=? AND source_key=?
+            AND {_EDITABLE_PROFILE} AND kind IN ('person_profile_snapshots',
+                'person_profile_overrides', 'person_profile_alias_overrides')""",
+        (source.instance, source.kind, source.source_key),
+    ).fetchone()
+    if row is None:
+        return None
+    person_id = row["person_id"]
+    key = source.instance, row["person_key"]
+    group = _latest_profiles(conn, person_id)[key]
+    primary, _, original_aliases = _base_profile(group, now.timestamp())
+    original = primary.record if primary is not None else None
+    evidence = original.evidence if original is not None else None
+    choices = _evidence_choices(evidence)
+    summary, positions, anchor = profile_maintenance.content(conn, key)
+    current_anchor = primary.id if primary is not None else None
+    aliases = profile_aliases.for_person(conn, person_id).get(key)
+    latest = conn.execute(
+        """SELECT rowid, undone_at FROM people_profile_plans WHERE instance=? AND person_key=?
+           AND applied_at IS NOT NULL ORDER BY rowid DESC LIMIT 1""", key,
+    ).fetchone()
+    edit = ProfileEdit(summary=summary, aliases=aliases, evidence=positions, anchor=anchor)
+    version = sha256(json.dumps([
+        person_id, [item.id for item in group.values()], current_anchor,
+        edit.model_dump(), list(latest) if latest else None,
+    ], sort_keys=True).encode()).hexdigest()
+    return ProfileTarget(key, version, edit, original.summary if original else None,
+                         original_aliases, choices, current_anchor)
+
+
+def _profile_view(target: ProfileTarget, edit: ProfileEdit) -> dict[str, object]:
+    anchored = edit.anchor == target.anchor
+    return {
+        "summary": edit.summary if anchored and edit.summary is not None else target.summary,
+        "aliases": edit.aliases if edit.aliases is not None else target.aliases,
+        "evidence": (
+            list(range(len(target.evidence))) if edit.evidence is None
+            else edit.evidence if anchored else []
+        ),
+    }
+
+
+def profile_details(
+    conn: sqlite3.Connection, source: ProfileSource, now: datetime, active: Callable[[], bool],
+) -> dict[str, object] | None:
+    """回读实际生效画像与仍可撤销的已执行操作。"""
+    with conn:
+        conn.execute("BEGIN")
+        target = _profile_target(conn, source, now)
+        if target is None or not active():
+            return None
+        latest = conn.execute(
+            """SELECT id, applied_at, undone_at, applied_version FROM people_profile_plans
+               WHERE instance=? AND person_key=? AND applied_at IS NOT NULL
+               ORDER BY rowid DESC LIMIT 20""", target.key,
+        )
+        return {
+            "choices": target.evidence, "effective": _profile_view(target, target.edit),
+            "edit": target.edit.model_dump(exclude={"anchor"}),
+            "history": [dict(id=row["id"], applied_at=row["applied_at"], undone_at=row["undone_at"],
+                             can_undo=row["applied_version"] == target.version and not row["undone_at"])
+                        for row in latest],
+        }
+
+
+def preview_profile(
+    conn: sqlite3.Connection, source: ProfileSource, edit: ProfileEdit, now: datetime,
+    active: Callable[[], bool],
+) -> dict[str, object] | None:
+    """只为当前有效来源生成计划，位置不得跨同名人物或版本。"""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        target = _profile_target(conn, source, now)
+        if target is None or not active():
+            return None
+        if edit.evidence is not None and (
+            len(set(edit.evidence)) != len(edit.evidence)
+            or any(not 0 <= point < len(target.evidence) for point in edit.evidence)
+        ):
+            raise ValueError("只能选择本组当前已有的证据位置。")
+        summary = edit.summary.strip() if edit.summary is not None else None
+        if summary == "":
+            raise ValueError("画像正文不能只包含空白。")
+        if (summary is not None or edit.evidence is not None) and target.anchor is None:
+            raise ProfileChangedError("原画像已失效，不能检修正文或证据。")
+        aliases = profile_aliases.normalize_aliases(edit.aliases) if edit.aliases is not None else None
+        proposed = ProfileEdit(summary=summary, aliases=aliases, evidence=edit.evidence,
+                               anchor=target.anchor if summary is not None or edit.evidence is not None else None)
+        if proposed == target.edit:
+            raise ProfileChangedError("没有需要保存的画像变化。")
+        plan_id = uuid4().hex
+        conn.execute(
+            "DELETE FROM people_profile_plans WHERE applied_at IS NULL AND created_at < ?",
+            (profile_maintenance.expired_before(now).isoformat(),),
+        )
+        conn.execute(
+            """INSERT INTO people_profile_plans
+               (id, instance, kind, source_key, person_key, created_at, expected, previous, proposed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (plan_id, source.instance, source.kind, source.source_key, target.key[1], now.isoformat(),
+             target.version, target.edit.model_dump_json(), proposed.model_dump_json()),
+        )
+        return {"plan_id": plan_id, "version": target.version, "choices": target.evidence,
+                "before": _profile_view(target, target.edit), "after": _profile_view(target, proposed)}
+
+
+def change_profile(
+    conn: sqlite3.Connection, identifier: str, now: datetime, active: Callable[[], bool], *, undo: bool,
+) -> bool:
+    """应用或撤销在同一写事务中复核账号关联、来源和版本。"""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM people_profile_plans WHERE id=?", (identifier,)).fetchone()
+        if row is None or not active():
+            return False
+        source = ProfileSource(row["instance"], row["kind"], row["source_key"])
+        target = _profile_target(conn, source, now)
+        if target is None:
+            return False
+        if profile_maintenance.expected_version(row, now, undo=undo) != target.version:
+            raise ProfileChangedError("原件或版本已变化，请重新预览。")
+        edit = ProfileEdit.model_validate_json(row["previous" if undo else "proposed"])
+        profile_maintenance.write_content(conn, target.key, edit)
+        profile_aliases.write(conn, target.key, edit.aliases)
+        stamp = "undone_at" if undo else "applied_at"
+        conn.execute(f"UPDATE people_profile_plans SET {stamp}=? WHERE id=?", (now.isoformat(), identifier))
+        current = _profile_target(conn, source, now)
+        if current is None or not active():
+            raise ProfileChangedError("当前权限已变化，未保存更改。")
+        if not undo:
+            conn.execute("UPDATE people_profile_plans SET applied_version=? WHERE id=?",
+                         (current.version, identifier))
+        return True
+
+
 def profile_alias_details(
     conn: sqlite3.Connection,
     profile_id: int,
@@ -366,6 +544,7 @@ def _profiles_for_recall(
     now: float,
     *,
     use_local_aliases: bool,
+    use_local_content: bool,
 ) -> list[HistoricalEntry]:
     local = profile_aliases.for_person(conn, person_id) if use_local_aliases else {}
 
@@ -375,13 +554,30 @@ def _profiles_for_recall(
         manual_alias = group.get(HistoricalKind.ALIAS_OVERRIDE)
         has_manual_text = manual is not None and bool(manual.record.summary)
         has_manual_alias = manual_alias is not None and manual_alias.record.aliases is not None
-        if manual is not None and has_manual_text:
-            selected.append(manual)
-        snapshot = group.get(HistoricalKind.PROFILE_SNAPSHOT)
+        primary, snapshot, _ = _base_profile(group, now)
         instance, subject_key = source
+        summary, positions, anchor_id = (
+            profile_maintenance.content(conn, (instance, subject_key))
+            if use_local_content and subject_key is not None else (None, None, None)
+        )
+        anchor = primary or next(iter(group.values()))
+        if primary is None or primary.id != anchor_id:
+            summary = None
+        if summary is not None or positions is not None:
+            choices = _evidence_choices(primary.record.evidence) if primary else []
+            evidence = None
+            if positions is not None:
+                evidence = [choices[point] for point in positions] if primary and primary.id == anchor_id else []
+            selected.append(replace(anchor, record=HistoricalRecord(
+                instance=instance, kind=HistoricalKind.LOCAL_PROFILE_OVERRIDE,
+                source_key=subject_key or "", subject_key=subject_key,
+                summary=summary if summary is not None else (primary.record.summary if primary else None),
+                evidence=evidence,
+            )))
+        elif manual is not None and has_manual_text:
+            selected.append(manual)
         aliases = local.get((instance, subject_key)) if subject_key is not None else None
         if aliases is not None:
-            anchor = next(iter(group.values()))
             selected.append(
                 replace(
                     anchor,
@@ -396,10 +592,10 @@ def _profiles_for_recall(
             )
         elif manual_alias is not None and manual_alias.record.aliases:
             selected.append(manual_alias)
-        if snapshot is None or not _snapshot_is_current(snapshot.record, now):
+        if snapshot is None:
             continue
         record = snapshot.record
-        summary = None if has_manual_text else record.summary
+        summary = None if has_manual_text or summary is not None or positions is not None else record.summary
         aliases = None if has_manual_alias or aliases is not None else record.aliases
         if summary or aliases:
             selected.append(
@@ -417,10 +613,12 @@ def _profiles_for_recall(
 
 
 def for_recall(
-    conn: sqlite3.Connection, person_id: int, limit: int, now: float, *, use_local_aliases: bool
+    conn: sqlite3.Connection, person_id: int, limit: int, now: float, *, use_local_aliases: bool,
+    use_local_content: bool,
 ) -> list[HistoricalEntry]:
     """选有效画像和普通人际资料，避免旧画像占用召回预算。"""
-    profiles = _profiles_for_recall(conn, person_id, now, use_local_aliases=use_local_aliases)
+    profiles = _profiles_for_recall(conn, person_id, now, use_local_aliases=use_local_aliases,
+                                    use_local_content=use_local_content)
     if 0 <= limit <= len(profiles):
         return profiles[:limit]
     rows = conn.execute(
