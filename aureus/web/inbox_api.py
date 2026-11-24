@@ -43,8 +43,21 @@ def register_inbox_routes(
     archive_account_id: str | None,
     read_attachment: AttachmentReader | None = None,
     emojis: EmojiStore | None = None,
+    *,
+    is_replying: Callable[[ConversationKey], bool] | None = None,
 ) -> None:
     """注册只读查询；收件箱存储每次查询打开独立的数据库连接。"""
+
+    @app.get("/api/inbox/typing")
+    async def inbox_typing(
+        _token: Annotated[str, Depends(require_ready)],
+        key: Annotated[ConversationKey, Depends(_conversation_key)],
+    ) -> JSONResponse:
+        return JSONResponse(
+            {"typing": store is not None and allows_conversation is not None
+             and allows_conversation(key) and is_replying is not None and is_replying(key)},
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/inbox/conversations")
     async def list_conversations(

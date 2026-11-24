@@ -501,6 +501,15 @@ def create_app(
 
     # ---------- WebSocket：实时收发 ----------
 
+    @app.get("/api/chat/typing")
+    async def chat_typing(_token: Annotated[str, Depends(require_ready)]) -> JSONResponse:
+        return JSONResponse(
+            {"typing": heartbeat is not None and heartbeat.is_replying_to(
+                web_visibility=channel.user_visibility
+            )},
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.websocket("/ws")
     async def websocket(socket: WebSocket) -> None:
         token = socket.cookies.get(SESSION_COOKIE, "")
@@ -535,6 +544,7 @@ def create_app(
         inbox_archive_account_id,
         read_inbox_attachment,
         resource_emojis,
+        is_replying=(lambda key: heartbeat.is_replying_to(conversation=key)) if heartbeat else None,
     )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock

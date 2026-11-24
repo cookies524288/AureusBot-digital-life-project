@@ -47,6 +47,34 @@ def test_empty_when_no_qq_store(tmp_path: Path) -> None:
         rig.close()
 
 
+def test_typing_endpoints_return_only_authorized_selected_scope(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    group = ConversationKey(**GROUP)
+    allowed = {group}
+    rig = ConfigRig(tmp_path, inbox_store=store, allows_inbox_conversation=allowed.__contains__)
+    try:
+        assert rig.client.get("/api/chat/typing").status_code == 401
+        assert rig.client.get("/api/inbox/typing", params=GROUP).status_code == 401
+        rig.log_in()
+        rig.heartbeat.replying_conversation = group
+        res = rig.client.get("/api/inbox/typing", params=GROUP)
+        assert res.json() == {"typing": True}
+        assert res.headers["Cache-Control"] == "no-store"
+        assert rig.client.get("/api/chat/typing").json() == {"typing": False}
+        assert rig.client.get("/api/inbox/typing", params={
+            **GROUP, "account_id": "same-name-other-account",
+        }).json() == {"typing": False}
+        allowed.clear()
+        assert rig.client.get("/api/inbox/typing", params=GROUP).json() == {"typing": False}
+        rig.heartbeat.replying_conversation = None
+        rig.heartbeat.replying_web = True
+        assert rig.client.get("/api/chat/typing").json() == {"typing": True}
+        assert rig.client.post("/api/logout").status_code == 200
+        assert rig.client.get("/api/chat/typing").status_code == 401
+    finally:
+        rig.close()
+
+
 def test_conversations_and_cursor_preserve_unread_and_route(tmp_path: Path) -> None:
     store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
     rig = ConfigRig(
