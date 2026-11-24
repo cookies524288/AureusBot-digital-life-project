@@ -179,6 +179,14 @@ _PLAN_RECALL = _template(
 _JUDGE_TASK = _template(
     "judge_task", "情绪判断要求", "现在先别回复，只判断上面刚收到的消息里的情绪。"
 )
+_JUDGE_SELF_STATE = _template(
+    "judge_self_state",
+    "判断前的自身状态",
+    "【判断前的自身状态】\n$state\n"
+    "这些是程序读到的自身状态，不是对方的情绪或意图的证据。"
+    "判断仍只依据当前来信，不因自己的状态推断对方，读数不是行动指令。",
+    editable=False,
+)
 _JUDGE_INSTRUCTION = _template(
     "judge_format",
     "情绪判断输出协议",
@@ -414,15 +422,14 @@ def build_system_context(
     return join_prompt(sections)
 
 
-def build_judge_context(identity: Identity) -> str:
-    """判断器官的系统上下文：只放不变人格和可变人格，不放身体状态和行为风格（D68 第 6 条）。
-
-    为什么这么少：判断只需要知道“我是谁”才能分辨哪些话是冲着我来的，省 token。
-    """
+def build_judge_context(identity: Identity, state: Sequence[str] = ()) -> str:
+    """判断只接收两层人格和本轮可用的自身读数，不附行为风格（D68、3.15）。"""
     sections: list[str] = [_PERSONA.fill(layer="不变人格", text=identity.persona.immutable.strip())]
     mutable = identity.persona.mutable.strip()
     if mutable:
         sections.append(_PERSONA.fill(layer="可变人格", text=mutable))
+    if state:
+        sections.append(_JUDGE_SELF_STATE.fill(state="\n".join(state)))
     return join_prompt(sections)
 
 

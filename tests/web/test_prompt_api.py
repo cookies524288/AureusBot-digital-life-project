@@ -97,6 +97,24 @@ def test_prompt_access_and_catalog(rig: ConfigRig, tmp_path: Path) -> None:
         locked.close()
 
 
+def test_judge_preview_uses_only_synthetic_self_state(rig: ConfigRig) -> None:
+    response = rig.client.get("/api/organs/judge/prompt-preview")
+    assert response.status_code == 200
+    scenes = {scene["id"]: scene["messages"] for scene in response.json()["scenes"]}
+    assert "【判断前的自身状态】" not in scenes["judge"][0]["content"]
+    with_state = scenes["judge_self_state"]
+    expected = build_judge_context(
+        IDENTITY, ("疲劳 10%", "情绪（0 至 1）：低落 0.12", "心情（−1 至 1）：-0.06")
+    )
+    actual = with_state[0]["content"].replace("〔身体读数〕", "10%")
+    actual = actual.replace("〔情绪读数〕", "低落 0.12").replace("〔心情读数〕", "-0.06")
+    assert actual == expected
+    assert "记录序号 〔当前消息记录号〕" in with_state[1]["content"]
+    catalog = rig.client.get("/api/prompts").json()
+    template = next(item for item in catalog["templates"] if item["key"] == "judge_self_state")
+    assert template["variables"] == ["state"] and not template["editable"]
+
+
 def test_restore_each_editable_template_keeps_other_overrides(rig: ConfigRig) -> None:
     client = rig.client
     originals = {
@@ -176,6 +194,7 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         "〔当前年龄〕": str(NOW.year - 2000),
         "〔聊天历史〕": f"[{NOW:%m-%d %H:%M}] 前位成员：历史材料",
         "〔当前消息〕": f"[{NOW:%m-%d %H:%M}] 当前说话人：当前材料",
+        "〔当前消息记录号〕": str(incoming[0].id),
         "〔主动联系原因〕": "主动原因样本",
         "〔主动联系触发原因〕": "主动触发样本",
         "〔规划意图〕": "意图样本",

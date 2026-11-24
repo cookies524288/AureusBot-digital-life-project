@@ -54,6 +54,7 @@ class HormoneEffects:
     """此刻的激素对这次回复的影响。"""
 
     summary: str
+    levels: tuple[tuple[HormoneKind, float], ...]
     retaliation: RetaliationMode
     # 规划器可以选择不回这个人（怒气到了冷处理线，且这场冲突里还没连续不回过）。
     may_cold_shoulder: bool
@@ -94,6 +95,10 @@ class HormoneEffects:
             parts.append("你气得很厉害，可以选择这次不回复这个人；回不回由你决定。")
         return "\n".join(parts)
 
+    def describe_levels(self) -> str:
+        """只描述已启用的自身情绪读数，不附触发原因或对象。"""
+        return "、".join(f"{_KIND_NAMES[kind]} {level:.2f}" for kind, level in self.levels)
+
 
 def compute_effects(
     triggers: Sequence[HormoneTrigger],
@@ -115,6 +120,11 @@ def compute_effects(
         viewer_is_user: 回复的对象是用户。回复别人时，来源不在这个人对话里的原因不写细节。
     """
     all_triggers = list(triggers)
+    levels = {
+        kind: level_at(all_triggers, kind, now, config)
+        for kind in HormoneKind
+        if kind_enabled(kind, config)
+    }
     anger = (
         level_at(all_triggers, HormoneKind.ANGER, now, config, person_id, exclude_empathy=True)
         if person_id is not None
@@ -124,13 +134,13 @@ def compute_effects(
     if not active:
         conflict = Conflict()
     return HormoneEffects(
-        summary=_summary(all_triggers, now, config, person_id, viewer_is_user),
+        summary=_summary(all_triggers, levels, now, config, person_id, viewer_is_user),
+        levels=tuple(levels.items()),
         retaliation=_retaliation_mode(anger, conflict, config),
         may_cold_shoulder=active and anger >= config.cold_shoulder_at and conflict.declines < 1,
         must_reply=active and conflict.declines >= 1,
-        shorten_reply=level_at(all_triggers, HormoneKind.HURT, now, config)
-        >= config.hurt_shorten_at,
-        surprised=level_at(all_triggers, HormoneKind.SURPRISE, now, config) >= config.surprise_at,
+        shorten_reply=levels.get(HormoneKind.HURT, 0.0) >= config.hurt_shorten_at,
+        surprised=levels.get(HormoneKind.SURPRISE, 0.0) >= config.surprise_at,
         person_anger=anger,
         retaliations_used=conflict.retaliations,
     )
@@ -147,6 +157,7 @@ def _retaliation_mode(anger: float, conflict: Conflict, config: HormonesConfig) 
 
 def _summary(
     triggers: list[HormoneTrigger],
+    levels: dict[HormoneKind, float],
     now: datetime,
     config: HormonesConfig,
     person_id: int | None,
@@ -154,10 +165,7 @@ def _summary(
 ) -> str:
     """各激素的数值和最主要的原因，只写事实。"""
     lines: list[str] = []
-    for kind in HormoneKind:
-        if not kind_enabled(kind, config):
-            continue
-        level = level_at(triggers, kind, now, config)
+    for kind, level in levels.items():
         if level < _SUMMARY_FLOOR:
             continue
         main = _main_trigger(triggers, kind, now, config)

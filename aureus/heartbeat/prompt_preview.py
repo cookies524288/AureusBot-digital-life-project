@@ -61,6 +61,7 @@ from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 
 _HISTORY = "〔聊天历史〕"
 _INPUT = "〔当前消息〕"
+_JUDGE_INPUT = "记录序号 〔当前消息记录号〕 " + _INPUT
 _LENGTH = "〔回复长度〕"
 _INTENT = "〔规划意图〕"
 _PLAN_REASON = "〔规划理由〕"
@@ -76,7 +77,7 @@ _CONDITIONAL = {
     "working_memory_summary": "工作记忆达到容量时由 utils 按来源分区压缩；预览只显示一份模拟分区。",
     "initiative_plan": "有历史时附对话，没有历史时显示首次联系提示。",
     "initiative_reply": "仅在主动规划决定开口时使用；无长度设置时使用短回复。",
-    "judge": "仅在判断器官启用且档位允许时调用，有历史才附对话。",
+    "judge": "仅在判断器官启用且档位允许时调用。只附同源对话；开启自身状态且有读数时才附状态。",
     "image_description": "实际请求会附上来信图片；预览不读取或发送图片。",
     "emoji_static": "仅用于 QQ 标记的静态表情；预览不读取或发送图片。",
     "emoji_gif": "仅用于 QQ 标记的 GIF 表情，实际请求会附上抽帧拼图；预览不读取或发送图片。",
@@ -129,7 +130,13 @@ def registered_templates() -> tuple[PromptTemplate, ...]:
 
 
 def build_prompt_scenes(
-    organ: str, tasks: set[str], identity: Identity, now: datetime, *, roleplay: bool = False
+    organ: str,
+    tasks: set[str],
+    identity: Identity,
+    now: datetime,
+    *,
+    roleplay: bool = False,
+    judge_state_enabled: bool = True,
 ) -> list[PromptScene]:
     """按启动时的器官职责及代表性输入组合预览，不查询运行记录。"""
     user = identity.user.name
@@ -369,14 +376,25 @@ def build_prompt_scenes(
     )
     if "judge" in tasks:
         judge = build_judge_context(identity)
-        add("judge", "judge", "情绪判断", build_judge_prompt([], _INPUT, user), judge)
+        add("judge", "judge", "情绪判断", build_judge_prompt([], _JUDGE_INPUT, user), judge)
         add(
             "judge",
             "judge_context",
             "情绪判断 · 含历史",
-            build_judge_prompt(_HISTORY, _INPUT, user),
+            build_judge_prompt(_HISTORY, _JUDGE_INPUT, user),
             judge,
         )
+        if judge_state_enabled and not roleplay:
+            add(
+                "judge",
+                "judge_self_state",
+                "情绪判断 · 含可用状态",
+                build_judge_prompt(_HISTORY, _JUDGE_INPUT, user),
+                build_judge_context(
+                    identity,
+                    ("疲劳 〔身体读数〕", "情绪（0 至 1）：〔情绪读数〕", "心情（−1 至 1）：〔心情读数〕"),
+                ),
+            )
     if "exploration_summary" in tasks:
         prompt, background = build_exploration_prompt(
             "〔探索主题〕", WebPage("〔网页地址〕", "〔网页标题〕", "〔网页正文〕", False)
