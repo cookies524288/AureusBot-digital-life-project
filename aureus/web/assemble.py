@@ -109,6 +109,7 @@ def open_web(
             resource_database=core.paths.database_file,
             recall_feedback_enabled=core.settings.runtime.memory.recall_feedback_enabled,
             embedding_progress=core.embedding_progress,
+            expression_recall=core.heartbeat.expression_recall,
         )
         yield WebServer(app, config, home=core.paths.home)
     finally:

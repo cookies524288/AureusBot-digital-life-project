@@ -37,6 +37,7 @@ from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
+from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
@@ -67,6 +68,7 @@ from .config_api import register_config_routes
 from .config_files import ConfigService
 from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
 from .expression_quality_api import register_expression_quality_routes
+from .expression_vector_api import register_expression_vector_routes
 from .inbox_api import register_inbox_routes
 from .inbox_operations import register_inbox_operations
 from .inbox_retention_api import register_inbox_retention_routes
@@ -274,6 +276,7 @@ def create_app(
     expression_cluster_store: ExpressionClusterStore | None = None,
     expression_cluster_grants: ExpressionClusterGrants | None = None,
     embedding_progress: EmbeddingProgress | None = None,
+    expression_recall: ExpressionRecall | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -598,9 +601,14 @@ def create_app(
         app,
         require_ready,
         resource_language,
-        expression_cluster_store,
+        expression_cluster_store
+        or (embedding_progress.expression_index if embedding_progress else None),
         expression_cluster_grants,
         sessions.is_active,
+    )
+    register_expression_vector_routes(
+        app, require_ready, _same_http_origin, sessions.is_active, embedding_progress,
+        expression_recall,
     )
     register_memory_inspection_routes(
         app, require_inspection_access, resource_memory, channel.user_visibility

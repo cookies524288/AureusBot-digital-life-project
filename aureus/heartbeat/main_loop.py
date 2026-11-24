@@ -90,6 +90,7 @@ from aureus.heartbeat.events import (
     EVENT_SHUT_DOWN,
     EVENT_WOKE_UP,
 )
+from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_attention import (
     SELECTION_TASK,
@@ -554,6 +555,11 @@ class Heartbeat:
         if organ != request.organ_id:
             request = replace(request, organ_id=organ)
         return await self._organs.call(request)
+
+    @property
+    def expression_recall(self) -> ExpressionRecall | None:
+        """网页维护与心跳共用同一个表达索引补建器。"""
+        return self._conversation.expression_recall
 
     def attach_channel(
         self, name: str, sink: MessageSink, *, can_quote: Callable[[MessageRoute], bool] | None = None

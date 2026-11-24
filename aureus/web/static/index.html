@@ -810,10 +810,12 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
       <div class="row resource-navigation" role="group" aria-label="表达浏览">
         <button class="btn small primary" type="button" data-expression-view="list" aria-pressed="true" aria-disabled="true" aria-controls="learning-expression-list">表达列表</button>
         <button class="btn small" type="button" data-expression-view="quality" aria-pressed="false" aria-controls="learning-panel-quality">质检记录</button>
+        <button class="btn small" type="button" data-expression-view="vectors" aria-pressed="false" aria-controls="learning-panel-vectors">向量空间</button>
         <button class="btn small" type="button" data-expression-view="clusters" aria-pressed="false" aria-controls="learning-panel-clusters">表达簇</button>
       </div>
       <div id="learning-expression-list" class="stack resource-panel"></div>
       <div id="learning-panel-quality" class="stack resource-panel hidden"></div>
+      <div id="learning-panel-vectors" class="stack resource-panel hidden"></div>
       <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
     </div>
     <div id="learning-panel-jargon" class="stack resource-panel hidden"></div>
