@@ -357,13 +357,20 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 /* ---------- 设置 ---------- */
 #page-config{overflow:hidden}
 #page-config>.page-head{flex:none}
-.cfg-layout{flex:1;display:grid;gap:20px;grid-template-columns:180px minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-height:0}
+.cfg-layout{flex:1;display:grid;gap:20px;grid-template-columns:220px minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-height:0}
 .cfg-layout:has(#cf-content.hidden){grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
-.cfg-layout:has(#cf-content.hidden)>.cfg-tabs{display:none}
-.cfg-tabs,.cfg-details{min-width:0;min-height:0;overflow:hidden auto;overscroll-behavior:contain}
+.cfg-layout:has(#cf-content.hidden)>.cfg-sidebar{display:none}
+.cfg-sidebar{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0}
+.cfg-search{display:flex;gap:6px}
+.cfg-search input{min-width:0;flex:1}
+.cfg-search button{flex:none}
+.cfg-search-results{max-height:48%}
+.cfg-search-results .nav-item{display:grid;gap:2px;overflow-wrap:anywhere}
+.cfg-search-state,.cfg-path{color:var(--text-2);font-size:12px;font-weight:400;overflow-wrap:anywhere}
+.cfg-tabs,.cfg-details,.cfg-search-results{min-width:0;min-height:0;overflow:hidden auto;overscroll-behavior:contain}
 .cfg-tabs{display:flex;flex-direction:column;gap:2px}
 .cfg-tabs .nav-item{flex:none}
-@media (max-width:820px){.cfg-layout{gap:12px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}.cfg-tabs{flex-direction:row;overflow:auto hidden}.cfg-tabs .nav-item{width:auto}}
+@media (max-width:820px){.cfg-layout{gap:12px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}.cfg-tabs{flex-direction:row;overflow:auto hidden}.cfg-tabs .nav-item{width:auto}.cfg-search-results{max-height:20vh}}
 .cfg-field{display:grid;gap:4px 16px;grid-template-columns:minmax(0,1fr) minmax(0,220px);align-items:center;padding:10px 0;border-top:1px solid var(--border)}
 .cfg-field:first-child{border-top:0}
 .cfg-field .name{font-weight:600;font-size:14px}
@@ -371,6 +378,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .cfg-control{display:flex;align-items:center;gap:8px}
 .cfg-control>:first-child{min-width:0}
 .cfg-control button,.field button[data-restore]{flex-shrink:0}
+.cfg-section-head .setting-help,.cfg-section-head + .cfg-field .setting-help{top:100%;bottom:auto}
 @media (max-width:820px){.cfg-field{grid-template-columns:1fr}}
 .save-bar{position:sticky;bottom:0;display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:12px 0;background:linear-gradient(transparent,var(--bg) 30%)}
 /* ---------- 观察：带标题栏的卡片，参考 MaiBot 主页的 STATUS / DISK 面板 ---------- */
@@ -933,13 +941,18 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
 <div class="row"><button id="cf-restore-all" class="btn danger" disabled>恢复默认设置</button><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
 <div class="page-body cfg-layout">
+<div id="cf-sidebar" class="cfg-sidebar">
+<div class="cfg-search"><input id="cf-search" type="text" inputmode="search" aria-label="搜索设置" aria-controls="cf-search-results" placeholder="搜索设置"><button id="cf-search-clear" class="btn small hidden" type="button" aria-label="清空设置搜索">清空</button></div>
+<div id="cf-search-state" class="cfg-search-state" role="status"></div>
+<div id="cf-search-results" class="cfg-search-results hidden" role="region" aria-label="设置搜索结果"></div>
 <div id="cf-tabs" class="cfg-tabs"></div>
+</div>
 <div id="cf-details" class="cfg-details" role="region" aria-label="设置项" tabindex="0"><div class="stack">
 <div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
 <div id="cf-missing" class="empty hidden"></div>
 <div id="cf-content" class="stack hidden">
 <div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="off" style="max-width:220px;margin-left:8px"></div>
-<div id="cf-section" class="card"></div>
+<div id="cf-section"></div>
 </div>
 <section id="qq-link" class="stack hidden" aria-labelledby="qq-link-title">
 <h3 id="qq-link-title"></h3>
@@ -2163,11 +2176,7 @@ async function loadInboxMessages(page) {
 }
 
 function openQQConfig() {
-  return showPage('config', () => {
-    const tab = document.querySelector('#cf-tabs [data-sec="qq"]');
-    tab?.click();
-    tab?.focus();
-  });
+  return showPage('config', () => focusConfigSection('qq'));
 }
 
 $('inbox-open-qq').addEventListener('click', () => openInboxView('qq'));
@@ -3291,29 +3300,31 @@ $('qq-link-revoke').addEventListener('click', async () => {
 });
 
 // ---------- 设置：运行配置（/api/config，2.12b 的接口） ----------
-// 字段的类型、范围、默认值都从后端给的 schema 读；这里只写中文名和说明。不认识的节和字段照原名显示。
+// 字段的类型、范围、默认值都从后端给的 schema 读；只有明确提供中文说明的节和字段才展示。
 const CFG_SECTIONS = [
-  ['', '通用'],
-  ['heartbeat', '心跳与回复'],
-  ['body', '身体'],
-  ['hormones', '激素'],
-  ['cortisol', '皮质醇调节'],
-  ['mood', '心情'],
-  ['people', '人际'],
-  ['empathy', '同理心'],
-  ['judge', '判断'],
-  ['feedback', '反馈'],
-  ['agenda', '日程'],
-  ['initiative', '主动联系'],
-  ['interests', '兴趣'],
-  ['exploration', '探索'],
-  ['memory', '记忆'],
-  ['diary', '日记'],
-  ['persona_growth', '人设成长'],
-  ['time', '时间'],
-  ['snapshots', '快照'],
-  ['safety', '安全'],
-  ['web', '网页'],
+  ['', '通用', '查看配置格式版本、调整日志详细程度，或更改当前浏览器的字体。'],
+  ['heartbeat', '心跳与回复', '控制检查待办的频率、收件箱处理、对话上下文和回复分段方式。'],
+  ['body', '身体', '调整精力档位、疲劳、压力、社交需求与夜间作息，并设置观察台采样。'],
+  ['hormones', '激素', '设置事件如何触发四类短期情绪反应，以及这些反应何时衰减或影响回复。'],
+  ['cortisol', '皮质醇调节', '按本地昼夜时相与承诺失败的记录，调节何时暂缓可选的主动联系；网页只读。'],
+  ['mood', '心情', '设置近期事件、激素和压力如何影响心情，以及进入或退出谨慎状态的条件。'],
+  ['people', '人际', '设置好感的起点和变化幅度，以及回复时是否使用以前的人物资料。'],
+  ['empathy', '同理心', '调节根据对方感受产生的共情反应强度。'],
+  ['judge', '判断', '选择分析事件的判断器官，并控制等待时长和参考消息数量。'],
+  ['feedback', '反馈', '设置统计以往行动结果时参考的次数和所需样本数。'],
+  ['agenda', '日程', '设置承诺与待办的数量、到期规则以及回复时带上的待办。'],
+  ['initiative', '主动联系', '限制主动发起对话的频率，以及多久没有回应就不再继续。'],
+  ['interests', '兴趣', '限制能同时关注的兴趣数量，以及一天内可以自行调整的次数。'],
+  ['exploration', '探索', '选择自主探索的搜索服务和总结器官，限制探索频率及网页读取量。'],
+  ['memory', '记忆', '设置记忆的建立索引、回复时的召回和后台整理。'],
+  ['language', '语言学习', '设置如何学习和引用表达方式、黑话等语言资料。'],
+  ['diary', '日记', '设置用哪个器官、在什么时候整理当天经历，以及日记的字数。'],
+  ['persona_growth', '人设成长', '限制哪些成长调整可以采用，以及修改材料、冷却时间与字数。'],
+  ['time', '时间', '设置运行时区和每天的起算时刻。'],
+  ['snapshots', '快照', '限制保存的历史快照合计可占用多少磁盘空间。'],
+  ['safety', '安全', '设置模型使用额度和调用失控时的暂停规则。'],
+  ['web', '网页', '查看网页服务部署状态，设置网页登录有效期与失败锁定。'],
+  ['qq', 'QQ 通道', '查看 QQ 连接与会话范围；部署参数只能在本机修改。'],
 ];
 const CFG_FIELDS = {
   'log_level': ['日志级别', '控制日志记录的详细程度。'],
@@ -3336,10 +3347,18 @@ const CFG_FIELDS = {
   'heartbeat.working_memory_enabled': ['工作记忆', '把已感知的近期经历和滚动摘要作为对话资料。保存后重启生效。'],
   'heartbeat.working_memory_capacity': ['工作记忆容量', '累计达到此条数时整理最早的经历。保存后重启生效。'],
   'heartbeat.working_memory_retain': ['保留近期经历条数', '每次整理后保留在工作记忆中的原始经历条数。保存后重启生效。'],
+  'heartbeat.inbox_attention_enabled': ['自主翻阅和特别关心调整', '允许自主翻阅收件箱，并由规划器调整特别关心；关闭后仍会因重要来信唤醒。'],
   'heartbeat.inbox_read_limit': ['自主翻阅条数上限', '每次自主翻阅从所有选中会话合计读取的消息条数。优先唤醒的来信单独处理。保存后重启生效。'],
   'heartbeat.inbox_debounce_enabled': ['会话消息防抖', '默认开启：合并短时间内同一会话的新消息，规划使用流式请求。关闭后保存，重启生效。'],
   'heartbeat.inbox_debounce_seconds': ['防抖窗口秒数', '同一会话的每条新消息都会重新开始计时。保存后重启生效。'],
   'heartbeat.inbox_debounce_max_restarts': ['规划重开次数上限', '同一轮规划最多可被新消息打断并重开的次数。保存后重启生效。'],
+  'heartbeat.qq_emoji_collection_enabled': ['QQ 表情收集', '允许从收到的 QQ 消息收集表情，并识别表情内容。'],
+  'heartbeat.qq_emoji_selection_enabled': ['QQ 回复表情选择', '回复计划需要表情时，允许从可发送的候选中选取。'],
+  'heartbeat.qq_emoji_maintenance_enabled': ['QQ 表情定期复查', '定期检查表情库候选的可用状态，更新可发送的候选。'],
+  'heartbeat.qq_emoji_visual_enabled': ['QQ 表情视觉选择', '让视觉模型直接看候选表情图片来选择，开启后不走语义或文字选择。'],
+  'heartbeat.qq_emoji_semantic_enabled': ['QQ 表情语义匹配', '未开启视觉选择时，使用已配置的向量模型匹配表情；没有合适的语义结果时仍可按文字挑选。'],
+  'heartbeat.qq_emoji_semantic_refresh_seconds': ['表情语义缓存刷新间隔（秒）', '表情描述的向量候选使用多久后需要重新检查。'],
+  'heartbeat.qq_emoji_semantic_threshold': ['表情语义相似度下限', '表情与当前语境的相似度至少达到多少才允许按语义选中。'],
   'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
   'heartbeat.low_message_limit': ['低电量对话条数', '低电量时可以参考最近多少条对话。'],
   'heartbeat.split_reply_enabled': ['分条回复', '允许把一次回复拆成多条消息发出。'],
@@ -3408,6 +3427,8 @@ const CFG_FIELDS = {
   'mood.cautious_below': ['谨慎门槛', '心情低于多少时进入谨慎状态。'],
   'mood.recover_above': ['恢复门槛', '心情回升到多少时退出谨慎状态。'],
   'people.affinity_enabled': ['好感调节', '是否根据互动经历调整好感。'],
+  'people.history_in_reply_enabled': ['回复参考人物资料', '是否在正常回复时带上与当前对话有关的迁入人物资料；关闭后仍可查看来源。'],
+  'people.profile_alias_maintenance_in_reply_enabled': ['回复使用本地人物别名', '回复检索人物资料时，是否也用本地维护的别名匹配人物。'],
   'people.user_initial_affinity': ['用户初始好感', '首次建立用户资料时采用的好感值。'],
   'people.stranger_affinity': ['陌生人初始好感', '初次遇到陌生人时采用的好感值。'],
   'people.praise_amount': ['夸奖增量', '受到夸奖后好感增加多少。'],
@@ -3453,9 +3474,22 @@ const CFG_FIELDS = {
   'exploration.share_within_days': ['发现分享期限（天）', '多少天以内的探索发现可以在对话中分享。'],
   'memory.enabled': ['记忆索引', '是否为记忆建立可搜索的索引。'],
   'memory.recall_enabled': ['回复记忆检索', '回复前是否查找相关旧记忆。'],
+  'memory.heuristic_recall_enabled': ['自动按关键词检索记忆', '正常回复时，允许不经显式工具调用，按当前对话里的关键词自动检索相关记忆。'],
+  'memory.graph_recall_enabled': ['关系图谱检索', '允许检索关系图中的人物和关联证据作为回复参考。'],
+  'memory.removal_operations_enabled': ['允许可逆移除记忆资料', '是否开放对记忆资料的移除与撤销操作；不是删除原始记录。'],
   'memory.max_results': ['记忆检索上限', '一次最多找回多少条相关记忆。'],
   'memory.recall_feedback_enabled': ['人工召回评价', '允许评价已投递回复使用的召回依据，不改变召回结果。'],
   'memory.index_batch': ['索引批量条数', '每次最多把多少条记录加入索引。'],
+  'memory.consolidation_enabled': ['后台记忆整理', '允许在后台整理之前尚未处理的记忆记录。'],
+  'memory.consolidation_batch': ['记忆整理批量条数', '每批后台整理最多读取多少条候选记录。'],
+  'memory.consolidation_half_life_days': ['记忆权重半衰期（天）', '整理记忆时，按这个时长计算时间衰减：经过一个半衰期，记忆的时间权重减半。'],
+  'memory.consolidation_extract_enabled': ['整理时提取记忆要点', '开启后台记忆整理后，是否再用总结器官提取事实或关系。'],
+  'language.recall_enabled': ['回复参考习得语言', '回复前是否检索可用的表达方式和黑话作为语言参考。'],
+  'language.learning_enabled': ['自动学习语言资料', '允许从符合条件的对话提取新的表达方式和黑话。'],
+  'language.organ': ['语言学习器官', '指定整理候选表达和黑话时使用的器官。'],
+  'language.reference_chars': ['语言参考字数上限', '每种语言参考块最多可带多少字符；设为零时不带入参考。'],
+  'language.use_vector_expression': ['表达向量检索', '开启后优先用本地向量索引匹配与当前语境相近的表达候选。'],
+  'language.expression_selector_organ': ['表达筛选器官', '指定从向量候选中筛选表达的器官；不填写时不启用该筛选器官。'],
   'diary.enabled': ['日记', '是否根据当天的经历写日记。'],
   'diary.organ': ['日记器官', '选择负责写日记的器官。'],
   'diary.write_after_hour': ['日记起写时间', '每天几点以后可以开始写日记。'],
@@ -3478,9 +3512,17 @@ const CFG_FIELDS = {
   'web.login_max_failures': ['登录失败上限', '统计时段内失败多少次后暂时锁定登录。'],
   'web.login_window_seconds': ['失败统计时段（秒）', '统计登录失败次数时回看最近多少秒。'],
   'web.login_lockout_seconds': ['登录锁定时长（秒）', '触发锁定后等待多少秒才能重新登录。'],
+  'qq.enabled': ['启用 QQ 通道', '决定启动时是否连接 QQ 网关收发消息。'],
+  'qq.endpoint': ['QQ 网关地址', '程序主动连接的 QQ 网关 WebSocket 服务地址。'],
+  'qq.account_id': ['QQ 机器人账号', '用于确认网关登录账号与当前配置一致的 QQ 号。'],
+  'qq.allowed_group_id': ['唯一允许的 QQ 群', '填写后限制到指定的 QQ 群，同时保留本人的普通私聊。'],
+  'qq.action_timeout_seconds': ['QQ 操作超时（秒）', '向 QQ 网关发起一次操作后，最多等待多少秒取得响应。'],
+  'qq.reconnect_seconds': ['QQ 重连等待（秒）', '与 QQ 网关断开或连接失败后，等待多久再连接。'],
 };
+const CFG_FONT = {key:'aureus-font', id:'cf-font', name:'界面字体', hint:'选择这台浏览器显示 Aureus 时使用的字体，切换后立即生效。'};
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
-const cf = { data: null, schema: null, readonly: new Set(), noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false };
+const cf = { data: null, schema: null, session: null, readonly: new Set(), noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
+  sections: new Map(), tabs: new Map(), searchEntries: [], results: [] };
 const cfKey = (sec, field) => sec ? sec + '.' + field : field;
 const cfResolve = node => (node && node.$ref ? cf.schema.$defs[node.$ref.split('/').pop()] : node) || {};
 const cfOriginal = (sec, field) => (sec ? (cf.data[sec] || {})[field] : cf.data[field]);
@@ -3490,22 +3532,22 @@ function cfFieldInfo(prop) {
   const variants = prop.anyOf || [prop];
   const base = variants.find(v => v.type !== 'null') || {};
   return {
-    type: base.type, nullable: variants.some(v => v.type === 'null'),
+    type: base.type,
     choices: base.enum || (base.const !== undefined ? [base.const] : null),
     min: base.minimum ?? base.exclusiveMinimum, max: base.maximum ?? base.exclusiveMaximum,
+    exclusiveMin: base.exclusiveMinimum, exclusiveMax: base.exclusiveMaximum,
     def: prop.default,
   };
 }
 // 每节有哪些字段；顶层的标量放在「通用」里（节名是空串）。
+function cfSectionProperties(sec) {
+  return sec ? cfResolve(cf.schema.properties[sec]).properties : cf.schema.properties;
+}
 function cfFields(sec) {
-  if (sec) return Object.keys(cfResolve(cf.schema.properties[sec]).properties || {});
-  return Object.keys(cf.schema.properties).filter(name => !cfResolve(cf.schema.properties[name]).properties);
+  return Object.keys(cfSectionProperties(sec) || {}).filter(field => Object.hasOwn(CFG_FIELDS, cfKey(sec, field)));
 }
 function cfSectionList() {
-  const objectSections = Object.keys(cf.schema.properties).filter(name => cfResolve(cf.schema.properties[name]).properties);
-  const known = CFG_SECTIONS.filter(([key]) => key === '' || objectSections.includes(key));
-  const unknown = objectSections.filter(key => !CFG_SECTIONS.some(([k]) => k === key)).map(key => [key, key, '']);
-  return known.concat(unknown);
+  return CFG_SECTIONS.filter(([sec]) => sec === '' || cfFields(sec).length);
 }
 
 function cfSet(key, value, original) {
@@ -3519,52 +3561,55 @@ function refreshConfigDirty() {
   $('cf-reset').disabled = cf.busy || (!keys.length && !cf.invalid.size);
   $('cf-restore-all').disabled = cf.busy || !cf.data;
   $('cf-section').inert = cf.busy;
-  $('cf-tabs').inert = cf.busy;
+  $('cf-sidebar').inert = cf.busy;
   const needPassword = cf.pwSections.has(cf.tab) || keys.some(key => key.includes('.') && cf.pwSections.has(key.split('.')[0]));
   $('cf-password-box').classList.toggle('hidden', !needPassword);
-  for (const tab of document.querySelectorAll('#cf-tabs .nav-item')) {
-    const sec = tab.dataset.sec;
-    const count = keys.filter(key => (sec ? key.startsWith(sec + '.') : !key.includes('.'))).length;
-    setLiveText(tab.querySelector('.count'), count ? ' · 改了 ' + count + ' 项' : '');
+  const drafts = keys.concat([...cf.invalid]);
+  for (const [sec, { count }] of cf.tabs) {
+    const total = drafts.filter(key => (sec ? key.startsWith(sec + '.') : !key.includes('.'))).length;
+    setLiveText(count, total ? ' · 改了 ' + total + ' 项' : '');
   }
 }
 
-function cfControl(sec, field, info, readonly) {
+function cfControl(sec, field, info, attributes) {
   const key = cfKey(sec, field);
   const original = cfOriginal(sec, field);
   const current = key in cf.changes ? cf.changes[key] : original;
   if (info.type === 'boolean') {
-    const box = el('input', { type: 'checkbox', checked: !!current, disabled: readonly });
+    const box = el('input', { ...attributes, type: 'checkbox', checked: !!current });
     box.addEventListener('change', () => cfSet(key, box.checked, original));
     return el('label', { class: 'switch' }, box, el('span', { class: 'track' }));
   }
   if (info.choices) {
-    const select = el('select', { disabled: readonly }, info.choices.map(c => el('option', { value: c, text: c, selected: c === current })));
+    const select = el('select', attributes, info.choices.map(choice => el('option', { value: choice, text: choice, selected: choice === current })));
     select.addEventListener('change', () => cfSet(key, select.value, original));
     return select;
   }
   const numeric = info.type === 'integer' || info.type === 'number';
-  const input = el('input', { type: numeric ? 'number' : 'text', disabled: readonly, step: info.type === 'integer' ? '1' : 'any', min: info.min, max: info.max,
+  const input = el('input', { ...attributes, type: numeric ? 'number' : 'text', step: info.type === 'integer' ? '1' : 'any', min: info.min, max: info.max,
     placeholder: current === null || current === undefined ? '不写（用默认）' : '' });
   input.value = current === null || current === undefined ? '' : current;
   input.addEventListener('input', () => {
-    // 页面不能把字段改回「不写」（null 不是合法的值），清空就当作没改。
-    if (input.value.trim() === '') { cfSet(key, original, original); return; }
     const value = numeric ? Number(input.value) : input.value;
-    if (numeric && (!Number.isFinite(value) || (info.type === 'integer' && !Number.isInteger(value)))) {
+    const outside = (info.exclusiveMin !== undefined && value <= info.exclusiveMin) ||
+      (info.exclusiveMax !== undefined && value >= info.exclusiveMax);
+    const invalid = numeric && (!input.validity.valid || (input.value === '' ? original != null : outside));
+    input.setAttribute('aria-invalid', String(invalid));
+    if (invalid) {
       delete cf.changes[key];
       cf.invalid.add(key);
       refreshConfigDirty();
       return;
     }
-    cfSet(key, value, original);
+    // 页面不能把字段改回「不写」（null 不是合法的值），清空就当作没改。
+    cfSet(key, input.value.trim() ? value : original, original);
   });
   return input;
 }
 
-function settingTerm(name, hint, key) {
+function settingTerm(name, hint, key, idForFocus) {
   const id = 'cf-help-' + key;
-  return el('span', {class:'setting-term', tabindex:0, 'aria-describedby':id}, name,
+  return el('span', {id:idForFocus, class:'setting-term', tabindex:0, 'aria-describedby':id, 'aria-label':name}, name,
     el('span', {id, class:'setting-help', role:'tooltip'}, el('b', {'aria-hidden':'true', text:'i'}), hint));
 }
 $('qq-link-title').append(settingTerm('QQ 账号关联',
@@ -3594,18 +3639,20 @@ async function restoreConfigField(sec, field, button) {
 }
 function cfRow(sec, field) {
   const key = cfKey(sec, field);
-  const prop = sec ? cfResolve(cf.schema.properties[sec]).properties[field] : cf.schema.properties[field];
+  const prop = cfSectionProperties(sec)[field];
   const info = cfFieldInfo(prop);
   const readonly = cf.readonly.has(key);
-  const [name, hint] = CFG_FIELDS[key] || [field, prop.description || field];
+  const [name, hint] = CFG_FIELDS[key];
+  const effect = readonly ? '只读' : '重启后生效';
+  const id = 'cf-field-' + key;
+  const attributes = {id:readonly ? undefined : id, disabled:readonly, 'aria-label':name, 'aria-describedby':'cf-help-' + key};
   const value = sec === 'cortisol'
     ? el('div', { class: 'mono' }, String(cfOriginal(sec, field)),
         el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) }))
-    : cfControl(sec, field, info, readonly);
+    : cfControl(sec, field, info, attributes);
   return el('div', { class: 'cfg-field' },
-    el('div', { class: 'name' }, settingTerm(name, hint, key), ' ',
-      el('span', { class: 'mono muted', style: 'font-size:12px;font-weight:400', text: field }),
-      readonly ? el('span', { class: 'tag', text: '只读' }) : null),
+    el('div', { class: 'name' }, settingTerm(name, hint + ' ' + effect + '。', key, readonly ? id : undefined), ' ',
+      el('span', { class: 'tag', text: effect }), el('div', { class: 'mono cfg-path', text: key })),
     el('div', { class: 'cfg-control' }, value,
       !readonly && !cf.noDefault.has(key) && Object.hasOwn(prop, 'default')
         ? restoreButton(name, key, button => restoreConfigField(sec, field, button)) : null));
@@ -3614,45 +3661,160 @@ function restoreConfigFont() {
   document.documentElement.dataset.font = DEFAULT_UI_FONT;
   try { localStorage.removeItem('aureus-font'); } catch (e) { /* 当前页面仍可恢复 */ }
 }
-function renderConfigSection(sec) {
-  $('cf-details').scrollTop = 0;
-  const container = $('cf-section');
-  container.textContent = '';
-  const [_, title] = CFG_SECTIONS.find(([k]) => k === sec) || [sec, sec];
-  container.append(el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }))));
+function cfFontRow() {
+  const {key, id, name, hint} = CFG_FONT;
+  const font = el('select', {id, 'aria-label':name, 'aria-describedby':'cf-help-' + key},
+    el('option', {value:'pixel', text:'Ark Pixel（像素）'}),
+    el('option', {value:'system', text:'系统字体'}));
+  font.value = document.documentElement.dataset.font;
+  font.addEventListener('change', () => {
+    document.documentElement.dataset.font = font.value;
+    try { localStorage.setItem('aureus-font', font.value); } catch (e) { /* 当前页面仍可切换 */ }
+  });
+  const resetFont = restoreButton(name, 'font', () => {
+    restoreConfigFont();
+    font.value = DEFAULT_UI_FONT;
+  });
+  return el('div', { class: 'cfg-field' },
+    el('div', {class:'name'}, settingTerm(name, hint, key), ' ', el('span', {class:'tag', text:'立即生效'}),
+      el('div', {class:'mono cfg-path', text:key})),
+    el('div', { class: 'cfg-control' }, font, resetFont));
+}
+function buildConfigSection(sec, title, hint) {
+  const container = el('div', {class:'card'});
+  container.append(el('div', {class:'card-head cfg-section-head'},
+    el('div', {}, el('h3', {}, settingTerm(title, hint, 'section-' + sec)),
+      sec ? el('div', {class:'mono cfg-path', text:sec}) : null)));
   if (sec === 'cortisol') {
     container.append(el('p', { class: 'muted',
       text: '恢复单项默认值时，在 config/aureus.toml 的 [cortisol] 节只删除对应的键值行，保留其他项，保存后重启。' }));
   }
   if (sec === 'qq') {
     container.append(el('p', {class:'muted',
-      text:'QQ / SnowLuma 的连接和权限项在网页上只读。在数据根目录的 config/aureus.toml 中编辑 [qq]，保存后重启。token_key 只填密钥引用名，真实令牌在本机密钥库维护。'}));
+      text:'QQ / SnowLuma 的连接和权限项在网页上只读。在数据根目录的 config/aureus.toml 中编辑 [qq]，保存后重启。真实令牌在本机密钥库维护。'}));
   }
-  if (sec === '') {
-    const font = el('select', {id:'cf-font'},
-      el('option', {value:'pixel', text:'Ark Pixel（像素）'}),
-      el('option', {value:'system', text:'系统字体'}));
-    font.value = document.documentElement.dataset.font;
-    font.addEventListener('change', () => {
-      document.documentElement.dataset.font = font.value;
-      try { localStorage.setItem('aureus-font', font.value); } catch (e) { /* 当前页面仍可切换 */ }
-    });
-    const resetFont = restoreButton('界面字体', 'font', () => {
-      restoreConfigFont();
-      font.value = DEFAULT_UI_FONT;
-    });
-    container.append(el('div', { class: 'cfg-field' }, el('label', {class:'name', for:'cf-font'}, settingTerm('界面字体', '选择这台浏览器显示 Aureus 时使用的字体。', 'font')),
-      el('div', { class: 'cfg-control' }, font, resetFont)));
-  }
+  if (!sec) container.append(cfFontRow());
   for (const field of cfFields(sec)) container.append(cfRow(sec, field));
+  return container;
+}
+function renderConfigSection(sec) {
+  $('cf-details').scrollTop = 0;
+  if (!cf.sections.has(sec)) {
+    const section = buildConfigSection(...CFG_SECTIONS.find(([key]) => key === sec));
+    cf.sections.set(sec, section);
+    $('cf-section').append(section);
+  }
+  for (const [key, section] of cf.sections) section.classList.toggle('hidden', key !== sec);
+}
+function resetConfigSections() {
+  cf.sections.clear();
+  $('cf-section').replaceChildren();
+  renderConfigSection(cf.tab);
+}
+function selectConfigSection(sec) {
+  if (sec === cf.tab) return;
+  for (const [key, {button}] of cf.tabs) {
+    const selected = key === sec;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-current', String(selected));
+    button.setAttribute('aria-disabled', String(selected));
+  }
+  cf.tab = sec;
+  refreshQQLinkVisibility();
+  renderConfigSection(sec);
+  refreshConfigDirty();
+}
+
+function configSearchEntries(sections) {
+  return sections.flatMap(([sec, title, sectionHint]) => {
+    const entries = cfFields(sec).map(field => {
+      const key = cfKey(sec, field);
+      const [name, hint] = CFG_FIELDS[key];
+      return {key, id:'cf-field-' + key, name, hint};
+    });
+    if (sec === '') entries.unshift(CFG_FONT);
+    return entries.map(({key, id, name, hint}) => ({sec, title, key, id, name,
+      terms:[title, sectionHint, key, name, hint].join(' ').toLowerCase()}));
+  });
+}
+function locateConfigField({sec, id}) {
+  selectConfigSection(sec);
+  const control = $(id);
+  control.closest('.cfg-field').scrollIntoView({block:'center', inline:'nearest'});
+  control.focus({preventScroll:true});
+}
+function renderConfigSearch() {
+  const terms = $('cf-search').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const results = terms.length ? cf.searchEntries.filter(entry => terms.every(term => entry.terms.includes(term))) : [];
+  const list = $('cf-search-results');
+  list.classList.toggle('hidden', !results.length);
+  $('cf-search-clear').classList.toggle('hidden', !$('cf-search').value);
+  setLiveText($('cf-search-state'), terms.length ? (results.length ? '找到 ' + results.length + ' 项设置。' : '没有匹配的设置，可清空搜索返回。') : '');
+  cf.results = results.map(entry => el('button', {class:'nav-item', type:'button', onclick:() => locateConfigField(entry)},
+    el('span', {text:entry.name}), el('span', {class:'cfg-path', text:entry.title + ' · ' + entry.key})));
+  list.replaceChildren(...cf.results);
+  list.scrollTop = 0;
+}
+function clearConfigSearch(returnFocus) {
+  $('cf-search').value = '';
+  if (returnFocus) $('cf-search').focus();
+  renderConfigSearch();
+}
+function focusConfigSection(sec) {
+  const tab = cf.tabs.get(sec);
+  if (!tab || $('cf-content').classList.contains('hidden')) return;
+  tab.button.focus();
+  clearConfigSearch(false);
+  selectConfigSection(sec);
+}
+$('cf-search').addEventListener('input', renderConfigSearch);
+$('cf-search-clear').addEventListener('click', () => clearConfigSearch(true));
+$('cf-sidebar').addEventListener('keydown', event => {
+  if (event.isComposing) return;
+  const search = $('cf-search');
+  const index = cf.results.indexOf(event.target);
+  if (event.key === 'Escape' && search.value) {
+    clearConfigSearch(true);
+  } else if (event.target === search && event.key === 'Enter' && cf.results.length) {
+    cf.results[0].click();
+  } else if (event.key === 'ArrowDown' && (event.target === search || index >= 0) && cf.results[index + 1]) {
+    cf.results[index + 1].focus();
+  } else if (event.key === 'ArrowUp' && index >= 0) {
+    (cf.results[index - 1] || search).focus();
+  } else return;
+  event.preventDefault();
+});
+
+function rebuildConfigTabs(sections) {
+  if (!sections.some(([key]) => key === cf.tab)) cf.tab = '';
+  cf.tabs.clear();
+  for (const [sec, title] of sections) {
+    const count = el('span', {class:'count', style:'font-size:12px;color:var(--text-2)'});
+    const selected = sec === cf.tab;
+    const button = el('button', {class:'nav-item', type:'button', 'data-sec':sec,
+      'aria-current':String(selected), 'aria-disabled':String(selected)},
+      el('span', {text:title}), count);
+    button.classList.toggle('active', selected);
+    button.addEventListener('click', () => {
+      if (sec !== cf.tab) focusConfigSection(sec);
+    });
+    cf.tabs.set(sec, {button, count});
+  }
+  $('cf-tabs').replaceChildren(...Array.from(cf.tabs.values(), ({button}) => button));
 }
 
 // 有没保存的改动时，切回这一页不重新读，免得改动丢掉。
 let configLoadRevision = 0;
 async function loadConfigPage(force) {
-  const hasDraft = () => cf.data && (cf.busy || Object.keys(cf.changes).length || cf.invalid.size);
+  const session = state.loaded;
+  if (session !== cf.session) {
+    $('cf-content').classList.add('hidden');
+    $('cf-password').value = '';
+    clearConfigSearch(false);
+  }
+  const hasDraft = () => cf.session === session && cf.data && (cf.busy || Object.keys(cf.changes).length || cf.invalid.size);
   if (!force && hasDraft()) return;
-  const revision = ++configLoadRevision, session = state.loaded;
+  const revision = ++configLoadRevision;
   const res = await api('/api/config');
   if (revision !== configLoadRevision || session !== state.loaded || (!force && hasDraft())) return;
   const missing = $('cf-missing');
@@ -3660,6 +3822,7 @@ async function loadConfigPage(force) {
   if (!res.ok) { failApi(res); return; }
   missing.classList.add('hidden');
   $('cf-content').classList.remove('hidden');
+  cf.session = session;
   cf.data = res.data.config;
   cf.schema = res.data.schema;
   cf.readonly = new Set(res.data.readonly);
@@ -3667,37 +3830,16 @@ async function loadConfigPage(force) {
   cf.pwSections = new Set(res.data.password_sections);
   cf.changes = {};
   cf.invalid = new Set();
-  const tabs = $('cf-tabs');
-  tabs.textContent = '';
-  for (const [key, title] of cfSectionList()) {
-    tabs.append(el('button', { class: 'nav-item', 'data-sec': key },
-      el('span', { text: title }), el('span', { class: 'count', style: 'font-size:12px;color:var(--text-2)' })));
-  }
-  const buttons = [...tabs.querySelectorAll('.nav-item')];
-  function selectSection(button) {
-    for (const tab of buttons) {
-      tab.classList.toggle('active', tab === button);
-      tab.setAttribute('aria-current', tab === button ? 'true' : 'false');
-      tab.setAttribute('aria-disabled', String(tab === button));
-    }
-    cf.tab = button.dataset.sec;
-    refreshQQLinkVisibility();
-    renderConfigSection(cf.tab);
-    refreshConfigDirty();
-  }
-  for (const button of buttons) button.addEventListener('click', () => {
-    if (button.classList.contains('active')) return;
-    selectSection(button);
-  });
-  selectSection(buttons.find(button => button.dataset.sec === cf.tab) || buttons[0]);
+  const sections = cfSectionList();
+  rebuildConfigTabs(sections);
+  resetConfigSections();
+  cf.searchEntries = configSearchEntries(sections);
+  renderConfigSearch();
+  refreshQQLinkVisibility();
   refreshConfigDirty();
 }
 PAGES.config = { load: () => loadConfigPage(false) };
-$('og-search-settings').addEventListener('click', () => showPage('config', () => {
-  const tab = document.querySelector('#cf-tabs [data-sec="exploration"]');
-  tab?.click();
-  tab?.focus();
-}));
+$('og-search-settings').addEventListener('click', () => showPage('config', () => focusConfigSection('exploration')));
 
 $('cf-save').addEventListener('click', async () => {
   if (cf.invalid.size) { toast('有的数字填得不对（' + [...cf.invalid].join('、') + '），改好再保存。', 'error'); return; }
@@ -3773,7 +3915,7 @@ $('cf-restore-all-form').addEventListener('submit', async event => {
     cf.invalid.clear();
     $('cf-password').value = '';
     restoreConfigFont();
-    renderConfigSection(cf.tab);
+    resetConfigSections();
     if (res.data.restart_required) showRestart();
     restored = true;
     toast(res.data.changed.length ? '已恢复默认设置，重启后运行设置生效。' : '已恢复默认设置。', 'ok');
