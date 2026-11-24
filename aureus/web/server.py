@@ -42,6 +42,7 @@ from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.memory_summary_source import VISIBLE_SUMMARY_SCOPES, WEB_PRIVATE_SCOPE
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
 from aureus.memory import (
@@ -66,7 +67,12 @@ from .auth import (
 )
 from .config_api import register_config_routes
 from .config_files import ConfigService
-from .expression_cluster_api import ExpressionClusterGrants, register_expression_cluster_routes
+from .expression_cluster_api import (
+    ExpressionClusterGrants,
+    register_expression_cluster_grants,
+    register_expression_cluster_routes,
+)
+from .expression_cluster_grants import ExpressionClusterDisplay
 from .expression_quality_api import register_expression_quality_routes
 from .expression_vector_api import register_expression_vector_routes
 from .inbox_api import register_inbox_routes
@@ -276,6 +282,7 @@ def create_app(
     memory_graph_display: MemoryGraphDisplay | None = None,
     expression_cluster_store: ExpressionClusterStore | None = None,
     expression_cluster_grants: ExpressionClusterGrants | None = None,
+    expression_cluster_display: ExpressionClusterDisplay | None = None,
     embedding_progress: EmbeddingProgress | None = None,
     expression_recall: ExpressionRecall | None = None,
 ) -> FastAPI:
@@ -606,6 +613,12 @@ def create_app(
         or (embedding_progress.expression_index if embedding_progress else None),
         expression_cluster_grants,
         sessions.is_active,
+        display=expression_cluster_display,
+        scopes=embedding_progress.expression_scopes if embedding_progress else None,
+    )
+    register_expression_cluster_grants(
+        app, require_ready, sessions.is_active, _same_http_origin, auth,
+        expression_cluster_display, embedding_progress.expression_scopes if embedding_progress else None,
     )
     register_expression_vector_routes(
         app, require_ready, _same_http_origin, sessions.is_active, embedding_progress,
@@ -614,6 +627,16 @@ def create_app(
     register_memory_inspection_routes(
         app, require_inspection_access, resource_memory, channel.user_visibility
     )
+    def can_show_summary(scope: tuple[str, str]) -> bool:
+        if scope == WEB_PRIVATE_SCOPE:
+            return channel.user_visibility is VisibilityScope.USER_ONLY
+        route, visibility = scope
+        return (
+            allows_inbox_conversation is not None and inbox_store is not None
+            and visibility in VISIBLE_SUMMARY_SCOPES and route.startswith("[")
+            and allows_inbox_conversation(ConversationKey.from_scope_key(route))
+        )
+
     register_resource_routes(
         app,
         require_ready,
@@ -627,6 +650,7 @@ def create_app(
         database=resource_database,
         clock=clock,
         inbox=inbox_store,
+        can_show_summary=can_show_summary,
         suggest_emoji_replacement=suggest_emoji_replacement,
     )
 

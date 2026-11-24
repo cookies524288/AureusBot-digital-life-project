@@ -158,6 +158,16 @@ class EmojiReplacement:
 
 
 @dataclass(frozen=True)
+class EmojiMaterial:
+    """一份经过预检的素材及其来源声明；不带登记或审批权限。"""
+
+    digest: str
+    data: bytes
+    description: str
+    source_license: str
+
+
+@dataclass(frozen=True)
 class ImportedEmoji:
     """一条旧表情记录的稳定来源、媒体地址及原始元数据。"""
 
@@ -525,6 +535,76 @@ class EmojiStore:
             ).fetchone()
         return row is not None
 
+    def export_materials(self, keys: list[str], source_license: str) -> list[EmojiMaterial]:
+        """只取明示选中的未移除资产；每份原件必须可完整读取。"""
+        materials = []
+        with closing(open_connection(self._database_file)) as connection:
+            connection.execute("BEGIN")
+            for key in dict.fromkeys(keys):
+                if not key.startswith("asset:"):
+                    raise ValueError("没有原图的档案不能导出为素材。")
+                digest = key.removeprefix("asset:")
+                row = self._replacement_row(connection, digest)
+                data = (
+                    self.read_media(digest) if row is not None and not row["is_removed"] else None
+                )
+                if row is None or data is None:
+                    raise ValueError("有选中的素材已移除或缺少原件。")
+                _validate_image(data)
+                materials.append(EmojiMaterial(digest, data, row["description"], source_license))
+        return materials
+
+    def import_materials(
+        self, materials: list[EmojiMaterial], *, confirmed: bool, register: bool
+    ) -> dict[str, int]:
+        """按内容键去重，只登记已确认的新素材，返回预检或实际数量。"""
+        with closing(open_connection(self._database_file)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE" if confirmed else "BEGIN")
+            slots = max(0, self.registration_limit - _active_count(connection))
+            added = registered = skipped = no_slot = no_description = 0
+            for material in materials:
+                if self._replacement_row(connection, material.digest) is not None:
+                    skipped += 1
+                    continue
+                can_register = register and bool(material.description) and slots > 0
+                if confirmed:
+                    self._write_media(material.digest, material.data)
+                    connection.execute(
+                        "INSERT INTO emoji_assets VALUES (?, ?, '[]', ?, 0, 0, 0, ?, NULL)",
+                        (
+                            material.digest,
+                            material.description,
+                            can_register,
+                            self._clock.now().timestamp(),
+                        ),
+                    )
+                    source = MemorySource("aureus", "main", "emoji_materials", (material.digest,))
+                    connection.execute(
+                        "INSERT INTO emoji_sources VALUES (?, ?, ?)",
+                        (
+                            source.encode(),
+                            material.digest,
+                            json.dumps(
+                                {"source_license": material.source_license}, ensure_ascii=False
+                            ),
+                        ),
+                    )
+                added += 1
+                if can_register:
+                    registered += 1
+                    slots -= 1
+                elif register and not material.description:
+                    no_description += 1
+                elif register:
+                    no_slot += 1
+        return {
+            "added": added,
+            "registered": registered,
+            "skipped": skipped,
+            "capacity_blocked": no_slot,
+            "missing_description": no_description,
+        }
+
     def replacement_options(self, incoming: str, offset: int, limit: int) -> list[EmojiReplacement]:
         """读取一页可撤销登记的替换对象，供预览或独立建议使用。"""
         with closing(open_connection(self._database_file)) as connection:
@@ -788,10 +868,10 @@ class EmojiStore:
         )
 
     def _write_media(self, digest: str, data: bytes) -> None:
+        self._attachments.mkdir(parents=True, exist_ok=True)
         path = self._attachment(digest)
         if path is None:
             raise OSError("表情归档目录不可用。")
-        self._attachments.mkdir(parents=True, exist_ok=True)
         if self.read_media(digest) is not None:
             return
         with NamedTemporaryFile(dir=self._attachments, delete=False) as stream:

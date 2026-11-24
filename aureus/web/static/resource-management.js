@@ -175,6 +175,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   const terms = {...labels, messages:'消息', mai_messages:'消息', active:'有效', inactive:'已停用', conflicted:'有冲突', superseded:'已替代',
     retracted:'已撤回', deleted:'已删除', missing:'缺失', image_assets:'图片资产', message:'消息',
+    summary_facts:'会话总结事实', platform_message:'平台消息定位', platform_image:'图片组件定位',
     attachment_archived:'归档附件', media_type:'媒体类型', source_key:'原记录编号', reference:'引用',
     evidence:'证据', name:'名称', id:'编号', kind:'类别', status:'状态', profile:'人物画像'};
   const term = key => terms[key] ?? key;
@@ -395,6 +396,49 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     return history;
   }
+  async function editClusterGrant(item) {
+    const endpoint = '/api/resources/learning/clusters/grants';
+    const body = el('div', {class:'stack'}, el('p', {text:'正在核对这条表达…'}));
+    openEditor('表达簇展示授权', body);
+    const response = await api(endpoint + '?' + new URLSearchParams({entry_key:item.entry_key}));
+    const isCurrent = () => body.isConnected && $('editor-dialog').open;
+    if (!isCurrent()) return;
+    if (!response.ok) { body.replaceChildren(el('p', {text:'暂时无法读取授权。'})); return fail(response); }
+    const {enabled, granted, version} = response.data;
+    if (!enabled || (!version && !granted)) {
+      body.replaceChildren(el('p', {text:enabled ? '该表达当前不可授权。' : '当前未接入表达簇展示授权。'}));
+      return;
+    }
+    const password = el('input', {type:'password', required:true, autocomplete:'current-password'});
+    const grant = el('button', {type:'submit', class:'btn small primary', text:'授权这条表达'});
+    const revoke = action('撤回这条授权', () => { if (form.reportValidity()) save(null); });
+    const canGrant = version && version === item.cluster_display_version;
+    grant.disabled = !canGrant;
+    revoke.disabled = !granted;
+    const controls = el('fieldset', {class:'stack'},
+      el('p', {text:item.text}),
+      el('p', {class:'muted', text:'只允许已登录者在表达簇查看该条表达与情景，不改变召回或语言包范围。'}),
+      el('p', {text:granted ? '有已保存的展示授权' : '尚未授权展示'}),
+      version && !canGrant && el('p', {text:'条目已变化；刷新表达列表后再授权。'}),
+      el('label', {class:'stack'}, '确认当前网页密码', password), el('div', {class:'row'}, grant, revoke));
+    const form = el('form', {class:'stack'}, controls);
+    form.addEventListener('submit', event => { event.preventDefault(); if (canGrant) save(version); });
+    body.replaceChildren(form);
+
+    async function save(target) {
+      if (controls.disabled) return;
+      const secret = password.value;
+      password.value = '';
+      controls.disabled = true;
+      try {
+        const result = await api(endpoint, 'PUT', {entry_key:item.entry_key, version:target, password:secret});
+        if (!isCurrent()) return;
+        if (!result.ok) return fail(result);
+        $('editor-dialog').close();
+        toast(target ? '已授权该表达在簇中展示。' : '已撤回该表达的簇展示授权。');
+      } finally { controls.disabled = false; }
+    }
+  }
   async function editLearningScope(kind, item, refresh) {
     const form = el('form', {class:'stack'}, el('p', {text:'读取已知会话…'}));
     openEditor('设置生效会话', form);
@@ -510,6 +554,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           item.review_status === 'pending' ? '' : item.review_status),
         el('div', {class:'row'}, action('编辑', () => editLearning(kind, pager.read, item)),
           item.jargon_status && !item.is_removed && action('定性', () => classifyJargon([item.entry_key], pager.read)),
+          kind === 'expression' && action('表达簇展示授权', () => editClusterGrant(item)),
           item.package_source != null && action('设置生效会话', () => editLearningScope(kind, item, pager.read)),
           !item.pending_scope && !item.is_removed && action(item.is_enabled ? '停用' : '恢复', async event => {
             const button = event.currentTarget;
@@ -875,6 +920,81 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }
     return el('div', {class:'resource-tile-selection'}, tile, batch.checkbox(item), approval || null);
   }
+  const emojiMaterialsEndpoint = '/api/resources/emoji/materials';
+  function emojiMaterialExport(keys) {
+    const license = textControl('选中素材的来源及许可声明', '', 500, true);
+    const submit = el('button', {class:'btn primary small', text:'导出所选'});
+    const form = el('form', {class:'stack'},
+      el('p', {text:`只导出选中的 ${keys.length} 张原图及描述，不包含登记或审批。每份最多 20 张；请确认有分享权。`}),
+      license.field, submit, action('取消', () => $('editor-dialog').close()));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (submit.disabled || !license.input.value.trim()) return;
+      submit.disabled = true;
+      try {
+        const response = await api(emojiMaterialsEndpoint + '/export', 'POST', {
+          keys, source_license:license.input.value,
+        });
+        if (!response.ok) { fail(response); return; }
+        if (!form.isConnected || !$('editor-dialog').open) return;
+        const url = URL.createObjectURL(new Blob([JSON.stringify(response.data)], {type:'application/json'}));
+        const link = el('a', {href:url, download:'aureus-emoji-materials.json'});
+        document.body.append(link); link.click(); link.remove();
+        URL.revokeObjectURL(url);
+        $('editor-dialog').close();
+      } finally { submit.disabled = false; }
+    });
+    openEditor('导出 Aureus 表情素材集', form);
+  }
+  function emojiMaterialImport(refresh) {
+    const input = el('input', {type:'file', accept:'.json,application/json', required:true});
+    const register = el('input', {type:'checkbox'});
+    const submit = el('button', {class:'btn primary small', text:'预检'});
+    const status = el('p', {role:'status', class:'muted'});
+    const members = el('ul');
+    const controls = el('fieldset', {class:'stack'}, el('label', {class:'stack'}, 'Aureus v1 JSON 素材集', input),
+      el('label', {}, register, ' 同时登记有描述且有空位的新素材'), submit);
+    const form = el('form', {class:'stack'},
+      el('p', {text:'这是 Aureus 扩展格式，不是 MaiBot 专用接口或 A_Memorix 记忆包。重复素材保留原有登记和审批。'}),
+      controls, status, members, action('取消', () => $('editor-dialog').close()));
+    let digest;
+    function reset() {
+      digest = null;
+      submit.textContent = '预检';
+      status.textContent = '最多 20 张、32 MiB；预检不写入。';
+      members.replaceChildren();
+    }
+    input.addEventListener('change', reset);
+    register.addEventListener('change', reset);
+    reset();
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (controls.disabled) return;
+      const confirmed = digest;
+      const params = new URLSearchParams({register:register.checked, ...(confirmed ? {confirmed} : {})});
+      controls.disabled = true;
+      try {
+        const response = await api(emojiMaterialsEndpoint + '/import?' + params, 'POST', input.files[0],
+          {'Content-Type':'application/json'});
+        if (!response.ok) { reset(); status.textContent = errorText(response); return; }
+        const data = response.data;
+        status.textContent = `${confirmed ? '已完成' : '预检'}：新增 ${data.added} 张 · 登记 ${data.registered} 张 · 重复 ${data.skipped} 张 · 超额 ${data.capacity_blocked} 张 · 缺描述 ${data.missing_description} 张`;
+        members.replaceChildren(...data.members.map(item => el('li', {text:
+          `${item.description || '未填写描述'} · ${item.bytes} 字节 · ${item.digest} · 来源及许可：${item.source_license}`})));
+        if (!confirmed) { digest = data.digest; submit.textContent = '确认导入'; }
+        else { digest = null; submit.textContent = '预检'; toast('素材集已处理'); await refresh(); }
+      } finally { controls.disabled = false; }
+    });
+    openEditor('导入 Aureus 表情素材集', form);
+  }
+  async function emojiThumbnailStatus() {
+    const status = el('p', {role:'status', text:'正在读取缩略图缓存状态…'});
+    detail('表情缩略图缓存', status);
+    const result = await api('/api/resources/emoji/thumbnail-cache');
+    if (status.isConnected) status.textContent = result.ok
+      ? '本项目不生成持久缩略图缓存，当前 0 条，无需预热或清理。原图和目录状态不受影响。'
+      : errorText(result);
+  }
   function mediaView(panel, kind) {
     const emoji = kind === 'emoji';
     const select = (label, name, options) => el('label', {}, label + ' ', el('select', {name},
@@ -889,10 +1009,15 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const removed = kind === 'emoji' ? el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除') : null;
     const form = searchForm(label, label, status, review, format, sort, removed);
     const counts = emoji ? el('div', {class:'muted', id:'emoji-library-counts'}) : null;
+    const exportMaterials = emoji ? action('导出所选素材', () => emojiMaterialExport(batch.keys())) : null;
     const batch = kind === 'emoji' ? batchControls(item => item.entry_key, '/api/resources/emoji/batch',
-      (entry_keys, removed) => ({entry_keys, removed}), () => pager.read()) : null;
+      (entry_keys, removed) => ({entry_keys, removed}), () => pager.read(), count => {
+        if (exportMaterials) exportMaterials.disabled = !count || count > 20 || removed.firstChild.checked;
+      }) : null;
     const upload = kind === 'emoji' ? action('上传表情', () => emojiForm(pager.read)) : null;
     const batchUpload = kind === 'emoji' ? action('批量上传', () => emojiBatchForm(pager.read)) : null;
+    const importMaterials = emoji ? action('导入素材集', () => emojiMaterialImport(pager.read)) : null;
+    const thumbnail = emoji ? action('缩略图缓存', emojiThumbnailStatus) : null;
     let checkingIntegrity = false;
     let emojiEnabled = false;
     const pendingReviews = new Set();
@@ -908,12 +1033,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       emojiEnabled = enabled;
       if (upload) upload.disabled = !enabled;
       if (batchUpload) batchUpload.disabled = !enabled;
+      if (importMaterials) importMaterials.disabled = !enabled;
+      if (thumbnail) thumbnail.disabled = !enabled;
       if (integrity) integrity.disabled = !enabled || checkingIntegrity;
     }
     syncEmojiActions(false);
     panel.append(form);
-    if (emoji) panel.append(actions('表情操作', upload, batchUpload, integrity));
-    if (batch) panel.append(actions('所选表情', batch.remove, batch.restore));
+    if (emoji) panel.append(actions('表情操作', upload, batchUpload, integrity, importMaterials, thumbnail));
+    if (batch) panel.append(actions('所选表情', batch.remove, batch.restore, exportMaterials));
     if (counts) panel.append(counts);
     const pager = searchable({panel, grid:true, id:kind === 'emoji' ? 'learning-emoji' : 'archived-images',
       render:item => renderMedia(item, pager.read, batch, openReview),
@@ -990,6 +1117,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   function renderMemory(item) {
     const type = labels[item.labels?.[0] ?? item.source?.table ?? 'live'] || item.source?.table;
+    if (item.kind === 'summary') return renderSummaryFact(item);
     const box = el('input', {type:'checkbox', 'aria-label':'选择' + type});
     box.addEventListener('change', () => {
       if (box.checked) selected.set(box, item); else selected.delete(box);
@@ -1008,6 +1136,27 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           if (await change('/api/resources/memory', 'PATCH', {...memoryTarget(item), is_enabled:!item.is_enabled},
             memory.read, button) && button.isConnected) $('editor-dialog').close();
         }))), box);
+  }
+  function renderSummaryFact(item) {
+    const title = item.text || (item.status === 'superseded' ? '已更正的事实' : '没有证据的事实');
+    return record(title, async () => {
+      const state = el('p', {class:'muted', role:'status', text:'正在复核事实来源…'});
+      detail('会话总结事实', state);
+      const {instance, role, table, key} = item.source;
+      const params = new URLSearchParams({source:JSON.stringify([instance, role, table, key])});
+      const response = await api('/api/resources/memory/facts/detail?' + params);
+      if (!state.isConnected || !$('editor-dialog').open) return;
+      if (!response.ok) {
+        state.textContent = response.status === 404 ? '没有此事实，或当前不可见。' : errorText(response);
+        if (response.status === 404) await memory.read();
+        return;
+      }
+      const fact = response.data;
+      detail('会话总结事实', field('事实', fact.text), field('事实来源', sourceText(fact.source)),
+        field('状态', fact.status === 'superseded' ? '已更正' : term(fact.status)),
+        field('证据定位', fact.evidence.map(entry => [term(entry.kind), entry.reference,
+          sourceText(entry.source)].join(' · ')).join('\n') || '没有可用证据'));
+    });
   }
   const counts = $('memory-counts');
   const memory = searchable({panel:$('memory-query-text'), id:'memory', render:renderMemory, prepare:() => {

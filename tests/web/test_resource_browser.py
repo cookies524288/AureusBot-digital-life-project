@@ -1446,6 +1446,49 @@ def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Brow
     )
 
 
+def test_emoji_material_preview_and_cancel_on_narrow_screen(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '表情入口');
+      const original = window.fetch;
+      let writes = 0;
+      window.fetch = async (url, options) => {
+        if (url === '/api/resources/emoji/thumbnail-cache') {
+          return new Response(JSON.stringify({persistent:false, total:0}));
+        }
+        if (!url.startsWith('/api/resources/emoji/materials/import?')) return original(url, options);
+        check(options.body instanceof File && await options.body.text() === '{"format":"fixture"}', '提交文件原字节');
+        check(options.headers['Content-Type'] === 'application/json', 'JSON 文件类型');
+        if (new URL(url, location.origin).searchParams.has('confirmed')) writes++;
+        return new Response(JSON.stringify({digest:'stamp', added:1, registered:0, skipped:0,
+          capacity_blocked:0, missing_description:0, members:[{description:'合成图片', bytes:1,
+            digest:'short', source_license:'测试 CC0'}]}));
+      };
+      click('[data-learning-tab="emoji"]');
+      await waitFor(() => button('导入素材集') && !button('导入素材集').disabled, '表情列表可用');
+      button('缩略图缓存').click();
+      const dialog = document.querySelector('#editor-dialog');
+      const dialogButton = label => [...dialog.querySelectorAll('button')]
+        .find(item => item.textContent.trim() === label);
+      await waitFor(() => dialog.innerText.includes('无需预热或清理'), '没有持久缓存');
+      document.querySelector('#editor-close').click();
+      button('导入素材集').click();
+      const input = dialog.querySelector('input[type=file]');
+      const files = new DataTransfer();
+      files.items.add(new File(['{"format":"fixture"}'], 'fixture.json', {type:'application/json'}));
+      input.files = files.files;
+      input.dispatchEvent(new Event('change', {bubbles:true}));
+      dialogButton('预检').click();
+      await waitFor(() => dialogButton('确认导入') && dialog.innerText.includes('测试 CC0'), '实际成员的许可');
+      check(dialog.getBoundingClientRect().right <= innerWidth, '窄屏弹窗不横向溢出');
+      dialogButton('取消').click();
+      check(writes === 0 && !dialog.open, '取消不提交');
+    """,
+    )
+
+
 def test_emoji_integrity_preview_runs_only_on_click_on_narrow_screen(browser: Browser) -> None:
     browser.open("learning", 390, 740)
     _run(

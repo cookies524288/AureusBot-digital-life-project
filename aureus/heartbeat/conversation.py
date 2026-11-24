@@ -71,7 +71,6 @@ from aureus.heartbeat.planning import (
 from aureus.heartbeat.platform_history import HistoryQuery, PlatformHistory
 from aureus.heartbeat.recall import (
     MAX_RECALL_CHARS,
-    format_recall,
     format_recall_hits,
     heuristic_keywords,
 )
@@ -107,7 +106,19 @@ logger = logging.getLogger(__name__)
 _DEFAULT_STRANGER_AFFINITY = PeopleConfig().stranger_affinity
 _REVIEW_SENTINEL_PREFIX = "reply_review_"
 _MAX_REVIEW_REASON_CHARS = 500
-type _Recall = tuple[tuple[str, ...], list[MemoryHit]]
+type _Recall = tuple[tuple[str, ...], Sequence[MemoryHit]]
+
+
+class _SummaryRecallChangedError(Exception):
+    """本轮器官已接触的派生事实不再可用。"""
+
+
+@dataclass
+class _RoundRecall:
+    """只跟踪本轮提示词中实际交给规划器的派生事实。"""
+
+    automatic: _Recall | None = None
+    seen: list[MemoryHit] = field(default_factory=list)
 
 
 def recent_dialogue(
@@ -725,29 +736,42 @@ class ConversationFlow:
             job = self._apply_hormones(
                 job, attempt.triggers if attempt is not None else (), now=self._clock.now()
             )
-        automatic: _Recall | None = None
+        recall = _RoundRecall()
         if self._memory_config.heuristic_recall_enabled and self._can_recall():
             words = heuristic_keywords(originals)
             if words and (hits := await self._retrieve(job, words)):
-                automatic = words, hits
+                recall.automatic = words, hits
         try:
-            plan, recalled = await self._plan(job, automatic)
+            plan, recalled = await self._plan(job, recall)
+            if job.planner_run is not None and job.planner_run.restart_requested:
+                return _ThoughtOutcome(declined=True)
+            outcome = (
+                await self._reply_with_review(job, plan, recall, recalled)
+                if plan is not None and plan.should_reply
+                else _ThoughtOutcome(plan=plan, declined=True)
+            )
+        except _SummaryRecallChangedError:
+            if job.round_trace is not None:
+                job.round_trace.actions[:] = [
+                    action
+                    if action.action != "reply" or action.status != "completed"
+                    else PlannerAction("reply", "rejected", "记忆来源已变化，丢弃本轮建议")
+                    for action in job.round_trace.actions
+                ]
+            _trace_action(
+                job, PlannerAction("query_memory", "rejected", "记忆来源已变化，本轮不发言")
+            )
+            return _ThoughtOutcome(declined=True, judge=attempt, effects=job.effects)
         except CallRejectedError as rejection:
             return _ThoughtOutcome(
                 notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
             )
-        if job.planner_run is not None and job.planner_run.restart_requested:
-            return _ThoughtOutcome(declined=True)
-        if plan is None or not plan.should_reply:
-            outcome = _ThoughtOutcome(plan=plan, declined=True)
-        else:
-            outcome = await self._reply_with_review(job, plan, automatic, recalled)
-            if outcome.response is not None:
-                outcome = await self._finish_reply(job, outcome, outcome.response)
-                if outcome.response is None:
-                    _trace_action(job, PlannerAction("replyer", "failed", "没有可发送的正文"))
-                else:
-                    _trace_action(job, PlannerAction("replyer", "completed", "已生成正文，等待投递"))
+        if outcome.response is not None:
+            outcome = await self._finish_reply(job, outcome, outcome.response)
+            if outcome.response is None:
+                _trace_action(job, PlannerAction("replyer", "failed", "没有可发送的正文"))
+            else:
+                _trace_action(job, PlannerAction("replyer", "completed", "已生成正文，等待投递"))
         return replace(
             outcome,
             reference_plan=outcome.reference_plan or plan,
@@ -759,11 +783,11 @@ class ConversationFlow:
         self,
         job: _ReplyJob,
         plan: Plan,
-        automatic: _Recall | None,
+        recall: _RoundRecall,
         recalled: _Recall | None,
     ) -> _ThoughtOutcome:
         """把有效的驳回理由交给规划器重审一次。"""
-        outcome = await self._reply(job, plan, automatic, recalled)
+        outcome = await self._reply(job, plan, recall, recalled)
         if outcome.review_reason is None:
             return outcome
         if not outcome.review_reason:
@@ -772,12 +796,12 @@ class ConversationFlow:
         _trace_action(job, PlannerAction("replyer", "rejected", "回复器要求重新审视"))
         _trace_action(job, PlannerAction("review", "requested", "重新判断是否需要回复"))
         try:
-            revised, recalled = await self._plan(job, automatic, review_reason=outcome.review_reason)
+            revised, recalled = await self._plan(job, recall, review_reason=outcome.review_reason)
         except CallRejectedError:
             return _ThoughtOutcome(declined=True)
         if revised is None or not revised.should_reply:
             return _ThoughtOutcome(declined=True, reference_plan=revised)
-        outcome = await self._reply(job, revised, automatic, recalled)
+        outcome = await self._reply(job, revised, recall, recalled)
         if outcome.review_reason is not None:
             _trace_action(job, PlannerAction("replyer", "rejected", "重新审视后仍被驳回，不发言"))
             outcome = _ThoughtOutcome(declined=True)
@@ -1002,7 +1026,7 @@ class ConversationFlow:
     async def _plan(
         self,
         job: _ReplyJob,
-        automatic: _Recall | None,
+        recall: _RoundRecall,
         *,
         review_reason: str = "",
     ) -> tuple[Plan | None, _Recall | None]:
@@ -1032,11 +1056,18 @@ class ConversationFlow:
             platform_cleanup=job.round_trace is not None and not review_reason,
         )
         tools = planner_tools(options)
-        heuristic_recall = (
-            format_recall(*automatic, self._timezone, heuristic=True)
-            if automatic is not None
-            else ""
-        )
+        jargon = await self._jargon_reference(job)
+        heuristic_recall = ""
+        pending_hits: Sequence[MemoryHit] = ()
+        if recall.automatic is not None:
+            words, hits = recall.automatic
+            verified = await self._verified_memory(job, hits)
+            recall.automatic = None
+            if verified:
+                heuristic_recall, pending_hits = format_recall_hits(
+                    words, verified, self._timezone, heuristic=True
+                )
+                recall.automatic = words, pending_hits
         prompt = build_plan_prompt(
             job.history,
             job.messages,
@@ -1045,7 +1076,7 @@ class ConversationFlow:
             with_agenda=options.agenda,
             with_interests=options.interests,
             with_recall=options.recall,
-            jargon=await self._jargon_reference(job),
+            jargon=jargon,
             with_expressions=options.expressions,
             heuristic_recall=heuristic_recall,
             review_reason=review_reason,
@@ -1064,10 +1095,23 @@ class ConversationFlow:
             run.is_planning = True
 
         async def retrieve(words: tuple[str, ...]) -> tuple[str, _Recall] | None:
+            nonlocal pending_hits
             hits = await self._retrieve(job, words)
             if hits is None:
                 return None
-            return format_recall(words, hits, self._timezone), (words, hits)
+            content, pending_hits = format_recall_hits(
+                words, await self._verified_memory(job, hits), self._timezone
+            )
+            return content, (words, pending_hits)
+
+        async def call_planner(request: OrganRequest) -> OrganResponse:
+            nonlocal pending_hits
+            recall.seen.extend(hit for hit in pending_hits if hit.is_summary_fact)
+            pending_hits = ()
+            await self._require_current_recall(job, recall)
+            response = await self._call(request)
+            await self._require_current_recall(job, recall)
+            return response
 
         async def read_history(query: HistoryQuery) -> str:
             assert history is not None and key is not None
@@ -1092,7 +1136,7 @@ class ConversationFlow:
 
         try:
             result = await dispatch_planner_tools(
-                request, tools, self._call, retrieve,
+                request, tools, call_planner, retrieve,
                 actions=trace.actions if trace is not None else None,
                 read_history=read_history if options.platform_history else None,
                 preview_cleanup=preview_cleanup if options.platform_cleanup else None,
@@ -1103,7 +1147,7 @@ class ConversationFlow:
             if pending is not None and still_authorized() and trace is not None:
                 trace.cleanup_preview = pending
             return result
-        except CallRejectedError:
+        except (CallRejectedError, _SummaryRecallChangedError):
             raise
         except OrganCallError as failure:
             logger.warning("规划器调用失败：%s", failure)
@@ -1148,22 +1192,23 @@ class ConversationFlow:
             logger.exception("读取黑话参考失败")
             return ""
 
-    async def _expression_reference(self, job: _ReplyJob, plan: Plan | None) -> str:
+    async def _expression_reference(self, job: _ReplyJob, plan: Plan, recall: _RoundRecall) -> str:
         if self._language is None or not self._can_recall_language():
             return ""
         if self.expression_recall is not None:
-            vector_reference = await self.expression_recall.reference(plan, job.language_scope_key)
+            vector_reference = await self.expression_recall.reference(
+                plan, job.language_scope_key, recheck=lambda: self._require_current_recall(job, recall)
+            )
             if vector_reference is not None:
                 return vector_reference
         topic = "\n".join(record.content for record in job.messages)
-        intent = " ".join((plan.intent, *plan.expression_focus)) if plan is not None else ""
-        avoid = plan.expression_avoid if plan is not None else ()
+        intent = " ".join((plan.intent, *plan.expression_focus))
         try:
             return await asyncio.to_thread(
                 self._language.expression_reference,
                 topic,
                 intent,
-                avoid,
+                plan.expression_avoid,
                 speaker_key(job.messages[-1]),
                 self._language_config.reference_chars,
                 conversation_key=job.language_scope_key,
@@ -1210,6 +1255,19 @@ class ConversationFlow:
         ]
         return [*graph_hits, *hits][:limit]
 
+    async def _verified_memory(
+        self, job: _ReplyJob, hits: Sequence[MemoryHit]
+    ) -> Sequence[MemoryHit]:
+        if not any(hit.is_summary_fact for hit in hits):
+            return hits
+        if self._memory is None:
+            return [hit for hit in hits if not hit.is_summary_fact]
+        return await asyncio.to_thread(self._memory.recheck_summary_hits, hits, job.summary_scope)
+
+    async def _require_current_recall(self, job: _ReplyJob, recall: _RoundRecall) -> None:
+        if len(await self._verified_memory(job, recall.seen)) != len(recall.seen):
+            raise _SummaryRecallChangedError
+
     async def _rerank_memory(
         self, words: tuple[str, ...], hits: list[MemoryHit]
     ) -> list[MemoryHit]:
@@ -1246,11 +1304,12 @@ class ConversationFlow:
         self,
         job: _ReplyJob,
         plan: Plan,
-        automatic: _Recall | None,
+        recall: _RoundRecall,
         recalled: _Recall | None,
     ) -> _ThoughtOutcome:
         """让回复器按明确的发言规划写成发言或通过内部标记驳回（D103）。"""
         strategy = job.strategy
+        await self._require_current_recall(job, recall)
         length = (
             plan.length.capped_at(strategy.length_limit)
             if plan.length is not None
@@ -1263,8 +1322,8 @@ class ConversationFlow:
         if recalled is not None:
             keywords, explicit = recalled
             recall_text, hits = format_recall_hits(keywords, explicit, self._timezone)
-        elif automatic is not None:
-            keywords, candidates = automatic
+        elif recall.automatic is not None:
+            keywords, candidates = recall.automatic
             recall_text, hits = format_recall_hits(
                 keywords, candidates, self._timezone, heuristic=True
             )
@@ -1286,7 +1345,7 @@ class ConversationFlow:
                 length=length,
                 recall=recall_text,
                 jargon=await self._jargon_reference(job),
-                expressions=await self._expression_reference(job, plan),
+                expressions=await self._expression_reference(job, plan, recall),
                 people_context=(
                     format_people_context(
                         job.people_history,
@@ -1301,6 +1360,7 @@ class ConversationFlow:
             purpose=CallPurpose.USER_REPLY,
             model_preference=job.strategy.model_preference,
         )
+        await self._require_current_recall(job, recall)
         try:
             response = await self._call(request)
         except CallRejectedError as rejection:
@@ -1316,6 +1376,7 @@ class ConversationFlow:
             return _ThoughtOutcome(
                 notice=f"调用模型时出错（{type(error).__name__}），这次没有回复，详情见日志。"
             )
+        await self._require_current_recall(job, recall)
         if self.expression_recall is not None:
             self.expression_recall.backfill(job.language_scope_key)
         text = response.suggestion.strip()
