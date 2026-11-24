@@ -457,6 +457,82 @@ def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> Non
         assert denied.status_code == 404 and "total" not in denied.json()
 
 
+@pytest.mark.parametrize("state", ("missing", "superseded"))
+def test_unavailable_summary_fact_maintenance_is_not_found(rig: Rig, state: str) -> None:
+    excerpt = "我目前住在晴桂巷。"
+    rig.add("m1", excerpt)
+    rig.add("m2", "合成上下文")
+    window = rig.window()
+    assert rig.index.commit_summary(
+        window, parse_delta(_answer("晴桂巷", excerpt), window), rig.source.check_window
+    )
+    [hit] = rig.index.search(["晴桂巷"], (), 5, summary_scope=rig.scope)
+    assert hit.source is not None
+    rig.index.summary_scope_allowed = rig.source.allows_scope
+    source = hit.source
+
+    def can_show(scope: SummaryScope) -> bool:
+        return scope == rig.scope
+
+    applied = rig.index.preview_lifecycle(source, "disable", None, can_show, lambda: True)
+    pending = rig.index.preview_lifecycle(source, "remove", None, can_show, lambda: True)
+    assert applied is not None and pending is not None
+    assert rig.index.apply_lifecycle(str(applied["plan_id"]), can_show, lambda: True, undo=False)
+    with sqlite3.connect(rig.path) as database:
+        if state == "missing":
+            database.execute("DELETE FROM inbox_messages WHERE message_id = 'm1'")
+        else:
+            database.execute("UPDATE memory_summary_facts SET superseded_by = id + 1")
+
+    app = FastAPI()
+
+    async def ready() -> str:
+        return "fixture-session"
+
+    register_memory_lifecycle_routes(
+        app, ready, rig.index, lambda _: True, lambda _: True, can_show
+    )
+    endpoint = "/api/resources/memory/maintenance"
+    location = {"source": source.encode()}
+    with TestClient(app) as client:
+        denied = client.get(endpoint + "/history", params=location)
+        assert denied.status_code == 404 and "total" not in denied.json()
+        preview = client.post(endpoint + "/preview", json=location | {"action": "enable"})
+        assert preview.status_code == 404
+        assert client.post(f"{endpoint}/{pending['plan_id']}/apply").status_code == 404
+        assert client.post(f"{endpoint}/{applied['plan_id']}/undo").status_code == 404
+
+
+def test_lifecycle_history_follows_application_order_not_preview_order(rig: Rig) -> None:
+    source = MemorySource("fixture", "formal", "fact_claims", (26,))
+    assert rig.index.publish([HistoricalMemory(source, "原值")]) == 1
+    first = rig.index.preview_lifecycle(source, "disable", None, None, lambda: True)
+    second = rig.index.preview_lifecycle(source, "correct", "后预览先应用", None, lambda: True)
+    assert first is not None and second is not None
+    earlier, later = str(first["plan_id"]), str(second["plan_id"])
+    assert rig.index.apply_lifecycle(later, None, lambda: True, undo=False)
+    rig.clock.advance(timedelta(seconds=1))
+    current = rig.index.preview_lifecycle(source, "disable", None, None, lambda: True)
+    assert current is not None
+    latest = str(current["plan_id"])
+    rig.clock.advance(timedelta(seconds=1))
+    assert rig.index.apply_lifecycle(latest, None, lambda: True, undo=False)
+    with pytest.raises(LifecycleConflictError):
+        rig.index.apply_lifecycle(earlier, None, lambda: True, undo=False)
+    page = rig.index.lifecycle_history(source, None, lambda: True, 0, 10)
+    assert page is not None
+    items, total = page
+    assert total == 2 and [item.plan_id for item in items] == [latest, later]
+    assert [item.can_undo for item in items] == [True, False]
+    with sqlite3.connect(rig.path) as database:
+        database.execute(
+            "UPDATE memory_lifecycle_plans SET applied_at=? WHERE id=?",
+            ((rig.clock.now() - timedelta(minutes=1)).isoformat(), latest),
+        )
+    items, _total = rig.index.lifecycle_history(source, None, lambda: True, 0, 10) or ([], 0)
+    assert [item.plan_id for item in items] == [later, latest]
+
+
 def test_relation_maintenance_cannot_be_bypassed_by_old_endpoints(rig: Rig) -> None:
     first = MemorySource("first", "formal", "relations", (7,))
     second = MemorySource("second", "formal", "relations", (7,))

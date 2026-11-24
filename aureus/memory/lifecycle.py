@@ -84,14 +84,15 @@ def _target(
 ) -> LifecycleTarget | None:
     if source.table == "summary_facts":
         detail = summary_detail(connection, source, *access) if access is not None else None
-        if detail is None or detail.entry_id is None:
+        # 缺失或已被替代的会话事实与无权一样当作不存在，避免按键探知历史条数（3.15 自检）。
+        if detail is None or detail.entry_id is None or detail.status != "active":
             return None
         kind = "summary"
         entry_id = detail.entry_id
         original = connection.execute(
             "SELECT text, evidence, superseded_by FROM memory_summary_facts WHERE id=?", (entry_id,)
         ).fetchone()
-        current = detail.status == "active"
+        current = True
     elif source.table in ("fact_claims", "relations", "episodes"):
         original = connection.execute(
             "SELECT * FROM memory_history WHERE source_key=?", (source.encode(),)
