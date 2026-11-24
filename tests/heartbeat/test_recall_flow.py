@@ -31,7 +31,7 @@ from aureus.memory import (
     MemoryIndex,
     MemorySource,
 )
-from aureus.organs import OrganRequest, OrganResponse, ToolCall
+from aureus.organs import CallPurpose, OrganRequest, OrganResponse, ToolCall
 from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import (
@@ -44,6 +44,8 @@ from aureus.timeline import (
 from aureus.web.recall_feedback_api import register_recall_feedback_routes
 from aureus.web.resource_api import register_resource_routes
 from tests.heartbeat.test_judging_flow import NOW
+from tests.memory.test_bundle_interop import TEXT as BUNDLE_TEXT
+from tests.memory.test_bundle_interop import _make_bundle, _png
 from tests.prompt_assertions import dialogue_text
 
 
@@ -355,6 +357,63 @@ async def test_imported_summary_reaches_planner_and_replyer(env: MemoryEnv, expl
         assert original_text not in env.organs.requests[1].tool_history[0].results[0].content
     assert env.records("message")[-1].metadata["recall_source_keys"] == [source.encode()]
     assert len(env.index.searches) == (2 if explicit else 1)
+
+
+@pytest.mark.asyncio
+async def test_installed_bundle_knowledge_is_reranked_only_by_local_embedding(
+    env: MemoryEnv,
+) -> None:
+    """D105：包内向量被跳过，已装知识只经本机 embedding 器官按需重排，卸载后不再出现。"""
+    bundle_texts = {BUNDLE_TEXT, "合成冰川图片"}
+    embedding_inputs: list[tuple[str | bytes, ...]] = []
+    answer = env.organs.call
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        if request.organ_id != "text_embedding":
+            return await answer(request)
+        assert request.purpose is CallPurpose.OPTIONAL
+        embedding_inputs.append(request.embedding_inputs)
+        candidates = request.embedding_inputs[1:]
+        return OrganResponse(
+            request.organ_id,
+            "",
+            embeddings=(
+                (1.0, 0.0),
+                *((1.0, 0.0) if text in bundle_texts else (0.0, 1.0) for text in candidates),
+            ),
+        )
+
+    env.organs.call = call
+    env.organs.keywords = ["冰川"]
+    env.timeline.append("diary_written", "去冰川边散步", ActorType.ME)
+    env.index_more()
+    installed = env.index.install_bundle(_make_bundle("rerank", _png()), "merge")
+    [member] = [
+        component
+        for component in installed["components"]
+        if component["name"] == "vectors/paragraphs.npz"
+    ]
+    assert member["status"] == "skip"
+    with closing(open_connection(env.database)) as connection:
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_schema WHERE name LIKE '%vector%'"
+        ).fetchall()
+    rig = env.build()
+    rig.update_available_organs(frozenset({"planner", "replyer", "text_embedding"}))
+    await env.exchange(rig, content="还记得冰川吗？")
+    assert len(embedding_inputs) == 1
+    assert embedding_inputs[0][0] == "冰川"
+    assert set(embedding_inputs[0][1:]) == {*bundle_texts, "去冰川边散步"}
+    text = dialogue_text(env.organs.requests[-1])
+    assert text.index(BUNDLE_TEXT) < text.index("去冰川边散步")
+
+    assert env.index.set_bundle_installed(installed["installation_id"], False)
+    await env.exchange(rig, content="冰川还记得吗？")
+    # 卸载后只剩本地日记一条候选，不再为包内知识调用嵌入器官。
+    assert len(embedding_inputs) == 1
+    text = dialogue_text(env.organs.requests[-1])
+    assert "去冰川边散步" in text
+    assert all(bundle_text not in text for bundle_text in bundle_texts)
 
 
 @pytest.mark.asyncio

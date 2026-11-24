@@ -22,7 +22,6 @@ from aureus.memory.bundle_sources import (
     open_bundle_sources,
     register_bundle_source,
 )
-from aureus.memory.bundle_vectors import search_vectors
 from aureus.memory.bundles import BundlePeople
 from aureus.memory.consolidation import (
     CandidateKind,
@@ -251,13 +250,11 @@ class MemoryIndex:
         clock: Clock | None = None,
         *,
         config: MemoryConfig | None = None,
-        bundle_vector_spaces: dict[str, dict[str, Any]] | None = None,
         bundle_attachment_root: Path | None = None,
     ) -> None:
         self._db_path, self._timeline = db_path, timeline
         self._clock = clock if clock is not None else SystemClock()
         self._config = config or MemoryConfig()
-        self._bundle_vector_spaces = bundle_vector_spaces or {}
         self._bundle_attachment_root = bundle_attachment_root
         self._conn: sqlite3.Connection | None = None
         self.graph_display = MemoryGraphDisplay(db_path, self._clock)
@@ -640,44 +637,19 @@ class MemoryIndex:
     def preview_bundle(self, file: BinaryIO, people: BundlePeople | None = None) -> dict[str, Any]:
         """校验上传包并检查当前安装条件。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.preview_bundle(connection, file, people, self._bundle_vector_spaces)
+            return bundles.preview_bundle(connection, file, people)
 
     def install_bundle(
         self, file: BinaryIO, mode: BundleMode, people: BundlePeople | None = None
     ) -> dict[str, Any]:
         """将兼容的包安装到实际记忆原件和索引。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.install_bundle(
-                connection, file, mode, self._clock.now(), people, self._bundle_vector_spaces
-            )
+            return bundles.install_bundle(connection, file, mode, self._clock.now(), people)
 
     def read_bundle_image(self, digest: str) -> tuple[bytes, str] | None:
         """按摘要读取当前仍有有效包归属的图片。"""
         with closing(open_connection(self._db_path, read_only=True)) as connection:
             return read_bundle_image(connection, digest)
-
-    def search_bundle_vectors(
-        self,
-        scope: str,
-        query: Sequence[float],
-        limit: int,
-        *,
-        allowed_sources: Collection[MemorySource] = (),
-    ) -> list[tuple[MemorySource, float]]:
-        """在独立启用的配置空间召回；图空间仍需调用方明确授权。"""
-        fingerprint = self._bundle_vector_spaces.get(scope)
-        if not fingerprint or limit <= 0 or (scope == "graph" and not allowed_sources):
-            return []
-        with closing(open_connection(self._db_path, read_only=True)) as connection:
-            return search_vectors(
-                connection,
-                scope,
-                fingerprint,
-                query,
-                limit,
-                self._clock.now().timestamp(),
-                allowed_sources,
-            )
 
     def list_bundles(self, offset: int, limit: int) -> list[dict[str, Any]]:
         """浏览包安装记录。"""

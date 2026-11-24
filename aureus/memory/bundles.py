@@ -3,7 +3,6 @@
 import json
 import sqlite3
 from collections import Counter
-from collections.abc import Mapping
 from dataclasses import asdict, replace
 from datetime import datetime
 from io import BytesIO
@@ -20,7 +19,7 @@ from aureus.memory.bundle_format import (
 )
 from aureus.memory.bundle_images import open_bundle_images, store_images
 from aureus.memory.bundle_projection import BundleProjection, project_bundle
-from aureus.memory.bundle_vectors import open_bundle_vectors, prepare_vectors
+from aureus.memory.bundle_vectors import prepare_vectors
 from aureus.memory.graph import put_graph_sources
 from aureus.memory.history import MemorySource, put_history_record
 
@@ -77,7 +76,6 @@ def open_bundles(connection: sqlite3.Connection) -> None:
             CREATE TABLE IF NOT EXISTS memory_bundle_owned (entry_id INTEGER PRIMARY KEY)
         """)
         open_bundle_images(connection)
-        open_bundle_vectors(connection)
         connection.execute("""
             CREATE TABLE IF NOT EXISTS memory_bundle_originals (
                 installation_id TEXT PRIMARY KEY, archive BLOB NOT NULL
@@ -157,16 +155,13 @@ def _prepare_profiles(
 
 
 def preview_bundle(
-    connection: sqlite3.Connection,
-    file: BinaryIO,
-    people: BundlePeople | None,
-    spaces: Mapping[str, dict[str, Any]],
+    connection: sqlite3.Connection, file: BinaryIO, people: BundlePeople | None
 ) -> dict[str, Any]:
     """核验读包、可投影内容及安装模式，不写数据库。"""
     bundle = load_bundle(file)
     projection = project_bundle(bundle)
     _prepare_profiles(bundle, projection, people)
-    vector_report, _ = prepare_vectors(bundle, projection.records, spaces)
+    vector_report = prepare_vectors(bundle)
     with connection:
         connection.execute("BEGIN")
         report = _inspect(connection, bundle, projection, people)
@@ -265,13 +260,15 @@ def install_bundle(
     mode: BundleMode,
     now: datetime,
     people: BundlePeople | None,
-    spaces: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """预检相同资料，再在同一写事务检查目标、登记归属并接入原件。"""
+    """预检相同资料，再在同一写事务检查目标、登记归属并接入原件。
+
+    包内向量不安装，由本机嵌入模型重建（D105）。
+    """
     bundle = load_bundle(file)
     projection = project_bundle(bundle)
     profiles = _prepare_profiles(bundle, projection, people)
-    vector_report, vectors = prepare_vectors(bundle, projection.records, spaces)
+    vector_report = prepare_vectors(bundle)
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         report = _inspect(connection, bundle, projection, people)
@@ -300,10 +297,6 @@ def install_bundle(
             ),
         )
         added = _apply_projection(connection, bundle.installation_id, projection, people)
-        connection.executemany(
-            "INSERT INTO memory_bundle_vectors VALUES (?,?,?,?,?)",
-            ((bundle.installation_id, *vector) for vector in vectors),
-        )
         if bundle.images is not None:
             store_images(connection, bundle.installation_id, bundle.images, bundle.binary_members)
         if bundle.binary_members or bundle.images is not None:
