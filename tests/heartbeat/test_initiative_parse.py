@@ -73,7 +73,7 @@ def test_empty_history_and_initiative_system_note() -> None:
     assert "还没有聊过" in build_initiative_plan_prompt([], "阿明", ["还没聊过"])
     identity = Identity.model_validate(
         {
-            "facts": {"name": "测试豆", "birthday": "2008-01-01"},
+            "facts": {"name": "测试助手", "birthday": "2008-01-01"},
             "user": {"name": "阿明"},
             "persona": {"immutable": "温和"},
         }

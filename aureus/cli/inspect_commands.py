@@ -28,7 +28,7 @@ CONTENT_PREVIEW_CHARS = 60
 LEDGER_PAGE_SIZE = 500
 
 WriteLine = Callable[[str], None]
-NO_DATABASE_MESSAGE = "还没有数据库：它还没有运行过。"
+NO_DATABASE_MESSAGE = "还没有数据库：助手还没有运行过。"
 
 
 def positive_int(text: str) -> int:

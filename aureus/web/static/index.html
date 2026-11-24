@@ -881,9 +881,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="form-grid" style="margin-top:12px">
 <div class="field"><label for="ps-name">名字</label><input id="ps-name" type="text"></div>
 <div class="field"><label for="ps-aliases">昵称</label><input id="ps-aliases" type="text"></div>
-<div class="field"><label for="ps-gender">性别</label><input id="ps-gender" type="text"></div>
+<div class="field"><label for="ps-gender">性别</label><select id="ps-gender"><option value="" hidden disabled>旧设定（保持不变）</option><option>男</option><option>女</option><option>其它</option></select></div>
 <div class="field"><label for="ps-birthday">生日</label><input id="ps-birthday" type="text" placeholder="YYYY-MM-DD"></div>
-<div class="field"><label for="ps-user-name">它怎么称呼你</label><input id="ps-user-name" type="text"></div>
+<div class="field"><label for="ps-user-name"><span data-bot-pronoun="">Ta</span>怎么称呼你</label><input id="ps-user-name" type="text"></div>
 </div>
 <div class="field" style="margin-top:14px">
 <div class="field-label"><label for="ps-accounts">你的账号</label><span class="hint" id="ps-accounts-hint">每行一个，格式为 平台:账号（如 qq:10000）</span></div>
@@ -923,7 +923,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="og-step conditional"><b>网页、终端来信 → 感知队列</b><p>直接唤醒心跳。日程等内部事件由心跳另行检查，符合条件时也可启动其他任务。</p></div>
 </div></li>
 <li><div class="og-step"><b>心跳收下新来信</b><p>识别来源，追加来信到时间线。收件箱按会话记录已读进度，优先唤醒时跳过的旧来信仍能翻阅。身份无法确认时只记录。</p></div></li>
-<li><div class="og-step"><b>检查本轮能否开始处理</b><p>一次处理同一会话的一批来信。小豆可以留在当前会话，直到主动退出或另一个会话有特别关心来信。开启防抖后，同会话新消息在默认 4 秒的窗口内合并。</p></div></li>
+<li><div class="og-step"><b>检查本轮能否开始处理</b><p>一次处理同一会话的一批来信。<span data-bot-pronoun="">Ta</span>可以留在当前会话，直到主动退出或另一个会话有特别关心来信。开启防抖后，同会话新消息在默认 4 秒的窗口内合并。</p></div></li>
 <li><div class="og-lanes">
 <div class="og-step conditional"><b>按需判断</b><p>满足判断配置和触发条件时，请判断器官提供情绪建议。心跳可把产生的变化带入后续处理。</p></div>
 <div class="og-step"><b>按会话规划</b><p>每个精力档位都先规划，再按建议决定是否回复。开启防抖后，规划用流式请求。同会话的新消息可在首次规划期间打断请求并加入本轮，默认最多重开 4 次。</p></div>
@@ -1026,7 +1026,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
 const $ = id => document.getElementById(id);
-const state = { loggedIn: false, qqLink: false, page: '', loaded: {} };
+const state = { loggedIn: false, qqLink: false, page: '', loaded: {}, botPronoun: 'Ta' };
 let editorGeneration = 0;
 
 for (const control of document.querySelectorAll('input, textarea, select, form')) control.setAttribute('autocomplete', 'off');
@@ -1182,6 +1182,15 @@ function setLiveText(node, value) {
   else updateLiveRegion(node, () => { node.textContent = value; });
 }
 
+function setBotPronoun(pronoun) {
+  const next = pronoun || 'Ta';
+  if (state.botPronoun === next) return;
+  state.botPronoun = next;
+  for (const node of document.querySelectorAll('[data-bot-pronoun]')) {
+    node.textContent = next + node.getAttribute('data-bot-pronoun');
+  }
+}
+
 function startPageEntrance(page) {
   if (reducedMotion.matches) return;
   stopPageEntrance();
@@ -1310,6 +1319,8 @@ $('theme-btn').addEventListener('click', () => {
 function showAuth(view, message) {
   PAGES[state.page]?.leave?.();
   state.loggedIn = false;
+  setBotPronoun();
+  clearPersona();
   clearQQLink();
   pendingLiveUpdates.clear();
   catalogs.clear();
@@ -1331,7 +1342,9 @@ function showAuth(view, message) {
 }
 
 async function enter() {
+  const session = state.loaded;
   const res = await api('/api/status');
+  if (session !== state.loaded) return;
   if (res.status === 401) { showAuth('login'); return; }
   if (!res.ok) { showAuth('login', errorText(res)); return; }
   if (res.data && res.data.must_change_password) {
@@ -1339,6 +1352,7 @@ async function enter() {
     return;
   }
   state.loggedIn = true;
+  setBotPronoun(res.data?.bot_pronoun);
   state.qqLink = Boolean(res.data?.qq_link);
   refreshQQLinkVisibility();
   $('terminal-btn').classList.toggle('hidden', !res.data?.can_open_terminal);
@@ -1574,8 +1588,8 @@ for (const btn of document.querySelectorAll('[data-go]')) btn.addEventListener('
 PAGES.overview = { load: loadOverview };
 const showMemoryTab = installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAGES});
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------
-// 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
-const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
+// 每条都显示通道（D63 第 8 条）；notice 是系统通知（D35），画成虚线条。
+const WHO_NAME = { user: '你', person: '对方', system: '系统' };
 const CHAT_RECOVERY_PAGE_SIZE = 50;
 let socket = null, socketWanted = false, lastDay = '';
 const chatEntries = [];
@@ -1591,12 +1605,16 @@ function chatDay(when) {
   return el('div', {class:'chat-day', text:(when.getMonth() + 1) + '月' + when.getDate() + '日'});
 }
 
-function chatMessage({kind, sender, channel, content, time, notice, id}) {
+function actorLabel(tag, who, suffix = '', className = '') {
+  if (who === 'me') return el(tag, {class:className, 'data-bot-pronoun':suffix, text:state.botPronoun + suffix});
+  return el(tag, {class:className, text:(WHO_NAME[who] || who) + suffix});
+}
+
+function chatMessage({kind, channel, content, time, notice, id}) {
   const when = time ? new Date(time) : new Date();
-  const who = notice ? '系统通知' : sender;
-  const meta = who + ' · ' + (channel || '未标通道') + ' · ' + fmtTime(when.toISOString());
+  const suffix = ' · ' + (channel || '未标通道') + ' · ' + fmtTime(when.toISOString());
   const node = el('div', {class:'msg ' + (notice ? 'notice' : kind)},
-    el('div', {class:'bubble', text:content}), el('div', {class:'meta', text:meta}));
+    el('div', {class:'bubble', text:content}), actorLabel('div', notice ? '系统通知' : kind, suffix, 'meta'));
   return {node, when, id};
 }
 
@@ -1636,7 +1654,7 @@ function addMessage(message) {
 function mergeChatHistory(items) {
   const log = $('chat-log');
   for (const item of items) {
-    registerChatMessage({...item, kind:item.who, sender:WHO_NAME[item.who] || item.who}, true);
+    registerChatMessage({...item, kind:item.who}, true);
   }
   chatEntries.sort((a, b) => a.when - b.when || (a.id != null && b.id != null ? a.id - b.id : 0));
   for (const child of Array.from(log.children)) {
@@ -1725,11 +1743,16 @@ function closeSocket() {
 }
 // 断线后隔 3 秒重连；先问一次登录状态，登录已经失效就不再连（api 会把页面带回登录）。
 function reconnectLater() {
+  const session = state.loaded;
+  const current = () => session === state.loaded && socketWanted && state.loggedIn && !socket;
   setTimeout(async () => {
-    if (!socketWanted || !state.loggedIn || socket) return;
+    if (!current()) return;
     const res = await api('/api/status');
-    if (!socketWanted || !state.loggedIn || socket) return;
-    if (res.ok) openSocket();
+    if (!current()) return;
+    if (res.ok) {
+      setBotPronoun(res.data?.bot_pronoun);
+      openSocket();
+    }
     else if (res.status === 0) reconnectLater();
   }, 3000);
 }
@@ -1746,7 +1769,7 @@ function sendChat() {
   }
   if (!socket || socket.readyState !== 1) { toast('还没连上，稍等一下再发。', 'error'); return; }
   socket.send(JSON.stringify({ text }));
-  addMessage({kind:'user', sender:'你', channel:'web', content:text});
+  addMessage({kind:'user', channel:'web', content:text});
   box.value = '';
   box.style.height = 'auto';
 }
@@ -1872,7 +1895,6 @@ function timelineItem(rec, inContext, {
   feedbackId = rec.recall_feedback_reply_id || (rec.recall_feedback_available ? rec.id : null),
   visibilityNames = VISIBILITY_NAMES,
 } = {}) {
-  const actor = { user: '你', me: '它', person: '对方', system: '系统' }[rec.actor] || rec.actor;
   const event = rec.event_type === 'message' && rec.actor === 'me' ? '历史回复 · 未标投递' : EVENT_NAMES[rec.event_type] || rec.event_type;
   const visibility = visibilityNames[rec.visibility];
   const top = el('div', { class: 'tl-top' },
@@ -1880,7 +1902,7 @@ function timelineItem(rec, inContext, {
     visibility ? el('span', { class: 'tag', text: visibility }) : null,
     el('div', { class: 'tl-meta' },
       el('time', { datetime: rec.time, text: fmtTime(rec.time, true) }),
-      el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
+      actorLabel('span', rec.actor, rec.actor_id ? '（' + rec.actor_id + '）' : ''),
       rec.channel ? el('span', { text: CHANNEL_NAMES[rec.channel] || rec.channel }) : null,
       el('span', { class: 'mono', text: '#' + rec.id })));
   const {actions, ...metadata} = rec.metadata || {};
@@ -2231,6 +2253,15 @@ let personaBaseline = null;
 let personaLocks = null;
 let personaSaving = false;
 
+function clearPersona() {
+  personaBaseline = personaLocks = null;
+  for (const field of PERSONA_BASELINE_FIELDS) $('ps-' + field).value = '';
+  $('ps-password').value = '';
+  $('ps-free').replaceChildren();
+  $('ps-locks').replaceChildren();
+  refreshPersonaSaveButtons();
+}
+
 function readPersonaBaseline() {
   return PERSONA_BASELINE_FIELDS.map(field => $('ps-' + field).value);
 }
@@ -2259,7 +2290,9 @@ async function confirmPersonaChange(message, write) {
 }
 
 async function savePersona(body, okText) {
+  const session = state.loaded;
   const res = await api('/api/settings', 'PUT', body);
+  if (session !== state.loaded) return false;
   if (!res.ok) { fail(res); return false; }
   toast(okText, 'ok');
   await loadPersona();
@@ -2303,6 +2336,7 @@ async function loadPersona() {
   if (revision !== personaLoadRevision || session !== state.loaded) return;
   if (!res.ok) { fail(res); return; }
   const v = res.data;
+  setBotPronoun(v.bot_pronoun);
   const free = $('ps-free');
   const locks = $('ps-locks');
   free.textContent = '';
@@ -2318,7 +2352,7 @@ async function loadPersona() {
   const facts = v.layers.facts.facts, user = v.layers.facts.user;
   $('ps-name').value = facts.name;
   $('ps-aliases').value = facts.alias_names.join('，');
-  $('ps-gender').value = facts.gender;
+  $('ps-gender').value = ['男', '女', '其它'].includes(facts.gender) ? facts.gender : '';
   $('ps-birthday').value = facts.birthday;
   $('ps-user-name').value = user.name;
   $('ps-accounts').value = user.accounts.map(a => a.platform + ':' + a.id).join('\n');
@@ -2359,10 +2393,12 @@ $('ps-save-baseline').addEventListener('click', () => {
   const password = $('ps-password').value;
   if (!password) { toast('修改设定需要输入当前密码。', 'error'); return; }
   const aliases = $('ps-aliases').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  const gender = $('ps-gender').value;
   const settings = {
     password,
     text: { immutable: $('ps-immutable').value },
-    facts: { name: $('ps-name').value.trim(), alias_names: aliases, gender: $('ps-gender').value.trim(), birthday: $('ps-birthday').value.trim() },
+    facts: { name: $('ps-name').value.trim(), alias_names: aliases, birthday: $('ps-birthday').value.trim(),
+      ...(gender && gender !== personaBaseline[PERSONA_BASELINE_FIELDS.indexOf('gender')] ? { gender } : {}) },
     user: { name: $('ps-user-name').value.trim(), accounts },
   };
   return confirmPersonaChange('确定要保存设定的修改吗？', () => {
@@ -3626,7 +3662,7 @@ function settingTerm(name, hint, key, idForFocus) {
     el('span', {id, class:'setting-help', role:'tooltip'}, el('b', {'aria-hidden':'true', text:'i'}), hint));
 }
 $('qq-link-title').append(settingTerm('QQ 账号关联',
-  '绑定本人的 QQ 账号。在网页生成验证码后，到 QQ 私聊小豆发送验证命令。', 'qq-link'));
+  '绑定本人的 QQ 账号。在网页生成验证码后，到 QQ 私聊本助手并发送验证命令。', 'qq-link'));
 
 async function restoreConfigField(sec, field, button) {
   const key = cfKey(sec, field);

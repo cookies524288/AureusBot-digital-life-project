@@ -58,7 +58,7 @@ def test_planner_tool_catalog_uses_active_binding_and_runtime_capabilities(
             organs=rig.models.bus,
             identity=Identity.model_validate(
                 {
-                    "facts": {"name": "测试豆", "birthday": "2026-11-23"},
+                    "facts": {"name": "测试助手", "birthday": "2026-11-23"},
                     "user": {"name": "测试用户"},
                     "persona": {"immutable": "友善。"},
                 }

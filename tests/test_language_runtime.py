@@ -189,7 +189,7 @@ async def test_online_expression_filter_runs_before_write(
             proposals = [
                 {"style": style, "situation": "庆祝跑步成绩", "id": source_id}
                 for style, source_id in (
-                    ("测试豆", 1),
+                    ("测试助手", 1),
                     ("使用MoonBOT", 1),
                     ("使用", 1),
                     ("使用：MoonBot冲线", 1),

@@ -150,7 +150,8 @@ def _apply_to_document(document: Any, edit: IdentityEdit) -> None:
         facts = _table(document, "facts")
         facts["name"] = edit.facts.name
         facts["alias_names"] = list(edit.facts.alias_names)
-        facts["gender"] = edit.facts.gender
+        if "gender" in edit.facts.model_fields_set:
+            facts["gender"] = edit.facts.gender
         facts["birthday"] = edit.facts.birthday
     if edit.user is not None:
         user = _table(document, "user")

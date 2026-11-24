@@ -742,6 +742,11 @@ class Heartbeat:
         return self._identity
 
     @property
+    def bot_pronoun(self) -> str:
+        """显示当前身份的称谓。"""
+        return self._identity.facts.pronoun
+
+    @property
     def cognitive_state(self) -> CognitiveState | None:
         """最近一拍广播的认知状态；还没跳过时是 None。"""
         return self._cognitive_state

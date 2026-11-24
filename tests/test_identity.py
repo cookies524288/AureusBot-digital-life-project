@@ -183,6 +183,16 @@ def test_single_instance_lock_success(paths: AureusPaths):
         pass
 
 
+def test_new_identity_template_defaults_to_male(paths: AureusPaths) -> None:
+    template = Path(__file__).resolve().parents[1] / "config" / "identity.example.toml"
+    paths.identity_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.identity_file.write_bytes(template.read_bytes())
+
+    identity = IdentityService(paths).load_identity()
+    assert identity.facts.gender == "男"
+    assert identity.facts.pronoun == "他"
+
+
 def test_lock_file_location(paths: AureusPaths):
     """测试锁文件放在数据根目录下。"""
     service = IdentityService(paths)
