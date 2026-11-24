@@ -32,6 +32,8 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
 
     paragraph = location("paragraphs", "original")
     episode = location("episodes", "expedition")
+    episode_link = location("episode_paragraphs", "expedition", "original")
+    other_episode = location("episodes", "expired-link")
     other = location("paragraphs", "other", instance="unselected")
     entity = location("entities", "observatory")
     entity_link = location("paragraph_entities", "original", "observatory")
@@ -58,6 +60,35 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
                 HistoricalMemory(paragraph, "月球合成段落"),
                 HistoricalMemory(location("paragraphs", "expired"), "失效原件", valid_to=now),
                 HistoricalMemory(location("paragraphs", "private"), "跨域原件", status="retracted"),
+                HistoricalMemory(
+                    episode_link,
+                    "",
+                    status="missing",
+                    evidence=(
+                        MemoryEvidence("episodes", "expedition", episode),
+                        MemoryEvidence("paragraph", "original", paragraph),
+                    ),
+                ),
+                HistoricalMemory(
+                    other_episode,
+                    "关联失效，情景仍在",
+                    evidence=(
+                        MemoryEvidence("paragraph", "original", paragraph),
+                        MemoryEvidence(
+                            "bundle_episode_fields", '{"title":"应排除","summary":"失效"}'
+                        ),
+                    ),
+                ),
+                HistoricalMemory(
+                    location("episode_paragraphs", "expired-link", "original"),
+                    "",
+                    status="missing",
+                    valid_to=now,
+                    evidence=(
+                        MemoryEvidence("episodes", "expired-link", other_episode),
+                        MemoryEvidence("paragraph", "original", paragraph),
+                    ),
+                ),
                 HistoricalMemory(
                     MemorySource("selected", "main", "mai_messages", ("a",)), "平台原件"
                 ),
@@ -111,6 +142,7 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
                 ),
             ],
             snapshot=("selected", "sample-1"),
+            bundle_origin="verified-source-batch",
             graph_sources=(
                 MemoryGraphSource(
                     entity,
@@ -137,6 +169,7 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
                     source_key="2",
                     subject_key="person",
                     profile_version=2,
+                    bundle_origin="verified-source-batch",
                     summary="当前画像",
                     occurred_at=now.timestamp(),
                     expires_at=(now + timedelta(hours=1)).timestamp(),
@@ -144,6 +177,26 @@ def test_generate_selected_snapshot_closure_and_recheck(tmp_path: Path) -> None:
                         "evidence_ids_json": '["original"]',
                         "fact_claim_ids_json": '["claim"]',
                     },
+                ),
+                HistoricalRecord(
+                    instance="selected",
+                    kind=HistoricalKind.PROFILE,
+                    source_key="other-person",
+                    subject_key="other-person",
+                    account=("qq", "1234568"),
+                    name="同源名不同批",
+                ),
+                HistoricalRecord(
+                    instance="selected",
+                    kind=HistoricalKind.PROFILE_SNAPSHOT,
+                    source_key="3",
+                    subject_key="other-person",
+                    profile_version=1,
+                    bundle_origin="other-batch",
+                    summary="不能从同名来源导出",
+                    occurred_at=now.timestamp(),
+                    expires_at=(now + timedelta(hours=1)).timestamp(),
+                    original={"evidence_ids_json": '["original"]'},
                 ),
             ]
         )

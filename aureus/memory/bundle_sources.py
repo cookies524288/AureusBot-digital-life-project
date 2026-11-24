@@ -38,6 +38,10 @@ class BundleSource:
     instance: str
 
 
+def _origins(connection: sqlite3.Connection) -> dict[str, str]:
+    return dict(connection.execute("SELECT instance, origin FROM memory_bundle_origins"))
+
+
 def open_bundle_sources(connection: sqlite3.Connection) -> None:
     """建立逐项来源账，不把已有可检索资料自动登记为可选来源。"""
     connection.execute("""
@@ -46,13 +50,19 @@ def open_bundle_sources(connection: sqlite3.Connection) -> None:
             PRIMARY KEY (instance, source_key)
         ) WITHOUT ROWID
     """)
+    connection.execute("""CREATE TABLE IF NOT EXISTS memory_bundle_origins (
+        instance TEXT PRIMARY KEY, origin TEXT NOT NULL
+    )""")
 
 
 def register_bundle_source(
-    connection: sqlite3.Connection, instance: str, sources: Collection[str]
+    connection: sqlite3.Connection, instance: str, sources: Collection[str], origin: str
 ) -> None:
     """仅登记这次可信发布明确提供的记忆库来源。"""
     connection.execute("DELETE FROM memory_bundle_sources WHERE instance = ?", (instance,))
+    connection.execute(
+        "INSERT OR REPLACE INTO memory_bundle_origins VALUES (?, ?)", (instance, origin)
+    )
     connection.execute(
         f"""INSERT INTO memory_bundle_sources(instance, source_key, signature)
             SELECT ?, original.source_key, {_SIGNATURE} FROM memory_history original
@@ -64,11 +74,12 @@ def register_bundle_source(
 def list_bundle_sources(connection: sqlite3.Connection) -> list[BundleSource]:
     """列出实际登记过的来源快照，仅提供范围标识。"""
     return [
-        BundleSource(bundle_digest([instance, fingerprint, keys]), instance)
-        for instance, fingerprint, keys in connection.execute("""
-            SELECT snapshot.instance, snapshot.fingerprint,
+        BundleSource(bundle_digest([instance, fingerprint, origin, keys]), instance)
+        for instance, fingerprint, origin, keys in connection.execute("""
+            SELECT snapshot.instance, snapshot.fingerprint, origin.origin,
                    json_group_array(json_array(member.source_key, member.signature))
             FROM memory_history_snapshots snapshot
+            JOIN memory_bundle_origins origin USING (instance)
             JOIN (SELECT * FROM memory_bundle_sources ORDER BY instance, source_key) member
                 USING (instance)
             GROUP BY snapshot.instance, snapshot.fingerprint ORDER BY snapshot.instance
@@ -78,7 +89,7 @@ def list_bundle_sources(connection: sqlite3.Connection) -> list[BundleSource]:
 
 def select_bundle_records(
     connection: sqlite3.Connection, source_ids: Sequence[str], now: datetime
-) -> tuple[tuple[str, ...], dict[str, HistoricalMemory], dict[str, int]]:
+) -> tuple[dict[str, str], dict[str, HistoricalMemory], dict[str, int]]:
     """精确选取已明确同意的来源，排除当前不可用的内容。"""
     available = {source.source_id: source.instance for source in list_bundle_sources(connection)}
     if not source_ids or len(set(source_ids)) != len(source_ids):
@@ -115,4 +126,5 @@ def select_bundle_records(
             )
         else:
             records[row["source_key"]] = decode_history_row(row)
-    return instances, records, excluded
+    origins = _origins(connection)
+    return {instance: origins[instance] for instance in instances}, records, excluded

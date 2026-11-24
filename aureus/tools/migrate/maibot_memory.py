@@ -389,7 +389,10 @@ def publish_maibot_memory(
         try:
             snapshot = instance, projection.staged.fingerprint(str(zone))
             index.publish(
-                projection.records(), snapshot=snapshot, graph_sources=projection.graph_sources()
+                projection.records(),
+                snapshot=snapshot,
+                graph_sources=projection.graph_sources(),
+                bundle_origin=projection.staged.bundle_origin(),
             )
         except MemorySnapshotConflictError as error:
             raise MigrationError("memory_snapshot_conflict") from error

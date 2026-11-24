@@ -25,7 +25,7 @@ class BundleProfileSource(Protocol):
     """画像子系统只提供已解析、有效且由可信来源取得的当前快照。"""
 
     def bundle_profile_candidates(
-        self, connection: sqlite3.Connection, instances: tuple[str, ...], now: datetime
+        self, connection: sqlite3.Connection, origins: dict[str, str], now: datetime
     ) -> list[tuple[str, dict[str, object]]]:
         """返回待核认证据闭包的画像。"""
         ...
@@ -186,7 +186,7 @@ def _portable_fields(record: HistoricalMemory, category: str) -> dict[str, Any]:
 
 def _add_episodes(closure: BundleClosure, records: dict[str, HistoricalMemory]) -> None:
     for key, record in records.items():
-        if record.source.table != "episodes":
+        if record.source.table != "episodes" or record.status != "active":
             continue
         fields = _portable_fields(record, "episode")
         references = [link for link in record.evidence if link.kind == "paragraph"]
@@ -195,7 +195,9 @@ def _add_episodes(closure: BundleClosure, records: dict[str, HistoricalMemory]) 
             or not fields.get("summary")
             or not references
             or any(
-                not link.source or link.source.encode() not in closure.keys for link in references
+                not link.source
+                or not _allowed_episode_link(record.source, link.source, records, closure)
+                for link in references
             )
         ):
             closure.skip("情景缺少可重建正文或完整段落依据")
@@ -224,6 +226,31 @@ def _add_episodes(closure: BundleClosure, records: dict[str, HistoricalMemory]) 
             {"episode_id": identity, "paragraph_hash": paragraph, "position": position}
             for position, paragraph in enumerate(paragraphs)
         )
+
+
+def _allowed_episode_link(
+    episode: MemorySource,
+    paragraph: MemorySource,
+    records: dict[str, HistoricalMemory],
+    closure: BundleClosure,
+) -> bool:
+    if (paragraph.instance, paragraph.role, paragraph.table) != (
+        episode.instance,
+        episode.role,
+        "paragraphs",
+    ):
+        return False
+    association = records.get(
+        MemorySource(
+            episode.instance, episode.role, "episode_paragraphs", (episode.key[0], paragraph.key[0])
+        ).encode()
+    )
+    return bool(
+        association
+        and paragraph.encode() in closure.keys
+        and {episode.encode(), paragraph.encode()}
+        <= {item.source.encode() for item in association.evidence if item.source}
+    )
 
 
 def _add_facts(closure: BundleClosure, records: dict[str, HistoricalMemory]) -> None:

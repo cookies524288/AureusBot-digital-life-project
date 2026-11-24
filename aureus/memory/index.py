@@ -321,6 +321,7 @@ class MemoryIndex:
         *,
         snapshot: tuple[str, str] | None = None,
         graph_sources: Iterable[MemoryGraphSource] = (),
+        bundle_origin: str = "",
     ) -> int:
         """写入长期记忆原件及派生索引，保留归档记录。"""
         if self._conn is None:
@@ -349,7 +350,7 @@ class MemoryIndex:
                 put_graph_sources(self._conn, projected)
                 members = collect_graph_batch_members(snapshot[0], published, projected)
                 save_graph_batch(self._conn, snapshot, members)
-                register_bundle_source(self._conn, snapshot[0], portable)
+                register_bundle_source(self._conn, snapshot[0], portable, bundle_origin)
         return written
 
     def read_graph(self, *, allowed_sources: Collection[MemorySource] | GraphAccess) -> MemoryGraph:

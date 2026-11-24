@@ -79,6 +79,7 @@ class HistoricalRecord(BaseModel):
     aliases: list[str] | None = None
     expires_at: JsonValue = None
     original: dict[str, JsonValue] | None = None
+    bundle_origin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -329,7 +330,7 @@ def _latest_profiles(
 
 
 def bundle_profile_candidates(
-    connection: sqlite3.Connection, instances: tuple[str, ...], now: datetime
+    connection: sqlite3.Connection, origins: dict[str, str], now: datetime
 ) -> list[tuple[str, dict[str, object]]]:
     """提供明确绑定人物的当前迁入快照，保留闭包校验所需的引用。"""
     rows = connection.execute(
@@ -337,14 +338,14 @@ def bundle_profile_candidates(
             WHERE history.instance IN (SELECT value FROM json_each(?))
                 AND history.kind = 'person_profile_snapshots' AND {_EDITABLE_PROFILE}
             ORDER BY history.person_id""",
-        (json.dumps(instances),),
+        (json.dumps(list(origins)),),
     ).fetchall()
     candidates: list[tuple[str, dict[str, object]]] = []
     for (person_id,) in rows:
         for (instance, subject), group in _latest_profiles(connection, person_id).items():
             snapshot = group.get(HistoricalKind.PROFILE_SNAPSHOT)
             if (
-                instance not in instances
+                instance not in origins
                 or not subject
                 or snapshot is None
                 or HistoricalKind.PROFILE_OVERRIDE in group
@@ -352,6 +353,8 @@ def bundle_profile_candidates(
             ):
                 continue
             record = snapshot.record
+            if not origins[instance] or record.bundle_origin != origins[instance]:
+                continue
             original = record.original or {}
             if not record.summary or type(record.profile_version) is not int:
                 continue
