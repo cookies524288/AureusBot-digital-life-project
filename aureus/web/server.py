@@ -11,7 +11,9 @@ import asyncio
 import json
 import logging
 import math
+import sqlite3
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -26,11 +28,12 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import WebChannel
 from aureus.common import Clock, WebConfig
+from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
@@ -249,6 +252,7 @@ def create_app(
     memory_graph_grants: GraphGrants | None = None,
     expression_cluster_store: ExpressionClusterStore | None = None,
     expression_cluster_grants: ExpressionClusterGrants | None = None,
+    embedding_progress: EmbeddingProgress | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -275,6 +279,28 @@ def create_app(
         if auth.password_is_default:
             raise HTTPException(403, detail="请先修改默认密码。")
         return token
+
+    @app.get("/api/organs/{organ}/index-progress")
+    async def read_index_progress(
+        organ: str, token: Annotated[str, Depends(require_inspection_access)]
+    ) -> JSONResponse:
+        if organ not in {"text_embedding", "image_embedding"}:
+            raise HTTPException(404, "该器官没有嵌入统计。")
+        if embedding_progress is None:
+            raise HTTPException(503, "当前运行未接入嵌入统计。")
+        try:
+            progress = await embedding_progress.read(organ)
+        except (sqlite3.Error, OSError, ValueError) as error:
+            logger.warning("嵌入统计读取失败（%s）", type(error).__name__)
+            raise HTTPException(503, "暂时无法读取嵌入统计。") from None
+        if not sessions.is_active(token):
+            raise HTTPException(401, "请先登录。")
+        if progress is None:
+            raise HTTPException(409, "模型路线已切换，请重新打开配置。")
+        return JSONResponse(
+            {"items": [asdict(item) for item in progress]},
+            headers={"Cache-Control": "no-store"},
+        )
 
     # ---------- 登录、退出、改密码 ----------
 

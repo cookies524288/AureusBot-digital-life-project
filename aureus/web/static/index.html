@@ -449,6 +449,16 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 @keyframes backdrop-in{from{opacity:0;backdrop-filter:blur(0)}to{opacity:1;backdrop-filter:blur(2px)}}
 .editor-dialog{width:min(580px,calc(100vw - 32px))}
 .editor-dialog.drawer{position:fixed;inset:16px 16px 16px auto;margin:0;height:calc(100dvh - 32px);width:min(520px,calc(100vw - 32px))}
+.editor-dialog.drawer.embedding-editor{width:min(810px,calc(100vw - 32px))}
+.embedding-layout{display:grid;grid-template-columns:minmax(210px,1fr) minmax(0,2fr);align-items:start;gap:20px}
+.embedding-progress{display:grid;gap:12px;padding:12px;border:1px solid var(--border);border-radius:12px}
+.embedding-progress h4,.embedding-progress p{margin:0;overflow-wrap:anywhere}
+.embedding-progress-item{display:grid;gap:6px}
+.embedding-progress-item+.embedding-progress-item{padding-top:10px;border-top:1px solid var(--border)}
+.embedding-progress-track{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:3px}
+.embedding-progress-track span{height:9px;border:1px solid var(--border);background:var(--surface)}
+.embedding-progress-track .filled{background:var(--accent-strong);border-color:var(--accent-strong)}
+@media(max-width:640px){.embedding-layout{grid-template-columns:minmax(0,1fr)}.editor-dialog.drawer.embedding-editor{width:calc(100vw - 16px)}}
 .dialog-shell{display:flex;flex-direction:column;max-height:calc(100dvh - 34px)}
 .drawer .dialog-shell{height:100%}
 .dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid var(--border)}
@@ -2816,11 +2826,64 @@ function allowedEfforts(organ) {
   if (!rows.length) return [];
   return (mdl.choices.reasoning_levels || []).filter(level => rows.every(model => (model.reasoning_levels || []).includes(level)));
 }
+const INDEX_PROGRESS_SEGMENTS = 12;
+const INDEX_PROGRESS_LABELS = {
+  expression: '本地表达 · 持久索引', images: '收件图片 · 持久索引',
+  emoji_cache: '表情描述 · 内存缓存', memory_rerank: '长期记忆 · 即时重排',
+};
+const INDEX_PROGRESS_STATES = {
+  disabled: '功能未启用', no_model: '没有适用的已接管模型', unavailable: '暂时无法统计',
+  on_demand: '按请求编码，不建立全库向量索引', empty: '没有适用候选',
+  missing: '尚未建立', partial: '部分已建立', complete: '已建立',
+};
+function renderIndexProgress(item) {
+  const isCache = item.kind === 'emoji_cache';
+  const label = INDEX_PROGRESS_LABELS[item.kind] + (item.route === null ? '' : ` · 路线 ${item.route}`);
+  const detail = item.kind === 'memory_rerank' && item.state !== 'on_demand'
+    ? `${INDEX_PROGRESS_STATES[item.state]}；此用途不建立全库向量索引` : INDEX_PROGRESS_STATES[item.state];
+  const count = item.eligible === null ? '' : `${item.established} / ${item.eligible}`;
+  const countLabel = isCache ? '已缓存 / 可缓存' : '已建立 / 可建立';
+  const filled = item.eligible > 0 ? Math.floor(item.established / item.eligible * INDEX_PROGRESS_SEGMENTS) : 0;
+  const track = item.eligible > 0 ? el('div', {
+    class: 'embedding-progress-track', role: 'progressbar', 'aria-label': label,
+    'aria-valuemin': 0, 'aria-valuemax': item.eligible, 'aria-valuenow': item.established,
+    'aria-valuetext': `${countLabel}：${count}`,
+  }, Array.from({ length: INDEX_PROGRESS_SEGMENTS }, (_, index) => el('span', {
+    class: index < filled ? 'filled' : '', 'aria-hidden': 'true',
+  }))) : null;
+  return el('div', { class: 'embedding-progress-item' }, el('h4', { text: label }), track,
+    count ? el('p', { text: `${countLabel}：${count}` }) : null,
+    el('p', { class: 'muted', text: isCache ? ({ missing: '尚未缓存', partial: '部分已缓存', complete: '已缓存' }[item.state] || detail) : detail }));
+}
+function mountIndexProgress(host, organ) {
+  const generation = editorGeneration;
+  let request = 0;
+  return async function refresh(saved) {
+    const latest = ++request, revision = mdl.revision;
+    const item = el('p', { class: 'muted', role: 'status', text: saved ? '等待模型配置保存…' : '正在读取…' });
+    host.replaceChildren(item);
+    const current = () => latest === request && revision === mdl.revision && generation === editorGeneration
+      && $('editor-dialog').open && $('editor-body').contains(host);
+    const applied = saved ? await saved : true;
+    if (!current()) return;
+    if (!applied || mdl.dirty) { item.textContent = '模型改动尚未应用，未显示旧索引统计。'; return; }
+    item.textContent = '正在读取…';
+    const response = await api('/api/organs/' + encodeURIComponent(organ) + '/index-progress');
+    if (!current()) return;
+    if (!response.ok) { item.textContent = errorText(response); return; }
+    host.replaceChildren(...response.data.items.map(renderIndexProgress));
+  };
+}
 function openOrganEditor(name) {
   const organ = mdl.cfg.organs[name] || emptyOrgan();
   const body = el('div', { class: 'stack' });
   const list = el('div', { class: 'chain' });
-  const save = () => { mdl.cfg.organs[name] = organ; markDirty(); };
+  let refreshProgress;
+  const save = () => {
+    mdl.cfg.organs[name] = organ;
+    const saved = markDirty();
+    if (refreshProgress) refreshProgress(saved);
+  };
   const changed = () => { save(); notifyModelWarnings([name]); renderOrgans(); renderModels(); refreshList(); };
   let dragIndex = null;
   const move = (from, to) => {
@@ -2872,7 +2935,16 @@ function openOrganEditor(name) {
   if (name === mdl.plannerOrgan) body.append(el('button', {
     class: 'btn', type: 'button', text: '工具列表', onclick: () => openPlannerTools(name),
   }));
-  openEditor(name.toUpperCase(), body, true); refreshList();
+  if (name === 'text_embedding' || name === 'image_embedding') {
+    const status = el('div', { class: 'stack', 'aria-live': 'polite' });
+    const panel = el('aside', { class: 'embedding-progress', 'aria-label': '当前嵌入统计' },
+      el('h4', { text: '当前嵌入统计' }), status);
+    openEditor(name.toUpperCase(), el('div', { class: 'embedding-layout' }, panel, body), true);
+    $('editor-dialog').classList.add('embedding-editor');
+    refreshProgress = mountIndexProgress(status, name);
+    refreshProgress(mdl.pending ? mdl.queue : null);
+  } else openEditor(name.toUpperCase(), body, true);
+  refreshList();
   notifyModelWarnings([name]);
 }
 async function loadOrgansPage() {

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from aureus.common.sqlite import open_connection
 from aureus.memory.expression_clusters import _embedding_text, _fingerprint, _fit_clusters, _unit
+from aureus.memory.language import LanguageStore
 from aureus.memory.language_matching import LanguageEntry, format_language, normalize
 
 MIN_INDEXED_EXPRESSIONS = 10
@@ -118,6 +119,30 @@ class ExpressionVectorIndex:
                 for key, mark, encoded, cluster in rows
                 if (entry := eligible.get(key)) is not None and fingerprint(entry) == mark
             ]
+
+    def coverage(
+        self, language: LanguageStore, space: str, scopes: frozenset[str]
+    ) -> tuple[int, int]:
+        """从同一个只读快照统计各授权范围内可选候选的并集。"""
+        with closing(open_connection(self._path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            pool = language.expression_pool(connection)
+            active_scopes = scopes.intersection(
+                scope for entry in pool for scope in entry.scope_keys
+            )
+            candidates = {
+                entry.entry_key: entry
+                for scope in (None, *active_scopes)
+                for entry in distinct_expressions(
+                    [entry for entry in pool if entry.visible_in(scope)], ()
+                )
+            }
+            eligible = {key: fingerprint(entry) for key, entry in candidates.items()}
+            rows = connection.execute(
+                "SELECT entry_key, fingerprint FROM expression_runtime_vectors WHERE space = ?",
+                (space,),
+            )
+            return sum(eligible.get(key) == mark for key, mark in rows), len(eligible)
 
 
 def embedding_text(entry: LanguageEntry) -> str:

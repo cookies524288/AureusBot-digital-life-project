@@ -531,7 +531,7 @@ class EmojiStore:
 
     def candidates(self) -> list[EmojiRecord]:
         """列出已经登记、未被拒绝或禁用且有本地媒体的表情。"""
-        with closing(open_connection(self._database_file)) as connection:
+        with closing(open_connection(self._database_file, read_only=True)) as connection:
             rows = connection.execute(
                 f"""SELECT *, NULL AS source, {_REVIEW} AS review FROM emoji_assets
                    WHERE {_SENDABLE}

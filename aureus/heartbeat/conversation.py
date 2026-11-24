@@ -345,7 +345,7 @@ class ConversationFlow:
         self._empathy, self._empathy_focus, self._agenda = empathy, empathy_focus, agenda
         self._judge_missing_logged = False
         self._memory = memory
-        self._emoji_selector = (
+        self.emoji_selector = (
             EmojiSelector(emoji_store, call, clock, config, timezone)
             if config.qq_emoji_selection_enabled and emoji_store is not None
             else None
@@ -565,7 +565,7 @@ class ConversationFlow:
                     for record in self._recent_history(target, EMOJI_CONTEXT_LIMIT)
                     if record.id not in batch_ids
                 ]
-                if self._emoji_selector is not None and target.channel == "qq" and target.route
+                if self.emoji_selector is not None and target.channel == "qq" and target.route
                 else None
             ),
         )
@@ -725,12 +725,12 @@ class ConversationFlow:
             return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
         emoji = None
         if (
-            self._emoji_selector is not None
+            self.emoji_selector is not None
             and job.emoji_history is not None
             and outcome.plan is not None
             and outcome.plan.emoji is not None
         ):
-            emoji = await self._emoji_selector.select(
+            emoji = await self.emoji_selector.select(
                 outcome.plan.emoji,
                 [*job.emoji_history, *job.messages][-EMOJI_CONTEXT_LIMIT:],
                 job.user_name,
@@ -900,7 +900,7 @@ class ConversationFlow:
             interests=interests,
             recall=self._can_recall(),
             expressions=self._can_recall_language(),
-            emoji=emoji and self._emoji_selector is not None,
+            emoji=emoji and self.emoji_selector is not None,
             inbox=inbox,
             special_contact=special_contact,
             stay_in_conversation=stay_in_conversation,

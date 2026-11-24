@@ -42,6 +42,7 @@ from aureus.common import (
     shutdown_logging,
 )
 from aureus.common.vault import SecretVault
+from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
@@ -89,6 +90,7 @@ class Core:
     memory: MemoryIndex | None = None
     inbox_images: InboxImageIndex | None = None
     emoji_store: EmojiStore | None = None
+    embedding_progress: EmbeddingProgress | None = None
 
 
 def open_people(
@@ -306,13 +308,13 @@ def open_core(
                 language = None
                 logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         expression_index = None
-        if (
-            language is not None
-            and not roleplay
+        expression_enabled = (
+            not roleplay
             and runtime.language.recall_enabled
-            and runtime.language.reference_chars
+            and bool(runtime.language.reference_chars)
             and runtime.language.use_vector_expression
-        ):
+        )
+        if expression_enabled and language is not None:
             try:
                 expression_index = ExpressionVectorIndex(paths.database_file)
             except sqlite3.Error:
@@ -428,6 +430,25 @@ def open_core(
             heartbeat.set_inbox_image_indexer(inbox_images.index)
             heartbeat.set_inbox_attachment_reader(qq.read_inbox_attachment)
             heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show, can_quote=qq.can_quote_reply)
+        embedding_progress = EmbeddingProgress(
+            models,
+            expression_enabled=expression_enabled,
+            language=language,
+            expression_index=expression_index,
+            emoji_selector=(
+                heartbeat.emoji_selector
+                if qq is not None
+                and heartbeat_config.qq_emoji_semantic_enabled
+                and not heartbeat_config.qq_emoji_visual_enabled
+                else None
+            ),
+            memory_rerank_enabled=(
+                memory is not None and runtime.memory.recall_enabled and not roleplay
+            ),
+            inbox=inbox_store,
+            images=inbox_images,
+            allows_conversation=qq.allows_inbox_conversation if qq is not None else None,
+        )
         logger.info(
             "核心已组装：数据根目录 {}，{}器官", paths.home, "假" if fake_organs else "真实"
         )
@@ -450,4 +471,5 @@ def open_core(
             memory,
             inbox_images,
             emoji_store,
+            embedding_progress,
         )

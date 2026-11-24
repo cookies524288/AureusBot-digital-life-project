@@ -479,6 +479,22 @@ class EmbeddingOrgan:
         identity = (route.provider.name, endpoint, route.model.name, route.model.identifier)
         return sha256(json.dumps(identity).encode()).hexdigest()
 
+    def spaces(self) -> tuple[tuple[int, str], ...]:
+        """返回已接线的路线序号和实际空间键，不读密钥或探测服务。"""
+        if self.organ_id == LOCAL_EXPRESSION_EMBEDDING:
+            space = self.local_expression_space
+            return ((1, space),) if space else ()
+        return tuple(
+            (number, self._route_space(route))
+            for number, route in enumerate(self._routes, 1)
+            if route.model.kind == "image_embedding" or route.provider.protocol != "anthropic"
+        )
+
+    @staticmethod
+    def _route_space(route: ModelRoute) -> str:
+        identity = (route.provider.name, route.provider.base_url, route.model.identifier)
+        return sha256(json.dumps(identity).encode()).hexdigest()
+
     async def process(self, request: OrganRequest) -> OrganResponse:
         """按器官路线计算一批向量，保持输入顺序。"""
         inputs = request.embedding_inputs
@@ -545,8 +561,7 @@ class EmbeddingOrgan:
                 )
             )
             if failure is None:
-                identity = (route.provider.name, route.provider.base_url, route.model.identifier)
-                space = local_space or sha256(json.dumps(identity).encode()).hexdigest()
+                space = local_space or self._route_space(route)
                 return OrganResponse(
                     self.organ_id,
                     "",

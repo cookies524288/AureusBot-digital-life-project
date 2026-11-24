@@ -31,6 +31,15 @@ class PreparedModels:
     available: frozenset[str]
 
 
+@dataclass(frozen=True)
+class EmbeddingSpaces:
+    """同一次热切换接管的实际空间；比较快照身份可发现中途切换。"""
+
+    expression: str | None = None
+    text: tuple[tuple[int, str], ...] = ()
+    image: tuple[tuple[int, str], ...] = ()
+
+
 class ModelRuntime:
     """保留原总线和启动时的密钥解析器，不替换安全网关或重置任何计数。"""
 
@@ -49,7 +58,7 @@ class ModelRuntime:
         self.prompts = prompts
         # 来源是启动参数 --fake；热重载不能把假器官切换成真实调用。
         self._fake_organs = fake_organs
-        self.local_expression_space: str | None = None
+        self.embedding_spaces = EmbeddingSpaces()
         self._fake_reply_organ = fake_reply_organ if fake_organs else None
         self._fake_plan_organ = fake_plan_organ if fake_organs else None
         # 来源是实际应用的模型路线，只影响可选总结任务是否可以启动。空模型就是关闭。
@@ -65,6 +74,11 @@ class ModelRuntime:
     def can_test_models(self) -> bool:
         """假器官模式下禁止发出真实模型测试。"""
         return not self._fake_organs
+
+    @property
+    def local_expression_space(self) -> str | None:
+        """心跳补建和查询共用的本地表达空间。"""
+        return self.embedding_spaces.expression
 
     def prepare(self, config: ModelsConfig) -> PreparedModels:
         """只构造、不应用；可在线程中执行，失败时文件和原器官都不改变。"""
@@ -120,15 +134,17 @@ class ModelRuntime:
 
     def apply(self, prepared: PreparedModels) -> None:
         """在事件循环中切换；进行中的旧调用继续完成，不重建网关或账本。"""
+        embeddings = {
+            organ.organ_id: organ for organ in prepared.organs if isinstance(organ, EmbeddingOrgan)
+        }
+        expression = embeddings.get(LOCAL_EXPRESSION_EMBEDDING)
+        text = embeddings.get("text_embedding")
+        image = embeddings.get("image_embedding")
         self.bus.replace_all(prepared.organs)
-        self.local_expression_space = next(
-            (
-                organ.local_expression_space
-                for organ in prepared.organs
-                if isinstance(organ, EmbeddingOrgan)
-                and organ.organ_id == LOCAL_EXPRESSION_EMBEDDING
-            ),
-            None,
+        self.embedding_spaces = EmbeddingSpaces(
+            expression.local_expression_space if expression else None,
+            text.spaces() if text else (),
+            image.spaces() if image else (),
         )
         self.available_organs = prepared.available
         if self.on_reload is not None:
