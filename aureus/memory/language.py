@@ -56,6 +56,9 @@ from aureus.memory.language_online import (
     ready_inferences,
     save_online_term,
 )
+from aureus.memory.learning_workbench_ids import identify as identify_workbench_ids
+from aureus.memory.learning_workbench_ids import initialize as initialize_workbench_ids
+from aureus.memory.learning_workbench_ids import resolve as resolve_workbench_ids
 
 MAX_TEXT = 80
 MAX_DETAIL = 160
@@ -323,6 +326,19 @@ class LanguageStore:
         """初始化语言子系统持有的表。"""
         with closing(open_connection(self._path)) as connection:
             connection.executescript(_SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA)
+            initialize_workbench_ids(connection)
+
+    def workbench_ids(self, kind: LanguageKind, keys: Iterable[str]) -> dict[str, int]:
+        """返回语言条目的稳定整数编号，不改变语言条目本身。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            return identify_workbench_ids(connection, kind, keys)
+
+    def resolve_workbench_ids(
+        self, kind: LanguageKind, identifiers: Iterable[int]
+    ) -> dict[int, str]:
+        """解析已分配的工作台编号，目标仍由调用方复验。"""
+        with closing(open_connection(self._path)) as connection:
+            return resolve_workbench_ids(connection, kind, identifiers)
 
     def publish(
         self,
@@ -614,7 +630,14 @@ class LanguageStore:
             [(entry_id, sample.source_key) for sample in supporting],
         )
 
-    def add_entry(self, kind: LanguageKind, content: LanguageContent) -> str:
+    def add_entry(
+        self,
+        kind: LanguageKind,
+        content: LanguageContent,
+        *,
+        origin_scope: str | None = None,
+        recorded_at: datetime | None = None,
+    ) -> str:
         """新增一条维护者指定的语言参考，返回稳定标识。"""
         content = content.validated(allow_empty_detail=kind == LanguageKind.JARGON)
         with closing(open_connection(self._path)) as connection, connection:
@@ -623,7 +646,23 @@ class LanguageStore:
                 "RETURNING id",
                 (kind, content.text, content.detail, content.example),
             ).fetchone()
-            return _local_key("manual", row["id"])
+            key = _local_key("manual", row["id"])
+            if recorded_at is not None:
+                connection.execute(
+                    "INSERT INTO learning_workbench_metadata VALUES (?, ?, ?, ?)",
+                    (kind, key, origin_scope, recorded_at.timestamp()),
+                )
+            return key
+
+    def workbench_metadata(self, kind: LanguageKind) -> dict[str, dict[str, object]]:
+        """读取工作台实际记载的来源及时间，存量缺失值保持缺失。"""
+        with closing(open_connection(self._path)) as connection:
+            return {
+                row["entry_key"]: dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM learning_workbench_metadata WHERE kind = ?", (kind,)
+                )
+            }
 
     def save_package(self, kind: LanguageKind, rows: Sequence[LanguagePackageRow]) -> int:
         """一次追加整包待映射原件，不修改任何现有条目或覆盖。"""
@@ -883,6 +922,19 @@ class LanguageStore:
                 for entry in entries
             ]
         entries = [self._apply_edit(entry, edits.get(entry.entry_key)) for entry in entries]
+        origins = {
+            row["entry_key"]: row["origin_scope"]
+            for row in connection.execute(
+                "SELECT entry_key, origin_scope FROM learning_workbench_metadata WHERE kind = ?",
+                (kind,),
+            )
+        }
+        entries = [
+            replace(entry, learning_source=origins[entry.entry_key])
+            if entry.entry_key in origins
+            else entry
+            for entry in entries
+        ]
         entries = [
             replace(entry, is_enabled=False, is_removed=True)
             if entry.entry_key in removed
