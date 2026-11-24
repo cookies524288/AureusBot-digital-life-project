@@ -23,11 +23,6 @@ from .planning import EmojiIntent, first_json_object
 from .reply_outbox import EmojiReplyPart
 
 EMOJI_CONTEXT_LIMIT = 30
-EMOJI_PLAN_NOTE = (
-    '如自然适合用一张 QQ 表情，可在 JSON 中加 "select_emoji": '
-    '{"emotion": "简短的情绪或用途", "before_text": false}。'
-    "要先发表情再发文字时写 true。不需要时省略整个字段。"
-)
 _TEXT_CANDIDATE_LIMIT = 50
 _EMBED_BATCH_SIZE = 64
 _QUERY_CONTEXT_CHARS = 500

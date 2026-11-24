@@ -54,10 +54,11 @@ class RecordingOrgans:
         self.requests.append(request)
         if self.gate is not None:
             await self.gate.wait()
-        suggestion = (
-            '{"reply":true,"intent":"回应"}' if request.context.get("task") == "plan" else "嗯。"
-        )
-        return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
+        from tests.planner_fixtures import plan_response
+
+        if request.context.get("task") == "plan":
+            return plan_response(request, {"reply": True, "intent": "回应"})
+        return OrganResponse(organ_id=request.organ_id, suggestion="嗯。")
 
 
 @dataclass

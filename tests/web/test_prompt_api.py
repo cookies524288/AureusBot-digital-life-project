@@ -226,7 +226,7 @@ async def test_every_organ_and_call_role_matches_captured_messages(rig: ConfigRi
         assert completion.calls[-1]["messages"] == expected
 
     plan = previews["planner"]["plan_context"][1]["content"]
-    for field in ["commit", "resolve", "interest", "recall"]:
+    for field in ["commit", "resolve", "interest", "query_memory"]:
         assert f'"{field}"' in plan
         assert f'"{field}"' not in previews["planner"]["plan"][1]["content"]
     planned = previews["replyer"]["reply_planned"]

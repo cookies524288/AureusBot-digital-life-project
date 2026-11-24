@@ -42,6 +42,7 @@ from aureus.people import HistoricalKind, HistoricalRecord
 from aureus.timeline import ActorType, TimelineQuery, TimelineRecord, VisibilityScope
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, IDENTITY, FakeOneBot, event
 from tests.organs.test_llm_adapter import FakeCompletion, fixed_counter, make_config, make_response
+from tests.planner_fixtures import plan_response
 from tests.prompt_assertions import dialogue_text
 from tests.test_language_runtime import LanguageOrgan, learning_samples
 
@@ -77,6 +78,8 @@ class ReplayOrgan:
         else:
             text = "收到。"
         self.calls.append((self.clock.now(), request, text))
+        if request.context["task"] == "plan":
+            return plan_response(request, text)
         return OrganResponse(self.organ_id, text)
 
 

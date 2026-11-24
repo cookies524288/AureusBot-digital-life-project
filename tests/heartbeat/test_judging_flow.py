@@ -64,6 +64,10 @@ class ScriptedOrgans:
             await asyncio.sleep(0)
             return OrganResponse(organ_id="judge", suggestion=outcome)
         text = PLAN if request.organ_id == "planner" else "好的。"
+        from tests.planner_fixtures import plan_response
+
+        if request.context.get("task") == "plan":
+            return plan_response(request, text)
         return OrganResponse(organ_id=request.organ_id, suggestion=text)
 
 

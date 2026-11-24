@@ -1052,7 +1052,7 @@ class Heartbeat:
             if outcome.plan is not None:
                 if self._hormones is not None:
                     self._hormones.note_decline(person_id, self._clock.now())
-                self._record_declined(thought, outcome.plan, target, outcome.effects)
+                self._record_declined(thought, outcome.plan, outcome.effects)
             return
         if outcome.response is None:
             self._deliver(target, outcome.notice, MessageKind.NOTICE)
@@ -1090,8 +1090,6 @@ class Heartbeat:
             metadata["recall_feedback_refs"] = list(outcome.recall_feedback_refs)
         if outcome.effects is not None:
             metadata["hormones"] = outcome.effects.to_metadata()
-            if outcome.forced_reply:
-                metadata["forced_reply"] = True
             if self._hormones is not None:
                 retaliated = outcome.effects.retaliation is RetaliationMode.ALLOWED
                 self._hormones.note_reply(person_id, self._clock.now(), retaliated=retaliated)
@@ -1352,13 +1350,9 @@ class Heartbeat:
         self,
         thought: _Thought,
         plan: Plan,
-        target: Perception,
         effects: HormoneEffects | None,
     ) -> None:
-        """规划器决定不回复：记进时间线，并在终端提示一行，让用户知道不是出了故障（D59）。
-
-        为什么要提示：用户看到的是「没有回应」，分不清是没看到、出了错、还是它选择不说话。
-        """
+        """规划器明确决定不回复：只在时间线记录，不向会话发送消息（D103）。"""
         reason = plan.reason or "觉得不需要回应"
         metadata: dict[str, Any] = {
             "in_reply_to": [heard.record.id for heard in thought.replying_to],
@@ -1375,7 +1369,6 @@ class Heartbeat:
             visibility=VisibilityScope.PRIVATE,
             metadata=metadata,
         )
-        self._deliver(target, f"（没有回复：{reason}）", MessageKind.NOTICE)
 
     def _submit_inbox(self, messages: Sequence[InboxMessage]) -> None:
         existing_ids = {message.id for _, message in self._pending if message is not None}

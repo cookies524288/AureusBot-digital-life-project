@@ -80,9 +80,11 @@ class RecallOrgans:
 
     async def call(self, request: OrganRequest) -> OrganResponse:
         self.requests.append(request)
-        return OrganResponse(
-            request.organ_id, self.plan if request.organ_id == "planner" else "记得。"
-        )
+        from tests.planner_fixtures import plan_response
+
+        if request.context.get("task") == "plan":
+            return plan_response(request, self.plan)
+        return OrganResponse(request.organ_id, "记得。")
 
 
 class MemoryEnv:
@@ -271,8 +273,12 @@ async def test_recall_reaches_reply_prompt_and_metadata(
     env.index_more()
     rig = env.build()
     await env.exchange(rig, trust=trust, visibility=visibility)
-    planner, replyer = env.organs.requests
-    assert '"recall"' in planner.prompt
+    planner, continued, replyer = env.organs.requests
+    assert "query_memory" in {tool.name for tool in planner.tools}
+    assert continued.prompt == planner.prompt
+    [exchange] = continued.tool_history
+    assert exchange.results[0].call_id == exchange.calls[0].call_id
+    assert "命中：1 条" in exchange.results[0].content
     text = dialogue_text(replyer)
     assert "【长期记忆检索结果·内部参考】" in text
     assert "2026-11-17 20:00 用户：约好一起看木卫二的照片" in text
@@ -326,7 +332,7 @@ async def test_imported_history_reaches_planner_and_replyer(env: MemoryEnv, expl
     if not explicit:
         env.organs.plan = '{"reply":true,"intent":"回忆观测"}'
     await env.exchange(env.build(MemoryConfig(heuristic_recall_enabled=True)))
-    planner, replyer = env.organs.requests
+    planner, *_, replyer = env.organs.requests
     assert "启发式记忆" in planner.prompt and "我们约好看木卫二照片" in planner.prompt
     text = dialogue_text(replyer)
     assert ("长期记忆检索结果" if explicit else "启发式记忆") in text
@@ -516,9 +522,10 @@ async def test_derived_preference_recalls_original_in_reply(env: MemoryEnv, enab
     env.index = CountingIndex(env.path / "aureus.db", env.timeline, clock=env.clock, config=config)
     env.index.open()
     await env.exchange(env.build(config))
-    planner, replyer = env.organs.requests
+    planner, continued, replyer = env.organs.requests
     assert (original.content in dialogue_text(replyer)) == enabled
     assert (original.content in planner.prompt) == enabled
+    assert (original.content in continued.tool_history[0].results[0].content) == enabled
     assert env.records("message")[-1].metadata["recall_record_ids"] == (
         [original.id] if enabled else []
     )
@@ -588,7 +595,7 @@ async def test_fact_decay_and_visibility_change_reply_evidence(
 )
 async def test_switch_hides_rule_and_prevents_search(env: MemoryEnv, config: MemoryConfig) -> None:
     await env.exchange(env.build(config))
-    assert '"recall"' not in env.organs.requests[0].prompt
+    assert "query_memory" not in {tool.name for tool in env.organs.requests[0].tools}
     assert not env.index.searches
 
 
@@ -604,12 +611,12 @@ async def test_no_recall_request_does_not_search(env: MemoryEnv) -> None:
 @pytest.mark.asyncio
 async def test_legacy_planning_switch_does_not_skip_recall(env: MemoryEnv) -> None:
     await env.exchange(env.build(heartbeat=HeartbeatConfig(planning_enabled=False)))
-    assert len(env.organs.requests) == 2
+    assert len(env.organs.requests) == 3
     assert [keywords for keywords, _, _ in env.index.searches] == [("木卫二",)]
 
 
 @pytest.mark.asyncio
-async def test_search_failure_keeps_normal_reply(
+async def test_search_failure_never_authorizes_reply(
     env: MemoryEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def broken(*args: object) -> list[MemoryHit]:
@@ -617,7 +624,7 @@ async def test_search_failure_keeps_normal_reply(
 
     monkeypatch.setattr(env.index, "search", broken)
     await env.exchange(env.build())
-    assert env.sent and "长期记忆检索结果" not in dialogue_text(env.organs.requests[-1])
+    assert not env.sent and len(env.organs.requests) == 1
     assert "recall_keywords" not in env.records("message")[-1].metadata
 
 

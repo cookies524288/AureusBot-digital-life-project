@@ -70,6 +70,10 @@ class LanguageOrgan:
                 text = '{"reply":true,"intent":"问好"}'
         else:
             text = "收到。"
+        if request.context.get("task") == "plan":
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(request, text)
         return OrganResponse(organ_id=self.organ_id, suggestion=text)
 
 
