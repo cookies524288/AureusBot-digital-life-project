@@ -1,9 +1,11 @@
 """统一语言库的证据、排序与整条裁剪。"""
 
+from dataclasses import replace
 from pathlib import Path
 
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore
 from aureus.memory.language_matching import (
+    JargonStatus,
     LanguageEntry,
     TermFrequency,
     format_language,
@@ -21,6 +23,7 @@ def test_jargon_match_keeps_senses_and_uses_frequency_and_position() -> None:
         LanguageEntry("now", "此刻", "", 20, (35,), frozenset()),
         LanguageEntry("absent", "并未命中", "", 99, (36,), frozenset()),
     ]
+    entries = [replace(entry, jargon_status=JargonStatus.CONFIRMED) for entry in entries]
     matches = match_jargons(
         ["<message id='1'> NOW", "xp", "gO"], entries, {"go": TermFrequency(2, 4)}
     )

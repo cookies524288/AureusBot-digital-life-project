@@ -551,7 +551,7 @@ def build_reply_request(
         review_sentinel: 规划后的回复器用于内部驳回的标记名。
         length: 回复的长度要求；None 表示不限。
         recall: 按关键词查到的内部参考块；空字符串表示没查记忆（D80）。
-        jargon: 合并调用时命中的黑话参考。
+        jargon: 当前调用中有资格使用的黑话参考。
         expressions: 选中的习得表达参考。
         people_context: 当前发言人的历史资料；空字符串表示不附人物资料（3.3）。
         with_splits: 是否让回复器标明分段边界及受保护的段（3.12）。

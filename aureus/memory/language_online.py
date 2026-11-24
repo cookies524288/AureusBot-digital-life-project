@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import groupby
 from sqlite3 import Connection, Row
 
-from aureus.memory.language_matching import LanguageEntry, normalize
+from aureus.memory.language_matching import JargonStatus, LanguageEntry, normalize
 
 INFERENCE_THRESHOLDS = (4, 8, 25, 100)
 ONLINE_BATCH_SIZE = 16
@@ -118,7 +118,7 @@ def _evidence(connection: Connection, term_id: int) -> Sequence[Row]:
 
 
 def online_entries(connection: Connection, kind: str) -> Iterator[LanguageEntry]:
-    """提供已判定黑话和可回查的表达；来源会话仅作标签。"""
+    """提供在线候选及可回查的证据；来源会话仅作标签。"""
     rows = connection.execute(
         """SELECT term.id, term.text, term.scope, term.detail,
                   evidence.fragment, observation.record_id, observation.speaker
@@ -132,11 +132,17 @@ def online_entries(connection: Connection, kind: str) -> Iterator[LanguageEntry]
         evidence = list(group)
         first = evidence[0]
         detail = first["detail"]
+        status = None
         if kind == "jargon":
             decision = _latest_decision(connection, term_id)
-            if decision is None or decision["outcome"] != "accepted":
-                continue
-            detail = decision["meaning"]
+            detail = decision["meaning"] if decision is not None else ""
+            status = (
+                JargonStatus.CANDIDATE
+                if decision is None
+                else JargonStatus.CONFIRMED
+                if decision["outcome"] == "accepted"
+                else JargonStatus.NON_JARGON
+            )
         yield LanguageEntry(
             first["text"],
             detail,
@@ -146,4 +152,5 @@ def online_entries(connection: Connection, kind: str) -> Iterator[LanguageEntry]
             frozenset(row["speaker"] for row in evidence),
             entry_key=f"online:{term_id}",
             learning_source=first["scope"],
+            jargon_status=status,
         )

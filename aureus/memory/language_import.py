@@ -8,7 +8,7 @@ from itertools import groupby
 from sqlite3 import Connection
 from typing import Literal
 
-from aureus.memory.language_matching import LanguageEntry, TermFrequency, normalize
+from aureus.memory.language_matching import JargonStatus, LanguageEntry, TermFrequency, normalize
 
 EXPRESSION_TABLE = "expressions"
 JARGON_TABLE = "jargons"
@@ -176,16 +176,19 @@ def publish_rows(
 
 
 def imported_entries(connection: Connection, table: str) -> list[LanguageEntry]:
-    """读取可召回的导入语言，来源引用与本地时间线编号分别保留。"""
+    """读取导入语言和黑话候选，来源引用与本地时间线编号分别保留。"""
     references: list[LanguageEntry] = []
     rows = connection.execute(
         """SELECT entry.instance, entry.source_key, entry.text, entry.detail, entry.example,
+                  entry.status, entry.reason, entry.raw_values,
                   entry.count, entry.evidence, sample.record_id, sample.speaker
            FROM language_import_rows AS entry
            LEFT JOIN language_import_observations AS observed
                USING (instance, table_name, source_key)
            LEFT JOIN language_observations AS sample ON sample.source_key = observed.observation_key
-           WHERE entry.table_name = ? AND entry.status = 'received'
+           WHERE entry.table_name = ? AND (entry.status = 'received' OR
+                 (entry.table_name = 'jargons' AND entry.reason IN
+                   ('classified_non_jargon', 'missing_word_or_meaning')))
            ORDER BY entry.instance, entry.source_key, sample.record_id""",
         (table,),
     )
@@ -193,16 +196,31 @@ def imported_entries(connection: Connection, table: str) -> list[LanguageEntry]:
         records = list(group)
         first = records[0]
         evidence = records if first["record_id"] is not None else []
+        status = None
+        text, detail = first["text"], first["detail"]
+        if table == JARGON_TABLE:
+            raw = json.loads(first["raw_values"])
+            text = text or str(raw.get("content") or "").strip()
+            detail = detail or str(raw.get("meaning") or "").strip()
+            if not text:
+                continue
+            if first["reason"] == "classified_non_jargon":
+                status = JargonStatus.NON_JARGON
+            elif first["status"] == "received" or raw.get("is_jargon") == 1:
+                status = JargonStatus.CONFIRMED
+            else:
+                status = JargonStatus.CANDIDATE
         references.append(
             LanguageEntry(
-                first["text"],
-                first["detail"],
+                text,
+                detail,
                 first["example"],
                 first["count"] + len(evidence),
                 tuple(row["record_id"] for row in evidence),
                 frozenset(row["speaker"] for row in evidence),
                 source_refs=(first["source_key"], *json.loads(first["evidence"])),
                 entry_key=_encode((table, *source)),
+                jargon_status=status,
             )
         )
     return references

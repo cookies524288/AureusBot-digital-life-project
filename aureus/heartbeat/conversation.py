@@ -1285,6 +1285,7 @@ class ConversationFlow:
                 with_splits=self._config.split_reply_enabled,
                 length=length,
                 recall=recall_text,
+                jargon=await self._jargon_reference(job),
                 expressions=await self._expression_reference(job, plan),
                 people_context=(
                     format_people_context(
