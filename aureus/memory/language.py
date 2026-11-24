@@ -839,9 +839,17 @@ class LanguageStore:
         conversation_key: str | None = None,
     ) -> str:
         """生成 Replyer 的情景表达参考。"""
-        entries = self._visible_entries(LanguageKind.EXPRESSION, conversation_key)
+        entries = self.expression_candidates(conversation_key)
         matches = select_expressions(entries, topic, intent, avoid, speaker)
         return format_language(matches, jargon=False, budget=budget)
+
+    def expression_candidates(self, conversation_key: str | None) -> list[LanguageEntry]:
+        """返回某一会话可用的表达；来源不限制在线记录的召回。"""
+        return [
+            entry
+            for entry in self._visible_entries(LanguageKind.EXPRESSION, conversation_key)
+            if entry.review_status != ExpressionReviewStatus.REJECTED
+        ]
 
     def _visible_entries(
         self, kind: LanguageKind, conversation_key: str | None
