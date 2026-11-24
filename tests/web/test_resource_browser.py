@@ -2237,7 +2237,7 @@ def test_memory_workbench_preserves_query_page_and_drafts_on_narrow_screen(
       check(requests.at(-1).get('offset') === offset && requests.at(-1).get('q') === '',
         '不应用搜索草稿');
       press('记忆检修');
-      press('维护人物别名');
+      press('维护人物画像');
       await waitFor(() => text('合成人物000'), '别名入口通往真实人物记录');
       check(document.activeElement === find('#memory-query-profiles input[type="search"]'),
         '焦点进入人物查询');

@@ -121,7 +121,7 @@ def export_archive(db_path: Path, output: BinaryIO) -> None:
             for key in ("recorded_at", "valid_from", "valid_to", "received_at"):
                 stamp = getattr(record, key)
                 values[key] = stamp.isoformat() if stamp is not None else None
-            for key in ("entry_id", "is_recallable", "original_text"):
+            for key in ("entry_id", "is_recallable", "original_text", "is_removed"):
                 del values[key]
             values["edited_text"] = row["edited_content"]
             values["is_enabled"] = bool(row["is_enabled"])
