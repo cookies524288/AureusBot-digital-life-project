@@ -33,7 +33,7 @@ python -m pytest -q -p no:cacheprovider --tb=short --basetemp <合成根>/baseli
 python -m pytest -q -p no:cacheprovider --tb=short --basetemp <合成根>/specialized tests/web/test_prompt_http_integration.py tests/web/test_prompt_api.py tests/heartbeat/test_working_memory.py
 ```
 
-第一条为旧版失败证据；第二条 13 项通过、3 条依赖警告。只跑直接专项，未跑全量。Ruff 格式检查三个改动文件通过；`working_memory.py` 的未改动 `recent_records` 列表推导格式不通过，任务书提交的旧文件同样不通过，保留基线原状，不作全绿声明。Pyright 使用 `--pythonpath` 指向既有解释器，结果 0 错误（工具另提示本工作树没有本地 `.venv`）；8 条架构约束全过。
+第一条为旧版失败证据；第二条 13 项通过、3 条依赖警告。只跑直接专项，未跑全量。Ruff 格式检查三个改动文件通过；`working_memory.py` 的未改动 `dialogue_focus` 列表推导格式不通过，任务书提交的旧文件同样不通过，保留基线原状，不作全绿声明。Pyright 使用 `--pythonpath` 指向既有解释器，结果 0 错误（工具另提示本工作树没有本地 `.venv`）；8 条架构约束全过。
 
 ## 不做
 
