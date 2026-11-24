@@ -28,6 +28,7 @@ TOTAL = 320
 MEMORY_BATCH_TOTAL = 15
 REVIEW_ENDPOINT = "/api/resources/learning/reviews"
 SCOPE_ENDPOINT = "/api/resources/learning/scope"
+ORIGINS_ENDPOINT = "/api/resources/learning/origins"
 
 
 def _items(path: str, kind: str) -> list[dict[str, object]]:
@@ -205,7 +206,7 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         elif url.path == REVIEW_ENDPOINT:
             entry_key = parse_qs(url.query)["entry_key"][0]
             self._send_json({"items": self.expression_reviews.get(entry_key, [])})
-        elif url.path == SCOPE_ENDPOINT:
+        elif url.path in (SCOPE_ENDPOINT, ORIGINS_ENDPOINT):
             self._send_json(
                 {
                     "items": [
@@ -325,10 +326,16 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         limit = int(params.get("limit", ["50"])[0])
         results = [item for item in _items(path, kind) if query in str(item)]
         counts = {"paragraphs": len(results)}
-        if path.endswith("/learning") and (scope := params.get("conversation_key")):
-            targets = {"group-10": range(24), "group-20": range(23, 25)}
-            keys = {f"{kind}-{index}" for index in targets.get(scope[0], range(0))}
-            results = [item for item in results if item["entry_key"] in keys]
+        if path.endswith("/learning"):
+            origin_groups = {"group-10": range(24), "group-20": range(23, 25)}
+            authorized_groups = {"group-10": (25,), "group-20": range(26, 50)}
+            for field, groups in (
+                ("origin_conversation_key", origin_groups),
+                ("authorized_conversation_key", authorized_groups),
+            ):
+                if scope := params.get(field):
+                    keys = {f"{kind}-{index}" for index in groups.get(scope[0], ())}
+                    results = [item for item in results if item["entry_key"] in keys]
         if path.endswith("/learning") and kind == "expression":
             for item in results:
                 history = self.expression_reviews.get(str(item["entry_key"]), [])
@@ -609,13 +616,19 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
     _run(
         browser,
         """
-      const scope = () => find('select[name="conversation_key"]');
+      const scope = () => find('select[name="origin_conversation_key"]');
+      const authorized = () => find('select[name="authorized_conversation_key"]');
       const result = () => find('#learning-jargon-result');
       function select(key) {
         scope().value = key;
         scope().dispatchEvent(new Event('change', {bubbles:true}));
       }
-      await waitFor(() => scope() && !scope().disabled && button('合成黑话000'), '会话就绪');
+      await waitFor(() => scope() && !scope().disabled && !authorized().disabled &&
+        button('合成黑话000'), '会话就绪');
+      check(scope().labels[0].textContent.includes('来自会话') &&
+        authorized().labels[0].textContent.includes('授权会话'), '来源和授权标签独立');
+      check(document.documentElement.scrollWidth <= innerWidth && innerWidth === 390,
+        '窄屏无横向溢出');
       const capacity = result().childElementCount;
       const allPages = Math.ceil(320 / capacity);
       const groupPages = Math.ceil(24 / capacity);
@@ -634,7 +647,7 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
       window.fetch = (url, options) => {
         const parsed = new URL(url, location.href);
         if (parsed.pathname === '/api/resources/learning' &&
-            parsed.searchParams.get('conversation_key') === 'group-20') {
+            parsed.searchParams.get('origin_conversation_key') === 'group-20') {
           return new Promise(resolve => {
             delayed = () => nativeFetch(url, options).then(response => {
               resolve(response); finished = true;
@@ -656,7 +669,14 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
       } finally { window.fetch = nativeFetch; }
       select('group-20');
       await waitFor(() => button('合成黑话023') && button('合成黑话024'), '另一个同名群可独立筛选');
+      authorized().value = 'group-10';
+      authorized().dispatchEvent(new Event('change', {bubbles:true}));
+      await waitFor(() => page() === '第 0 / 0 页' && !button('合成黑话024'), '两种筛选取交集');
+      check(scope().value === 'group-20', '设置授权不覆盖来源选择');
       select('');
+      await waitFor(() => page() === '第 1 / 1 页' && button('合成黑话025'), '清空来源保留授权');
+      authorized().value = '';
+      authorized().dispatchEvent(new Event('change', {bubbles:true}));
       await waitFor(() => page() === `第 1 / ${allPages} 页` && button('合成黑话000'),
         '清空恢复原首页');
       click('[data-learning-tab="expression"]');
@@ -675,7 +695,7 @@ def test_learning_scope_reload_disables_unconfirmed_choices(browser: Browser, ou
     _run(
         browser,
         """
-      const scope = () => find('select[name="conversation_key"]');
+      const scope = () => find('select[name="origin_conversation_key"]');
       const hint = () => find('#learning-scope-hint-jargon');
       const select = key => {
         scope().value = key;
@@ -689,12 +709,12 @@ def test_learning_scope_reload_disables_unconfirmed_choices(browser: Browser, ou
       const queries = [];
       window.fetch = (url, options) => {
         const parsed = new URL(url, location.href);
-        if (parsed.pathname === '/api/resources/learning/scope') {
+        if (parsed.pathname === '/api/resources/learning/origins') {
           return new Promise(resolve => pending.push(resolve));
         }
         if (parsed.pathname === '/api/resources/learning' &&
             parsed.searchParams.get('kind') === 'jargon') {
-          queries.push(parsed.searchParams.get('conversation_key'));
+          queries.push(parsed.searchParams.get('origin_conversation_key'));
         }
         return nativeFetch(url, options);
       };

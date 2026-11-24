@@ -694,12 +694,14 @@ class LanguageStore:
         limit: int,
         *,
         conversation_key: str = "",
+        origin_conversation_key: str = "",
+        authorized_conversation_key: str = "",
         text: str = "",
         is_enabled: bool | None = None,
         review: ExpressionReviewStatus | None = None,
         is_removed: bool = False,
     ) -> tuple[list[LanguageEntry], int]:
-        """按明确绑定或在线来源筛选，并返回本页及筛选总数。"""
+        """分别筛选可信来源和明确授权，兼容旧调用的并集语义。"""
         term = text.strip().casefold()
         matches = [
             entry
@@ -709,6 +711,8 @@ class LanguageStore:
                 or conversation_key == entry.learning_source
                 or conversation_key in entry.scope_keys
             )
+            and (not origin_conversation_key or origin_conversation_key == entry.learning_source)
+            and (not authorized_conversation_key or authorized_conversation_key in entry.scope_keys)
             and entry.is_removed == is_removed
             and (is_enabled is None or entry.is_enabled == is_enabled)
             and (review is None or entry.review_status == review)

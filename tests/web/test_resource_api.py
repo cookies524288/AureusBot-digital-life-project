@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -12,7 +13,16 @@ from aureus.common import ManualClock
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception, TrustLevel
-from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore, MemoryIndex
+from aureus.memory import (
+    EXPRESSION_TABLE,
+    JARGON_TABLE,
+    ImportedLanguageRow,
+    LanguageKind,
+    LanguageProposal,
+    LanguageSample,
+    LanguageStore,
+    MemoryIndex,
+)
 from aureus.memory.emoji import EmojiStore
 from aureus.memory.history import HistoricalMemory, MemoryEvidence, MemorySource
 from aureus.memory.language import ExpressionReviewStatus, LanguageContent, LanguagePackageRow
@@ -213,6 +223,139 @@ def test_learning_browse_combines_explicit_conversation_and_filters(
         assert {item["text"] for item in all_entries["items"]} >= {"未映射", "旧资料"}
         empty = client.get(endpoint, params={**params, "conversation_key": "同名群"}).json()
         assert empty["total"] == 0 and empty["items"] == []
+    assert language.entries(kind, include_disabled=True) == initial
+    assert references() == before
+
+
+@pytest.mark.parametrize("kind", [LanguageKind.JARGON, LanguageKind.EXPRESSION])
+def test_learning_origin_and_authorization_are_independent(
+    tmp_path: Path, kind: LanguageKind
+) -> None:
+    database = tmp_path / "sources.db"
+    clock = ManualClock(datetime(2026, 11, 24, tzinfo=UTC))
+    TimelineDatabase(database, clock).open()
+    inbox = InboxStore(database, clock)
+    keys = []
+    for route in (
+        MessageRoute("bot", "group", "10", "5"),
+        MessageRoute("bot", "group", "20", "5"),
+        MessageRoute("bot", "private", "5", "5", temporary_group_id="10"),
+    ):
+        message = Perception(
+            "qq",
+            "fixture",
+            "测试",
+            VisibilityScope.USER_ONLY,
+            TrustLevel.VERIFIED_USER,
+            route=route,
+        )
+        inbox.add(message, conversation_name="同名群")
+        keys.append(ConversationKey.from_perception(message).language_scope_key())
+    origin, authorized, temporary = keys
+    language = LanguageStore(database)
+    language.open()
+    source_table = JARGON_TABLE if kind == LanguageKind.JARGON else EXPRESSION_TABLE
+    source_ref = '["fixture","main","mai_messages",[7]]'
+    language.publish(
+        "fixture",
+        "synthetic",
+        {source_table: 1},
+        [
+            ImportedLanguageRow(
+                source_table,
+                "record-1",
+                {"session_id": origin, "session_id_dict": {origin: 3}},
+                "received",
+                text="迁入词",
+                detail="合成场景",
+                evidence=(source_ref,),
+            )
+        ],
+    )
+    for index, (word, key, detail) in enumerate(
+        (
+            ("在线甲", origin, "合成场景"),
+            ("在线乙", origin, "合成场景"),
+            ("在线其他", origin, "其他场景"),
+            ("临时私聊所得", temporary, "合成场景"),
+        )
+    ):
+        samples = [
+            LanguageSample(f"sample-{record_id}", record_id, "fixture", f"测试 {word}")
+            for record_id in range(index * 4 + 1, index * 4 + 5)
+        ]
+        language.observe(samples, ())
+        presented = {sample.record_id: sample.content for sample in samples}
+        inferences = language.observe_extraction(
+            kind, key, samples, presented, [LanguageProposal(kind, word, detail, tuple(presented))]
+        )
+        for attempt in inferences:
+            language.record_jargon_inference(attempt, "accepted", detail)
+    packages = [
+        LanguagePackageRow(
+            LanguageContent(word, "合成场景"), 1, "同名群", json.dumps({"text": word})
+        )
+        for word in ("包内有授权", "包内待授权")
+    ]
+    language.save_package(kind, packages)
+    language.package_scope(kind, f"package:{packages[0].digest}", [authorized], confirm=True)
+    initial = language.entries(kind, include_disabled=True)
+
+    def references() -> list[str]:
+        if kind == LanguageKind.JARGON:
+            return [
+                language.jargon_reference(
+                    ["在线甲 迁入词 包内有授权 包内待授权"], 2000, conversation_key=key
+                )
+                for key in keys
+            ]
+        return [" ".join(item.text for item in language.expression_candidates(key)) for key in keys]
+
+    before = references()
+    assert all("在线甲" in reference and "迁入词" in reference for reference in before)
+    assert "包内有授权" in before[1] and "包内有授权" not in before[0]
+    assert all("包内待授权" not in reference for reference in before)
+
+    async def require_ready() -> str:
+        return "test"
+
+    app = FastAPI()
+    register_resource_routes(app, require_ready, language, None, inbox=inbox)
+    endpoint = "/api/resources/learning"
+    with TestClient(app) as client:
+
+        def browse(**filters: str | int) -> dict[str, Any]:
+            return client.get(endpoint, params={"kind": kind, "q": "合成场景", **filters}).json()
+
+        first = browse(origin_conversation_key=origin, limit=1)
+        second = browse(origin_conversation_key=origin, offset=1, limit=1)
+        assert first["total"] == second["total"] == 2
+        assert first["next_offset"] == 1 and second["next_offset"] is None
+        assert {item["text"] for item in first["items"] + second["items"]} == {"在线甲", "在线乙"}
+        assert browse(origin_conversation_key=authorized)["total"] == 0
+        assert browse(origin_conversation_key="同名群")["total"] == 0
+        assert [item["text"] for item in browse(origin_conversation_key=temporary)["items"]] == [
+            "临时私聊所得"
+        ]
+        assert browse(authorized_conversation_key=origin)["total"] == 0
+        assert browse(authorized_conversation_key=temporary)["total"] == 0
+        combined = browse(origin_conversation_key=origin, authorized_conversation_key=authorized)
+        assert combined["total"] == 0
+        grants = browse(authorized_conversation_key=authorized)
+        assert [item["text"] for item in grants["items"]] == ["包内有授权"]
+        assert browse(conversation_key=authorized) == grants
+        assert browse(conversation_key=origin)["total"] == 2
+        details = {item["text"]: item for item in browse()["items"]}
+        assert details["迁入词"]["source_refs"] == ["record-1", source_ref]
+        assert details["迁入词"]["learning_source"] is None
+        assert details["包内待授权"]["pending_scope"]
+        assert details["包内有授权"]["package_source"] == "同名群"
+        assert details["包内有授权"]["learning_source"] is None
+        assert "包内待授权" not in {item["text"] for item in browse(recall="enabled")["items"]}
+        origins = client.get(f"{endpoint}/origins").json()["items"]
+        grants = client.get(f"{endpoint}/scope").json()["items"]
+        assert {item["key"] for item in origins} == set(keys)
+        assert {item["key"] for item in grants} == {origin, authorized}
     assert language.entries(kind, include_disabled=True) == initial
     assert references() == before
 
