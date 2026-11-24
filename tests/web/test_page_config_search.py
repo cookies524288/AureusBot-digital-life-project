@@ -72,6 +72,42 @@ def test_settings_catalog_covers_the_received_schema(config_response: dict[str, 
     )
 
 
+def test_biochemical_rows_show_values_defaults_sources_and_toml_recovery(
+    config_response: dict[str, Any],
+) -> None:
+    run_page_script(
+        "const response = " + json.dumps(config_response) + ";"
+        r"""
+        response.config.hormones.anger_half_life_seconds = 731;
+        cf.schema = response.schema;
+        cf.data = response.config;
+        cf.readonly = new Set(response.readonly);
+        cf.biochemicalSources = response.biochemical_sources;
+        for (const section of cfSectionList()) {
+          const card = buildConfigSection(...section);
+          const [sec] = section;
+          const protectedFields = Object.keys(cf.biochemicalSources).filter(key => key.startsWith(sec + '.'));
+          if (protectedFields.length) {
+            assert.ok(card.children.some(node => node.textContent.includes(`[${sec}] 节只删除对应的键值行`)));
+          }
+          for (const key of protectedFields) {
+            const field = key.split('.')[1];
+            const row = $('cf-field-' + key).closest('.cfg-field');
+            const control = row.children.at(-1);
+            assert.equal(control.children.length, 1);
+            const value = control.children[0];
+            assert.equal(value.tagName, 'DIV');
+            assert.equal(value.children[0].textContent, String(response.config[sec][field]));
+            assert.equal(value.children[1].textContent,
+              `开发默认值 ${cfSectionProperties(sec)[field].default} · 来源：${cf.biochemicalSources[key]}`);
+          }
+        }
+        assert.equal($('cf-field-hormones.anger_enabled').tagName, 'INPUT');
+        assert.equal($('cf-field-mood.enabled').tagName, 'INPUT');
+        """
+    )
+
+
 def test_settings_search_uses_real_controls_and_preserves_drafts(
     config_response: dict[str, Any],
 ) -> None:

@@ -3571,7 +3571,7 @@ const CFG_FIELDS = {
 };
 const CFG_FONT = {key:'aureus-font', id:'cf-font', name:'界面字体', hint:'选择这台浏览器显示 Aureus 时使用的字体，切换后立即生效。'};
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
-const cf = { data: null, schema: null, session: null, readonly: new Set(), noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
+const cf = { data: null, schema: null, session: null, readonly: new Set(), biochemicalSources: {}, noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
   sections: new Map(), tabs: new Map(), searchEntries: [], results: [] };
 const cfKey = (sec, field) => sec ? sec + '.' + field : field;
 const cfResolve = node => (node && node.$ref ? cf.schema.$defs[node.$ref.split('/').pop()] : node) || {};
@@ -3692,13 +3692,14 @@ function cfRow(sec, field) {
   const prop = cfSectionProperties(sec)[field];
   const info = cfFieldInfo(prop);
   const readonly = cf.readonly.has(key);
+  const source = cf.biochemicalSources[key];
   const [name, hint] = CFG_FIELDS[key];
   const effect = readonly ? '只读' : '重启后生效';
   const id = 'cf-field-' + key;
   const attributes = {id:readonly ? undefined : id, disabled:readonly, 'aria-label':name, 'aria-describedby':'cf-help-' + key};
-  const value = sec === 'cortisol'
+  const value = source
     ? el('div', { class: 'mono' }, String(cfOriginal(sec, field)),
-        el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) }))
+        el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) + ' · 来源：' + source }))
     : cfControl(sec, field, info, attributes);
   return el('div', { class: 'cfg-field' },
     el('div', { class: 'name' }, settingTerm(name, hint + ' ' + effect + '。', key, readonly ? id : undefined), ' ',
@@ -3735,9 +3736,9 @@ function buildConfigSection(sec, title, hint) {
   container.append(el('div', {class:'card-head cfg-section-head'},
     el('div', {}, el('h3', {}, settingTerm(title, hint, 'section-' + sec)),
       sec ? el('div', {class:'mono cfg-path', text:sec}) : null)));
-  if (sec === 'cortisol') {
+  if (cfFields(sec).some(field => Object.hasOwn(cf.biochemicalSources, cfKey(sec, field)))) {
     container.append(el('p', { class: 'muted',
-      text: '恢复单项默认值时，在 config/aureus.toml 的 [cortisol] 节只删除对应的键值行，保留其他项，保存后重启。' }));
+      text: `恢复只读项的默认值时，在 config/aureus.toml 的 [${sec}] 节只删除对应的键值行，保留其他项，保存后重启。` }));
   }
   if (sec === 'qq') {
     container.append(el('p', {class:'muted',
@@ -3876,6 +3877,7 @@ async function loadConfigPage(force) {
   cf.data = res.data.config;
   cf.schema = res.data.schema;
   cf.readonly = new Set(res.data.readonly);
+  cf.biochemicalSources = res.data.biochemical_sources || {};
   cf.noDefault = new Set(res.data.no_default);
   cf.pwSections = new Set(res.data.password_sections);
   cf.changes = {};
