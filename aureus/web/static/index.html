@@ -468,15 +468,34 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .confirm-dialog{width:min(400px,calc(100vw - 32px))}.confirm-dialog p{padding:26px 24px;font-size:16px}
 .key-card{min-width:0;overflow-wrap:anywhere}.key-card .row{justify-content:space-between}.key-card h3{min-width:0}.key-card .key-actions{justify-content:flex-end;margin-top:20px}
 .key-actions .btn{display:grid;place-items:center;min-width:34px;min-height:34px;padding:6px}
-.inbox-layout{display:grid;grid-template-columns:minmax(190px,1fr) minmax(0,2.5fr);gap:16px;align-items:start}
-.inbox-layout .card{min-width:0}.inbox-conversations{max-height:65dvh;overflow:auto}.inbox-conversations section+section{margin-top:14px}
+.inbox-platforms{display:flex;gap:16px;flex-wrap:wrap}
+.inbox-platform{display:grid;gap:8px;justify-items:stretch;min-width:min(160px,100%)}
+.inbox-platform-enter{min-height:112px;display:grid;gap:8px;justify-items:center;align-content:center}
+.inbox-platform-icon{width:36px;height:36px;color:var(--accent);shape-rendering:crispEdges}
+.inbox-layout{display:grid;grid-template-columns:minmax(165px,1fr) minmax(0,2.5fr);gap:12px;align-items:start}
+.inbox-layout .card{min-width:0}.inbox-conversations{max-height:65dvh;overflow:auto}
 .inbox-conversations h4{margin:8px 0 4px;color:var(--text-2);font-size:12px}
 .inbox-conversation{width:100%;min-height:40px;justify-content:space-between;text-align:left;gap:8px;margin:2px 0}
 .inbox-conversation span:first-child,.inbox-message{overflow-wrap:anywhere}
 .inbox-conversation[aria-pressed="true"]{border-color:var(--accent)}
-.inbox-message{padding:12px 0;border-bottom:1px solid var(--border)}
-.inbox-message .row{justify-content:space-between;gap:6px 12px}.inbox-message p{white-space:pre-wrap;margin:7px 0 0}
-.inbox-more{margin-top:14px}
+.inbox-unread{flex:none;min-width:22px;height:22px;padding:0 4px;border-radius:999px;background:#b22535;color:#fff;text-align:center;font:12px/22px system-ui}
+.inbox-messages{display:grid;gap:12px}
+.inbox-message{display:flex;gap:8px;align-items:flex-start}
+.inbox-message.outgoing{flex-direction:row-reverse;text-align:right}
+.inbox-avatar{display:grid;flex:none;place-items:center;width:32px;height:32px;background:var(--bg);border:1px solid var(--border)}
+.inbox-avatar .ico{width:22px;height:22px;shape-rendering:crispEdges}
+.inbox-message-body{min-width:0;max-width:88%;display:grid;justify-items:start;gap:5px}
+.inbox-message.outgoing .inbox-message-body{justify-items:end}
+.inbox-message-meta{display:flex;gap:6px 12px;align-items:baseline;flex-wrap:wrap;font-size:12px}
+.inbox-bubble{max-width:100%;padding:8px 10px;text-align:left;background:var(--bg);border:1px solid var(--border);border-radius:2px 8px 8px 8px}
+.inbox-message.outgoing .inbox-bubble{border-color:var(--accent);border-radius:8px 2px 8px 8px}
+.inbox-bubble p{white-space:pre-wrap;margin:0}
+.inbox-image{display:grid;justify-items:end;gap:5px;margin:6px 0 0}
+.inbox-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}
+.inbox-image .btn{justify-self:end}
+.inbox-pagination{margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.inbox-pagination form{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.inbox-pagination input{width:6rem}
 .resource-page .stack{gap:10px}
 .resource-page>.page-body,.resource-panel{flex:1;min-width:0}
 .resource-filters input[type=search]{flex:1 1 180px;min-width:0}
@@ -532,7 +551,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .memory-graph-viewport .is-muted:not(:hover):not(:focus-visible){opacity:.27}
 .memory-graph-viewport .is-dense .memory-graph-edge:not(:hover):not(:focus) text{visibility:hidden}
 @media(max-width:1050px){.memory-graph-layout{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:680px){.inbox-layout{grid-template-columns:minmax(0,1fr)}.inbox-conversations{max-height:30dvh}}
+@media(max-width:680px){.inbox-layout{grid-template-columns:minmax(0,1fr)}.inbox-conversations{max-height:30dvh}.inbox-message-body{max-width:calc(100% - 40px)}}
 @media(max-width:1100px){.model-library{grid-template-columns:1fr}.model-vendors{position:static}.provider-list{flex-direction:row;flex-wrap:wrap}.provider-row{flex:1 1 100px}.model-price,.model-owners{display:none}}
 @media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
 
@@ -590,6 +609,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <symbol id="i-pulse" viewBox="0 0 16 16"><path d="M1 8h3V6h1V4h1V2h2v3h1v3h1v3h1V9h1V7h3v2h-2v2h-1v3h-2v-2H9v-3H8V6H7V5H6v3H5v2H1z"/></symbol>
 <symbol id="i-timeline" viewBox="0 0 16 16"><path d="M2 1h3v3H4v2h1v4H4v2h1v3H2v-3h1v-2H2V6h1V4H2zm5 1h7v1H7zm0 5h5v2H7zm0 6h7v1H7z"/></symbol>
 <symbol id="i-inbox" viewBox="0 0 16 16"><path d="M3 1h10v1h1v6h-2V5h-1v1h-2v1H7V6H5V5H4v3H2V2h1zm1 2v1h2v1h4V4h2V3zM1 8h5v2h4V8h5v6h-1v1H2v-1H1zm2 2v3h10v-3h-1v2H4v-2z"/></symbol>
+<symbol id="i-qq-platform" viewBox="0 0 16 16"><path d="M5 1h6v1h2v2h1v5h1v3h-2v2h1v1H9v-1H7v1H2v-1h1v-2H1V9h1V4h1V2h2z"/><path fill="var(--surface,#fff)" d="M5 5h2v2H5zm4 0h2v2H9zm-4 5h6v3H5z"/><path fill="#d17b33" d="M6 8h4v1H6z"/></symbol>
+<symbol id="i-inbox-person" viewBox="0 0 16 16"><path d="M5 2h6v1h1v5h-1v1H5V8H4V3h1zM4 10h8v1h2v3H2v-3h2z"/></symbol>
 <symbol id="i-learning" viewBox="0 0 16 16"><path d="M1 2h5v1h2v1h1V3h2V2h4v11h-4v1H9v1H7v-1H5v-1H1zm2 2v7h3v1h1V6H6V5H4V4zm10 0h-1v1h-2v1H9v6h1v-1h3z"/></symbol>
 <symbol id="i-memory" viewBox="0 0 16 16"><path d="M3 1h10v1h1v12h-1v1H3v-1H2V2h1zm1 2v4h8V3zm0 6v4h8V9zm2-5h4v2H6zm0 6h4v2H6z"/></symbol>
 <symbol id="i-prompt" viewBox="0 0 16 16"><path d="M3 1h7v1h1v1h1v1h1v1h1v9h-1v1H3v-1H2V2h1zm1 2v10h8V6H9V3zm7 0v1h1v1h-1zM5 6h2v1h1v1h1v1H8v1H7v1H5V9h1V8H5zm4 4h2v1H9z"/></symbol>
@@ -663,7 +684,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button class="nav-item" data-page="chat" aria-label="私聊"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-chat"/></svg><span class="nav-label" style="--i:2">私聊</span></button>
 <button class="nav-item" data-page="monitor" aria-label="观察"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-pulse"/></svg><span class="nav-label" style="--i:3">观察</span></button>
 <button class="nav-item" data-page="timeline" aria-label="时间线"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-timeline"/></svg><span class="nav-label" style="--i:4">时间线</span></button>
-<button class="nav-item" data-page="inbox" aria-label="收件箱"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-inbox"/></svg><span class="nav-label" style="--i:5">收件箱</span></button>
+<button class="nav-item" data-page="inbox" aria-label="平台"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-inbox"/></svg><span class="nav-label" style="--i:5">平台</span></button>
 <div class="nav-group"><span class="nav-label" style="--i:4">资源管理</span></div>
 <button class="nav-item" data-page="learning" aria-label="学习"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-learning"/></svg><span class="nav-label" style="--i:5">学习</span></button>
 <button class="nav-item" data-page="memory" aria-label="长期记忆"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-memory"/></svg><span class="nav-label" style="--i:6">长期记忆</span></button>
@@ -806,16 +827,32 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
     <div id="memory-panel-transfer" class="stack hidden"></div>
   </div>
 </section>
-<section id="page-inbox" class="page"><div class="page-head"><h2>收件箱</h2><button id="inbox-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
+<section id="page-inbox" class="page"><div class="page-head"><h2 id="inbox-heading" tabindex="-1">平台桌面</h2><div class="row"><button id="inbox-home" type="button" class="btn small hidden">返回平台桌面</button><button id="inbox-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div></div>
 <div class="page-body">
+<div id="inbox-desktop" class="stack">
+<p class="muted">点击图标进入会话；右键图标或使用「配置」按钮打开平台设置。</p>
+<div id="inbox-platforms" class="inbox-platforms">
+<div class="card inbox-platform">
+<button id="inbox-open-qq" class="btn inbox-platform-enter" type="button" aria-label="进入 QQ 会话"><svg class="ico inbox-platform-icon" aria-hidden="true"><use href="#i-qq-platform"/></svg>QQ</button>
+<button id="inbox-config-qq" class="btn small" type="button" aria-label="配置 QQ / SnowLuma">配置</button>
+</div>
+<div id="inbox-archive-tile" class="card inbox-platform hidden">
+<button id="inbox-open-archive" class="btn inbox-platform-enter" type="button"><svg class="ico inbox-platform-icon" aria-hidden="true"><use href="#i-inbox"/></svg>未归类历史</button>
+</div>
+</div>
+</div>
 <p id="inbox-empty" class="empty hidden" role="status"></p>
 <div id="inbox-layout" class="inbox-layout hidden">
 <nav id="inbox-conversations" class="card inbox-conversations" aria-label="收件箱会话"></nav>
 <div class="card">
 <h3 id="inbox-thread-name">选择会话</h3>
+<nav id="inbox-pagination" class="inbox-pagination hidden" aria-label="会话消息分页">
+<button id="inbox-newer" type="button" class="btn small" disabled>较新一页</button>
+<button id="inbox-more" type="button" class="btn small" disabled>较早一页</button>
+<form id="inbox-jump"><label for="inbox-page">页码</label><input id="inbox-page" type="number" inputmode="numeric" min="1" max="2147483647" step="1" value="1" required><button type="submit" class="btn small">跳转</button></form>
+</nav>
 <p id="inbox-message-status" class="empty hidden" role="status"></p>
-<div id="inbox-messages"></div>
-<button id="inbox-more" class="btn inbox-more hidden" disabled>加载更早的消息</button>
+<div id="inbox-messages" class="inbox-messages"></div>
 </div>
 </div></div></section>
 <section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2></div></div>
@@ -1937,119 +1974,216 @@ $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
 PAGES.timeline = { load: () => loadTimeline(false) };
 // ---------- 平台收件箱 ----------
-const inbox = {selected:null, next:null, nextSource:null, conversationRequest:0, messageRequest:0};
+const INBOX_MAX_PAGE = 2147483647;
+const inbox = {view:null, enabled:false, conversations:[], archives:[], selected:null,
+  page:1, lastPage:null, conversationRequest:0, messageRequest:0};
 const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
+const inboxScope = key => new URLSearchParams(Object.entries(key).filter(([, value]) => value !== null));
 
-function selectInboxConversation(conversation) {
+function inboxStatus(id, text) {
+  const status = $(id);
+  status.textContent = text;
+  status.classList.toggle('hidden', !text);
+}
+
+function renderInboxPager() {
+  $('inbox-pagination').classList.toggle('hidden', !inbox.selected);
+  $('inbox-page').value = String(inbox.page);
+  $('inbox-newer').disabled = !inbox.selected || inbox.page === 1;
+  $('inbox-more').disabled = !inbox.selected || inbox.page >= (inbox.lastPage ?? INBOX_MAX_PAGE);
+}
+
+function clearInboxThread() {
+  ++inbox.messageRequest;
+  inbox.selected = null;
+  inbox.page = 1;
+  inbox.lastPage = null;
+  $('inbox-thread-name').textContent = '选择会话';
+  $('inbox-messages').replaceChildren();
+  $('inbox-messages').removeAttribute('aria-busy');
+  inboxStatus('inbox-message-status', '');
+  renderInboxPager();
+}
+
+function selectInboxConversation(conversation, page = 1) {
   inbox.selected = conversation;
+  inbox.lastPage = null;
   const selected = inboxKey(conversation);
   for (const button of $('inbox-conversations').querySelectorAll('button')) {
     button.setAttribute('aria-pressed', String(button.dataset.conversation === selected));
   }
   $('inbox-thread-name').textContent = conversation.name;
-  return loadInboxMessages();
+  return loadInboxMessages(page);
 }
 
-function renderInboxConversations(conversations, archives) {
-  const platforms = new Map();
-  for (const conversation of conversations) {
-    const platform = conversation.key.platform;
-    if (!platforms.has(platform)) platforms.set(platform, []);
-    platforms.get(platform).push(conversation);
+function renderInboxView() {
+  const isDesktop = !inbox.view;
+  const entries = isDesktop ? [] : inbox.view === 'archive' ? inbox.archives :
+    inbox.conversations.filter(item => item.key.platform === inbox.view);
+  $('inbox-desktop').classList.toggle('hidden', !isDesktop);
+  $('inbox-home').classList.toggle('hidden', isDesktop);
+  $('inbox-archive-tile').classList.toggle('hidden', !inbox.archives.length);
+  $('inbox-layout').classList.toggle('hidden', !entries.length);
+  $('inbox-heading').textContent = isDesktop ? '平台桌面' : inbox.view === 'qq' ? 'QQ 会话' : '未归类历史';
+  inboxStatus('inbox-empty', isDesktop || entries.length ? '' : inbox.view === 'qq' && !inbox.enabled
+    ? 'QQ 收件箱未启用。可返回平台桌面查看配置位置。' : '暂无可查看的消息。');
+  const list = $('inbox-conversations');
+  list.replaceChildren();
+  const groups = inbox.view === 'archive' ? [['原件', entries]] : [
+    ['群聊', entries.filter(item => item.key.kind === 'group')],
+    ['私聊', entries.filter(item => item.key.kind !== 'group')],
+  ];
+  for (const [label, items] of groups) {
+    if (!items.length) continue;
+    list.append(el('h4', {text:label}), ...items.map(item => el('button', {
+      type:'button', class:'btn inbox-conversation', 'aria-pressed':String(inbox.selected && inboxKey(inbox.selected) === inboxKey(item) || false),
+      'data-conversation':inboxKey(item), onclick:() => selectInboxConversation(item),
+    }, el('span', {text:item.name}), item.unread_count ? el('span', {
+      class:'inbox-unread', text:item.unread_count > 99 ? '99+' : String(item.unread_count),
+      'aria-label':item.unread_count + ' 条未读消息',
+    }) : null)));
   }
-  $('inbox-conversations').replaceChildren(...Array.from(platforms, ([platform, items]) => {
-    const section = el('section', {}, el('h3', {text:platform === 'qq' ? 'QQ' : platform}));
-    for (const [label, isGroup] of [['群聊', true], ['私聊', false]]) {
-      const group = items.filter(item => (item.key.kind === 'group') === isGroup);
-      if (!group.length) continue;
-      section.append(el('h4', {text:label}), ...group.map(item => el('button', {
-        type:'button', class:'btn inbox-conversation', 'aria-pressed':'false',
-        'data-conversation':inboxKey(item), onclick:() => selectInboxConversation(item),
-      }, el('span', {text:item.name}), item.unread_count ? el('span', {
-        class:'tag', text:String(item.unread_count), 'aria-label':item.unread_count + ' 条小豆未读消息',
-      }) : null)));
-    }
-    return section;
-  }));
-  if (archives.length) {
-    $('inbox-conversations').append(el('section', {}, el('h3', {text:'未归类历史'}),
-      ...archives.map(item => el('button', {
-        type:'button', class:'btn inbox-conversation', 'aria-pressed':'false',
-        'data-conversation':inboxKey(item), text:item.name,
-        onclick:() => selectInboxConversation(item),
-      }))));
-  }
+  const previous = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
+  if (entries.length) return selectInboxConversation(previous || entries[0], previous ? inbox.page : 1);
+  clearInboxThread();
 }
 
 async function loadInbox() {
   const request = ++inbox.conversationRequest, session = state.loaded;
   const res = await api('/api/inbox/conversations');
   if (request !== inbox.conversationRequest || session !== state.loaded) return;
-  if (!res.ok) { fail(res); return; }
-  const {enabled, conversations, archives = []} = res.data;
-  const entries = [...conversations, ...archives];
-  const empty = $('inbox-empty');
-  empty.textContent = enabled ? '还没有收到消息。' : 'QQ 收件箱未启用。';
-  empty.classList.toggle('hidden', !!entries.length);
-  $('inbox-layout').classList.toggle('hidden', !entries.length);
-  renderInboxConversations(conversations, archives);
-  const selected = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
-  if (entries.length) await selectInboxConversation(selected || entries[0]);
-  else {
-    inbox.selected = null;
-    ++inbox.messageRequest;
-    $('inbox-messages').replaceChildren();
-  }
+  if (!res.ok) { inboxStatus('inbox-empty', errorText(res)); return; }
+  inbox.enabled = res.data.enabled;
+  inbox.conversations = res.data.conversations;
+  inbox.archives = res.data.archives || [];
+  await renderInboxView();
 }
 
-async function loadInboxMessages(more = false) {
-  const list = $('inbox-messages'), status = $('inbox-message-status'), button = $('inbox-more');
-  if (!inbox.selected || (more && (!inbox.next || button.disabled))) return;
-  const request = ++inbox.messageRequest, session = state.loaded;
-  const archive = inbox.selected.archive;
-  const query = new URLSearchParams(archive ? {source:archive} :
-    Object.entries(inbox.selected.key).filter(([, value]) => value !== null));
-  if (more) {
-    query.set('before_id', String(inbox.next));
-    if (!archive && inbox.nextSource) query.set('before_source', inbox.nextSource);
-  }
-  else {
-    inbox.next = null;
-    inbox.nextSource = null;
-    list.replaceChildren();
-    status.textContent = '正在加载消息…';
-    status.classList.remove('hidden');
-    button.classList.add('hidden');
-  }
-  button.disabled = true;
-  const res = await api('/api/inbox/' + (archive ? 'uncategorized?' : 'messages?') + query);
-  if (request !== inbox.messageRequest || session !== state.loaded) return;
-  button.disabled = false;
-  status.classList.add('hidden');
-  if (!res.ok) {
-    if (!more) {
-      status.textContent = errorText(res);
-      status.classList.remove('hidden');
-    } else fail(res);
-    return;
-  }
-  const {messages, next_before_id, next_before_source} = res.data;
-  list.append(...messages.map(message => el('article', {class:'inbox-message'},
-    el('div', {class:'row'}, el('strong', {text:message.sender_name || message.sender_id || '未知发件人'}),
-      message.timestamp ? el('time', {class:'muted', datetime:message.timestamp, text:fmtTime(message.timestamp, true)}) :
-        el('span', {class:'muted', text:'时间未知'})),
-    el('p', {text:message.content}))));
-  if (!list.childElementCount) {
-    status.textContent = '这个会话暂无消息。';
-    status.classList.remove('hidden');
-  }
-  inbox.next = next_before_id;
-  inbox.nextSource = next_before_source;
-  button.classList.toggle('hidden', !inbox.next);
+function openInboxView(view) {
+  clearInboxThread();
+  inbox.view = view;
+  const rendered = renderInboxView();
+  $('inbox-heading').focus();
+  return rendered;
 }
+
+function renderInboxImage(message, attachment, position) {
+  const label = `图片 ${position + 1}`;
+  const unavailable = el('p', {class:'muted hidden', text:'原图暂不可读取。'});
+  const picture = el('img', {alt:label, loading:'lazy', onerror:() => {
+    picture.classList.add('hidden');
+    unavailable.classList.remove('hidden');
+  }});
+  const preview = el('div', {}, picture, unavailable);
+  let sourceURL = null;
+  if (message.source === 'inbox' && message.conversation && Number.isSafeInteger(message.id)) {
+    const query = inboxScope(message.conversation);
+    sourceURL = `/api/inbox/messages/${message.id}/images/${position}?${query}`;
+    picture.setAttribute('src', sourceURL);
+  } else {
+    picture.classList.add('hidden');
+    unavailable.classList.remove('hidden');
+  }
+  const description = el('p', {class:'muted hidden', text:'这张图片没有保存可核验的 VLM 或规划器描述。'});
+  const toggle = el('button', {type:'button', class:'btn small', 'aria-pressed':'false', text:'查看描述'});
+  let descriptionRequested = false;
+  toggle.addEventListener('click', async () => {
+    const showing = description.classList.contains('hidden');
+    description.classList.toggle('hidden', !showing);
+    preview.classList.toggle('hidden', showing);
+    toggle.setAttribute('aria-pressed', String(showing));
+    toggle.textContent = showing ? '查看原图' : '查看描述';
+    if (!showing || !sourceURL || !attachment.is_emoji || descriptionRequested) return;
+    descriptionRequested = true;
+    description.textContent = '正在查找已有表情描述…';
+    const request = inbox.messageRequest, session = state.loaded;
+    const res = await api(sourceURL + '&view=description');
+    if (request !== inbox.messageRequest || session !== state.loaded) return;
+    description.textContent = res.ok && res.data.source === 'emoji_catalog' && res.data.description
+      ? '来源：表情资料库（相同图片）\n' + res.data.description
+      : '没有可核验的会话描述或表情资料；不会再次识别。';
+  });
+  return el('figure', {class:'inbox-image', 'aria-label':label}, preview, description, toggle);
+}
+
+function renderInboxMessage(message) {
+  const timestamp = message.timestamp;
+  const direction = message.direction === 'incoming' || message.direction === 'outgoing' ? message.direction : 'unknown';
+  const avatar = el('span', {class:'inbox-avatar', 'aria-hidden':'true'});
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('class', 'ico');
+  const glyph = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  glyph.setAttribute('href', '#i-inbox-person');
+  icon.append(glyph);
+  avatar.append(icon);
+  return el('article', {class:'inbox-message ' + direction}, avatar,
+    el('div', {class:'inbox-message-body'}, el('div', {class:'inbox-message-meta'},
+      el('strong', {text:message.sender_name || message.sender_id || '未知发件人'}),
+      direction === 'unknown' && el('span', {class:'muted', text:'方向未知'}),
+      timestamp ? el('time', {class:'muted', datetime:timestamp, title:fmtTime(timestamp, true), text:fmtTime(timestamp)}) :
+        el('span', {class:'muted', text:'时间未知'})),
+      el('div', {class:'inbox-bubble'}, message.content && el('p', {text:message.content}),
+        ...(message.attachments || []).map((item, position) => item.kind === 'image' && renderInboxImage(message, item, position)))));
+}
+
+async function loadInboxMessages(page) {
+  if (!inbox.selected || !Number.isInteger(page) || page < 1 || page > INBOX_MAX_PAGE) return;
+  const request = ++inbox.messageRequest, session = state.loaded;
+  const list = $('inbox-messages');
+  const archive = inbox.selected.archive;
+  const query = archive ? new URLSearchParams({source:archive}) : inboxScope(inbox.selected.key);
+  query.set('page', String(page));
+  inbox.page = page;
+  renderInboxPager();
+  list.replaceChildren();
+  list.setAttribute('aria-busy', 'true');
+  inboxStatus('inbox-message-status', `正在加载第 ${page} 页…`);
+  const res = await api(`/api/inbox/${archive ? 'uncategorized' : 'messages'}?${query}`);
+  if (request !== inbox.messageRequest || session !== state.loaded) return;
+  list.removeAttribute('aria-busy');
+  if (!res.ok) { inboxStatus('inbox-message-status', errorText(res)); return; }
+  const {messages, next_before_id} = res.data;
+  if (next_before_id) inbox.lastPage = null;
+  else if (messages.length || page === 1) inbox.lastPage = page;
+  renderInboxPager();
+  list.append(...[...messages].reverse().map(renderInboxMessage));
+  inboxStatus('inbox-message-status', messages.length ? '' : `第 ${page} 页没有消息。`);
+}
+
+function openQQConfig() {
+  return showPage('config', () => {
+    const tab = document.querySelector('#cf-tabs [data-sec="qq"]');
+    tab?.click();
+    tab?.focus();
+  });
+}
+
+$('inbox-open-qq').addEventListener('click', () => openInboxView('qq'));
+$('inbox-open-qq').addEventListener('contextmenu', event => { event.preventDefault(); openQQConfig(); });
+$('inbox-open-qq').addEventListener('keydown', event => {
+  if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+    event.preventDefault();
+    openQQConfig();
+  }
+});
+$('inbox-config-qq').addEventListener('click', openQQConfig);
+$('inbox-open-archive').addEventListener('click', () => openInboxView('archive'));
+$('inbox-home').addEventListener('click', () => openInboxView(null));
 $('inbox-refresh').addEventListener('click', loadInbox);
-$('inbox-more').addEventListener('click', () => loadInboxMessages(true));
-PAGES.inbox = {load:loadInbox};
+$('inbox-newer').addEventListener('click', () => loadInboxMessages(inbox.page - 1));
+$('inbox-more').addEventListener('click', () => loadInboxMessages(inbox.page + 1));
+$('inbox-jump').addEventListener('submit', event => {
+  event.preventDefault();
+  loadInboxMessages(Number($('inbox-page').value));
+});
+PAGES.inbox = {load:loadInbox, leave() {
+  ++inbox.conversationRequest;
+  inbox.conversations = [];
+  inbox.archives = [];
+  inbox.enabled = false;
+  inbox.view = null;
+  renderInboxView();
+}};
 // ---------- 人设：五层设定（接口 1.10 已有） ----------
 // 回退不是删除：是再存一个新版本，历史都还在（D62、D81 第 8 条）。
 const FREE_LAYERS = [
@@ -3476,6 +3610,10 @@ function renderConfigSection(sec) {
   if (sec === 'cortisol') {
     container.append(el('p', { class: 'muted',
       text: '恢复单项默认值时，在 config/aureus.toml 的 [cortisol] 节只删除对应的键值行，保留其他项，保存后重启。' }));
+  }
+  if (sec === 'qq') {
+    container.append(el('p', {class:'muted',
+      text:'QQ / SnowLuma 的连接和权限项在网页上只读。在数据根目录的 config/aureus.toml 中编辑 [qq]，保存后重启。token_key 只填密钥引用名，真实令牌在本机密钥库维护。'}));
   }
   if (sec === '') {
     const font = el('select', {id:'cf-font'},

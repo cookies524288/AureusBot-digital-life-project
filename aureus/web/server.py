@@ -38,6 +38,7 @@ from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
 from aureus.heartbeat.inbox_images import InboxImageIndex
+from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
@@ -241,6 +242,7 @@ def create_app(
     inbox_store: InboxStore | None = None,
     allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
     inbox_archive_account_id: str | None = None,
+    read_inbox_attachment: AttachmentReader | None = None,
     resource_language: LanguageStore | None = None,
     resource_memory: MemoryIndex | None = None,
     resource_images: InboxImageIndex | None = None,
@@ -516,6 +518,8 @@ def create_app(
         timeline.platform_history,
         ImportedPlatformHistory(resource_database) if resource_database is not None else None,
         inbox_archive_account_id,
+        read_inbox_attachment,
+        resource_emojis,
     )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock

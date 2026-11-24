@@ -572,6 +572,16 @@ class EmojiStore:
             ).fetchone()
         return self.read_media(digest) if entry else None
 
+    def read_catalog_description(self, digest: str) -> str | None:
+        """按内容指纹读取未移除的表情描述；不推断描述作者。"""
+        with closing(open_connection(self._database_file, read_only=True)) as connection:
+            entry = connection.execute(
+                """SELECT description FROM emoji_assets WHERE digest = ? AND NOT EXISTS (
+                    SELECT 1 FROM emoji_removed WHERE entry_key = 'asset:' || digest)""",
+                (digest,),
+            ).fetchone()
+        return (entry["description"].strip() or None) if entry is not None else None
+
     def _record(self, row: Row) -> EmojiRecord:
         path = self._attachment(row["digest"])
         return EmojiRecord(

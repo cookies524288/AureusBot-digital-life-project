@@ -9,6 +9,7 @@ from aureus.channels import WebChannel
 from aureus.common import AureusPaths, ManualClock, RuntimeConfig, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import registered_templates
+from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.identity import Identity
 from aureus.memory import EmojiStore
@@ -28,6 +29,7 @@ class ConfigRig:
         prompt_identity: Identity | None = None,
         inbox_store: InboxStore | None = None,
         allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
+        read_inbox_attachment: AttachmentReader | None = None,
         emoji_store: EmojiStore | None = None,
         runtime: RuntimeConfig | None = None,
         planner_tool_definitions: Callable[[], tuple[ToolDefinition, ...]] | None = None,
@@ -73,6 +75,7 @@ class ConfigRig:
             planner_tool_definitions=planner_tool_definitions,
             inbox_store=inbox_store,
             allows_inbox_conversation=allows_inbox_conversation,
+            read_inbox_attachment=read_inbox_attachment,
             resource_emojis=emoji_store,
             resource_database=self.paths.database_file,
         )

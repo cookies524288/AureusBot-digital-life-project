@@ -91,6 +91,7 @@ def open_web(
             inbox_archive_account_id=(
                 core.settings.runtime.qq.account_id if core.qq is not None else None
             ),
+            read_inbox_attachment=core.qq.read_inbox_attachment if core.qq is not None else None,
             resource_language=core.language,
             resource_memory=core.memory,
             resource_images=core.inbox_images,

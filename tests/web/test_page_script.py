@@ -18,6 +18,11 @@ function element(tag = 'div') {
   return {
     nodeType: 1, tagName: tag.toUpperCase(), dataset: {}, style: {}, value: '', textContent: '',
     children: [], listeners: {}, attributes: {},
+    get className() { return [...classes].join(' '); },
+    set className(value) {
+      classes.clear();
+      for (const name of value.split(/\s+/).filter(Boolean)) classes.add(name);
+    },
     get lastChild() { return this.children.at(-1) ?? null; },
     get firstElementChild() { return this.children.find(child => child.nodeType === 1) ?? null; },
     get nextElementSibling() {
@@ -70,6 +75,7 @@ function element(tag = 'div') {
       if (key === 'id') nodes.set(value, this);
       if (key === 'disabled') this.disabled = true;
     },
+    removeAttribute(key) { delete this.attributes[key]; },
     addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
     removeEventListener() {}, focus() {},
     remove() {
@@ -150,6 +156,98 @@ def run_page_script(code: str) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() -> None:
+    run_page_script(
+        r"""
+        const route = {platform:'qq', account_id:'14', kind:'group', recipient_id:'62', temporary_group_id:null};
+        const pending = new Map();
+        const stamp = '2026-11-24T01:23:00Z';
+        const messages = page => ({messages:[{source:'inbox', id:page + 10, conversation:route,
+          direction:'outgoing', content:'发件 ' + page, timestamp:stamp,
+          attachments:[{kind:'image', file_id:'https://invalid.test/private'},
+            {kind:'image', file_id:'C:/private.png', is_emoji:true}]},
+          {source:'inbox', id:page + 1, conversation:route, direction:'incoming', content:'来件 ' + page}],
+          next_before_id:page < 3 ? 1 : null});
+        state.loggedIn = true;
+        fetch = async path => {
+          if (path === '/api/inbox/conversations') return reply(200, {
+            enabled:true, conversations:[{key:route, name:'同名测试群', unread_count:120}],
+            archives:[{archive:'imported', name:'迁入原件'}],
+          });
+          if (path.includes('view=description')) return reply(200, {source:'emoji_catalog', description:'合成描述'});
+          if (path.startsWith('/api/inbox/uncategorized?')) return reply(200,
+            {messages:[{source:'imported', content:'原件', attachments:[]}], next_before_id:null});
+          assert.match(path, /\/api\/inbox\/messages\?platform=qq&account_id=14/);
+          assert.ok(!path.includes('before_id'));
+          const page = Number(new URLSearchParams(path.split('?')[1]).get('page'));
+          return new Promise(resolve => pending.set(page, () => resolve(reply(200, messages(page)))));
+        };
+        const click = id => $(id).listeners.click[0]({preventDefault(){}});
+        await loadInbox();
+        assert.equal($('inbox-heading').textContent, '平台桌面');
+        assert.equal($('inbox-archive-tile').classList.contains('hidden'), false);
+        const opening = click('inbox-open-qq');
+        assert.equal($('inbox-heading').textContent, 'QQ 会话');
+        assert.equal($('inbox-conversations').children[1].children[1].textContent, '99+');
+        assert.equal($('inbox-more').disabled, false);
+        $('inbox-page').value = '2';
+        $('inbox-jump').listeners.submit[0]({preventDefault(){}});
+        assert.equal($('inbox-more').disabled, false);
+        const latest = click('inbox-more');
+        assert.deepEqual([...pending.keys()], [1, 2, 3]);
+        pending.get(3)();
+        await latest;
+        pending.get(1)(); pending.get(2)();
+        await opening;
+        await Promise.resolve();
+        const list = $('inbox-messages');
+        assert.equal($('inbox-page').value, '3');
+        assert.equal($('inbox-more').disabled, true);
+        const [incoming, outgoing] = list.children;
+        assert.equal(incoming.className, 'inbox-message incoming');
+        assert.equal(outgoing.className, 'inbox-message outgoing');
+        assert.equal(outgoing.children[1].children[0].children[1].textContent, fmtTime(stamp));
+        const [body, first, second] = outgoing.children[1].children[1].children;
+        assert.equal(body.textContent, '发件 3');
+        assert.match(first.children[0].children[0].attributes.src, /^\/api\/inbox\/messages\/13\/images\/0\?/);
+        assert.match(second.children[0].children[0].attributes.src, /^\/api\/inbox\/messages\/13\/images\/1\?/);
+        await first.children[2].listeners.click[0]();
+        assert.match(first.children[1].textContent, /没有保存/);
+        assert.equal(second.children[1].classList.contains('hidden'), true);
+        await second.children[2].listeners.click[0]();
+        assert.match(second.children[1].textContent, /来源：表情资料库.*\n合成描述/);
+        await first.children[2].listeners.click[0]();
+        assert.equal(second.children[1].classList.contains('hidden'), false);
+        click('inbox-home');
+        await click('inbox-open-archive');
+        assert.equal($('inbox-heading').textContent, '未归类历史');
+        assert.equal(list.children[0].className, 'inbox-message unknown');
+        """
+    )
+
+
+def test_platform_config_has_mouse_keyboard_and_touch_equivalents() -> None:
+    run_page_script(
+        r"""
+        let prevented = 0, tabs = 0;
+        const nav = [];
+        showPage = async (name, ready) => { nav.push(name); ready(); };
+        document.querySelector = selector => {
+          assert.equal(selector, '#cf-tabs [data-sec="qq"]');
+          return {click(){ tabs++; }, focus(){}};
+        };
+        const event = {preventDefault(){ prevented++; }};
+        $('inbox-open-qq').listeners.contextmenu[0](event);
+        $('inbox-open-qq').listeners.keydown[0]({...event, shiftKey:true, key:'F10'});
+        $('inbox-open-qq').listeners.keydown[0]({...event, key:'ContextMenu'});
+        await $('inbox-config-qq').listeners.click[0]();
+        assert.deepEqual(nav, ['config', 'config', 'config', 'config']);
+        assert.equal(tabs, 4);
+        assert.equal(prevented, 3);
+        """
+    )
 
 
 def test_initial_chat_history_keeps_a_live_notice() -> None:
