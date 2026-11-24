@@ -33,6 +33,10 @@
 - [x] `test_interrupted_group_plan_keeps_review_and_summary_in_its_conversation`、`test_actual_planner_and_replyer_get_saved_summary` 和 `test_pending_replies_are_split_at_working_memory_capacity` 验证保留工作记忆、再审和收到新消息时的规划行为。不带平台会话地址的历史按可见范围筛选；未确认是用户的私聊不读取旧私聊历史。
 - [x] 16 文件联合专项先通过 184 项；剩余 6 项旧夹具与回放断言修正后，与新增的 HTTP 隔离一起复跑，13 项均通过。另跑媒体、流式读与取消、分段及 QQ 语言回放，26 项通过。该轮 23 个 Python 文件 Ruff、格式检查和 Pyright 均通过。未调用真实模型或发送真实 QQ。
 
+## 规划与发言默认原文
+
+[原文移植专项](planner-reply-prompt-port.md)对照同一固定提交。规划只取判断局面、计划和缘由的一整句；不取紧接的输出分析、搜集信息或工具行为。发言原样使用口语化指令行和现代回复器的最终正文指令，仍放在历史和内部参考之后；本地参考不是同名上游区块，保留本地描述与前缀、表情约束。人格开头、覆盖键、内部召回与防泄漏说明、JSON、分段和再审均不动，不移植上游完整 system 或工具协议。两器官的真实心跳调用均经模拟 HTTP 验证，不以预览或实际模型效果作为等价证据。
+
 ## 语言学习布局
 
 实际请求和预览使用同一构建器，预览只填合成样本。`test_integrated_prompt_scenes_match_captured_http_and_template_edits` 捕获模拟 HTTP 请求，验证系统规则、逐条资料和末尾输出要求；正文中的 `[id:99]`、`[speaker:SELF]`、`$samples` 原样留在单条 `user` 资料内。原 `language_learner_prompt` 的覆盖键和占位符仍有效；`$samples` 现在是固定的后续样本格式说明，`$output_format` 指向最后一条消息。已有自定义文案若写的是「以下 JSON」或「样本已经内嵌」，维护者可改为「后续逐条提供样本」；本次不读改正式覆盖。

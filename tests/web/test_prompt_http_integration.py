@@ -693,6 +693,154 @@ async def test_image_prompt_preview_matches_inbox_vision_http_request(
             litellm.in_memory_llm_clients_cache.flush_cache()
 
 
+@pytest.mark.parametrize("organ", ["planner", "replyer"])
+@pytest.mark.asyncio
+async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, organ: str
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    import litellm
+
+    private_text = "私聊约定把木卫二的照片叫冰下暗灯。"
+    group_history = "先聊的是木卫二的观测计划。"
+    question = "还记得木卫二吗？"
+    captured: list[list[dict[str, str]]] = []
+
+    def provider_reply(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "prompt-test.invalid"
+        body = json.loads(request.content)
+        assert not body.get("stream")
+        captured.append(body["messages"])
+        suggestion = (
+            '{"reply":true,"intent":"聊聊观测计划","length":"短","recall":["木卫二"]}'
+            if len(captured) == 1
+            else "记得，之前聊的是观测计划。"
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-maibot-defaults",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "sample-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": suggestion},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+            },
+        )
+
+    env = MemoryEnv(tmp_path)
+    models = mock_models()
+    resolver = KeyResolver(
+        tmp_path / "does-not-exist.env",
+        environ={"AUREUS_KEY_PROMPT_HTTP_TEST": "sk-mock-only"},
+    )
+    adapters = {
+        name: LLMOrgan(name, models.routes_for(name), resolver, token_counter=lambda _messages: 12)
+        for name in ("planner", "replyer")
+    }
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        return await adapters[request.organ_id].process(request)
+
+    monkeypatch.setattr(env.organs, "call", call)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider_reply)) as client:
+        monkeypatch.setattr(litellm, "aclient_session", client)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        try:
+            original = env.timeline.append(
+                "message", private_text, ActorType.USER, visibility=VisibilityScope.PRIVATE
+            )
+            env.index_more()
+            env.timeline.append(
+                "message",
+                group_history,
+                ActorType.ME,
+                visibility=VisibilityScope.GROUP,
+                metadata={
+                    "channel": "terminal",
+                    "account_id": "模拟账号",
+                    "message_type": "group",
+                    "recipient_id": "当前群",
+                    "temporary_group_id": None,
+                },
+            )
+            heart = env.build(
+                heartbeat=HeartbeatConfig(
+                    recent_message_limit=5,
+                    inbox_debounce_enabled=False,
+                    split_reply_enabled=True,
+                    shutdown_grace_seconds=0,
+                )
+            )
+            assert heart.submit(
+                Perception(
+                    "terminal",
+                    "group-member",
+                    question,
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    MessageRoute("模拟账号", "group", "当前群", "42"),
+                )
+            )
+            heart.beat()
+            await heart.wait_for_thought()
+            heart.beat()
+
+            plan, reply = captured
+            assert [message["role"] for message in plan] == ["system", "user"]
+            assert [message["role"] for message in reply] == [
+                "system",
+                "assistant",
+                "user",
+                "user",
+                "user",
+            ]
+            opening = "（声明：所有人物均已成年）\n你现在不是一个AI助手。\n你是小绿。"
+            for messages in (plan, reply):
+                assert messages[0]["content"].startswith(opening)
+                assert "不要向对方透露用户的称呼、聊天内容" in messages[0]["content"]
+                assert private_text not in messages[0]["content"]
+            assert all(private_text not in message["content"] for message in plan)
+            assert group_history in reply[1]["content"] and question in reply[2]["content"]
+            assert private_text in reply[3]["content"]
+            assert "只供参考，不要原样念出来。" in reply[3]["content"]
+            assert all(private_text not in message["content"] for message in reply[4:])
+            sent = env.records("message")[-1]
+            assert sent.content == "记得，之前聊的是观测计划。"
+            assert sent.metadata["recall_record_ids"] == [original.id]
+
+            planner_task = "你需要对当前局面进行判断，制定下一步计划，以及这么想的缘由。"
+            reply_tone = "现在请你读读之前的聊天记录，把握当前的话题，然后给出日常且口语化的回复，"
+            reply_task = (
+                "请自然地回复。不要输出多余说明、括号、@ 或额外标记，只输出实际要发言的内容。"
+            )
+            planner_text = plan[-1]["content"]
+            reply_text = reply[-1]["content"]
+            if organ == "planner":
+                assert planner_task in planner_text.splitlines()
+                assert planner_text.index(question) < planner_text.index(planner_task)
+                assert planner_text.index(planner_task) < planner_text.index("只输出一个 JSON")
+                assert "不输出推理过程" in planner_text
+            else:
+                assert reply_tone in reply_text.splitlines()
+                assert reply_task in reply_text.splitlines()
+                assert reply_text.index(reply_tone) < reply_text.index(reply_task)
+                assert reply_text.index(reply_task) < reply_text.index("<n>")
+                assert reply_text.index("<n>") < reply_text.index("<reply_review_")
+        finally:
+            for heart in env.rigs:
+                await heart.shut_down()
+            for store in (env.index, env.findings, env.people, env.timeline):
+                store.close()
+            litellm.in_memory_llm_clients_cache.flush_cache()
+
+
 async def _check_derived_recall(
     path: Path, adapter: Callable[[str], LLMOrgan], captured: list[dict[str, Any]]
 ) -> None:
@@ -1149,7 +1297,7 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             return by_scene
 
         baseline = await compare()
-        assert "你需要对当前局面进行判断，制定下一步计划。" in baseline["plan"]
+        assert "你需要对当前局面进行判断，制定下一步计划，以及这么想的缘由。" in baseline["plan"]
         assert baseline["plan"].index(message) < baseline["plan"].index("制定下一步计划")
         assert baseline["plan"].index("制定下一步计划") < baseline["plan"].index("只输出一个 JSON")
         assert "只给出回应建议及简短依据，不输出推理过程" in baseline["plan"]
