@@ -995,7 +995,7 @@ function errorText(res) {
 const notBuilt = res => res.status === 404 || res.status === 405;
 const NOT_BUILT_TEXT = '这项功能的后端还没做好（路线图 2.12b），所以这里暂时没有内容。';
 
-const NOTICE_DURATION_MS = 2000;
+const NOTICE_DURATION_MS = 5000;
 function toast(text, kind) {
   const host = $('toasts');
   // 提示也要在原生编辑对话框之上；manual popover 不抢焦点，不阻挡操作。

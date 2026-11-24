@@ -61,6 +61,56 @@ def test_repeated_model_warnings_share_one_visible_toast() -> None:
     )
 
 
+def test_model_results_and_toasts_expire_independently_after_five_seconds() -> None:
+    run_page_script(
+        r"""
+        let now = 0;
+        const pending = [];
+        setTimeout = (callback, delay) => pending.push({callback, at:now + delay});
+        const advance = async time => {
+          now = time;
+          while (pending[0]?.at <= now) pending.shift().callback();
+          await Promise.resolve();
+        };
+        const model = {name:'合成模型', identifier:'test', provider:'合成厂商', kind:'llm'};
+        mdl.baseline = {models:[model]};
+        mdl.provider = model.provider;
+        api = async path => path === '/api/models/test'
+          ? {ok:true, data:{model:model.name, provider:model.provider, kind:'llm', checks:[]}}
+          : {ok:true, data:{latency_ms:1}};
+        const probes = $('model-test-status');
+        const toasts = $('toasts');
+        const showError = detail => {
+          fail({status:400, data:{detail}});
+          toasts.lastChild.getAnimations = () => [];
+        };
+        await testModel(model);
+        showError('第一条合成提示');
+        const firstProbe = probes.lastChild, firstToast = toasts.lastChild;
+        await advance(1000);
+        await $('md-test-provider').listeners.click[0]();
+        showError('第二条合成提示');
+        const secondProbe = probes.lastChild, secondToast = toasts.lastChild;
+        const assertVisible = (host, ...expected) => {
+          assert.equal(host.children.length, expected.length);
+          assert.ok(expected.every((notice, index) => host.children[index] === notice));
+        };
+        await advance(4999);
+        assertVisible(probes, firstProbe, secondProbe);
+        assertVisible(toasts, firstToast, secondToast);
+        await advance(5000);
+        assertVisible(probes, secondProbe);
+        assertVisible(toasts, secondToast);
+        await advance(5999);
+        assertVisible(probes, secondProbe);
+        assertVisible(toasts, secondToast);
+        await advance(6000);
+        assertVisible(probes);
+        assertVisible(toasts);
+        """
+    )
+
+
 def test_loading_models_does_not_replace_newer_edits() -> None:
     run_page_script(
         r"""
