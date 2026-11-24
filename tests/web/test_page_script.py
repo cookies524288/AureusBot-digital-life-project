@@ -18,6 +18,7 @@ function element(tag = 'div') {
   return {
     nodeType: 1, tagName: tag.toUpperCase(), dataset: {}, style: {}, value: '', textContent: '',
     children: [], listeners: {}, attributes: {},
+    validity: { valid: true, badInput: false },
     get className() { return [...classes].join(' '); },
     set className(value) {
       classes.clear();
@@ -77,7 +78,16 @@ function element(tag = 'div') {
     },
     removeAttribute(key) { delete this.attributes[key]; },
     addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
-    removeEventListener() {}, focus() {},
+    removeEventListener() {},
+    focus() { context.document.activeElement = this; },
+    click() { for (const callback of this.listeners.click || []) callback(); },
+    closest(selector) {
+      for (let node = this; node; node = node.parentElement) {
+        if (node.className?.split(' ').includes(selector.slice(1))) return node;
+      }
+      return null;
+    },
+    scrollIntoView(options) { this.scrolled = options; },
     remove() {
       if (this.parentElement) {
         const siblings = this.parentElement.children;
