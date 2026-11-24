@@ -76,6 +76,7 @@ function element(tag = 'div') {
       if (key === 'id') nodes.set(value, this);
       if (key === 'disabled') this.disabled = true;
     },
+    getAttribute(key) { return this.attributes[key] ?? null; },
     removeAttribute(key) { delete this.attributes[key]; },
     addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); },
     removeEventListener() {},
@@ -342,7 +343,7 @@ def test_initial_chat_history_merges_live_reply_by_record_id() -> None:
         const loading = loadChatHistory();
         const push = message => sockets.at(-1).onmessage({data:JSON.stringify(message)});
         const time = '2026-11-22T12:00:00Z';
-        push({type:'reply', id:12, time, sender:'小绿', channel:'web', content:'收到'});
+        push({type:'reply', id:12, time, sender:'测试助手', channel:'web', content:'收到'});
         const liveReply = log.children.at(-1);
         finishHistory({ok:true, data:[
           {id:10, time:'2026-11-21T12:00:00Z', who:'user', channel:'terminal', content:'你好'},
@@ -352,13 +353,13 @@ def test_initial_chat_history_merges_live_reply_by_record_id() -> None:
         ]});
         await loading;
         push({type:'reply', id:13, time:'2026-11-22T12:01:00Z',
-          sender:'小绿', channel:'web', content:'晚些收到'});
+          sender:'测试助手', channel:'web', content:'晚些收到'});
         const messages = Array.from(log.children).filter(node => node.className.startsWith('msg '));
         assert.deepEqual(messages.map(node => node.children[0].textContent),
           ['你好', '收到', '收到', '晚些收到']);
         assert.equal(messages[2], liveReply);
         assert.match(messages[0].children[1].textContent, /terminal/);
-        assert.match(messages[2].children[1].textContent, /小绿 · web/);
+        assert.match(messages[2].children[1].textContent, /^Ta · web/);
         assert.equal(log.children.filter(node => node.className === 'chat-day').length, 2);
         """
     )
@@ -368,22 +369,54 @@ def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bu
     run_page_script(
         r"""
         state.loggedIn = true;
+        state.page = 'chat';
         openSocket();
-        api = async () => ({ok:true, data:[]});
-        await loadChatHistory();
-        const time = '2026-11-22T12:00:00Z';
-        sockets.at(-1).onmessage({data:JSON.stringify({type:'reply', id:40, delivery_key:'40:1',
-          time, sender:'小绿', channel:'web', content:'首段'})});
-        api = async path => {
-          assert.equal(path, '/api/history?replies_only=true');
-          return {ok:true, data:[
-            {id:41, delivery_key:'40:1', time, who:'me', channel:'web', content:'首段'},
-            {id:42, delivery_key:'40:2', time, who:'me', channel:'web', content:'第二段'},
-          ]};
+        let finishHistory;
+        api = path => {
+          if (path === '/api/inbox/conversations') {
+            return Promise.resolve({ok:true, data:{enabled:false}});
+          }
+          assert.equal(path, '/api/history');
+          return new Promise(resolve => { finishHistory = resolve; });
         };
-        await recoverChatReplies(sockets.at(-1));
-        const messages = Array.from($('chat-log').children).filter(node => node.className === 'msg me');
-        assert.deepEqual(messages.map(node => node.children[0].textContent), ['首段', '第二段']);
+        const loading = loadChatHistory();
+        const time = '2026-11-22T12:00:00Z';
+        const push = (ws, part, content) => ws.onmessage({data:JSON.stringify({type:'reply',
+          id:40, delivery_key:'40:' + part, time, sender:'测试助手', channel:'web', content})});
+        const firstSocket = sockets.at(-1);
+        push(firstSocket, 1, '同一段文字');
+        const messages = () => $('chat-log').children.filter(node => node.className === 'msg me');
+        const firstBubble = messages()[0];
+        await showPage('inbox');
+        finishHistory({ok:true, data:[{id:41, delivery_key:'40:1', time, who:'me',
+          channel:'web', content:'同一段文字'}]});
+        await loading;
+        firstSocket.onclose();
+        openSocket();
+        const replacement = sockets.at(-1);
+        const recovered = Array.from({length:51}, (_, index) => ({
+          id:42 + index, delivery_key:`${40 + index}:2`, time, who:'me', channel:'web',
+          content:index === 0 ? '同一段文字' : '补读 ' + index,
+        }));
+        const requested = [];
+        api = async path => {
+          requested.push(path);
+          if (requested.length === 1) {
+            push(replacement, 2, '同一段文字');
+            push(firstSocket, 3, '旧连接不能插入');
+            return {ok:true, data:recovered.slice(0, 50)};
+          }
+          return {ok:true, data:recovered.slice(50)};
+        };
+        await replacement.onopen();
+        await showPage('chat');
+        assert.deepEqual(requested, [
+          '/api/history?replies_only=true&since_id=41&limit=50',
+          '/api/history?replies_only=true&since_id=91&limit=50',
+        ]);
+        assert.equal(messages()[0], firstBubble);
+        assert.deepEqual(Array.from(messages(), node => node.children[0].textContent),
+          ['同一段文字', ...recovered.map(record => record.content)]);
         """
     )
 
@@ -458,6 +491,85 @@ def test_chat_history_failure_preserves_the_draft_for_retry() -> None:
         enter({key:'Enter', preventDefault() {}});
         assert.deepEqual(sent, ['修改后的草稿']);
         assert.equal(box.value, '');
+        """
+    )
+
+
+def test_persona_pronoun_updates_existing_labels_and_not_user_text() -> None:
+    run_page_script(
+        r"""
+        let gender = '旧身份自由文本', pronoun = 'Ta', writes = [];
+        const updatedLabels = [];
+        document.querySelectorAll = selector =>
+          selector === '[data-bot-pronoun]' ? updatedLabels : [];
+        $('page-persona').querySelector = () => ({inert:false});
+        location.hash = '#chat';
+        const time = '2026-11-22T12:00:00Z';
+        api = async (path, method, body) => {
+          if (path === '/api/status') return {ok:true, data:{bot_pronoun:pronoun}};
+          if (path === '/api/history') return {ok:true, data:[]};
+          assert.equal(path, '/api/settings');
+          if (method === 'PUT') {
+            writes.push(body.facts);
+            if (body.facts.gender) {
+              gender = body.facts.gender;
+              pronoun = '她';
+            }
+            return {ok:true};
+          }
+          return {ok:true, data:{bot_pronoun:pronoun, history:{}, locks:{}, layers:{
+            facts:{facts:{name:'测试助手', alias_names:[], gender, birthday:'2000-01-01'},
+              user:{name:'用户', accounts:[]}}, immutable:'它是用户自己写的人设',
+          }}};
+        };
+        await enter();
+        await loadPersona();
+        assert.equal($('ps-gender').value, '');
+        addMessage({kind:'user', channel:'web', content:'它是原话', time});
+        sockets.at(-1).onmessage({data:JSON.stringify({type:'reply', id:15, delivery_key:'15:1',
+          time, sender:'测试助手', channel:'web', content:'它是回复原话'})});
+        const messages = $('chat-log').children.filter(node => node.className.startsWith('msg '));
+        const replyLabel = messages[1].children[1];
+        const timeline = timelineItem({actor:'me', actor_id:'测试助手',
+          event_type:'reply_delivered', content:'它是历史原话', id:1, time});
+        const timelineLabel = timeline.children[0].children[1].children[1];
+        updatedLabels.push(replyLabel, timelineLabel);
+        assert.match(replyLabel.textContent, /^Ta · web/);
+        const save = $('ps-save-baseline').listeners.click[0];
+        const dialog = $('confirm-dialog');
+        const finish = async (choice, pending) => {
+          dialog.returnValue = choice;
+          dialog.onclose();
+          await pending;
+        };
+        const edit = (field, value) => {
+          const input = $('ps-' + field);
+          input.value = value;
+          input.listeners.input?.[0]();
+        };
+        edit('name', '改名的测试助手');
+        edit('password', '合成密码');
+        await finish('yes', save());
+        assert.equal(Object.hasOwn(writes[0], 'gender'), false);
+        edit('gender', '女');
+        edit('password', '合成密码');
+        await finish('no', save());
+        assert.equal(writes.length, 1);
+        await finish('yes', save());
+        assert.equal(writes[1].gender, '女');
+        assert.match(replyLabel.textContent, /^她 · web/);
+        assert.equal(timelineLabel.textContent, '她（测试助手）');
+        assert.equal(messages[0].children[0].textContent, '它是原话');
+        assert.equal(messages[1].children[0].textContent, '它是回复原话');
+        assert.equal(timeline.children[1].textContent, '它是历史原话');
+        assert.equal($('ps-immutable').value, '它是用户自己写的人设');
+        showAuth('login');
+        assert.equal(state.botPronoun, 'Ta');
+        assert.equal($('ps-immutable').value, '');
+        pronoun = '他';
+        await enter();
+        assert.equal(state.botPronoun, '他');
+        assert.equal($('chat-log').children.filter(node => node.className === 'msg me').length, 0);
         """
     )
 

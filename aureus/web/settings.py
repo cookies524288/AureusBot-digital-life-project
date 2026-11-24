@@ -73,11 +73,12 @@ class SettingsService:
         return {
             "layers": layers,
             "locks": persona.locks.model_dump(),
+            "bot_pronoun": identity.facts.pronoun,
             "history": {
                 layer.value: [
                     {
                         "id": version.id,
-                        "source": version.source.describe(),
+                        "source": version.source.describe(identity.facts.pronoun),
                         "time": version.created_at.isoformat(),
                         "content": version.content,
                     }

@@ -517,10 +517,15 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-layout:not([data-can-operate="true"]) .inbox-row-actions{display:none}
 .resource-page .stack{gap:10px}
 .resource-page>.page-body,.resource-panel{flex:1;min-width:0}
+.resource-navigation,.resource-actions{gap:6px}
+.resource-navigation .row{gap:6px}
+.resource-navigation>.row+.row{border-inline-start:1px solid var(--stitch);padding-inline-start:8px}
+@media(max-width:640px){.resource-navigation>.row+.row{border-inline-start:0;padding-inline-start:0;flex-basis:100%}}
 .resource-filters input[type=search]{flex:1 1 180px;min-width:0}
 .resource-filters select{width:auto;max-width:100%}
 .resource-filters select[name=conversation_key]{width:min(100%,15rem);min-width:0}
 .resource-filters label{font-size:13px}
+.resource-counts{min-height:1.5em;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .resource-list{display:grid;gap:6px;--resource-row:42px;flex:1;align-content:start;contain:size;min-height:var(--resource-row)}
 .resource-record{display:flex;align-items:center;min-width:0;gap:8px;height:var(--resource-row)}
 .resource-record .btn{height:100%;flex:1;justify-content:flex-start;min-width:0}
@@ -787,60 +792,81 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-learning" class="page wide resource-page">
   <div class="page-head"><h2>学习</h2></div>
   <div class="page-body stack">
-    <div class="row" role="group" aria-label="学习类型">
-      <button class="btn small primary" data-learning-tab="jargon" aria-pressed="true">黑话</button>
-      <button class="btn small" data-learning-tab="expression" aria-pressed="false">表达方式</button>
-      <button class="btn small" data-learning-tab="clusters" aria-pressed="false">表达簇</button>
-      <button class="btn small" data-learning-tab="emoji" aria-pressed="false">表情包</button>
+    <div class="row resource-navigation" role="group" aria-label="学习类型">
+      <button class="btn small primary" type="button" data-learning-tab="expression" aria-pressed="true" aria-disabled="true" aria-controls="learning-panel-expression">表达方式</button>
+      <button class="btn small" type="button" data-learning-tab="jargon" aria-pressed="false" aria-controls="learning-panel-jargon">黑话</button>
+      <button class="btn small" type="button" data-learning-tab="emoji" aria-pressed="false" aria-controls="learning-panel-emoji">表情包</button>
     </div>
-    <div id="learning-panel-jargon" class="stack resource-panel"></div>
-    <div id="learning-panel-expression" class="stack resource-panel hidden"></div>
-    <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
+    <div id="learning-panel-expression" class="stack resource-panel">
+      <div class="row resource-navigation" role="group" aria-label="表达浏览">
+        <button class="btn small primary" type="button" data-expression-view="list" aria-pressed="true" aria-disabled="true" aria-controls="learning-expression-list">表达列表</button>
+        <button class="btn small" type="button" data-expression-view="clusters" aria-pressed="false" aria-controls="learning-panel-clusters">表达簇</button>
+      </div>
+      <div id="learning-expression-list" class="stack resource-panel"></div>
+      <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
+    </div>
+    <div id="learning-panel-jargon" class="stack resource-panel hidden"></div>
     <div id="learning-panel-emoji" class="stack resource-panel hidden"></div>
   </div>
 </section>
 <section id="page-memory" class="page wide resource-page">
   <div class="page-head"><h2>长期记忆</h2></div>
   <div class="page-body stack">
-    <div class="row" role="group" aria-label="长期记忆功能" style="flex-wrap:wrap">
-      <button class="btn small primary" data-memory-tab="query" aria-pressed="true">记忆查询</button>
-      <button class="btn small" data-memory-tab="graph" aria-pressed="false">关系图</button>
-      <button class="btn small" data-memory-tab="images" aria-pressed="false">图片记忆</button>
-      <button class="btn small" data-memory-tab="flow" aria-pressed="false">记忆流</button>
-      <button class="btn small" data-memory-tab="operations" aria-pressed="false">操作记录</button>
-      <button class="btn small" data-memory-tab="transfer" aria-pressed="false">导入导出</button>
+    <div class="row resource-navigation" role="group" aria-label="长期记忆工作台">
+      <div class="row" role="group" aria-label="记忆浏览">
+        <button class="btn small primary" type="button" data-memory-tab="query" aria-pressed="true" aria-disabled="true" aria-controls="memory-panel-query">记忆查询</button>
+        <button class="btn small" type="button" data-memory-tab="images" aria-pressed="false" aria-controls="memory-panel-images">图片记忆</button>
+        <button class="btn small" type="button" data-memory-tab="flow" aria-pressed="false" aria-controls="memory-panel-flow">记忆流</button>
+      </div>
+      <div class="row" role="group" aria-label="记忆管理">
+        <button class="btn small" type="button" data-memory-tab="transfer" aria-pressed="false" aria-controls="memory-panel-transfer">导入导出</button>
+        <button class="btn small" type="button" data-memory-tab="inspection" aria-pressed="false" aria-controls="memory-panel-inspection">记忆检修</button>
+        <button class="btn small" type="button" data-memory-tab="operations" aria-pressed="false" aria-controls="memory-panel-operations">记忆移除</button>
+      </div>
     </div>
     <div id="memory-panel-query" class="stack resource-panel">
-      <div class="row" role="group" aria-label="查询内容">
-        <button class="btn small primary" data-memory-query="text" aria-pressed="true">文字记录</button>
-        <button class="btn small" data-memory-query="profiles" aria-pressed="false">人物画像</button>
+      <div class="row resource-navigation" role="group" aria-label="查询内容">
+        <button class="btn small primary" type="button" data-memory-query="text" aria-pressed="true" aria-disabled="true" aria-controls="memory-query-text">文字记录</button>
+        <button class="btn small" type="button" data-memory-query="profiles" aria-pressed="false" aria-controls="memory-query-profiles">人物画像</button>
+        <button class="btn small" type="button" data-memory-query="graph" aria-pressed="false" aria-controls="memory-panel-graph">关系图</button>
       </div>
       <div id="memory-query-text" class="stack resource-panel">
         <form id="memory-search" class="row resource-filters">
           <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索正文或来源 ID" maxlength="200">
           <select name="type" aria-label="记忆类型">
-            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="messages">消息</option><option value="experiences">其他经历</option>
+            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="experiences">其他经历</option>
           </select>
           <label id="memory-show-disabled"><input name="disabled" type="checkbox"> 显示停用</label>
           <label><input name="removed" type="checkbox"> 查看已移除</label>
           <button class="btn small primary">查询</button><button id="memory-refresh" type="button" class="btn small">刷新</button>
         </form>
-        <div id="memory-selection" class="row">
+        <div id="memory-selection" class="row resource-actions" role="group" aria-label="所选文字记忆">
           <label><input id="memory-select-all" type="checkbox" disabled> 全选本页</label>
           <button id="memory-correct" class="btn small" disabled>修正所选</button>
           <button id="memory-toggle-removed" type="button" class="btn small" disabled>移除所选</button>
-          <button id="memory-inspection" type="button" class="btn small">只读检修</button>
-          <span id="memory-counts" class="muted" aria-live="polite" style="margin-left:auto"></span>
         </div>
+        <p id="memory-counts" class="muted resource-counts" aria-live="polite"></p>
       </div>
       <div id="memory-query-profiles" class="stack resource-panel hidden"></div>
+      <div id="memory-panel-graph" class="stack resource-panel hidden"></div>
     </div>
     <div id="memory-panel-images" class="stack resource-panel hidden">
       <div id="memory-pictures" class="stack resource-panel"></div>
     </div>
-    <div id="memory-panel-graph" class="stack resource-panel hidden"></div>
     <div id="memory-panel-flow" class="stack resource-panel hidden"></div>
+    <div id="memory-panel-inspection" class="stack resource-panel hidden">
+      <p class="muted">核对本地文字索引；内容、召回状态和人物别名在对应记录上维护。</p>
+      <div class="row resource-actions" role="group" aria-label="检修操作">
+        <button id="memory-inspection" type="button" class="btn small">只读检修</button>
+        <button id="memory-inspect-text" type="button" class="btn small">维护文字记录</button>
+        <button id="memory-inspect-profiles" type="button" class="btn small">维护人物别名</button>
+      </div>
+      <p class="muted">如需查看原始聊天，请前往 <a href="#inbox">平台会话</a>。</p>
+    </div>
     <div id="memory-panel-operations" class="stack resource-panel hidden">
+      <p class="muted">在文字查询中选中本页记录后移除，或查看已移除记录并恢复。不永久删除原件。</p>
+      <div class="row"><button id="memory-removal-query" type="button" class="btn small">选择文字记忆</button></div>
+      <h3>操作记录</h3>
       <p class="muted">仅显示启用后成功移除或恢复的、在当前可见范围内的本地文字记忆。不含迁入记录或旧历史。</p>
     </div>
     <div id="memory-panel-transfer" class="stack hidden"></div>
@@ -900,9 +926,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="form-grid" style="margin-top:12px">
 <div class="field"><label for="ps-name">名字</label><input id="ps-name" type="text"></div>
 <div class="field"><label for="ps-aliases">昵称</label><input id="ps-aliases" type="text"></div>
-<div class="field"><label for="ps-gender">性别</label><input id="ps-gender" type="text"></div>
+<div class="field"><label for="ps-gender">性别</label><select id="ps-gender"><option value="" hidden disabled>旧设定（保持不变）</option><option>男</option><option>女</option><option>其它</option></select></div>
 <div class="field"><label for="ps-birthday">生日</label><input id="ps-birthday" type="text" placeholder="YYYY-MM-DD"></div>
-<div class="field"><label for="ps-user-name">它怎么称呼你</label><input id="ps-user-name" type="text"></div>
+<div class="field"><label for="ps-user-name"><span data-bot-pronoun="">Ta</span>怎么称呼你</label><input id="ps-user-name" type="text"></div>
 </div>
 <div class="field" style="margin-top:14px">
 <div class="field-label"><label for="ps-accounts">你的账号</label><span class="hint" id="ps-accounts-hint">每行一个，格式为 平台:账号（如 qq:10000）</span></div>
@@ -942,7 +968,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="og-step conditional"><b>网页、终端来信 → 感知队列</b><p>直接唤醒心跳。日程等内部事件由心跳另行检查，符合条件时也可启动其他任务。</p></div>
 </div></li>
 <li><div class="og-step"><b>心跳收下新来信</b><p>识别来源，追加来信到时间线。收件箱按会话记录已读进度，优先唤醒时跳过的旧来信仍能翻阅。身份无法确认时只记录。</p></div></li>
-<li><div class="og-step"><b>检查本轮能否开始处理</b><p>一次处理同一会话的一批来信。小豆可以留在当前会话，直到主动退出或另一个会话有特别关心来信。开启防抖后，同会话新消息在默认 4 秒的窗口内合并。</p></div></li>
+<li><div class="og-step"><b>检查本轮能否开始处理</b><p>一次处理同一会话的一批来信。<span data-bot-pronoun="">Ta</span>可以留在当前会话，直到主动退出或另一个会话有特别关心来信。开启防抖后，同会话新消息在默认 4 秒的窗口内合并。</p></div></li>
 <li><div class="og-lanes">
 <div class="og-step conditional"><b>按需判断</b><p>满足判断配置和触发条件时，请判断器官提供情绪建议。心跳可把产生的变化带入后续处理。</p></div>
 <div class="og-step"><b>按会话规划</b><p>每个精力档位都先规划，再按建议决定是否回复。开启防抖后，规划用流式请求。同会话的新消息可在首次规划期间打断请求并加入本轮，默认最多重开 4 次。</p></div>
@@ -1045,7 +1071,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
 const $ = id => document.getElementById(id);
-const state = { loggedIn: false, qqLink: false, page: '', loaded: {} };
+const state = { loggedIn: false, qqLink: false, page: '', loaded: {}, botPronoun: 'Ta' };
 let editorGeneration = 0;
 
 for (const control of document.querySelectorAll('input, textarea, select, form')) control.setAttribute('autocomplete', 'off');
@@ -1203,6 +1229,15 @@ function setLiveText(node, value) {
   else updateLiveRegion(node, () => { node.textContent = value; });
 }
 
+function setBotPronoun(pronoun) {
+  const next = pronoun || 'Ta';
+  if (state.botPronoun === next) return;
+  state.botPronoun = next;
+  for (const node of document.querySelectorAll('[data-bot-pronoun]')) {
+    node.textContent = next + node.getAttribute('data-bot-pronoun');
+  }
+}
+
 function startPageEntrance(page) {
   if (reducedMotion.matches) return;
   stopPageEntrance();
@@ -1331,6 +1366,8 @@ $('theme-btn').addEventListener('click', () => {
 function showAuth(view, message) {
   PAGES[state.page]?.leave?.();
   state.loggedIn = false;
+  setBotPronoun();
+  clearPersona();
   clearQQLink();
   pendingLiveUpdates.clear();
   catalogs.clear();
@@ -1352,7 +1389,9 @@ function showAuth(view, message) {
 }
 
 async function enter() {
+  const session = state.loaded;
   const res = await api('/api/status');
+  if (session !== state.loaded) return;
   if (res.status === 401) { showAuth('login'); return; }
   if (!res.ok) { showAuth('login', errorText(res)); return; }
   if (res.data && res.data.must_change_password) {
@@ -1360,6 +1399,7 @@ async function enter() {
     return;
   }
   state.loggedIn = true;
+  setBotPronoun(res.data?.bot_pronoun);
   state.qqLink = Boolean(res.data?.qq_link);
   refreshQQLinkVisibility();
   $('terminal-btn').classList.toggle('hidden', !res.data?.can_open_terminal);
@@ -1595,11 +1635,12 @@ for (const btn of document.querySelectorAll('[data-go]')) btn.addEventListener('
 PAGES.overview = { load: loadOverview };
 const showMemoryTab = installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAGES});
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------
-// 每条都显示通道（D63 第 8 条）；notice 是系统通知，不是它说的（D35），画成虚线条。
-const WHO_NAME = { user: '你', me: '它', person: '对方', system: '系统' };
+// 每条都显示通道（D63 第 8 条）；notice 是系统通知（D35），画成虚线条。
+const WHO_NAME = { user: '你', person: '对方', system: '系统' };
+const CHAT_RECOVERY_PAGE_SIZE = 50;
 let socket = null, socketWanted = false, lastDay = '';
 const chatEntries = [];
-const renderedChatKeys = new Set();
+const chatEntriesByKey = new Map();
 
 function setConn(text, kind) {
   setLiveText($('conn-text'), text);
@@ -1611,22 +1652,31 @@ function chatDay(when) {
   return el('div', {class:'chat-day', text:(when.getMonth() + 1) + '月' + when.getDate() + '日'});
 }
 
-function chatMessage({kind, sender, channel, content, time, notice, id}) {
+function actorLabel(tag, who, suffix = '', className = '') {
+  if (who === 'me') return el(tag, {class:className, 'data-bot-pronoun':suffix, text:state.botPronoun + suffix});
+  return el(tag, {class:className, text:(WHO_NAME[who] || who) + suffix});
+}
+
+function chatMessage({kind, channel, content, time, notice, id}) {
   const when = time ? new Date(time) : new Date();
-  const who = notice ? '系统通知' : sender;
-  const meta = who + ' · ' + (channel || '未标通道') + ' · ' + fmtTime(when.toISOString());
+  const suffix = ' · ' + (channel || '未标通道') + ' · ' + fmtTime(when.toISOString());
   const node = el('div', {class:'msg ' + (notice ? 'notice' : kind)},
-    el('div', {class:'bubble', text:content}), el('div', {class:'meta', text:meta}));
+    el('div', {class:'bubble', text:content}), actorLabel('div', notice ? '系统通知' : kind, suffix, 'meta'));
   return {node, when, id};
 }
 
-function registerChatMessage(message) {
+function registerChatMessage(message, fromHistory = false) {
   const key = message.delivery_key ?? message.id;
-  if (key != null) {
-    if (renderedChatKeys.has(key)) return null;
-    renderedChatKeys.add(key);
+  const existing = chatEntriesByKey.get(key);
+  if (existing) {
+    if (fromHistory) {
+      existing.when = new Date(message.time);
+      existing.id = message.id;
+    }
+    return null;
   }
   const entry = chatMessage(message);
+  if (key != null) chatEntriesByKey.set(key, entry);
   chatEntries.push(entry);
   return entry;
 }
@@ -1651,7 +1701,7 @@ function addMessage(message) {
 function mergeChatHistory(items) {
   const log = $('chat-log');
   for (const item of items) {
-    registerChatMessage({...item, kind:item.who, sender:WHO_NAME[item.who] || item.who});
+    registerChatMessage({...item, kind:item.who}, true);
   }
   chatEntries.sort((a, b) => a.when - b.when || (a.id != null && b.id != null ? a.id - b.id : 0));
   for (const child of Array.from(log.children)) {
@@ -1680,6 +1730,7 @@ function loadChatHistory() {
     $('chat-send').disabled = false;
     if (!res.ok) { delete loaded.chat; fail(res); return; }
     mergeChatHistory(res.data);
+    loaded.chatCursor = res.data.at(-1)?.id ?? 0;
   });
   return loaded.chat;
 }
@@ -1689,12 +1740,18 @@ async function recoverChatReplies(ws) {
   const loaded = state.loaded;
   if (!loaded.chat) return;
   await loaded.chat;
-  if (state.loaded !== loaded || socket !== ws) return;
-  const res = await api('/api/history?replies_only=true');
-  if (res.ok && state.loaded === loaded && socket === ws) mergeChatHistory(res.data);
+  const current = () => state.loaded === loaded && socket === ws;
+  while (current() && loaded.chatCursor !== undefined) {
+    const query = '?replies_only=true&since_id=' + loaded.chatCursor + '&limit=' + CHAT_RECOVERY_PAGE_SIZE;
+    const res = await api('/api/history' + query);
+    if (!current() || !res.ok || !res.data.length) return;
+    mergeChatHistory(res.data);
+    loaded.chatCursor = res.data.at(-1).id;
+    if (res.data.length < CHAT_RECOVERY_PAGE_SIZE) return;
+  }
 }
 
-function openSocket(reconnecting = false) {
+function openSocket() {
   socketWanted = true;
   if (socket) return;
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1704,7 +1761,7 @@ function openSocket(reconnecting = false) {
   ws.onopen = () => {
     if (socket !== ws) return;
     setConn('已连接', 'ok');
-    if (reconnecting) void recoverChatReplies(ws);
+    return recoverChatReplies(ws);
   };
   ws.onmessage = ev => {
     if (socket !== ws) return;
@@ -1727,17 +1784,22 @@ function closeSocket() {
   if (old) old.close();
   chatEntries.length = 0;
   $('chat-send').disabled = true;
-  renderedChatKeys.clear();
+  chatEntriesByKey.clear();
   lastDay = '';
   $('chat-log').replaceChildren();
 }
 // 断线后隔 3 秒重连；先问一次登录状态，登录已经失效就不再连（api 会把页面带回登录）。
 function reconnectLater() {
+  const session = state.loaded;
+  const current = () => session === state.loaded && socketWanted && state.loggedIn && !socket;
   setTimeout(async () => {
-    if (!socketWanted || !state.loggedIn || socket) return;
+    if (!current()) return;
     const res = await api('/api/status');
-    if (!socketWanted || !state.loggedIn || socket) return;
-    if (res.ok) openSocket(true);
+    if (!current()) return;
+    if (res.ok) {
+      setBotPronoun(res.data?.bot_pronoun);
+      openSocket();
+    }
     else if (res.status === 0) reconnectLater();
   }, 3000);
 }
@@ -1747,14 +1809,14 @@ function sendChat() {
   const text = box.value.trim();
   if (!text) return;
   // 等历史快照合并后再发送，避免同一条消息同时出现在快照和本地气泡里。
-  if (pendingChat !== null) {
+  if (state.loaded.chatCursor === undefined) {
     toast('正在读取聊天记录，读取完成后请再发送。');
     loadChatHistory();
     return;
   }
   if (!socket || socket.readyState !== 1) { toast('还没连上，稍等一下再发。', 'error'); return; }
   socket.send(JSON.stringify({ text }));
-  addMessage({kind:'user', sender:'你', channel:'web', content:text});
+  addMessage({kind:'user', channel:'web', content:text});
   box.value = '';
   box.style.height = 'auto';
 }
@@ -1880,7 +1942,6 @@ function timelineItem(rec, inContext, {
   feedbackId = rec.recall_feedback_reply_id || (rec.recall_feedback_available ? rec.id : null),
   visibilityNames = VISIBILITY_NAMES,
 } = {}) {
-  const actor = { user: '你', me: '它', person: '对方', system: '系统' }[rec.actor] || rec.actor;
   const event = rec.event_type === 'message' && rec.actor === 'me' ? '历史回复 · 未标投递' : EVENT_NAMES[rec.event_type] || rec.event_type;
   const visibility = visibilityNames[rec.visibility];
   const top = el('div', { class: 'tl-top' },
@@ -1888,7 +1949,7 @@ function timelineItem(rec, inContext, {
     visibility ? el('span', { class: 'tag', text: visibility }) : null,
     el('div', { class: 'tl-meta' },
       el('time', { datetime: rec.time, text: fmtTime(rec.time, true) }),
-      el('span', { text: actor + (rec.actor_id ? '（' + rec.actor_id + '）' : '') }),
+      actorLabel('span', rec.actor, rec.actor_id ? '（' + rec.actor_id + '）' : ''),
       rec.channel ? el('span', { text: CHANNEL_NAMES[rec.channel] || rec.channel }) : null,
       el('span', { class: 'mono', text: '#' + rec.id })));
   const {actions, ...metadata} = rec.metadata || {};
@@ -2418,6 +2479,15 @@ let personaBaseline = null;
 let personaLocks = null;
 let personaSaving = false;
 
+function clearPersona() {
+  personaBaseline = personaLocks = null;
+  for (const field of PERSONA_BASELINE_FIELDS) $('ps-' + field).value = '';
+  $('ps-password').value = '';
+  $('ps-free').replaceChildren();
+  $('ps-locks').replaceChildren();
+  refreshPersonaSaveButtons();
+}
+
 function readPersonaBaseline() {
   return PERSONA_BASELINE_FIELDS.map(field => $('ps-' + field).value);
 }
@@ -2446,7 +2516,9 @@ async function confirmPersonaChange(message, write) {
 }
 
 async function savePersona(body, okText) {
+  const session = state.loaded;
   const res = await api('/api/settings', 'PUT', body);
+  if (session !== state.loaded) return false;
   if (!res.ok) { fail(res); return false; }
   toast(okText, 'ok');
   await loadPersona();
@@ -2490,6 +2562,7 @@ async function loadPersona() {
   if (revision !== personaLoadRevision || session !== state.loaded) return;
   if (!res.ok) { fail(res); return; }
   const v = res.data;
+  setBotPronoun(v.bot_pronoun);
   const free = $('ps-free');
   const locks = $('ps-locks');
   free.textContent = '';
@@ -2505,7 +2578,7 @@ async function loadPersona() {
   const facts = v.layers.facts.facts, user = v.layers.facts.user;
   $('ps-name').value = facts.name;
   $('ps-aliases').value = facts.alias_names.join('，');
-  $('ps-gender').value = facts.gender;
+  $('ps-gender').value = ['男', '女', '其它'].includes(facts.gender) ? facts.gender : '';
   $('ps-birthday').value = facts.birthday;
   $('ps-user-name').value = user.name;
   $('ps-accounts').value = user.accounts.map(a => a.platform + ':' + a.id).join('\n');
@@ -2546,10 +2619,12 @@ $('ps-save-baseline').addEventListener('click', () => {
   const password = $('ps-password').value;
   if (!password) { toast('修改设定需要输入当前密码。', 'error'); return; }
   const aliases = $('ps-aliases').value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  const gender = $('ps-gender').value;
   const settings = {
     password,
     text: { immutable: $('ps-immutable').value },
-    facts: { name: $('ps-name').value.trim(), alias_names: aliases, gender: $('ps-gender').value.trim(), birthday: $('ps-birthday').value.trim() },
+    facts: { name: $('ps-name').value.trim(), alias_names: aliases, birthday: $('ps-birthday').value.trim(),
+      ...(gender && gender !== personaBaseline[PERSONA_BASELINE_FIELDS.indexOf('gender')] ? { gender } : {}) },
     user: { name: $('ps-user-name').value.trim(), accounts },
   };
   return confirmPersonaChange('确定要保存设定的修改吗？', () => {
@@ -3644,6 +3719,7 @@ const CFG_FIELDS = {
   'judge.organ': ['判断器官', '选择负责解读事件的器官。'],
   'judge.timeout_seconds': ['判断超时（秒）', '一次判断最多等多少秒。'],
   'judge.context_messages': ['判断参考消息数', '判断时额外参考最近多少条对话。'],
+  'judge.state_context_enabled': ['判断前读取自身状态', '判断时参考当前可用的身体、情绪和心情读数；关闭不影响判断器调用或回复调节。'],
   'feedback.enabled': ['反馈统计', '是否根据过去的结果统计反馈。'],
   'feedback.window_size': ['反馈统计窗口', '统计时最多参考最近多少次结果。'],
   'feedback.min_samples': ['样本下限', '至少积累多少次结果，系统才认为样本足够。'],
@@ -3722,7 +3798,7 @@ const CFG_FIELDS = {
 };
 const CFG_FONT = {key:'aureus-font', id:'cf-font', name:'界面字体', hint:'选择这台浏览器显示 Aureus 时使用的字体，切换后立即生效。'};
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
-const cf = { data: null, schema: null, session: null, readonly: new Set(), noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
+const cf = { data: null, schema: null, session: null, readonly: new Set(), biochemicalSources: {}, noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
   sections: new Map(), tabs: new Map(), searchEntries: [], results: [] };
 const cfKey = (sec, field) => sec ? sec + '.' + field : field;
 const cfResolve = node => (node && node.$ref ? cf.schema.$defs[node.$ref.split('/').pop()] : node) || {};
@@ -3814,7 +3890,7 @@ function settingTerm(name, hint, key, idForFocus) {
     el('span', {id, class:'setting-help', role:'tooltip'}, el('b', {'aria-hidden':'true', text:'i'}), hint));
 }
 $('qq-link-title').append(settingTerm('QQ 账号关联',
-  '绑定本人的 QQ 账号。在网页生成验证码后，到 QQ 私聊小豆发送验证命令。', 'qq-link'));
+  '绑定本人的 QQ 账号。在网页生成验证码后，到 QQ 私聊本助手并发送验证命令。', 'qq-link'));
 
 async function restoreConfigField(sec, field, button) {
   const key = cfKey(sec, field);
@@ -3843,13 +3919,14 @@ function cfRow(sec, field) {
   const prop = cfSectionProperties(sec)[field];
   const info = cfFieldInfo(prop);
   const readonly = cf.readonly.has(key);
+  const source = cf.biochemicalSources[key];
   const [name, hint] = CFG_FIELDS[key];
   const effect = readonly ? '只读' : '重启后生效';
   const id = 'cf-field-' + key;
   const attributes = {id:readonly ? undefined : id, disabled:readonly, 'aria-label':name, 'aria-describedby':'cf-help-' + key};
-  const value = sec === 'cortisol'
+  const value = source
     ? el('div', { class: 'mono' }, String(cfOriginal(sec, field)),
-        el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) }))
+        el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) + ' · 来源：' + source }))
     : cfControl(sec, field, info, attributes);
   return el('div', { class: 'cfg-field' },
     el('div', { class: 'name' }, settingTerm(name, hint + ' ' + effect + '。', key, readonly ? id : undefined), ' ',
@@ -3886,9 +3963,9 @@ function buildConfigSection(sec, title, hint) {
   container.append(el('div', {class:'card-head cfg-section-head'},
     el('div', {}, el('h3', {}, settingTerm(title, hint, 'section-' + sec)),
       sec ? el('div', {class:'mono cfg-path', text:sec}) : null)));
-  if (sec === 'cortisol') {
+  if (cfFields(sec).some(field => Object.hasOwn(cf.biochemicalSources, cfKey(sec, field)))) {
     container.append(el('p', { class: 'muted',
-      text: '恢复单项默认值时，在 config/aureus.toml 的 [cortisol] 节只删除对应的键值行，保留其他项，保存后重启。' }));
+      text: `恢复只读项的默认值时，在 config/aureus.toml 的 [${sec}] 节只删除对应的键值行，保留其他项，保存后重启。` }));
   }
   if (sec === 'qq') {
     container.append(el('p', {class:'muted',
@@ -4027,6 +4104,7 @@ async function loadConfigPage(force) {
   cf.data = res.data.config;
   cf.schema = res.data.schema;
   cf.readonly = new Set(res.data.readonly);
+  cf.biochemicalSources = res.data.biochemical_sources || {};
   cf.noDefault = new Set(res.data.no_default);
   cf.pwSections = new Set(res.data.password_sections);
   cf.changes = {};

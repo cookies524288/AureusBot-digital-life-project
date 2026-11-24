@@ -32,7 +32,7 @@ def run_halt_command(args: argparse.Namespace, paths: AureusPaths) -> int:
         print(f"错误：急停没有生效，写不进 {paths.halt_file}（{error}）。", file=sys.stderr)
         return EXIT_FAILURE
     if engaged:
-        print("已急停。它不会再调用模型、不会再回复，收到的消息照常记录。")
+        print("已急停。助手不会再调用模型、不会再回复，收到的消息照常记录。")
         print("解除用：aureus resume")
     else:
         print(f"本来就在急停中：{stop.status().reason}")

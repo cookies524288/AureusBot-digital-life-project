@@ -138,6 +138,9 @@ class LegacyPlatformHistory:
         limit: int,
         archive_account_id: str | None = None,
         offset: int = 0,
+        visibility: VisibilityScope | None = None,
+        keyword: str | None = None,
+        received_only: bool = False,
     ) -> list[TimelineRecord]:
         """按追加序号倒序读取精确原路由或显式未归类的独立页。"""
         if route is None:
@@ -153,11 +156,15 @@ class LegacyPlatformHistory:
                 SELECT MIN(id) FROM classified WHERE {scope} GROUP BY message_key))
         """
         distinct_parameters = () if route is None else parameters
-        with closing(open_connection(self._path)) as database:
+        received = "AND actor_type IN ('user', 'person')" if received_only else ""
+        with closing(open_connection(self._path, read_only=True)) as database:
             rows = database.execute(
                 f"""{_PLATFORM_ROWS}
-                SELECT * FROM classified WHERE {scope} {distinct} AND (? IS NULL OR id < ?)
+                SELECT * FROM classified WHERE {scope} {distinct} {received}
+                  AND (? IS NULL OR visibility = ?) AND (? IS NULL OR id < ?)
+                  AND (? IS NULL OR instr(lower(content), lower(?)) > 0)
                 ORDER BY id DESC LIMIT ? OFFSET ?""",
-                (*parameters, *distinct_parameters, before_id, before_id, limit, offset),
+                (*parameters, *distinct_parameters, visibility, visibility, before_id, before_id,
+                 keyword, keyword, limit, offset),
             ).fetchall()
         return [_record(row) for row in rows]

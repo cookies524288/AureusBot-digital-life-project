@@ -80,3 +80,24 @@ def _describe_energy(energy: EnergyReading) -> str:
         f"还剩 {energy.remaining_today:,}；"
         f"本月还剩 {energy.month_remaining:,} token、{energy.days_left_in_month} 天"
     )
+
+
+def describe_judge_body(
+    reading: BodyReading, config: BodyConfig, *, owner_private: bool
+) -> list[str]:
+    """只给判断器已开启的读数，不附账单细节、失败原因或最近联系时间。"""
+    if not config.state_in_prompt_enabled:
+        return []
+    lines: list[str] = []
+    if owner_private and config.energy_enabled:
+        energy = reading.energy
+        lines.append(f"精力 {energy.fraction:.0%}" if energy.fraction is not None else "精力不限")
+    if reading.fatigue.enabled:
+        lines.append(f"疲劳 {reading.fatigue.level:.0%}")
+    if reading.stress.enabled:
+        lines.append(f"压力 {reading.stress.level:.0%}")
+    if reading.sleep.enabled:
+        lines.append("夜间时段：是" if reading.sleep.night else "夜间时段：否")
+    if owner_private and reading.social_need.enabled:
+        lines.append(f"社交需求 {reading.social_need.level:.0%}")
+    return lines

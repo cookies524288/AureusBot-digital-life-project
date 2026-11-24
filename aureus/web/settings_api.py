@@ -9,7 +9,7 @@ import math
 import sqlite3
 from collections.abc import Awaitable, Callable
 from datetime import date
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -46,7 +46,7 @@ class FactsRequest(_Strict):
     alias_names: list[Annotated[str, Field(max_length=MAX_NAME_CHARS)]] = Field(
         default_factory=list, max_length=MAX_ALIASES
     )
-    gender: str = Field(default="", max_length=MAX_NAME_CHARS)
+    gender: Literal["男", "女", "其它"] | None = None
     birthday: str
 
     @field_validator("birthday")
@@ -117,7 +117,7 @@ class EditRequest(_Strict):
             )
             if (content := getattr(self.text, layer.value)) is not None
         }
-        facts = None if self.facts is None else Facts(**self.facts.model_dump())
+        facts = None if self.facts is None else Facts(**self.facts.model_dump(exclude_none=True))
         user = None
         if self.user is not None:
             accounts = [UserAccount(**a.model_dump()) for a in self.user.accounts]

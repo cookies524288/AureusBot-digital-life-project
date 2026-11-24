@@ -424,6 +424,8 @@ def create_app(
         request: Request, _token: Annotated[str, Depends(require_session)]
     ) -> dict[str, bool | str]:
         result: dict[str, bool | str] = {"must_change_password": auth.password_is_default}
+        if settings is not None and not auth.password_is_default:
+            result["bot_pronoun"] = settings.heartbeat.identity.facts.pronoun
         if qq_link is not None and not auth.password_is_default:
             result["qq_link"] = True
         if request_restart is not None and not auth.password_is_default:
@@ -469,14 +471,16 @@ def create_app(
         _token: Annotated[str, Depends(require_ready)],
         limit: int = DEFAULT_HISTORY_LIMIT,
         replies_only: bool = False,
+        since_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        """最新一批与用户本人的私聊，每条标明来自哪个通道（D84）"""
+        """读取最新私聊，或从已见序号之后按顺序补读（D84）。"""
         bounded = min(max(limit, 1), MAX_HISTORY_LIMIT)
         records = timeline.query(
             TimelineQuery(
                 event_types=(EVENT_REPLY_DELIVERED,)
                 if replies_only else (EVENT_MESSAGE, EVENT_REPLY_DELIVERED),
-                latest=True,
+                since_id=since_id if since_id is not None else 0,
+                latest=since_id is None,
                 limit=bounded,
                 visibility=VisibilityScope.USER_ONLY,
                 without_metadata=(INTERNAL_REPLY_RECORD,),

@@ -299,6 +299,8 @@ def test_restore_all_removes_only_settings_overrides(rig: ConfigRig) -> None:
         b'# keep this note\nconfig_version = 1\nlog_level = "DEBUG"\n'
         b'[heartbeat]\nadvance_biomodel = true\nplan_organ = "old"\n'
         b'inbox_read_limit = 72\n[cortisol]\nenabled = true\n'
+        b'[hormones]\nanger_half_life_seconds = 731.0 # keep duration\njoy_enabled = false\n'
+        b'[mood]\nhalf_life_seconds = 18000.0\nenabled = false\n'
         b'[exploration]\nsearch_endpoint = "https://search.example.test"\n'
         b'[web]\nport = 30000 # keep this comment\nsession_days = 12\n'
         b'[safety]\nmax_calls_per_minute = 21\n'
@@ -310,7 +312,9 @@ def test_restore_all_removes_only_settings_overrides(rig: ConfigRig) -> None:
     data = response.json()
     assert data["changed"] == [
         "heartbeat.inbox_read_limit",
+        "hormones.joy_enabled",
         "log_level",
+        "mood.enabled",
         "safety.max_calls_per_minute",
         "web.session_days",
     ]
@@ -326,10 +330,13 @@ def test_restore_all_removes_only_settings_overrides(rig: ConfigRig) -> None:
         "config_version": 1,
         "heartbeat": {"advance_biomodel": True, "plan_organ": "old"},
         "cortisol": {"enabled": True},
+        "hormones": {"anger_half_life_seconds": 731.0},
+        "mood": {"half_life_seconds": 18000.0},
         "exploration": {"search_endpoint": "https://search.example.test"},
         "web": {"port": 30000},
     }
     assert "# keep this note" in text and "# keep this comment" in text
+    assert "anger_half_life_seconds = 731.0 # keep duration" in text
     assert all(path.read_bytes() == content for path, content in kept_files.items())
     assert rig.timeline.count_records() == 0
     rig.auth.confirm_password(GOOD, "127.0.0.1")

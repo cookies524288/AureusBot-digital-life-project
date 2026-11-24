@@ -68,15 +68,16 @@ class VersionSource(StrEnum):
     USER_FILE = "user_file"  # 用户改了 identity.toml，启动时记成一次用户修改
     SELF = "self"  # 它自己改的（Phase 2 的睡眠整理）；锁定的层不能有这种版本
 
-    def describe(self) -> str:
-        """给人看的中文说法。"""
+    def describe(self, bot_pronoun: str = "助手") -> str:
+        """给人看的中文说法；有当前身份时使用其称谓。"""
+        if self is VersionSource.SELF:
+            return f"{bot_pronoun}自己改的"
         return _SOURCE_NAMES[self]
 
 
 _SOURCE_NAMES = {
     VersionSource.INITIAL: "初始版本",
     VersionSource.USER_FILE: "用户修改",
-    VersionSource.SELF: "它自己改的",
 }
 
 

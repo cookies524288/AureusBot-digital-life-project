@@ -67,15 +67,20 @@ class FakeHeartbeat:
 
 class Rig:
     def __init__(
-        self, tmp_path: Path, *, password_set: bool = True, max_failures: int = 10
+        self,
+        tmp_path: Path,
+        *,
+        password_set: bool = True,
+        max_failures: int = 10,
+        identity_text: str = ORIGINAL,
     ) -> None:
         clock = ManualClock(NOW)
         config = WebConfig(login_max_failures=max_failures)
         self.identity_file = tmp_path / "identity.toml"
-        self.identity_file.write_bytes(ORIGINAL.encode("utf-8"))
+        self.identity_file.write_bytes(identity_text.encode("utf-8"))
         self.history = IdentityHistory(tmp_path / "aureus.db", clock)
         self.history.open()
-        from_file = Identity.model_validate(tomllib.loads(ORIGINAL))
+        from_file = Identity.model_validate(tomllib.loads(identity_text))
         self.heartbeat = FakeHeartbeat(self.history.sync_from_file(from_file))
         passwords = PasswordStore(tmp_path / "web_password.argon2", FAST_HASHER)
         if password_set:
@@ -122,6 +127,7 @@ def rig(tmp_path: Path) -> Iterator[Rig]:
 
 
 def test_the_settings_api_needs_a_login(rig: Rig) -> None:
+    assert rig.client.get("/api/status").status_code == 401
     assert rig.client.get("/api/settings").status_code == 401
     assert rig.client.put("/api/settings", json={}).status_code == 401
     rollback = {"layer": "mutable", "version_id": 1}
@@ -135,6 +141,7 @@ def test_the_settings_api_is_blocked_while_the_password_is_the_default(tmp_path:
     rig = Rig(tmp_path, password_set=False)
     try:
         rig.log_in("admin")
+        assert "bot_pronoun" not in rig.client.get("/api/status").json()
         assert rig.client.get("/api/settings").status_code == 403
         assert rig.client.put("/api/settings", json={"text": {"mutable": "x"}}).status_code == 403
         restore = {"layer": "mutable"}
@@ -229,6 +236,45 @@ def test_the_baseline_is_saved_with_the_right_password(rig: Rig) -> None:
     assert rig.heartbeat.identity.facts.name == "小蓝"
 
 
+@pytest.mark.parametrize("gender", [None, "", "  旧的自定义  "])
+def test_legacy_gender_stays_exactly_as_written_when_saving_other_facts(
+    tmp_path: Path, gender: str | None
+) -> None:
+    gender_line = "" if gender is None else f'gender = "{gender}"\n'
+    original = ORIGINAL.replace('gender = ""\n', gender_line)
+    rig = Rig(tmp_path, identity_text=original)
+    try:
+        rig.log_in()
+        assert rig.client.get("/api/status").json()["bot_pronoun"] == "Ta"
+        data = rig.client.get("/api/settings").json()
+        assert data["layers"]["facts"]["facts"]["gender"] == (gender or "")
+        assert rig.file_text() == original
+
+        body = {"password": GOOD, "facts": {"name": "测试助手", "birthday": "2008-01-01"}}
+        assert rig.client.put("/api/settings", json=body).status_code == 200
+        saved = tomllib.loads(rig.file_text())["facts"]
+        assert saved["name"] == "测试助手"
+        assert saved.get("gender") == gender
+    finally:
+        rig.close()
+
+
+@pytest.mark.parametrize(("gender", "pronoun"), [("男", "他"), ("女", "她"), ("其它", "Ta")])
+def test_gender_edits_are_confirmed_and_applied_to_the_authenticated_display(
+    rig: Rig, gender: str, pronoun: str
+) -> None:
+    rig.log_in()
+    body = {"facts": {"name": "测试助手", "birthday": "2008-01-01", "gender": gender}}
+    assert rig.client.put("/api/settings", json=body).status_code == 403
+    assert rig.file_text() == ORIGINAL
+    assert rig.client.get("/api/status").json()["bot_pronoun"] == "Ta"
+
+    assert rig.client.put("/api/settings", json={**body, "password": GOOD}).status_code == 200
+    assert rig.client.get("/api/status").json()["bot_pronoun"] == pronoun
+    assert rig.client.get("/api/settings").json()["bot_pronoun"] == pronoun
+    assert tomllib.loads(rig.file_text())["facts"]["gender"] == gender
+
+
 def test_a_lock_toggle_is_saved(rig: Rig) -> None:
     rig.log_in()
     locks = {"mutable": True, "behavior_style": False, "expression_style": False}
@@ -299,6 +345,7 @@ def test_incomplete_or_non_boolean_locks_are_refused(rig: Rig, locks: dict) -> N
         {"facts": {"name": "", "birthday": "2008-01-01"}},
         {"facts": {"name": "小蓝", "birthday": "二〇〇八年"}},
         {"facts": {"name": "小蓝", "birthday": "2008-02-30"}},
+        {"facts": {"name": "测试助手", "birthday": "2008-01-01", "gender": "旧自定义"}},
         {"user": {"name": "阿强", "accounts": [{"platform": "", "id": "1"}]}},
         {"password": "x" * 300},
     ],

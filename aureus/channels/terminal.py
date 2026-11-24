@@ -36,9 +36,9 @@ COMMAND_RESTART = "/restart"
 QUIT_COMMANDS = frozenset({COMMAND_QUIT, "/exit"})
 
 HELP_TEXT = (
-    "直接输入文字就是和它说话。命令：\n"
-    f"  {COMMAND_STATE}  看它此刻的状态\n"
-    f"  {COMMAND_HALT} [原因]  急停：它不再调用模型、不再回复，消息照常记录\n"
+    "直接输入文字就是和{pronoun}说话。命令：\n"
+    f"  {COMMAND_STATE}  看{{pronoun}}此刻的状态\n"
+    f"  {COMMAND_HALT} [原因]  急停：{{pronoun}}不再调用模型、不再回复，消息照常记录\n"
     f"  {COMMAND_RESUME}  解除急停\n"
     f"  {COMMAND_QUIT}   关闭 Aureus\n"
     f"  {COMMAND_HELP}   显示这段说明"
@@ -52,6 +52,11 @@ WriteLine = Callable[[str], None]
 
 class HeartbeatHandle(Protocol):
     """终端通道用到的心跳接口。"""
+
+    @property
+    def bot_pronoun(self) -> str:
+        """返回当前称谓。"""
+        ...
 
     def submit(self, perception: Perception) -> bool:
         """交一条感知给心跳。"""
@@ -157,7 +162,7 @@ class TerminalChannel:
             self._write_line(f"急停没有生效：写不进急停标记（{error}）。")
             return
         self._write_line(
-            "已急停。它不会再调用模型、不会再回复，收到的消息照常记录。"
+            f"已急停。{self._heartbeat.bot_pronoun}不会再调用模型、不会再回复，收到的消息照常记录。"
             if engaged
             else "本来就在急停中。"
         )
@@ -166,7 +171,7 @@ class TerminalChannel:
         try:
             released = self._heartbeat.resume()
         except OSError as error:
-            self._write_line(f"解除失败：删不掉急停标记（{error}），它还在急停中。")
+            self._write_line(f"解除失败：删不掉急停标记（{error}），{self._heartbeat.bot_pronoun}还在急停中。")
             return
         self._write_line("已解除急停。" if released else "本来就没有急停。")
 
@@ -179,7 +184,7 @@ class TerminalChannel:
     def _help_text(self) -> str:
         restart_help = f"\n  {COMMAND_RESTART}  重启 Aureus" if self._restart else ""
         return (
-            HELP_TEXT
+            HELP_TEXT.format(pronoun=self._heartbeat.bot_pronoun)
             + restart_help
             + (STOP_SHORTCUTS if self._close_on_interrupt else WINDOW_SHORTCUTS)
         )

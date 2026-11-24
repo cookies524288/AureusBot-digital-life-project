@@ -99,6 +99,7 @@ from aureus.heartbeat.inbox_attention import (
 )
 from aureus.heartbeat.inbox_media import AttachmentReader, ImageIndexer
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
+from aureus.heartbeat.platform_history import PlatformHistory
 from aureus.heartbeat.initiative import InitiativeDecision, decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import Judgment, TowardMeKind
@@ -395,6 +396,9 @@ class Heartbeat:
             people=people,
             people_config=people_config,
             working_memory=working_memory,
+            platform_history=(
+                PlatformHistory(inbox_store, timeline.platform_history) if inbox_store else None
+            ),
         )
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._memory_consolidator = (
@@ -526,6 +530,7 @@ class Heartbeat:
             special_contact=self._people is not None,
             stay_in_conversation=self._platform_inbox is not None,
             quote_source=bool(self._quote_routes),
+            platform_history=True,
         )
         return tuple(tool.definition() for tool in planner_tools(options))
 
@@ -578,6 +583,8 @@ class Heartbeat:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
+        if self._conversation.platform_history is not None:
+            self._conversation.platform_history.allows = allows
         if (consolidator := self._memory_consolidator) is not None and consolidator.source:
             consolidator.source.allows = allows
 
@@ -749,6 +756,11 @@ class Heartbeat:
     def identity(self) -> Identity:
         """此刻生效的身份；用户在网页上改了设定后，这里就是改过之后的（D63）。"""
         return self._identity
+
+    @property
+    def bot_pronoun(self) -> str:
+        """显示当前身份的称谓。"""
+        return self._identity.facts.pronoun
 
     @property
     def cognitive_state(self) -> CognitiveState | None:

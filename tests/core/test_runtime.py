@@ -25,7 +25,7 @@ FAKE_SECRET = "sk-fake-runtime-0001"
 IDENTITY = textwrap.dedent(
     """\
     [facts]
-    name = "测试豆"
+    name = "测试助手"
     birthday = "2008-01-01"
 
     [user]
@@ -54,7 +54,7 @@ def paths(tmp_path: Path) -> AureusPaths:
 @pytest.mark.asyncio
 async def test_assembles_with_fake_organs_and_closes_cleanly(paths: AureusPaths) -> None:
     with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
-        assert core.identity.facts.name == "测试豆"
+        assert core.identity.facts.name == "测试助手"
         assert core.heartbeat.downtime is None  # 组装好了，但还没有醒来
         core.heartbeat.wake_up()
         await core.heartbeat.shut_down()

@@ -63,7 +63,7 @@ async def _chat(
     beating = asyncio.create_task(heartbeat.run(), name="aureus-heartbeat")
     await asyncio.sleep(0)
     if heartbeat.downtime is not None:
-        write_line(f"它醒来了。{heartbeat.downtime.describe()}")
+        write_line(f"{heartbeat.bot_pronoun}醒来了。{heartbeat.downtime.describe()}")
     serving: asyncio.Task[None] | None = None
     if web is not None:
         serving = asyncio.create_task(

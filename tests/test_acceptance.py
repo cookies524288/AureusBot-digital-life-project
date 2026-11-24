@@ -40,7 +40,7 @@ pytestmark = pytest.mark.asyncio
 IDENTITY = textwrap.dedent(
     """\
     [facts]
-    name = "测试豆"
+    name = "测试助手"
     birthday = "2008-01-01"
 
     [user]

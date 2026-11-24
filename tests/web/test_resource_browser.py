@@ -481,6 +481,7 @@ class Browser:
 
     def open(self, page: str, width: int, height: int) -> None:
         self.command("Page.enable")
+        self.command("Emulation.setFocusEmulationEnabled", enabled=True)
         self.resize(width, height)
         self.command(
             "Emulation.setEmulatedMedia",
@@ -716,7 +717,7 @@ def test_page_entrance_keeps_current_and_disabled_button_styles(browser: Browser
     _run(
         browser,
         r"""
-      await waitFor(() => text('合成黑话000'), '学习页就绪');
+      await waitFor(() => text('合成表达000'), '学习页就绪');
       const nav = name => document.querySelector(`[data-page="${name}"]`);
       const requests = [];
       api = path => new Promise(resolve => requests.push({path, resolve}));
@@ -780,7 +781,17 @@ def test_learning_pagination_and_category_switch(browser: Browser, width: int, h
     _run(
         browser,
         r"""
-      await waitFor(() => text('合成黑话000') && button('下一页'), '黑话首页与分页按钮');
+      await waitFor(() => text('合成表达000'), '初始进入表达列表');
+      const types = [...find('[aria-label="学习类型"]').querySelectorAll('button')];
+      check(types.map(node => node.textContent).join('|') === '表达方式|黑话|表情包', '学习只有三个上层分类');
+      check(find('[data-expression-view="clusters"]') && !types.includes(button('表达簇')), '表达簇只在表达内');
+      click('[data-learning-tab="jargon"]');
+      await waitFor(() => text('合成黑话000') && !button('下一页')?.disabled &&
+        !find('select[name="origin_conversation_key"]')?.disabled &&
+        !find('select[name="authorized_conversation_key"]')?.disabled, '黑话首页、范围和分页按钮');
+      await document.fonts.ready;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await waitFor(() => text('合成黑话000') && !button('下一页')?.disabled, '尺寸确定后的黑话首页');
       const expected = Math.ceil(320 / find('#learning-jargon-result').childElementCount);
       check(page() === `第 1 / ${expected} 页`, '总页数按当前视口容量计算');
       check(button('上一页').disabled && !button('下一页').disabled, '黑话首页的按钮状态');
@@ -800,6 +811,12 @@ def test_learning_pagination_and_category_switch(browser: Browser, width: int, h
       await waitFor(() => text('合成表达001') && !text('合成表达000'), '表达筛选只显示命中项');
       check(page() === '第 1 / 1 页', '筛选后重新计算总页数');
       check(button('上一页').disabled && button('下一页').disabled, '末页禁止继续翻页');
+      search.value = '未提交的表达草稿';
+      press('表达簇');
+      check(find('[data-learning-tab="expression"]').getAttribute('aria-pressed') === 'true', '表达簇仍属于表达');
+      press('表达列表');
+      await waitFor(() => text('合成表达001') && !text('合成表达000'), '返回仍使用已提交的筛选');
+      check(search.value === '未提交的表达草稿', '表达子页切换保留未提交草稿');
       search.value = '无匹配内容';
       search.form.requestSubmit();
       await waitFor(() => page() === '第 0 / 0 页', '空列表没有可翻的页');
@@ -807,6 +824,7 @@ def test_learning_pagination_and_category_switch(browser: Browser, width: int, h
       click('[data-learning-tab="jargon"]');
       await waitFor(() => text('合成黑话000'), '黑话不沿用表达查询');
       check(!find('input[type="search"]').value, '黑话搜索栏独立');
+      check(!button('表达簇') && !button('快速审核'), '黑话没有表达专属操作');
     """,
     )
 
@@ -825,6 +843,8 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
         scope().value = key;
         scope().dispatchEvent(new Event('change', {bubbles:true}));
       }
+      await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
+      click('[data-learning-tab="jargon"]');
       await waitFor(() => scope() && !scope().disabled && !authorized().disabled &&
         button('合成黑话000'), '会话就绪');
       check(scope().labels[0].textContent.includes('来自会话') &&
@@ -851,7 +871,7 @@ def test_learning_conversation_filter_replaces_pages_and_ignores_stale_responses
         if (parsed.pathname === '/api/resources/learning' &&
             parsed.searchParams.get('origin_conversation_key') === 'group-20') {
           return new Promise(resolve => {
-            delayed = () => nativeFetch(url, options).then(response => {
+            delayed = () => nativeFetch(url, {...options, signal:undefined}).then(response => {
               resolve(response); finished = true;
             });
           });
@@ -903,6 +923,8 @@ def test_learning_scope_reload_disables_unconfirmed_choices(browser: Browser, ou
         scope().value = key;
         scope().dispatchEvent(new Event('change', {bubbles:true}));
       };
+      await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
+      click('[data-learning-tab="jargon"]');
       await waitFor(() => scope() && !scope().disabled && button('合成黑话000'), '首次会话就绪');
       select('group-20');
       await waitFor(() => button('合成黑话024') && !button('合成黑话000'), '首次会话筛选');
@@ -968,6 +990,8 @@ def test_expression_quick_queue_filters_and_preserves_review_history(browser: Br
     _run(
         browser,
         """
+      await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
+      click('[data-learning-tab="jargon"]');
       await waitFor(() => text('合成黑话000'), '黑话页已加载');
       check(!button('快速审核'), '黑话没有审核入口');
       click('[data-learning-tab="expression"]');
@@ -1021,6 +1045,8 @@ def test_learning_scope_shows_preview_and_cancel_never_confirms(browser: Browser
         browser,
         """
       const nativeFetch = window.fetch;
+      await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
+      click('[data-learning-tab="jargon"]');
       await waitFor(() => find('#learning-panel-jargon input[name="disabled"]'), '黑话页已就绪');
       const calls = [];
       const response = value => Promise.resolve(new Response(JSON.stringify(value)));
@@ -1067,6 +1093,8 @@ def test_learning_package_entry_previews_without_writing(browser: Browser) -> No
     _run(
         browser,
         """
+      await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
+      click('[data-learning-tab="jargon"]');
       await waitFor(() => button('导入') && !button('导入').disabled, '黑话包入口就绪');
       check(!button('导出').disabled, '黑话包导出可用');
       const nativeFetch = window.fetch;
@@ -1182,7 +1210,10 @@ def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Brow
       const review = () => find('button[aria-label="表情审批 · 未人工审核 · 合成表情000"]');
       await waitFor(review, '表情卡有审批入口');
       press('小');
-      await waitFor(() => review() && button('下一页')?.disabled === false, '小号缩略图已载入');
+      await document.fonts.ready;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await waitFor(() => find('#learning-emoji-result')?.dataset.size === 'small' &&
+        find('#learning-emoji-result')?.getAttribute('aria-busy') === 'false' && review(), '小号缩略图已载入');
       const frame = review().parentElement.getBoundingClientRect();
       const spot = review().getBoundingClientRect();
       check(spot.right <= frame.right && frame.right - spot.right <= 5 &&
@@ -1197,6 +1228,7 @@ def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Brow
             type=event_type,
             key="Enter",
             code="Enter",
+            text="\r" if event_type == "keyDown" else "",
             windowsVirtualKeyCode=13,
         )
     _run(
@@ -1702,11 +1734,15 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
         browser,
         r"""
       await waitFor(() => text('合成记忆000') && !button('下一页')?.disabled, '文字记忆首页');
+      await document.fonts.ready;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await waitFor(() => text('合成记忆000') && !button('下一页')?.disabled, '尺寸确定后的文字记忆首页');
       const jump = find('.resource-page-jump');
       const list = find('#memory-result');
       const next = () => button('下一页');
       const previous = () => button('上一页');
       const totalPages = Number(page().match(/\/ (\d+)/)[1]);
+      const pageHeight = list.clientHeight;
       const queue = [];
       const original = window.fetch;
       window.fetch = (url, options) => {
@@ -1716,7 +1752,7 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
         return new Promise(resolve => queue.push({params:path.searchParams, signal:options.signal, resolve}));
       };
       const send = (index, title, total = 320) => queue[index].resolve(Response.json({
-        enabled:true, total, items:title ? [{text:title, is_recallable:true}] : [],
+        enabled:true, total, counts:{paragraphs:total}, items:title ? [{text:title, is_recallable:true}] : [],
       }));
       const fail = (index, detail) => queue[index].resolve(Response.json({detail}, {status:503}));
       const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -1748,6 +1784,7 @@ def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) 
         submitJump(totalPages);
         check(target(2) === totalPages && next().disabled && !previous().disabled,
           '读取中直接跳到末页，立即应用边界');
+        check(list.clientHeight === pageHeight, '读取中清除旧计数但保留列表高度');
         send(2, '最新末页');
         await waitFor(() => text('最新末页') && page() === `第 ${totalPages} / ${totalPages} 页`, '末页完成');
         send(0, '迟到的第二页');
@@ -1880,6 +1917,7 @@ def test_memory_inspection_shows_counts_and_limits(browser: Browser) -> None:
         browser,
         r"""
       await waitFor(() => text('合成记忆000'), '文字记忆有查询结果');
+      press('记忆检修');
       press('只读检修');
       const dialog = document.querySelector('#editor-dialog');
       await waitFor(() => dialog.open && dialog.innerText.includes('维护停用：1 条'), '检修分项');
@@ -1889,7 +1927,54 @@ def test_memory_inspection_shows_counts_and_limits(browser: Browser) -> None:
         dialog.innerText.includes('零异常不代表全库完整'), '显示报告边界');
       check(!dialog.innerText.includes('合成记忆000'), '报告不显示原件正文');
       document.querySelector('#editor-close').click();
-      check(!dialog.open && text('合成记忆000'), '关闭报告保留原来的结果');
+      check(!dialog.open && button('维护文字记录'), '关闭报告仍在记忆检修');
+      press('维护文字记录');
+      await waitFor(() => text('合成记忆000'), '返回原文字查询');
+    """,
+    )
+
+
+def test_memory_workbench_preserves_query_page_and_drafts_on_narrow_screen(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000'), '记忆查询就绪');
+      const names = label => [...find(`[aria-label="${label}"]`).querySelectorAll('button')]
+        .map(node => node.textContent).join('|');
+      check(names('记忆浏览') === '记忆查询|图片记忆|记忆流', '浏览导航顺序');
+      check(names('记忆管理') === '导入导出|记忆检修|记忆移除', '管理导航顺序');
+      check(find('[data-memory-query="graph"]').closest('[aria-label="查询内容"]'), '关系图只在查询中');
+      check(!find('#memory-search select').querySelector('[value="messages"]'), '查询不提供原始消息类别');
+      check(!button('只读检修'), '查询不混放检修');
+      const search = find('#memory-search [name="q"]');
+      const requests = [];
+      const fetchOriginal = window.fetch;
+      window.fetch = (url, options) => {
+        const path = new URL(url, location.origin);
+        if (path.pathname === '/api/resources/memory' && options.method === 'GET') {
+          requests.push(path.searchParams);
+        }
+        return fetchOriginal(url, options);
+      };
+      press('下一页');
+      await waitFor(() => page().startsWith('第 2 /') && text('合成记忆'), '查询第二页就绪');
+      const offset = requests.at(-1).get('offset');
+      search.value = '未提交的查询草稿';
+      press('记忆移除');
+      check(text('不永久删除原件') && text('操作记录') && !button('清空'), '明确可逆边界');
+      press('选择文字记忆');
+      check(document.activeElement === search && search.value === '未提交的查询草稿', '快捷入口恢复焦点与草稿');
+      await waitFor(() => page().startsWith('第 2 /') && text('合成记忆'), '返回原来的列表页');
+      check(requests.at(-1).get('offset') === offset && requests.at(-1).get('q') === '', '不应用搜索草稿');
+      press('记忆检修');
+      press('维护人物别名');
+      await waitFor(() => text('合成人物000'), '别名入口通往真实人物记录');
+      check(document.activeElement === find('#memory-query-profiles input[type="search"]'), '焦点进入人物查询');
+      check(root().scrollWidth <= innerWidth, '窄屏不横向溢出');
+      press('记忆检修');
+      click('a[href="#inbox"]');
+      await waitFor(() => root()?.id === 'page-inbox', '原始聊天入口交给平台');
     """,
     )
 
@@ -2134,15 +2219,15 @@ def test_memory_operations_show_states_and_paginate_at_390px(browser: Browser) -
         return Promise.resolve(Response.json({enabled:mode !== 'disabled', total, items,
           next_offset:offset + limit < total ? offset + limit : null}));
       };
-      press('操作记录');
+      press('记忆移除');
       await waitFor(() => text('没有可见的移除或恢复记录') && page() === '第 0 / 0 页', '空态');
       press('记忆查询');
       mode = 'disabled';
-      press('操作记录');
+      press('记忆移除');
       await waitFor(() => text('此功能当前关闭'), '关闭状态');
       press('记忆查询');
       mode = 'error';
-      press('操作记录');
+      press('记忆移除');
       await waitFor(() => text('读取失败') && button('重试'), '读取失败不伪装成空态');
       mode = 'records';
       press('重试');
@@ -2280,7 +2365,7 @@ def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser
       await waitFor(() => resume, '列表正在返回');
       const oldList = resume;
       granted = false;
-      press('记忆查询');
+      press('文字记录');
       await waitFor(() => text('合成记忆000'), '离开图谱');
       press('关系图');
       await waitFor(() => text('当前没有获准的图谱资料'), '撤权后无覆盖');
@@ -2405,7 +2490,7 @@ def test_expression_clusters_paginate_and_discard_stale_results_at_390px(browser
     _run(
         browser,
         r"""
-      await waitFor(() => find('#learning-panel-jargon')?.querySelector('.resource-record'),
+      await waitFor(() => find('#learning-expression-list')?.querySelector('.resource-record'),
         '学习页就绪');
       const path = '/api/resources/learning/clusters';
       let granted = true, size = 0, delay = '', resume;
@@ -2468,7 +2553,8 @@ def test_expression_clusters_paginate_and_discard_stale_results_at_390px(browser
       const oldList = resume;
       granted = false;
       press('黑话');
-      press('表达簇');
+      check(!button('表达簇'), '黑话页不显示表达子页');
+      press('表达方式');
       await waitFor(() => text('当前没有可见的表达簇') && page() === '第 0 / 0 页', '撤权空态');
       oldDetail();
       oldList();
@@ -2484,7 +2570,7 @@ def test_expression_cluster_members_paginate_at_390px(browser: Browser) -> None:
     _run(
         browser,
         r"""
-      await waitFor(() => find('#learning-panel-jargon')?.querySelector('.resource-record'),
+      await waitFor(() => find('#learning-expression-list')?.querySelector('.resource-record'),
         '学习页就绪');
       const path = '/api/resources/learning/clusters';
       const rows = Array.from({length:8}, (_, index) => ({
@@ -2621,6 +2707,8 @@ def test_learning_reflows_when_the_available_height_changes(browser: Browser) ->
     _run(
         browser,
         """
+      await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
+      click('[data-learning-tab="jargon"]');
       await waitFor(() => text('合成黑话000') && !button('下一页').disabled, '高屏首页稳定');
       window.tallCount = find('#learning-jargon-result').childElementCount;
       press('下一页');
