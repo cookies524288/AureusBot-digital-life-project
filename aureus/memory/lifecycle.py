@@ -125,11 +125,12 @@ def _target(
     )
     latest = connection.execute(
         """SELECT rowid, applied_at, undone_at FROM memory_lifecycle_plans
-           WHERE source_key=? AND applied_at IS NOT NULL ORDER BY rowid DESC LIMIT 1""",
+           WHERE source_key=? AND applied_at IS NOT NULL
+           ORDER BY applied_at DESC, rowid DESC LIMIT 1""",
         (source.encode(),),
     ).fetchone()
-    version = sha256(_json([list(original), asdict(state), list(latest) if latest else None,
-                            current]).encode()).hexdigest()
+    version = sha256(_json([list(original), list(edit) if edit else None, asdict(state),
+                            list(latest) if latest else None, current]).encode()).hexdigest()
     text = original["text"] if kind == "summary" else original["content"]
     return LifecycleTarget(kind, entry_id, state, version, text, current)
 
@@ -216,7 +217,8 @@ def operation_history(
         key = (source.encode(),)
         total = connection.execute(f"SELECT count(*) {selection}", key).fetchone()[0]
         rows = connection.execute(
-            f"SELECT * {selection} ORDER BY rowid DESC LIMIT ? OFFSET ?", (*key, limit, offset)
+            f"SELECT * {selection} ORDER BY applied_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            (*key, limit, offset),
         ).fetchall()
         current = _target(connection, source, now, access)
         if current is None or not session_active():

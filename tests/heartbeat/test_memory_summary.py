@@ -17,8 +17,15 @@ from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.memory_consolidation import MemoryConsolidator, summary_material
 from aureus.heartbeat.memory_summary_source import PlatformSummarySource, summary_scope_for
 from aureus.heartbeat.perception import MediaReference, MessageRoute, Perception, TrustLevel
-from aureus.memory import HistoricalMemory, MemoryIndex, MemorySource, SummaryScope, SummaryWindow
-from aureus.memory import parse_delta
+from aureus.memory import (
+    HistoricalMemory,
+    LifecycleConflictError,
+    MemoryIndex,
+    MemorySource,
+    SummaryScope,
+    SummaryWindow,
+    parse_delta,
+)
 from aureus.organs import ModelPreference, OrganCallError, OrganRequest, OrganResponse
 from aureus.timeline import TimelineDatabase, VisibilityScope
 from aureus.web.memory_lifecycle_api import register_memory_lifecycle_routes
@@ -409,6 +416,16 @@ def test_fact_maintenance_rechecks_version_session_and_evidence(rig: Rig) -> Non
         active = False
         assert client.post(f"{endpoint}/{corrected}/apply").status_code == 404
         active = True
+        detail_path = catalog + "/facts/detail"
+        location = {"source": hit.source.encode()}
+        visible = False
+        for path in (detail_path, endpoint + "/history"):
+            denied = client.get(path, params=location)
+            assert denied.status_code == 404 and "total" not in denied.json()
+        assert client.post(endpoint + "/preview", json=location | {
+            "action": "correct", "text": "未获准的修订",
+        }).status_code == 404
+        visible = True
         assert client.post(f"{endpoint}/{corrected}/apply").status_code == 200
         assert client.post(f"{endpoint}/{corrected}/apply").status_code == 409
         assert client.post(f"{endpoint}/{race}/apply").status_code == 409
@@ -450,6 +467,8 @@ def test_relation_maintenance_cannot_be_bypassed_by_old_endpoints(rig: Rig) -> N
     items, total, _counts = rig.index.browse_text_resources("", "relations", "", "", 0, 10)
     assert total == 2
     ids = {item["source"]["instance"]: item["entry_id"] for item in items}
+    assert not rig.index.update_resource("history", ids["first"], "绕过预览", None)
+    assert not rig.index.set_resources_removed([("history", ids["first"])], True)
 
     for action in ("freeze", "protect"):
         plan = rig.index.preview_lifecycle(first, action, None, None, lambda: True)
@@ -457,9 +476,47 @@ def test_relation_maintenance_cannot_be_bypassed_by_old_endpoints(rig: Rig) -> N
         assert rig.index.apply_lifecycle(plan["plan_id"], None, lambda: True, undo=False)
         assert not rig.index.update_resource("history", ids["first"], "晚到覆盖", None)
         assert not rig.index.set_resources_removed([("history", ids["first"])], True)
-        assert rig.index.update_resource("history", ids["second"], "同名者独立修改", None)
+        independent = rig.index.preview_lifecycle(second, "disable", None, None, lambda: True)
+        assert independent is not None
+        identifier = str(independent["plan_id"])
+        assert rig.index.apply_lifecycle(identifier, None, lambda: True, undo=False)
+        assert rig.index.apply_lifecycle(identifier, None, lambda: True, undo=True)
         assert rig.index.apply_lifecycle(plan["plan_id"], None, lambda: True, undo=True)
     assert rig.index.get_history(first).text == "阿明却是河岸向导"
+
+
+@pytest.mark.parametrize("table", ("fact_claims", "episodes"))
+def test_corrected_history_does_not_match_original_substring(rig: Rig, table: str) -> None:
+    source = MemorySource("fixture", "formal", table, (25,))
+    assert rig.index.publish([HistoricalMemory(source, "旧值由鸢尾石制成")]) == 1
+    plan = rig.index.preview_lifecycle(source, "correct", "修订值由蓝铜片制成", None, lambda: True)
+    assert plan is not None
+    assert rig.index.apply_lifecycle(str(plan["plan_id"]), None, lambda: True, undo=False)
+    assert rig.index.browse_text_resources("鸢尾石", table, "", "", 0, 10) == ([], 0, {})
+    items, total, counts = rig.index.browse_text_resources("蓝铜片", table, "", "", 0, 10)
+    assert total == 1 and counts == {table: 1}
+    assert items[0]["text"] == "修订值由蓝铜片制成"
+
+
+def test_history_preview_and_undo_reject_a_value_changed_back_by_legacy_edits(rig: Rig) -> None:
+    source = MemorySource("fixture", "formal", "fact_claims", (25,))
+    assert rig.index.publish([HistoricalMemory(source, "最初的值")]) == 1
+    [item] = rig.index.browse_history("", "", 0, 10)
+    assert item.entry_id is not None
+    preview = rig.index.preview_lifecycle(source, "correct", "修订值", None, lambda: True)
+    assert preview is not None
+    assert rig.index.update_resource("history", item.entry_id, None, False)
+    assert rig.index.update_resource("history", item.entry_id, None, True)
+    with pytest.raises(LifecycleConflictError):
+        rig.index.apply_lifecycle(str(preview["plan_id"]), None, lambda: True, undo=False)
+    current = rig.index.preview_lifecycle(source, "correct", "修订值", None, lambda: True)
+    assert current is not None
+    current_id = str(current["plan_id"])
+    assert rig.index.apply_lifecycle(current_id, None, lambda: True, undo=False)
+    assert rig.index.update_resource("history", item.entry_id, "更新的值", None)
+    assert rig.index.update_resource("history", item.entry_id, "修订值", None)
+    with pytest.raises(LifecycleConflictError):
+        rig.index.apply_lifecycle(current_id, None, lambda: True, undo=True)
 
 
 @pytest.mark.asyncio

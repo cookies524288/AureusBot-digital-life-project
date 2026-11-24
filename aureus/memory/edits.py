@@ -32,6 +32,10 @@ def open_edits(connection: Connection) -> None:
             connection.execute(
                 "ALTER TABLE memory_edits ADD COLUMN is_removed INTEGER NOT NULL DEFAULT 0"
             )
+        if "revision" not in columns:
+            connection.execute(
+                "ALTER TABLE memory_edits ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+            )
         if "is_bundle_removed" not in columns:
             connection.execute(
                 "ALTER TABLE memory_edits ADD COLUMN is_bundle_removed INTEGER NOT NULL DEFAULT 0"
@@ -82,6 +86,7 @@ def write_edit(
         f"""SELECT 1 FROM memory_history history
         LEFT JOIN memory_lifecycle_relations flags USING (source_key)
         WHERE id = ? AND NOT ({is_message_source('source_key')})
+          AND json_extract(source_key, '$[2]') != 'relations'
           AND NOT coalesce(flags.is_frozen, 0) AND NOT coalesce(flags.is_protected, 0)"""
         if kind == "history"
         else "SELECT 1 FROM memory_index entry JOIN timeline event ON event.id = entry.record_id "
@@ -96,7 +101,8 @@ def write_edit(
                VALUES (?, ?, ?, coalesce(?, 1))
                ON CONFLICT(kind, entry_id) DO UPDATE SET
                    edited_content = coalesce(excluded.edited_content, edited_content),
-                   is_enabled = coalesce(?, is_enabled)""",
+                   is_enabled = coalesce(?, is_enabled),
+                   revision = revision + 1""",
             (kind, entry_id, text, is_enabled, is_enabled),
         )
     return True

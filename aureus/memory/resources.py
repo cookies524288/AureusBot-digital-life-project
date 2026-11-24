@@ -93,7 +93,6 @@ _MATCHING = (
       AND (:status = '' OR status = :status)
       AND (:recall = '' OR is_recallable = (:recall = 'enabled'))
       AND (:query = '' OR instr(lower(coalesce(edited_content, content)), lower(:query)) > 0
-                      OR (kind != 'summary' AND instr(lower(content), lower(:query)) > 0)
                       OR instr(lower(actor_label), lower(:query)) > 0
                       OR instr(lower(source_key), lower(:query)) > 0)
 )
@@ -224,8 +223,10 @@ def set_resources_removed(
         matched = connection.execute(
             _TEXT_CATALOG
             + "SELECT original_id FROM catalog WHERE category IS NOT NULL "
+            + "AND category != 'relations' "
             + "AND NOT EXISTS (SELECT 1 FROM memory_lifecycle_relations flags "
-            + "WHERE flags.source_key = catalog.source_key AND (flags.is_frozen OR flags.is_protected)) "
+            + "WHERE flags.source_key = catalog.source_key "
+            + "AND (flags.is_frozen OR flags.is_protected)) "
             + f"AND is_removed = :prior AND (kind, entry_id) IN (VALUES {pairs})",
             params,
         ).fetchall()
