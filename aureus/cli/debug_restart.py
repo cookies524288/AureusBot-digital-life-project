@@ -158,12 +158,16 @@ def _verified_target(home: Path) -> tuple[str, ListenerIdentity] | None:
     return url, listener
 
 
-def _status(client: httpx.Client) -> str | None:
-    response = client.get("/api/status")
+def _response_object(response: httpx.Response) -> dict[str, object]:
+    """只接受成功响应中的 JSON 对象，不把异常正文带入诊断。"""
     if response.status_code != 200:
-        return None
+        return {}
     data = response.json()
-    instance = data.get("restart_instance")
+    return data if isinstance(data, dict) else {}
+
+
+def _status(client: httpx.Client) -> str | None:
+    instance = _response_object(client.get("/api/status")).get("restart_instance")
     return instance if isinstance(instance, str) and instance else None
 
 
@@ -230,25 +234,33 @@ def _restart(home: Path) -> int:
         print("目标实例发生变化；未提交密码或重启请求。")
         return 1
     url, original_listener = target
+    failure_message = "登录请求网络或响应异常；未发出重启请求。"
     try:
         with httpx.Client(
             base_url=url, trust_env=False, follow_redirects=False, timeout=5
         ) as client:
             login = client.post("/api/login", json={"password": password})
-            if login.status_code != 200 or login.json().get("must_change_password") is not False:
+            if _response_object(login).get("must_change_password") is not False:
                 print("登录失败或需先在网页修改默认密码；未发出重启请求。")
                 return 1
+            failure_message = "读取重启前状态时发生网络或响应异常；未发出重启请求。"
             previous = _status(client)
-            if previous is None or _verified_target(home) != target:
-                print("目标身份或监听归属无法确认；未发出重启请求。")
+            if previous is None:
+                print("无法从重启前状态确认实例身份；未发出重启请求。")
+                return 1
+            failure_message = "提交前无法核对监听归属；未发出重启请求。"
+            if _verified_target(home) != target:
+                print("目标监听归属无法确认；未发出重启请求。")
                 return 1
             if _verified_target(home) != target:
                 print("提交前目标监听归属发生变化；未发出重启请求。")
                 return 1
+            failure_message = "重启请求结果未确认；不会重试请求。"
             response = client.post("/api/restart", headers={"Origin": url})
-            if response.status_code != 200 or response.json().get("instance") != previous:
-                print("重启请求结果未确认；不会重试请求。")
+            if _response_object(response).get("instance") != previous:
+                print(failure_message)
                 return 1
+            failure_message = "重启请求已接受，但未能核实新内核接管；不会重复重启请求。"
             print("已接受一次重启请求；正在等待新内核接管。")
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
@@ -285,7 +297,7 @@ def _restart(home: Path) -> int:
             print("等待新内核接管超时；不会重复重启请求，请在网页核实。")
             return 1
     except (httpx.HTTPError, ValueError):
-        print("网络或响应异常，重启结果未知；不会重复重启请求。")
+        print(failure_message)
         return 1
 
 

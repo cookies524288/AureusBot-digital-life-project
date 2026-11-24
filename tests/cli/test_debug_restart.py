@@ -142,35 +142,129 @@ def test_interactive_restart_accepts_once_then_times_out(
     monkeypatch.setattr(debug_restart.time, "monotonic", lambda: next(ticks))
     assert debug_restart._restart(tmp_path) == 1
     assert client.posts == ["/api/login", "/api/restart"]
-    assert "已接受一次" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "已接受一次" in output
+    assert "等待新内核接管超时" in output
+    assert "不会重复重启请求" in output
+
+
+@pytest.mark.parametrize(
+    ("path", "failure", "stage"),
+    [
+        (path, failure, stage)
+        for path, stage in [
+            ("/api/login", "登录"),
+            ("/api/status", "状态"),
+            ("/api/restart", "重启请求"),
+        ]
+        for failure in ("timeout", "invalid_json", "non_object")
+    ]
+    + [("/api/restart", "wrong_identity", "重启请求")],
+)
+def test_interactive_restart_diagnoses_http_failure_by_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    path: str,
+    stage: str,
+    failure: str,
+) -> None:
+    make_client = httpx.Client
+    _fake_restart(monkeypatch, tmp_path)
+    calls: list[tuple[str, str]] = []
+    responses = {
+        "/api/login": {"must_change_password": False},
+        "/api/status": {"restart_instance": "old"},
+        "/api/restart": {"instance": "old"},
+    }
+    private_text = "synthetic-private-response"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_path = request.url.path
+        calls.append((request.method, request_path))
+        if request_path == path:
+            if failure == "timeout":
+                raise httpx.ReadTimeout(private_text, request=request)
+            if failure == "invalid_json":
+                return httpx.Response(200, content=private_text)
+            if failure == "wrong_identity":
+                return httpx.Response(200, json={"instance": private_text})
+            return httpx.Response(200, json=[private_text])
+        return httpx.Response(200, json=responses[request_path])
+
+    monkeypatch.setattr(
+        debug_restart.httpx,
+        "Client",
+        lambda **kwargs: make_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    assert debug_restart._restart(tmp_path) == 1
+    expected = [("POST", "/api/login"), ("GET", "/api/status"), ("POST", "/api/restart")]
+    assert calls == expected[: list(responses).index(path) + 1]
+    captured = capsys.readouterr()
+    assert stage in captured.out
+    assert private_text not in captured.out + captured.err
+    assert "fake-secret" not in captured.out + captured.err
+    assert "已接受一次" not in captured.out
+    if path == "/api/restart":
+        assert "结果未确认" in captured.out
+        assert "不会重试" in captured.out
+    else:
+        assert "未发出重启请求" in captured.out
 
 
 def test_interactive_restart_waits_for_new_listener_and_service(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    client, _current = _fake_restart(monkeypatch, tmp_path)
-    new_client = FakeClient(base_url=client.base_url)
-    new_client.instance = "new"
-    new_client.get = lambda path: httpx.Response(
-        200, json={"restart_instance": "new"} if path == "/api/status" else {}
-    )
+    make_client = httpx.Client
+    _fake_restart(monkeypatch, tmp_path)
+    calls: list[tuple[str, str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append((request.method, path))
+        if path == "/api/login":
+            assert json.loads(request.content) == {"password": "fake-secret"}
+            return httpx.Response(
+                200,
+                json={"must_change_password": False},
+                headers={"Set-Cookie": "session=old-session; Path=/"},
+            )
+        if path == "/api/status":
+            return httpx.Response(200, json={"restart_instance": "old"})
+        if path == "/api/restart":
+            return httpx.Response(200, json={"instance": "old"})
+        assert path == "/" and request.method == "GET"
+        assert "cookie" not in request.headers
+        assert request.content == b""
+        if calls.count(("GET", "/")) == 1:
+            raise httpx.ReadTimeout("synthetic-private-probe", request=request)
+        return httpx.Response(200)
+
     monkeypatch.setattr(
         debug_restart.httpx,
         "Client",
-        lambda **kwargs: client if kwargs["timeout"] == 5 else new_client,
+        lambda **kwargs: make_client(transport=httpx.MockTransport(respond), **kwargs),
     )
     monkeypatch.setattr(
         debug_restart,
         "_listener_identity",
         lambda port, owner: debug_restart.ListenerIdentity(42, "2026-01-01", 45, "2026-01-03"),
     )
-    ticks = iter([0, 1, 2])
-    monkeypatch.setattr(debug_restart.time, "monotonic", lambda: next(ticks, 2))
+    ticks = iter([0, 1, 2, 60])
+    monkeypatch.setattr(debug_restart.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(debug_restart.time, "sleep", lambda seconds: None)
     assert debug_restart._restart(tmp_path) == 0
-    assert client.posts == ["/api/login", "/api/restart"]
-    assert new_client.posts == []
-    assert "新监听进程接管" in capsys.readouterr().out
+    assert calls == [
+        ("POST", "/api/login"),
+        ("GET", "/api/status"),
+        ("POST", "/api/restart"),
+        ("GET", "/"),
+        ("GET", "/"),
+    ]
+    captured = capsys.readouterr()
+    assert "新监听进程接管" in captured.out
+    for private_text in ("fake-secret", "old-session", "synthetic-private-probe"):
+        assert private_text not in captured.out + captured.err
 
 
 def test_interactive_restart_refuses_unverified_listener_before_prompt(
