@@ -1,6 +1,6 @@
 # Phase 3.11：普通图片提示词预览与实际请求对照
 
-状态：待实现
+状态：待评审
 
 ## 先读
 
@@ -18,7 +18,22 @@
 
 ## 自检清单
 
-- [ ] 旧版普通图片预览缺失的断言先失败；修复后预览包含准确提示词和图片占位，不读取图片、不调用模型。
-- [ ] 模拟最终 HTTP 断言完整文字、角色、载荷顺序和合成图字节正确，不只测假器官或字符串首尾。
-- [ ] 验证网页实际展示文字和附件层次（若 UI 变动用合成浏览器专项）；现有文本器官、表情和语音直接回归通过。
-- [ ] 记录提交、专项结果和仍未移植之处；不改正式实例、不修改机密、用户身份和媒体数据。
+- [x] `test_image_prompt_preview_matches_inbox_vision_http_request` 在任务书提交 `d08fd93` 上先因场景为 `custom` 而不是 `image_description` 失败；实现后完整通过。预览的请求次数和附件读取次数均不增加，也不返回图片 URL 或 Base64。
+- [x] 同一联测从 `InboxMedia.enrich` 经真实 `LLMOrgan` 和 `httpx.MockTransport` 捕获最终 HTTP 请求，对照固定版本原文、系统角色和内容、用户角色、文字和图片的顺序、PNG MIME 及合成 PNG 的完整字节。表情请求仍使用原有不同指令。
+- [x] `test_image_prompt_preview_displays_text_then_attachment` 在 390 px Chrome 对话框验证系统消息、用户多行文字、同一条用户消息内随后出现的图片占位，以及没有图片节点或对象字符串。文本器官和语音预览仍保持字符串消息；现有 QQ 媒体专项通过。
+- [x] 任务书 `d08fd93`、实现 `87c1662`；专项 75 项通过，Ruff 规范及格式检查通过，Pyright 0 错误，`git diff --check` 通过。对照表与许可登记已同步。不操作正式实例、机密、用户身份或媒体数据，不合并、不推送。
+
+## 核验命令
+
+从开发工作树运行；`PYTHONPATH` 为该工作树，`python` 为主工作树既有 `.venv/Scripts/python.exe`。设置 `PYTHONUTF8=1`、`LITELLM_LOCAL_MODEL_COST_MAP=True`，`--basetemp` 指向本次专用临时目录，避开 Windows 共享 pytest 临时目录的访问错误。
+
+```text
+python -m pytest -q --basetemp <临时目录> --tb=short tests/web/test_prompt_http_integration.py::test_image_prompt_preview_matches_inbox_vision_http_request
+python -m pytest -q --basetemp <临时目录> --tb=short tests/web/test_prompt_http_integration.py tests/web/test_prompt_api.py tests/channels/test_qq_media.py tests/organs/test_llm_adapter.py tests/web/test_resource_browser.py::test_image_prompt_preview_displays_text_then_attachment
+```
+
+第一条为旧版回归证据；第二条在实现后 75 项通过。只跑直接专项，未跑全量。普通图片保留固定文案，未新增编辑项；表情标签、表情拼图和语音转写未移植或改接。不代表所有视觉服务商或器官提示词已对齐。
+
+## 待设计问题
+
+无。
