@@ -717,6 +717,52 @@ def test_narrow_typing_bubbles_follow_only_the_open_conversation(browser: Browse
     """)
 
 
+def test_narrow_inbox_captions_are_independent_and_ignore_stale_requests(browser: Browser) -> None:
+    browser.open("inbox", 390, 740)
+    _run(browser, """
+      await waitFor(() => typeof renderInboxImage === 'function' && state.loggedIn, '页面未就绪');
+      const key = {platform:'qq',account_id:'bot',kind:'group',recipient_id:'A'};
+      const requests = [];
+      window.api = (path, method, body, headers, signal) => {
+        if (path.includes('view=description')) {
+          return new Promise(resolve => requests.push({path, resolve, signal}));
+        }
+        return Promise.resolve({ok:true,data:{messages:[],enabled:false}});
+      };
+      inbox.view = 'qq';
+      inbox.enabled = true;
+      inbox.conversations = [{key,name:'甲'}, {key:{...key,recipient_id:'B'},name:'乙'}];
+      await renderInboxView();
+      const message = {source:'inbox',id:20,conversation:key};
+      const list = document.querySelector('#inbox-messages');
+      const images = [renderInboxImage(message, 0), renderInboxImage(message, 1)];
+      list.append(...images);
+      const first = images[0].querySelector('button');
+      const second = images[1].querySelector('button');
+      first.click();
+      second.click();
+      check(requests[0].path.includes('/images/0?') && requests[1].path.includes('/images/1?'), '位置独立');
+      first.click();
+      check(requests[0].signal.aborted && first.textContent === '查看描述', '第一张可独立返回');
+      requests[0].resolve({ok:true,data:{description:'过期图注',source:'vlm'}});
+      requests[1].resolve({ok:true,data:{description:'第二张描述',source:'vlm'}});
+      await waitFor(() => images[1].textContent.includes('第二张描述'), '第二张显示真实来源');
+      check(images[1].textContent.includes('视觉模型') && !list.textContent.includes('过期图注'), '不串附件');
+      first.click();
+      requests[2].resolve({ok:true,data:{description:null,source:null}});
+      await waitFor(() => images[0].textContent.includes('没有可核验'), '缺图注如实显示');
+      first.click();
+      check(!images[0].firstElementChild.classList.contains('hidden'), '缺图注仍能返回原图');
+      second.click();
+      second.click();
+      await selectInboxConversation(inbox.conversations[1]);
+      requests[3].resolve({ok:true,data:{description:'旧会话图注',source:'vlm'}});
+      await new Promise(resolve => setTimeout(resolve, 50));
+      check(!list.textContent.includes('旧会话图注'), '切会话丢弃迟到结果');
+      check(root().scrollWidth <= root().clientWidth, '窄屏没有横向溢出');
+    """)
+
+
 def test_narrow_qq_desktop_confirms_and_keeps_operations_in_selected_conversation(
     browser: Browser,
 ) -> None:

@@ -20,7 +20,7 @@ from aureus.common import ManualClock, QQConfig
 from aureus.common.sqlite import open_connection
 from aureus.heartbeat import MediaReference, MessageRoute
 from aureus.heartbeat.inbox_media import InboxMedia
-from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxImageNote, InboxMessage, InboxStore
 from aureus.memory import EmojiStore
 from aureus.organs import ModelPreference, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
@@ -248,6 +248,11 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
                 await remote.send(json.dumps({**envelope, "data": {"user_id": ACCOUNT}}))
                 connected.put_nowait(remote)
                 continue
+            if action == "get_group_info":
+                await remote.send(json.dumps({**envelope, "data": {
+                    "group_id": GROUP, "group_name": "测试群",
+                }}))
+                continue
             requests.append(request)
             if action == "get_record":
                 encoded = b64encode(SPEECH).decode()
@@ -309,13 +314,16 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
             on_inbox_message=received.put_nowait,
         ) as channel:
             remote = await connected.get()
-            await remote.send(json.dumps(event(45, 2100, "", message=[segment("image", "ok.png")])))
+            await remote.send(json.dumps(event(
+                45, 2100, "", group=GROUP, message=[segment("image", "ok.png")],
+            )))
             await remote.send(
                 json.dumps(
                     event(
                         46,
                         2100,
                         "",
+                        group=GROUP,
                         message=[
                             {"type": "text", "data": {"text": "原文"}},
                             segment("image", "broken.png"),
@@ -329,7 +337,7 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
             assert requests == []
             reopened = InboxStore(path, clock)
             sources = [item.perception for item in reopened.list_unread(pure.conversation)]
-            assert sources[0].route == MessageRoute(str(ACCOUNT), "private", "2100", "45")
+            assert sources[0].route == MessageRoute(str(ACCOUNT), "group", str(GROUP), "45")
             assert sources[0].content == "[图片]"
             assert sources[0].attachments == (MediaReference("image", "ok.png"),)
             assert sources[1] == mixed.perception
@@ -345,13 +353,18 @@ async def test_qq_reads_saved_media_on_demand(tmp_path: Path) -> None:
                     event_type="message",
                     content=source.content,
                     visibility=source.visibility,
+                    metadata={"inbox_message_id": original.id},
                 )
-                for index, source in enumerate(sources, 1)
+                for index, (source, original) in enumerate(zip(sources, (pure, mixed), strict=True), 1)
             ]
-            flow = InboxMedia(recognize)
+            flow = InboxMedia(recognize, inbox_store=reopened)
             flow.read = channel.read_inbox_attachment
             flow.available = frozenset({"vlm", "voice"})
             enriched = await flow.enrich(records, sources, ModelPreference.PREFERRED)
+            ordinary = reopened.get_visible_image(pure.conversation, pure.id, 0)
+            missing = reopened.get_visible_image(mixed.conversation, mixed.id, 0)
+            assert ordinary is not None and ordinary[2] == InboxImageNote("vlm", "图片里的字")
+            assert missing is not None and missing[2] is None
     assert [record.content for record in enriched] == [
         "[图片]\n[图片识别] 图片里的字",
         "原文\n[语音转写] 语音里的话",
@@ -374,6 +387,8 @@ def test_previous_inbox_schema_keeps_text_messages(tmp_path: Path) -> None:
     assert perception is not None
     assert store.add(perception) is not None
     with closing(open_connection(path)) as connection, connection:
+        connection.execute("DROP TRIGGER inbox_image_notes_changed")
+        connection.execute("ALTER TABLE inbox_messages DROP COLUMN image_notes")
         connection.execute("ALTER TABLE inbox_messages DROP COLUMN attachments")
     conversation = ConversationKey.from_perception(perception)
     [entry] = InboxStore(path, clock).list_unread(conversation)

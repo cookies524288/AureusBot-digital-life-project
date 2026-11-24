@@ -45,7 +45,7 @@ from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.history_retention import CleanupPreview, HistoryRetention
 from aureus.heartbeat.inbox_attention import InboxResidence, InboxSelection
 from aureus.heartbeat.inbox_media import InboxMedia
-from aureus.heartbeat.inbox_store import ConversationKey
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.judging import SENDER_SUBJECT, Judgment, parse_judgment
 from aureus.heartbeat.language_runner import speaker_key
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome
@@ -365,11 +365,12 @@ class ConversationFlow:
         working_memory: WorkingMemory | None = None,
         platform_history: PlatformHistory | None = None,
         history_retention: HistoryRetention | None = None,
+        inbox_store: InboxStore | None = None,
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
         self._call, self._timezone = call, timezone
         self.inbox_media = InboxMedia(
-            call, emoji_store if config.qq_emoji_collection_enabled else None
+            call, emoji_store if config.qq_emoji_collection_enabled else None, inbox_store
         )
         self._judge, self._hormones, self._affinity = judge, hormones, affinity
         self._empathy, self._empathy_focus, self._agenda = empathy, empathy_focus, agenda
@@ -711,6 +712,7 @@ class ConversationFlow:
 
     async def _think(self, job: _ReplyJob) -> _ThoughtOutcome:
         """在后台先规划，明确需要开口才调用回复器。"""
+        originals = job.messages
         if job.media_sources:
             messages = await self.inbox_media.enrich(
                 job.messages, job.media_sources, job.strategy.model_preference
@@ -725,7 +727,7 @@ class ConversationFlow:
             )
         automatic: _Recall | None = None
         if self._memory_config.heuristic_recall_enabled and self._can_recall():
-            words = heuristic_keywords(job.messages)
+            words = heuristic_keywords(originals)
             if words and (hits := await self._retrieve(job, words)):
                 automatic = words, hits
         try:

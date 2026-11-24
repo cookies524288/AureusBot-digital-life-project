@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection, Row
+from typing import Literal
 
 from aureus.common import Clock
 from aureus.common.sqlite import open_connection
@@ -70,6 +71,18 @@ _MESSAGES = f"""
 SELECT m.*, c.platform, c.account_id, c.kind, c.recipient_id, c.temporary_group_id, c.name,
        NOT ({_UNREAD}) AS is_read
 FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
+"""
+
+_INVALIDATE_IMAGE_NOTES = """
+CREATE TRIGGER IF NOT EXISTS inbox_image_notes_changed AFTER UPDATE OF attachments ON inbox_messages
+WHEN OLD.attachments <> NEW.attachments
+BEGIN
+    UPDATE inbox_messages SET image_notes = (
+        SELECT json_group_object(note.key, json(note.value)) FROM json_each(OLD.image_notes) note
+        WHERE json_extract(OLD.attachments, '$[' || note.key || ']')
+            IS json_extract(NEW.attachments, '$[' || note.key || ']')
+    ) WHERE id = NEW.id;
+END;
 """
 
 
@@ -143,6 +156,14 @@ class InboxMessage:
     direction: str = "incoming"
 
 
+@dataclass(frozen=True)
+class InboxImageNote:
+    """普通图的既有 VLM 文字，或用于查询表情资料的内容摘要。"""
+
+    source: Literal["vlm", "emoji_catalog"]
+    value: str
+
+
 def _conversation(row: Row) -> ConversationKey:
     return ConversationKey(
         row["platform"],
@@ -151,6 +172,15 @@ def _conversation(row: Row) -> ConversationKey:
         row["recipient_id"],
         row["temporary_group_id"] or None,
     )
+
+
+def _find_visible_message(
+    database: Connection, conversation: ConversationKey, identifier: int
+) -> Row | None:
+    return database.execute(
+        f"{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE} AND m.id = ?",
+        (*conversation.parameters(), identifier),
+    ).fetchone()
 
 
 def _message(row: Row) -> InboxMessage:
@@ -271,6 +301,11 @@ class InboxStore:
                     )
                 if "received_at" not in columns:
                     database.execute("ALTER TABLE inbox_messages ADD COLUMN received_at TEXT")
+                if "image_notes" not in columns:
+                    database.execute(
+                        "ALTER TABLE inbox_messages ADD COLUMN image_notes TEXT NOT NULL DEFAULT '{}'"
+                    )
+                database.execute(_INVALIDATE_IMAGE_NOTES)
                 if "is_read" in columns:
                     database.execute(
                         "ALTER TABLE inbox_conversations ADD COLUMN first_read_id INTEGER"
@@ -471,11 +506,49 @@ class InboxStore:
     ) -> InboxMessage | None:
         """用会话完整路由和原件序号读取可见消息；不推进未读进度。"""
         with closing(open_connection(self._path, read_only=True)) as database:
-            row = database.execute(
-                f"{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE} AND m.id = ?",
-                (*conversation.parameters(), identifier),
-            ).fetchone()
+            row = _find_visible_message(database, conversation, identifier)
         return _message(row) if row is not None else None
+
+    def get_visible_image(
+        self, conversation: ConversationKey, identifier: int, position: int
+    ) -> tuple[Perception, MediaReference, InboxImageNote | None] | None:
+        """从同一原件快照取附件及已有图注，不读图片字节。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            row = _find_visible_message(database, conversation, identifier)
+        if row is None:
+            return None
+        perception = _message(row).perception
+        if not 0 <= position < len(perception.attachments):
+            return None
+        attachment = perception.attachments[position]
+        if attachment.kind != "image":
+            return None
+        note = json.loads(row["image_notes"]).get(str(position))
+        return perception, attachment, InboxImageNote(*note) if note is not None else None
+
+    def save_image_note(
+        self, identifier: int, source: Perception, position: int, note: InboxImageNote
+    ) -> None:
+        """仅当会话、平台消息键及原位置附件仍匹配时保存已有识别。"""
+        if not note.value or source.route is None or not source.route.message_id:
+            return
+        if not 0 <= position < len(source.attachments):
+            return
+        attachment = source.attachments[position]
+        if attachment.kind != "image" or attachment.is_emoji != (note.source == "emoji_catalog"):
+            return
+        with closing(open_connection(self._path)) as database, database:
+            database.execute(
+                f"""UPDATE inbox_messages AS m
+                    SET image_notes = json_set(image_notes, ?, json(?))
+                    WHERE id = ? AND message_id = ? AND direction = 'incoming'
+                      AND {USER_VISIBLE_INBOX_MESSAGE}
+                      AND conversation_id IN (SELECT id FROM inbox_conversations WHERE {_KEY})
+                      AND json_extract(attachments, ?) = json(?)""",
+                (f'$."{position}"', json.dumps((note.source, note.value), ensure_ascii=False),
+                 identifier, source.route.message_id, *ConversationKey.from_perception(source).parameters(),
+                 f"$[{position}]", json.dumps([attachment.kind, attachment.file_id, attachment.is_emoji])),
+            )
 
     def list_unread(self, conversation: ConversationKey, *, limit: int = 50) -> list[InboxMessage]:
         """从最早的未读开始读取一批。"""

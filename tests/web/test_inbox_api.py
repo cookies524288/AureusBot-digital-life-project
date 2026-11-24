@@ -1,14 +1,18 @@
 """平台收件箱网页接口使用临时库，不消耗心跳未读。"""
 
+import json
+from contextlib import closing
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from aureus.common import ManualClock
+from aureus.common.sqlite import open_connection
 from aureus.heartbeat import MediaReference, MessageRoute, Perception, TrustLevel
-from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxImageNote, InboxStore
 from aureus.memory import EmojiStore, HistoricalMemory, MemoryIndex, MemorySource
 from aureus.timeline import ActorType, VisibilityScope
 from tests.web.config_rig import ConfigRig
@@ -305,7 +309,7 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
     rig = ConfigRig(tmp_path, inbox_store=store, allows_inbox_conversation=allowed.__contains__,
                     read_inbox_attachment=read, emoji_store=emojis)
     components = (
-        MediaReference("voice", "voice"), MediaReference("image", "photo"),
+        MediaReference("record", "voice"), MediaReference("image", "photo"),
         MediaReference("image", "emoji", True), MediaReference("image", "bad-type"),
         MediaReference("image", "revoked"),
     )
@@ -337,6 +341,7 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
         assert result.headers["Content-Type"] == "image/png"
         assert result.headers["Cache-Control"] == "no-store"
         assert result.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        store.save_image_note(visible.id, visible.perception, 2, InboxImageNote("emoji_catalog", digest))
         description = rig.client.get(f"{endpoint}/2", params={**GROUP, "view": "description"})
         assert description.json() == {"source": "emoji_catalog", "description": "编造描述"}
         emojis.set_removed([f"asset:{digest}"], True)
@@ -344,7 +349,96 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
         assert removed.json()["description"] is None
         assert rig.client.get(f"{endpoint}/3", params=GROUP).status_code == 404
         assert rig.client.get(f"{endpoint}/4", params=GROUP).status_code == 404
-        assert reads == ["photo", "emoji", "emoji", "bad-type", "revoked"]
+        assert reads == ["photo", "bad-type", "revoked"]
         assert store.list_conversations(visible_to_user=True)[0].unread_count == 1
+    finally:
+        rig.close()
+
+
+def test_captions_follow_attachment_positions_and_complete_conversations(tmp_path: Path) -> None:
+    path = tmp_path / "inbox.db"
+    store = InboxStore(path, ManualClock(NOW))
+    first_key, other_key = ConversationKey(**GROUP), ConversationKey("qq", "1", "group", "3")
+    allowed = {first_key, other_key}
+    attachments = (MediaReference("image", "a.png"), MediaReference("image", "b.png"))
+    originals = []
+    for key in (first_key, other_key):
+        original = store.add(Perception(
+            "qq", "sender", "原件", VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute(key.account_id, key.kind, key.recipient_id, "same-platform-id"),
+            attachments=attachments,
+        ), conversation_name="同名群")
+        assert original is not None
+        originals.append(original)
+    first, other = originals
+    store.save_image_note(first.id, first.perception, 0, InboxImageNote("vlm", "甲"))
+    store.save_image_note(first.id, first.perception, 1, InboxImageNote("vlm", "乙"))
+    store.save_image_note(other.id, first.perception, 0, InboxImageNote("vlm", "错会话"))
+    store.save_image_note(other.id, other.perception, 0, InboxImageNote("vlm", "另一群的甲"))
+    rig = ConfigRig(tmp_path, inbox_store=InboxStore(path, ManualClock(NOW)),
+                    allows_inbox_conversation=allowed.__contains__)
+    try:
+        rig.log_in()
+
+        def caption(identifier: int, position: int, recipient_id: str) -> tuple[int, dict]:
+            response = rig.client.get(f"{MESSAGES}/{identifier}/images/{position}", params={
+                **GROUP, "recipient_id": recipient_id, "view": "description",
+            })
+            return response.status_code, response.json()
+
+        assert caption(first.id, 0, "2") == (200, {"description": "甲", "source": "vlm"})
+        assert caption(first.id, 1, "2") == (200, {"description": "乙", "source": "vlm"})
+        assert caption(other.id, 0, "3")[1]["description"] == "另一群的甲"
+        assert caption(other.id, 1, "3")[1]["description"] is None
+        assert caption(first.id, 0, "3")[0] == 404
+        with closing(open_connection(path)) as connection, connection:
+            connection.execute(
+                "UPDATE inbox_messages SET attachments = ? WHERE id = ?",
+                (json.dumps([["image", "replacement.png", False], ["image", "b.png", False]]), first.id),
+            )
+        store.save_image_note(first.id, first.perception, 0, InboxImageNote("vlm", "迟到的甲"))
+        assert caption(first.id, 0, "2")[1]["description"] is None
+        assert caption(first.id, 1, "2")[1]["description"] == "乙"
+        with closing(open_connection(path)) as connection, connection:
+            connection.execute(
+                "UPDATE inbox_messages SET attachments = ? WHERE id = ?",
+                (json.dumps([["image", "a.png", False], ["image", "b.png", False]]), first.id),
+            )
+        assert caption(first.id, 0, "2")[1]["description"] is None
+        allowed.remove(first_key)
+        assert caption(first.id, 1, "2")[0] == 404
+    finally:
+        rig.close()
+
+
+def test_caption_rechecks_permission_after_original_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    key = ConversationKey(**GROUP)
+    source = Perception(
+        "qq", "sender", "原件", VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT,
+        route=MessageRoute("1", "group", "2", "55"),
+        attachments=(MediaReference("image", "a.png"),),
+    )
+    row = store.add(source)
+    assert row is not None
+    store.save_image_note(row.id, source, 0, InboxImageNote("vlm", "撤权前的图注"))
+    allowed = {key}
+    get_image = store.get_visible_image
+
+    def read_then_revoke(
+        conversation: ConversationKey, identifier: int, position: int,
+    ) -> tuple[Perception, MediaReference, InboxImageNote | None] | None:
+        result = get_image(conversation, identifier, position)
+        allowed.clear()
+        return result
+
+    monkeypatch.setattr(store, "get_visible_image", read_then_revoke)
+    rig = ConfigRig(tmp_path, inbox_store=store, allows_inbox_conversation=allowed.__contains__)
+    try:
+        rig.log_in()
+        endpoint = f"{MESSAGES}/{row.id}/images/0"
+        assert rig.client.get(endpoint, params={**GROUP, "view": "description"}).status_code == 404
     finally:
         rig.close()

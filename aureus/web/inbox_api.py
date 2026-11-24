@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
-from hashlib import sha256
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
@@ -138,47 +137,45 @@ def register_inbox_routes(
 
     @app.get("/api/inbox/messages/{identifier}/images/{position}")
     async def read_image(
-        _token: Annotated[str, Depends(require_ready)],
+        token: Annotated[str, Depends(require_ready)],
         key: Annotated[ConversationKey, Depends(_conversation_key)],
         identifier: Annotated[int, Path(gt=0, le=2**63 - 1)],
         position: Annotated[int, Path(ge=0)],
         view: Literal["image", "description"] = "image",
     ) -> Response:
-        unavailable = HTTPException(404, "这个会话中的图片暂不可读取。")
-        if store is None or read_attachment is None or allows_conversation is None:
-            raise unavailable
-        if not allows_conversation(key):
-            raise unavailable
-        message = await asyncio.to_thread(store.get_visible_message, key, identifier)
-        if message is None or position >= len(message.perception.attachments):
-            raise unavailable
-        attachment = message.perception.attachments[position]
-        if attachment.kind != "image" or not allows_conversation(key):
-            raise unavailable
-
-        async def attachment_is_current() -> bool:
-            current = await asyncio.to_thread(store.get_visible_message, key, identifier)
+        def authorized() -> bool:
             return (
-                current is not None and position < len(current.perception.attachments)
-                and current.perception.attachments[position] == attachment and allows_conversation(key)
+                is_active is not None and is_active(token) and allows_conversation is not None
+                and allows_conversation(key)
             )
 
-        if view == "description" and (not attachment.is_emoji or emojis is None):
-            return JSONResponse({"description": None}, headers={"Cache-Control": "no-store"})
-        media = await read_attachment(message.perception, attachment)
-        if media is None or media[1] not in IMAGE_TYPES or not allows_conversation(key):
+        unavailable = HTTPException(404, "这个会话中的图片暂不可读取。")
+        if store is None or not authorized():
             raise unavailable
-        if view == "description" and emojis is not None:
-            description = await asyncio.to_thread(
-                emojis.read_catalog_description, sha256(media[0]).hexdigest()
-            )
-            if not await attachment_is_current():
+        image = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
+        if image is None or not authorized():
+            raise unavailable
+        perception, attachment, note = image
+        if view == "description":
+            description = None
+            if note is not None and note.source == "vlm":
+                description = note.value
+            elif note is not None and note.source == "emoji_catalog" and emojis is not None:
+                description = await asyncio.to_thread(emojis.read_catalog_description, note.value)
+            current = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
+            if current != image or not authorized():
                 raise unavailable
             return JSONResponse(
-                {"description": description, "source": "emoji_catalog" if description else None},
+                {"description": description, "source": note.source if description and note else None},
                 headers={"Cache-Control": "no-store"},
             )
-        if not await attachment_is_current():
+        if read_attachment is None:
+            raise unavailable
+        media = await read_attachment(perception, attachment)
+        if media is None or media[1] not in IMAGE_TYPES or not authorized():
+            raise unavailable
+        current = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
+        if current is None or current[:2] != image[:2] or not authorized():
             raise unavailable
         return Response(media[0], media_type=media[1], headers={
             "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
