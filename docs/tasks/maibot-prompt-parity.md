@@ -17,7 +17,7 @@
 | 收件会话选择：`select_conversations` 使用独立的候选 JSON、顺序和私聊优先规则，不传完整会话或人设。 | 上游焦点规划与 `context/history` 工具选择材料，未找到同样的未读候选请求。 | 不替换，本地模型只能从已授权候选中建议读哪个会话。 |
 | 工作记忆：`WorkingMemory` 合成短会话摘要；回复切点：`ReplyDraft.prompt`；情绪：`ConversationFlow._judge_emotion`。 | `context_compaction{,_focus}.prompt` 属规划器会话压缩，其五键 JSON 和原工具结果不同；上游分段算法已单独登记；未找到同样的独立情绪/受冲判断输出。 | 不用上游五字段替换本地摘要格式，不让切点模型重写原文，不改判断的情绪枚举、强度和可信度约束。 |
 | 记忆整理：`MemoryConsolidator.run` 编号批次、证据校验后写入；`ConversationFlow._rerank_memory` 做向量重排。 | `a_memorix_chat_summary.prompt` 提取增量事实、实体、关系、图片引用；`heuristic_memory_impression.prompt` 是另一类印象任务；已移植的召回展示见清单。 | 夜间提取与上游增量写入格式、证据及触发不同，不移植完整指令。向量重排没有对话提示词；只送当前查询及已经筛选的候选文本。 |
-| 语言学习：`learn_language` 按可信会话分批，以一次请求抽取增量表达和黑话；规则为 `system`，从 1 编号的样本各占一条 `user`，最后一条 `user` 是输出要求。 | `src/learners/expression_learner.py`、`jargon_learner.py` 同样逐条用 `user` 提交编号样本；上游另有 `learn_style.prompt`、`learn_jargon.prompt`、`jargon_inference*.prompt` 及导入模板。 | 只对齐角色和消息顺序，保持合并的 `proposals` 协议；不复制独立请求或多阶段释义。只接受实际展示且有原件支持的批内编号。细节见[会话分批与证据](language-session-evidence.md)。 |
+| 语言学习：`learn_style` 和 `learn_jargon` 分开请求；规则为 `system`，从 1 编号的样本各占一条 `user`，最后一条 `user` 是本阶段要求。 | `src/learners/expression_learner.py`、`jargon_learner.py` 同样逐条用 `user` 提交编号样本；`jargon_miner.py` 分上下文、仅词条、比较三个请求。 | 已接通两个抽取与三个释义阶段，并共用实际构建器和网页预览。只接受展示过的来源编号；推断证据不跨会话，来源标签不限制在线条目召回。细节见[在线语言学习](language-extraction-stages.md)。 |
 | 主动 `initiative_plan` / `initiative_reply`、探索摘要、日记、人设回顾。 | 无对应的本项目真实社交需要、外部资料隔离、以日记为依据的人设审核和仅用户可改身份约束。 | 维持原流程及上下文可见性；主动回复复用共通的正文指令，但不冒充上游主动工作流。搜索器本身是 SearXNG 查询，不注入聊天提示。 |
 | `voice` 转写、`text_embedding`、`image_embedding`、模型连通性探测。 | 上游可有同类能力，未确认有等价会话提示。 | 转写和向量适配是专用载荷；通用模型探测及缺省系统消息是连接机制，不对应任何聊天模板。实验能量调用使用专用测试请求，不算正式聊天。 |
 
