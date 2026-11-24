@@ -33,6 +33,7 @@ from aureus.organs import (
     OrganCallError,
     OrganRequest,
     OrganResponse,
+    ToolCall,
     assemble_messages,
 )
 from aureus.safety import BudgetExceededError, EmergencyStop, Ledger, PermissionChecker
@@ -389,6 +390,36 @@ async def test_a_broken_planner_keeps_silent(
     made: list[Rig], tmp_path: Path, planner_outcome: str | BaseException
 ) -> None:
     rig = make_rig(made, tmp_path, planner=[planner_outcome])
+    await rig.exchange("在吗")
+
+    assert rig.organ_ids() == ["planner"]
+    assert rig.sent == []
+    assert rig.my_messages() == []
+
+
+@pytest.mark.parametrize(
+    ("calls", "invalid"),
+    [
+        ((ToolCall("reply", "synthetic_reply", {"addressed_to_me": "yes"}),), False),
+        ((), True),
+    ],
+)
+async def test_unparsable_reply_tool_call_never_reaches_the_replyer(
+    made: list[Rig], tmp_path: Path, calls: tuple[ToolCall, ...], invalid: bool
+) -> None:
+    """参数不合格或器官已判定整批损坏，都不能放行到回复器（3.15a 自检第 2 条）。"""
+    rig = make_rig(made, tmp_path)
+
+    async def broken_planner(request: OrganRequest) -> OrganResponse:
+        rig.organs.requests.append(request)
+        return OrganResponse(
+            request.organ_id,
+            PLAN,
+            metadata={"tool_calls_invalid": invalid},
+            tool_calls=calls,
+        )
+
+    rig.organs.call = broken_planner  # type: ignore[method-assign]
     await rig.exchange("在吗")
 
     assert rig.organ_ids() == ["planner"]

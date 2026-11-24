@@ -3359,7 +3359,29 @@ function renderIndexProgress(item) {
   }))) : null;
   return el('div', { class: 'embedding-progress-item' }, el('h4', { text: label }), track,
     count ? el('p', { text: `${countLabel}：${count}` }) : null,
-    el('p', { class: 'muted', text: isCache ? ({ missing: '尚未缓存', partial: '部分已缓存', complete: '已缓存' }[item.state] || detail) : detail }));
+    el('p', { class: 'muted', text: isCache ? ({ missing: '尚未缓存', partial: '部分已缓存', complete: '已缓存' }[item.state] || detail) : detail }),
+    item.state === 'disabled' && INDEX_PROGRESS_SWITCHES[item.kind] ? renderSwitchHint(item.kind) : null);
+}
+// 功能未启用时，告诉维护者该开哪个设置；设置名取自设置页同一份 CFG_FIELDS，不另存一份（3.15 追加）。
+const INDEX_PROGRESS_SWITCHES = {
+  expression: { key: 'language.use_vector_expression',
+    requires: name => `另需${name('language.recall_enabled')}开启，且${name('language.reference_chars')}大于零` },
+  emoji_cache: { key: 'heartbeat.qq_emoji_semantic_enabled',
+    requires: name => `另需${name('qq.enabled')}已开启，且${name('heartbeat.qq_emoji_visual_enabled')}保持关闭` },
+};
+function renderSwitchHint(kind) {
+  const { key, requires } = INDEX_PROGRESS_SWITCHES[kind];
+  const name = field => `「${CFG_FIELDS[field][0]}」`;
+  const group = CFG_SECTIONS.find(([sec]) => sec === key.split('.')[0])[1];
+  return el('p', { class: 'muted' }, `请在设置页「${group}」分组开启${name(key)}；${requires(name)}。保存后重启生效。 `,
+    el('button', { type: 'button', class: 'btn small', text: '去设置页查看', onclick: () => jumpToSetting(key) }));
+}
+function jumpToSetting(key) {
+  $('editor-dialog').close();
+  showPage('config', () => {
+    const entry = cf.searchEntries.find(item => item.key === key);
+    if (entry) locateConfigField(entry);
+  });
 }
 function mountIndexProgress(host, organ) {
   const generation = editorGeneration;
