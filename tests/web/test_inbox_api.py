@@ -5,7 +5,7 @@ from pathlib import Path
 
 from aureus.common import ManualClock
 from aureus.heartbeat import MessageRoute, Perception, TrustLevel
-from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.timeline import VisibilityScope
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import NOW
@@ -42,7 +42,9 @@ def test_empty_when_no_qq_store(tmp_path: Path) -> None:
 
 def test_conversations_and_cursor_preserve_unread_and_route(tmp_path: Path) -> None:
     store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
-    rig = ConfigRig(tmp_path, inbox_store=store)
+    rig = ConfigRig(
+        tmp_path, inbox_store=store, allows_inbox_conversation=lambda key: key.account_id == "1"
+    )
     try:
         rig.log_in()
         assert rig.client.get(CONVERSATIONS).json() == {"enabled": True, "conversations": []}
@@ -52,7 +54,7 @@ def test_conversations_and_cursor_preserve_unread_and_route(tmp_path: Path) -> N
                     "qq",
                     "3",
                     f"群消息 {number}",
-                    VisibilityScope.PRIVATE,
+                    VisibilityScope.GROUP,
                     TrustLevel.VERIFIED_CONTACT,
                     route=MessageRoute("1", "group", "2", str(number)),
                 ),
@@ -64,7 +66,7 @@ def test_conversations_and_cursor_preserve_unread_and_route(tmp_path: Path) -> N
                 "qq",
                 "3",
                 "私聊消息",
-                VisibilityScope.PRIVATE,
+                VisibilityScope.USER_ONLY,
                 TrustLevel.VERIFIED_CONTACT,
                 route=MessageRoute("1", "private", "3", "4", "2"),
             ),
@@ -93,5 +95,43 @@ def test_conversations_and_cursor_preserve_unread_and_route(tmp_path: Path) -> N
         )
         assert rig.client.get(MESSAGES, params={**GROUP, "limit": 0}).status_code == 422
         assert rig.client.get(CONVERSATIONS).json()["conversations"] == before
+    finally:
+        rig.close()
+
+
+def test_history_rechecks_complete_scope_and_visibility(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    allowed = {ConversationKey("qq", "1", "group", "2")}
+    rig = ConfigRig(tmp_path, inbox_store=store, allows_inbox_conversation=allowed.__contains__)
+    try:
+        rig.log_in()
+        for account, recipient, visibility, text in (
+            ("1", "2", VisibilityScope.GROUP, "允许"),
+            ("1", "2", VisibilityScope.PRIVATE, "独享"),
+            ("7", "2", VisibilityScope.GROUP, "同名其他账号"),
+            ("1", "9", VisibilityScope.GROUP, "同名其他群"),
+        ):
+            store.add(
+                Perception(
+                    "qq",
+                    "3",
+                    text,
+                    visibility,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute(account, "group", recipient, text),
+                ),
+                sender_name="相似昵称",
+                conversation_name="同一个名称",
+            )
+        page = rig.client.get(MESSAGES, params=GROUP).json()
+        assert [message["content"] for message in page["messages"]] == ["允许"]
+        assert page["messages"][0]["platform_message_id"] == "允许"
+        assert (
+            rig.client.get(MESSAGES, params={**GROUP, "account_id": "7"}).json()["messages"] == []
+        )
+        assert len(rig.client.get(CONVERSATIONS).json()["conversations"]) == 1
+        allowed.clear()
+        assert rig.client.get(MESSAGES, params=GROUP).json()["messages"] == []
+        assert rig.client.get(CONVERSATIONS).json()["conversations"] == []
     finally:
         rig.close()

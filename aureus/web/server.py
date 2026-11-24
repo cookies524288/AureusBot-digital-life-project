@@ -34,7 +34,7 @@ from aureus.common import Clock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.inbox_images import InboxImageIndex
-from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.identity import Identity
 from aureus.memory import EmojiStore, ExpressionClusterStore, LanguageStore, MemoryIndex
 from aureus.organs import OrganResponse, ToolDefinition
@@ -228,6 +228,7 @@ def create_app(
     | None = None,
     qq_link: AccountLink | None = None,
     inbox_store: InboxStore | None = None,
+    allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
     resource_language: LanguageStore | None = None,
     resource_memory: MemoryIndex | None = None,
     resource_images: InboxImageIndex | None = None,
@@ -462,7 +463,7 @@ def create_app(
     if settings is not None:
         register_settings_routes(app, settings, require_ready)
 
-    register_inbox_routes(app, inbox_store, require_ready)
+    register_inbox_routes(app, inbox_store, require_ready, allows_inbox_conversation)
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock
     )
