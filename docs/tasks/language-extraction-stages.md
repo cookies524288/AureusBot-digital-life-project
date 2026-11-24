@@ -38,3 +38,10 @@
 ## 验收意见
 
 待 Astra 复审。联合专项临时目录 `E:/Temp/aureus-learning-release-97ee61a562b642adb7e2a7df462fc4c5`，浏览器复跑 `E:/Temp/aureus-learning-browser-bd38a4688efa4ec8a080b1080d610501`。未使用正式数据或真实模型，未操作正式运行实例。
+
+### D100 语言包核对（2026-11-24）
+
+- 在线学习的会话键只用于归集证据和管理筛选。MaiBot 主库发布按条目状态纳入候选；原会话和证据链接不写入语言包授权表。
+- 网页导入兼容包只保存原件，包内会话名称、`targets` 和 `is_global` 不产生本地授权。原有包权限仍需从管理页为已知会话显式确认，清空目标即撤销；来源名称不与当前会话比较。停用、移除、审核及管理接口限制均未改变。
+- `test_same_language_in_reply_depends_on_explicit_package_grant` 在四个独立合成库中向同一个群发送同一句消息：私聊自行学到、网页包导入未授权、授权给目标群、撤销。相同词义与表达只在自行学到及明确授权时进入实际 Planner/Replyer 请求；分别建库，避免同义去重掩盖来源。运行时、网页包和主库发布专项共 17 项通过，未跑全量，未修改生产逻辑。
+- 最终专项临时目录：`E:/Temp/aureus-d100-language-typecheck-20261124-6a2516f2`（17 项通过）。Windows 的 `pyright.exe` 启动失败，原文为 `error: uv trampoline failed to canonicalize script path`；这是启动器错误，不是代码类型错误。改用已有环境的 `python -m pyright` 后，发现并修正测试中可能未赋值的局部变量；复查实际修改的测试文件为 0 错误、0 警告、0 提示，Ruff 格式和规范检查通过。

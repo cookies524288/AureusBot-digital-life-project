@@ -18,6 +18,7 @@ from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, Langua
 from aureus.memory.language import LanguageContent, LanguagePackageRow
 from aureus.organs import CallPurpose, KeyResolver, OrganBus, OrganRequest, OrganResponse
 from aureus.timeline import ActorType, TimelineQuery, VisibilityScope
+from aureus.web.language_package_api import register_language_package_routes
 from aureus.web.resource_api import register_resource_routes
 from tests.heartbeat.test_judging_flow import NOW
 from tests.prompt_assertions import dialogue_text
@@ -337,6 +338,168 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
     assert not store.expression_reference(
         "跑步", "庆祝跑步成绩", (), "", 1000, conversation_key=keys[0]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["online", "pending", "granted", "revoked"])
+async def test_same_language_in_reply_depends_on_explicit_package_grant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    paths = _paths(tmp_path)
+    paths.runtime_config_file.write_text(
+        "[heartbeat]\nplanning_enabled = true\n"
+        "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
+        "[language]\nlearning_enabled = false\nreference_chars = 1000\n",
+        encoding="utf-8",
+    )
+    clock = ManualClock(NOW)
+    requests: list[OrganRequest] = []
+    bus = OrganBus()
+    for organ in ("planner", "replyer"):
+        bus.register(LanguageOrgan(organ, requests))
+
+    def build_bus(
+        _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
+    ) -> ModelRuntime:
+        return ModelRuntime(bus, resolver, fake_organs=False)
+
+    async def require_ready() -> str:
+        return "synthetic"
+
+    def same_origin(request: Request) -> bool:
+        return request.headers.get("Origin") == "http://testserver"
+
+    monkeypatch.setattr(runtime, "_build_organ_bus", build_bus)
+    private = Perception(
+        "synthetic_qq",
+        "runner",
+        "私聊来源",
+        VisibilityScope.USER_ONLY,
+        TrustLevel.VERIFIED_USER,
+        route=MessageRoute("42", "private", "10", "1"),
+    )
+    group = Perception(
+        "synthetic_qq",
+        "local",
+        "GG，来聊跑步。",
+        VisibilityScope.GROUP,
+        TrustLevel.VERIFIED_USER,
+        route=MessageRoute("99", "group", "20", "2"),
+        mentioned=True,
+    )
+    private_key, group_key = (
+        ConversationKey.from_perception(item).language_scope_key() for item in (private, group)
+    )
+    inbox = InboxStore(paths.database_file, clock)
+    assert inbox.add(private, conversation_name="合成私聊") is not None
+    assert inbox.add(group, conversation_name="合成群") is not None
+    store = LanguageStore(paths.database_file)
+    store.open()
+    if source == "online":
+        samples = [
+            LanguageSample(f"private:{number}", number, "runner", "跑步第 1 场：GG，月兔冲线。")
+            for number in range(1, 5)
+        ]
+        await learn_language(
+            store,
+            "summarizer",
+            LanguageOrgan("summarizer", []).process,
+            samples,
+            conversation_key=private_key,
+        )
+    else:
+        app = FastAPI()
+        register_resource_routes(
+            app, require_ready, store, None, same_origin=same_origin, inbox=inbox
+        )
+        register_language_package_routes(app, require_ready, same_origin, store, clock)
+        headers = {"Origin": "http://testserver"}
+        with TestClient(app) as client:
+            for kind, spelling, fields, item in (
+                (
+                    LanguageKind.JARGON,
+                    "jargons",
+                    {"include_chat_info": True},
+                    {
+                        "content": "GG",
+                        "meaning": "抵达终点",
+                        "count": 4,
+                        "is_jargon": True,
+                        "is_complete": True,
+                        "is_global": True,
+                        "targets": [{"platform": "qq", "id": "20", "type": "group", "count": 4}],
+                    },
+                ),
+                (
+                    LanguageKind.EXPRESSION,
+                    "expressions",
+                    {"source_chat_name": "合成私聊"},
+                    {
+                        "style": "月兔冲线",
+                        "situation": "庆祝跑步成绩",
+                        "count": 4,
+                        "checked": False,
+                        "content_list": "[]",
+                    },
+                ),
+            ):
+                package = {
+                    "type": f"maibot.{kind}.export",
+                    "version": 1,
+                    "exported_at": NOW.isoformat(),
+                    "count": 1,
+                    spelling: [item],
+                    **fields,
+                }
+                endpoint = f"/api/resources/learning/package/{kind}"
+                preview = client.post(endpoint, headers=headers, json=package)
+                assert preview.status_code == 200
+                confirmed = client.post(
+                    endpoint,
+                    headers=headers,
+                    json=package,
+                    params={"confirmed": preview.json()["digest"]},
+                )
+                assert confirmed.json() == {"added": 1, "skipped": 0, "can_recall": 0}
+                [entry] = store.entries(kind, include_disabled=True)
+                scope = "/api/resources/learning/scope"
+                payload = {
+                    "kind": kind,
+                    "entry_key": entry.entry_key,
+                    "conversation_keys": [group_key],
+                }
+                assert client.post(scope, headers=headers, json=payload).json()["before"] == []
+                if source in {"granted", "revoked"}:
+                    grant = client.post(scope, headers=headers, json={**payload, "confirm": True})
+                    assert grant.status_code == 200 and grant.json()["confirmed"]
+                    assert store.package_scope(kind, entry.entry_key, [], confirm=False) == (
+                        group_key,
+                    )
+                if source == "revoked":
+                    revoked = client.post(
+                        scope,
+                        headers=headers,
+                        json={**payload, "confirm": True, "conversation_keys": []},
+                    )
+                    assert revoked.status_code == 200 and revoked.json()["confirmed"]
+                    assert len(revoked.json()["before"]) == 1
+                    assert revoked.json()["after"] == []
+                    assert store.package_scope(kind, entry.entry_key, [], confirm=False) == ()
+
+    with runtime.open_core(paths, clock=clock, to_console=False) as core:
+        heart = core.heartbeat
+        heart.attach_channel("synthetic_qq", lambda _message: None)
+        heart.wake_up()
+        assert heart.submit(group)
+        for _ in range(3):
+            heart.beat()
+            await heart.wait_for_thought()
+        await heart.shut_down()
+    plan = next(request for request in requests if request.context["task"] == "plan")
+    reply = next(request for request in requests if request.context["task"] == "reply")
+    expected = source in {"online", "granted"}
+    assert ("GG：抵达终点" in plan.prompt) is expected
+    assert ("当「庆祝跑步成绩」时，可用「月兔冲线」" in dialogue_text(reply)) is expected
 
 
 @pytest.mark.asyncio
