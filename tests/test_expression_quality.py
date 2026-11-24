@@ -120,13 +120,13 @@ async def test_independent_expression_quality_consumption_and_reply(
     def reference() -> str:
         return store.expression_reference("轻松庆祝", "庆祝", (), "", 700)
 
-    assert ("乐一个" in reference()) == (mode == "off")
+    assert ("乐一个" in reference()) == (mode in {"off", "passed"})
     if mode == "passed":
         [entry] = entries
         assert entry.example == "" and entry.review_status == ExpressionReviewStatus.PENDING
-        store.review_expressions([entry.entry_key], ExpressionReviewStatus.APPROVED, "", NOW)
+        store.review_expressions([entry.entry_key], ExpressionReviewStatus.REJECTED, "旧审核", NOW)
         assert "乐一个" in reference()
-        store.review_expressions([entry.entry_key], ExpressionReviewStatus.PENDING, "", NOW)
+        assert store.set_removed(LanguageKind.EXPRESSION, [entry.entry_key], True)
         assert "乐一个" not in reference()
 
 

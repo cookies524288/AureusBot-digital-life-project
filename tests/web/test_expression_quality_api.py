@@ -152,8 +152,6 @@ def test_rescue_preserves_rejection_and_cannot_expand_scope(tmp_path: Path) -> N
             assert response.status_code == 200
             assert client.post(target, headers=headers, json=confirmation).status_code == 409
             entry_key = response.json()["entry_key"]
-            assert not store.expression_candidates(scope)
-            store.review_expressions([entry_key], ExpressionReviewStatus.APPROVED, "", NOW)
             assert [entry.entry_key for entry in store.expression_candidates(scope)] == [entry_key]
             assert not store.expression_candidates(other_scope)
             index = ExpressionVectorIndex(path)

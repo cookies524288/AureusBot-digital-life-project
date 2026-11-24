@@ -17,7 +17,15 @@ from aureus.heartbeat.language_runner import learn_language
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore
 from aureus.memory.language import LanguageContent, LanguagePackageRow
 from aureus.memory.language_matching import JargonStatus
-from aureus.organs import CallPurpose, KeyResolver, OrganBus, OrganRequest, OrganResponse, ToolCall
+from aureus.organs import (
+    CallAttempt,
+    CallPurpose,
+    KeyResolver,
+    OrganBus,
+    OrganRequest,
+    OrganResponse,
+    ToolCall,
+)
 from aureus.timeline import ActorType, TimelineQuery, VisibilityScope
 from aureus.web.language_package_api import register_language_package_routes
 from aureus.web.resource_api import register_resource_routes
@@ -92,6 +100,57 @@ class LearningSample(TypedDict):
 def learning_samples(request: OrganRequest) -> list[LearningSample]:
     """读取假器官实际看到的编号与文本。"""
     return [json.loads(content) for role, content in request.preceding_messages if role == "user"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate", ["allowed", "stopped", "budget", "missing", "untrusted"])
+async def test_continuous_language_learning_preserves_safety_gates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gate: str
+) -> None:
+    paths = _paths(tmp_path)
+    paths.runtime_config_file.write_text(
+        "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
+        "[diary]\nenabled = false\n[safety]\nmonthly_token_limit = 100\n"
+        "[language]\nlearning_enabled = false\nrecall_enabled = false\n",
+        encoding="utf-8",
+    )
+    requests: list[OrganRequest] = []
+    bus = OrganBus()
+    if gate != "missing":
+        bus.register(LanguageOrgan("summarizer", requests))
+
+    def build_bus(
+        _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
+    ) -> ModelRuntime:
+        return ModelRuntime(bus, resolver, fake_organs=False)
+
+    monkeypatch.setattr(runtime, "_build_organ_bus", build_bus)
+    with runtime.open_core(paths, clock=ManualClock(NOW), to_console=False) as core:
+        heart = core.heartbeat
+        heart.attach_channel("terminal", lambda _message: None)
+        heart.wake_up()
+        if gate == "stopped":
+            paths.halt_file.write_text("{}", encoding="utf-8")
+        if gate == "budget":
+            core.ledger.record("summarizer", [CallAttempt("offline", "fixture", 100, 0)])
+        assert heart.submit(
+            Perception(
+                "terminal",
+                "local",
+                "月兔冲线。",
+                VisibilityScope.USER_ONLY,
+                TrustLevel.UNVERIFIED if gate == "untrusted" else TrustLevel.VERIFIED_USER,
+            )
+        )
+        for _ in range(3):
+            heart.beat()
+            await heart.wait_for_thought()
+        assert [request.context["task"] for request in requests] == (
+            ["learn_style", "learn_jargon"] if gate == "allowed" else []
+        )
+        store = LanguageStore(paths.database_file)
+        assert bool(store.entries(LanguageKind.EXPRESSION)) == (gate == "allowed")
+        await heart.shut_down()
 
 
 @pytest.mark.asyncio
@@ -425,7 +484,8 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
             assert "旧有释义" in plan.prompt and "永不映射" not in plan.prompt
             reply_text = dialogue_text(reply)
             assert "旧有释义" in reply_text
-            assert all(word not in reply_text for word in ("永不映射", "已否定义项", "已移除义项"))
+            assert "已否定义项" in plan.prompt and "已否定义项" in reply_text
+            assert all(word not in reply_text for word in ("永不映射", "已移除义项"))
             assert "GG：\n" not in reply_text
             for word in ("甲群异义", "乙群异义"):
                 assert (word in plan.prompt) == (word == jargon)
@@ -435,7 +495,6 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
         assert store.update_entry(
             LanguageKind.JARGON, empty, LanguageContent("GG", "新增义项"), None
         )
-        assert store.classify_jargons([denied], JargonStatus.CONFIRMED, NOW) == 1
         assert store.set_removed(LanguageKind.JARGON, [removed_key], False)
         requests.clear()
         assert heart.submit(message("group", "10", 3))
@@ -685,27 +744,23 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             heart.beat()
             await heart.wait_for_thought()
         entries = store.entries(LanguageKind.EXPRESSION)
-        assert [(entry.text, entry.count) for entry in entries] == (
-            [("月兔冲线", 4)] if learning else []
-        )
+        assert [(entry.text, entry.count) for entry in entries] == [("月兔冲线", 4)]
         jargon = store.entries(LanguageKind.JARGON)
-        assert [(entry.detail, entry.count) for entry in jargon] == (
-            [("抵达终点", 4), ("等候开局", 4)] if learning else []
-        )
+        assert [(entry.detail, entry.count) for entry in jargon] == [
+            ("抵达终点", 4),
+            ("等候开局", 4),
+        ]
         await heart.shut_down()
 
-    if learning:
-        assert [
-            learning_samples(request)
-            for request in requests
-            if request.context["task"] == "learn_style"
-        ] == [
-            [{"id": number, "text": sample.content} for number, sample in enumerate(batch, start=1)]
-            for batch in (samples[:4], samples[4:])
-        ]
-        assert all(request.purpose is CallPurpose.OPTIONAL for request in requests)
-    else:
-        assert not requests
+    assert [
+        learning_samples(request)
+        for request in requests
+        if request.context["task"] == "learn_style"
+    ] == [
+        [{"id": number, "text": sample.content} for number, sample in enumerate(batch, start=1)]
+        for batch in (samples[:4], samples[4:])
+    ]
+    assert all(request.purpose is CallPurpose.OPTIONAL for request in requests)
     requests.clear()
     with runtime.open_core(paths, clock=clock, to_console=False) as core:
         heart = core.heartbeat
@@ -718,12 +773,11 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
         assert not requests
         assert store.entries(LanguageKind.EXPRESSION) == entries
         assert store.entries(LanguageKind.JARGON) == jargon
-        if learning:
-            mentioned = set(jargon[0].evidence_ids + jargon[1].evidence_ids)
-            evidence = core.timeline.query(TimelineQuery(event_type="message"))
-            assert {
-                row.metadata["source_message_id"] for row in evidence if row.id in mentioned
-            } == {sample.source_message_id for sample in samples}
+        mentioned = set(jargon[0].evidence_ids + jargon[1].evidence_ids)
+        evidence = core.timeline.query(TimelineQuery(event_type="message"))
+        assert {row.metadata["source_message_id"] for row in evidence if row.id in mentioned} == {
+            sample.source_message_id for sample in samples
+        }
 
         def submit(kind: str, recipient: str, text: str, number: str) -> None:
             message = Perception(
@@ -751,7 +805,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
                 await heart.wait_for_thought()
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
-            injected = learning and budget > 0
+            injected = budget > 0
             [reply_tool] = [tool for tool in plan.tools if tool.name == "reply"]
             assert ("expression_intent" in reply_tool.parameters["properties"]) is (budget > 0)
             assert ('"expression_intent"' in plan.prompt) is (budget > 0)

@@ -1136,7 +1136,7 @@ def test_learning_scope_reload_disables_unconfirmed_choices(browser: Browser, ou
     )
 
 
-def test_expression_quick_queue_filters_and_preserves_review_history(browser: Browser) -> None:
+def test_language_pages_have_no_manual_approval_controls(browser: Browser) -> None:
     browser.open("learning", 1280, 900)
     _run(
         browser,
@@ -1144,47 +1144,16 @@ def test_expression_quick_queue_filters_and_preserves_review_history(browser: Br
       await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
       click('[data-learning-tab="jargon"]');
       await waitFor(() => text('合成黑话000'), '黑话页已加载');
-      check(!button('快速审核'), '黑话没有审核入口');
+      check(!button('定性所选'), '黑话没有批量审批入口');
       click('[data-learning-tab="expression"]');
-      await waitFor(() => button('快速审核') && !button('快速审核').disabled, '表达队列就绪');
-      press('快速审核');
-      const filter = find('select[name="review"]');
+      await waitFor(() => button('合成表达000'), '表达列表就绪');
+      check(!button('快速审核') && !button('审核所选'), '表达没有批量审核');
+      check(!find('#learning-expression-list select[name="review"]'), '没有审核筛选');
+      press('合成表达000');
       const dialog = document.querySelector('#editor-dialog');
-      function submit(status, reason) {
-        const form = dialog.querySelector('form');
-        const select = form.querySelector('select');
-        select.value = status;
-        select.dispatchEvent(new Event('change'));
-        form.querySelector('textarea').value = reason;
-        form.requestSubmit();
-      }
-      function filterBy(status) {
-        filter.value = status;
-        filter.dispatchEvent(new Event('change', {bubbles:true}));
-      }
-      check(filter.value === 'pending', '快速审核进入待审队列');
-      await waitFor(() => button('合成表达000 · 待审'), '待审记录可操作');
-      press('合成表达000 · 待审');
-      submit('rejected', '');
-      check(dialog.open && dialog.querySelector('textarea').required, '拒绝理由必填');
-      submit('rejected', '合成拒绝理由');
-      await waitFor(() => !dialog.open && button('合成表达001 · 待审') &&
-        !button('合成表达000 · 待审'), '拒绝后退出待审队列');
-      click('input[aria-label="选择 合成表达001"]');
-      click('input[aria-label="选择 合成表达002"]');
-      press('审核所选');
-      check(dialog.innerText.includes('审核 2 条所选表达'), '批量审核只操作选中记录');
-      submit('approved', '合成通过理由');
-      await waitFor(() => !dialog.open && button('合成表达003 · 待审') &&
-        !button('合成表达001 · 待审'), '批量通过后刷新队列');
-      filterBy('approved');
-      await waitFor(() => button('合成表达001 · 通过') && button('合成表达002 · 通过'), '通过筛选');
-      check(find('#learning-expression-result').childElementCount === 2, '只批准了两条');
-      filterBy('rejected');
-      await waitFor(() => button('合成表达000 · 拒绝'), '拒绝项仍保留');
-      press('合成表达000 · 拒绝');
-      dialog.querySelector('summary').click();
-      await waitFor(() => dialog.innerText.includes('合成拒绝理由'), '详情显示审核历史与理由');
+      const controls = [...dialog.querySelectorAll('button')].map(node => node.textContent.trim());
+      check(dialog.open && !controls.includes('保存审核'), '详情无审核表单');
+      check(controls.includes('编辑') && controls.includes('停用'), '详情仍可编辑和停用');
       document.querySelector('#editor-close').click();
     """,
     )

@@ -1862,7 +1862,7 @@ class Heartbeat:
             self._pending.popleft()
             if inbox_message is not None and inbox is not None and residence is None:
                 inbox.store.mark_read([inbox_message.id])
-            if self._language is not None and self._language_config.learning_enabled:
+            if self._language is not None and self._has_language_organ():
                 self._language_samples.append(
                     language_runner.queue_language_sample(record, perception, inbox_message)
                 )
@@ -1964,6 +1964,14 @@ class Heartbeat:
             round_trace=trace,
         )
 
+    def _has_language_organ(self) -> bool:
+        return (
+            resolve_task_organ(
+                self._language_config.organ, "language_learning", self._available_organs
+            )
+            in self._available_organs
+        )
+
     def _maybe_learn_language(self) -> None:
         """回复优先。空闲时用同一个器官任务槽处理本次运行的新消息。"""
         if (
@@ -1973,6 +1981,7 @@ class Heartbeat:
             or self._unanswered
             or self._stop_requested
             or not self._permissions.check(ACTION_CALL_ORGAN).allowed
+            or not self._has_language_organ()
         ):
             return
         scope, samples = language_runner.take_language_batch(self._language_samples, BATCH_SIZE)

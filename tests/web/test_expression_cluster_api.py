@@ -138,17 +138,17 @@ def test_cluster_filtering_precedes_counts_and_detail_rechecks_state(
         assert first["total"] == second["total"] == 2
         assert first["next_offset"] == 1 and second["next_offset"] is None
         [left], [right] = first["items"], second["items"]
-        assert (left["number"], left["title"], left["count"]) == (1, "可见甲", 1)
+        assert (left["number"], left["title"], left["count"]) == (1, "可见甲", 2)
         assert (right["number"], right["title"], right["count"]) == (2, "可见乙", 1)
         assert left["location"] != right["location"]
         detail = client.get(DETAIL, params={"location": left["location"]})
         assert detail.headers["cache-control"] == "no-store"
-        assert detail.json()["members"] == [{"text": "可见甲", "detail": "合成情景"}]
+        assert {member["text"] for member in detail.json()["members"]} == {"可见甲", "拒绝"}
         assert client.get(DETAIL, params={"location": right["location"]}).json()["members"] == [
             {"text": "可见乙", "detail": "合成情景"}
         ]
         missing = client.get(DETAIL, params={"location": "bad"})
-        allowed.remove(keys["可见甲"])
+        allowed.difference_update({keys["可见甲"], keys["拒绝"]})
         assert client.get(CLUSTERS).json()["total"] == 1
         revoked = client.get(DETAIL, params={"location": left["location"]})
         assert revoked.status_code == missing.status_code == 404

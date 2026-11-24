@@ -82,6 +82,7 @@ HIDDEN_CONFIG = frozenset(
         "language.use_vector_expression",
         "diary.organ",
         "persona_growth.organ",
+        "language.learning_enabled",
     }
 )
 NO_DEFAULT_CONFIG = frozenset({"exploration.search_endpoint"})

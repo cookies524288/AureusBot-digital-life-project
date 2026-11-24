@@ -51,8 +51,7 @@ from aureus.memory.emoji import (
     emoji_media_type,
 )
 from aureus.memory.expression_index import display_version
-from aureus.memory.language import MAX_REVIEW_REASON
-from aureus.memory.language_matching import ExpressionReviewStatus, JargonStatus
+from aureus.memory.language_matching import JargonStatus
 from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
 from aureus.safety import CallRejectedError
@@ -111,27 +110,6 @@ class LearningBatch(ResourceRemoval):
     """指定变更所应用的语言类别。"""
 
     kind: LanguageKind
-
-
-class ExpressionReviewUpdate(BaseModel):
-    """维护者对一条或一批表达提交的人工审核。"""
-
-    model_config = ConfigDict(extra="forbid")
-    entry_keys: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
-        min_length=1, max_length=MAX_SIZE
-    )
-    status: ExpressionReviewStatus
-    reason: str = Field(default="", max_length=MAX_REVIEW_REASON)
-
-
-class JargonClassification(BaseModel):
-    """维护者核对后选择确认或否定，不接收来源名称或义项。"""
-
-    model_config = ConfigDict(extra="forbid")
-    entry_keys: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
-        min_length=1, max_length=MAX_SIZE
-    )
-    status: Literal[JargonStatus.CONFIRMED, JargonStatus.NON_JARGON]
 
 
 class LearningScopeUpdate(BaseModel):
@@ -678,7 +656,6 @@ def register_resource_routes(
         _token: Annotated[str, Depends(require_ready)],
         kind: LanguageKind = LanguageKind.EXPRESSION,
         recall: RecallFilter = "",
-        review: ExpressionReviewStatus | None = None,
         jargon_status: JargonStatus | None = None,
         shared: bool = False,
         removed: bool = False,
@@ -712,7 +689,6 @@ def register_resource_routes(
                 authorized_conversation_key=authorized_conversation_key,
                 text=q,
                 is_enabled=(recall == "enabled") if recall else None,
-                review=review,
                 jargon_status=jargon_status,
                 shared=shared,
                 is_removed=removed,
@@ -738,21 +714,6 @@ def register_resource_routes(
     ) -> dict[str, Any]:
         targets = await asyncio.to_thread(known_conversations, include_temporary=True)
         return {"items": [{"key": key, "label": label} for key, label in targets.items()]}
-
-    @app.patch("/api/resources/learning/jargon/classification")
-    async def classify_jargons(
-        request: Request, body: JargonClassification, _token: Annotated[str, Depends(require_ready)]
-    ) -> dict[str, int | JargonStatus]:
-        if same_origin is None or not same_origin(request):
-            raise HTTPException(403, "请在当前网页上定性黑话。")
-        if language is None:
-            raise HTTPException(409, "学习功能当前关闭。")
-        changed = await asyncio.to_thread(
-            language.classify_jargons, body.entry_keys, body.status, review_clock.now()
-        )
-        if changed is None:
-            raise HTTPException(404, "选中条目有误或已移除；没有写入定性记录。")
-        return {"changed": changed, "status": body.status}
 
     @app.get("/api/resources/learning/scope")
     async def list_learning_scope_targets(
@@ -785,39 +746,6 @@ def register_resource_routes(
             "after": [targets[key] for key in keys],
             "confirmed": body.confirm,
         }
-
-    @app.get("/api/resources/learning/reviews")
-    async def expression_review_history(
-        _token: Annotated[str, Depends(require_ready)],
-        entry_key: Annotated[str, Query(min_length=1, max_length=4096)],
-    ) -> dict[str, Any]:
-        if language is None:
-            raise HTTPException(409, "学习功能当前关闭。")
-        return {"items": await asyncio.to_thread(language.expression_reviews, entry_key)}
-
-    @app.patch("/api/resources/learning/reviews")
-    async def write_expression_reviews(
-        request: Request,
-        body: ExpressionReviewUpdate,
-        _token: Annotated[str, Depends(require_ready)],
-    ) -> dict[str, int]:
-        if same_origin is None or not same_origin(request):
-            raise HTTPException(403, "请在当前网页上审核表达。")
-        if language is None:
-            raise HTTPException(409, "学习功能当前关闭。")
-        try:
-            changed = await asyncio.to_thread(
-                language.review_expressions,
-                body.entry_keys,
-                body.status,
-                body.reason,
-                review_clock.now(),
-            )
-        except ValueError as error:
-            raise HTTPException(422, str(error)) from error
-        if not changed:
-            raise HTTPException(404, "未找到全部选中的表达，没有写入审核记录。")
-        return {"changed": changed}
 
     @app.get("/api/resources/memory")
     async def browse_memory(

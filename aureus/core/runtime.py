@@ -306,15 +306,14 @@ def open_core(
             exploration = exploration.model_copy(update={"enabled": False})
             persona_growth = persona_growth.model_copy(update={"enabled": False})
         language: LanguageStore | None = None
-        if runtime.language.recall_enabled or runtime.language.learning_enabled:
-            try:
-                language = LanguageStore(
-                    paths.database_file, old_source_scope=partial(previous_language_scope, timeline)
-                )
-                language.open()
-            except sqlite3.Error:
-                language = None
-                logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
+        try:
+            language = LanguageStore(
+                paths.database_file, old_source_scope=partial(previous_language_scope, timeline)
+            )
+            language.open()
+        except sqlite3.Error:
+            language = None
+            logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         expression_index = None
         expression_enabled = (
             not roleplay

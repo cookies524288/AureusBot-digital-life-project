@@ -859,7 +859,6 @@ class LanguageStore:
                 replace(
                     entry,
                     review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
-                    requires_approval=entry.entry_key in checked,
                     restricted_scope=(
                         entry.learning_source
                         if entry.entry_key in checked and checked[entry.entry_key]["is_scoped"]
@@ -1080,12 +1079,11 @@ class LanguageStore:
 
     def expression_pool(self, connection: Connection | None = None) -> list[LanguageEntry]:
         """在应用会话授权前读取有效表达；可在调用方的同库读事务中取值。"""
-        entries = (
+        return (
             self.entries(LanguageKind.EXPRESSION)
             if connection is None
             else self._catalog_entries(connection, LanguageKind.EXPRESSION)
         )
-        return [entry for entry in entries if entry.can_reference_expression()]
 
     def _visible_entries(
         self, kind: LanguageKind, conversation_key: str | None
