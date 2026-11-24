@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from aureus.actions.web import WebPage
-from aureus.common import HeartbeatConfig, RuntimeConfig
+from aureus.common import HeartbeatConfig, LanguageConfig, RuntimeConfig
 from aureus.common.time_format import format_local_time
-from aureus.heartbeat import ReplyLength, registered_templates
+from aureus.heartbeat import ReplyLength, build_prompt_scenes, registered_templates
 from aureus.heartbeat.context import (
     build_diary_prompt,
     build_exploration_prompt,
@@ -23,6 +23,7 @@ from aureus.heartbeat.context import (
     build_reply_request,
     build_system_context,
 )
+from aureus.heartbeat.language_requests import build_expression_quality
 from aureus.heartbeat.persona_growth import MaterialLine, build_prompt
 from aureus.identity import Identity
 from aureus.organs import (
@@ -71,6 +72,31 @@ def test_emoji_preview_routes_follow_active_selection_mode() -> None:
     disabled = RuntimeConfig(heartbeat=HeartbeatConfig(qq_emoji_selection_enabled=False))
     assert "emoji" not in organ_tasks(disabled, {"emoji"})
     assert "emoji_visual_selection" not in organ_tasks(disabled)
+
+
+def test_expression_quality_preview_uses_runtime_builder_and_explicit_route(tmp_path: Path) -> None:
+    assert "expression_quality" not in organ_tasks(RuntimeConfig())
+    missing = RuntimeConfig(language=LanguageConfig(expression_quality_enabled=True))
+    assert "expression_quality" not in organ_tasks(missing, {"judge", "utils"})
+    runtime = RuntimeConfig(language=LanguageConfig(
+        expression_quality_enabled=True, expression_quality_organ="reviewer"
+    ))
+    assert organ_tasks(runtime, {"judge", "utils"})["expression_quality"] == "reviewer"
+    [scene] = build_prompt_scenes("reviewer", {"expression_quality"}, IDENTITY, NOW)
+    assert scene.request == build_expression_quality("reviewer", "〔使用情境〕", "〔候选说法〕")
+    rig = ConfigRig(tmp_path, prompt_identity=IDENTITY, runtime=runtime)
+    try:
+        rig.log_in()
+        response = rig.client.get("/api/organs/reviewer/prompt-preview")
+        assert response.status_code == 200
+        [preview] = response.json()["scenes"]
+        assert preview["id"] == "expression_quality"
+        assert json.loads(preview["messages"][1]["content"]) == {
+            "situation": "〔使用情境〕", "style": "〔候选说法〕"
+        }
+        assert "expression_quality" in rig.client.get("/api/prompts").json()["organs"]["reviewer"]
+    finally:
+        rig.close()
 
 
 def test_prompt_access_and_catalog(rig: ConfigRig, tmp_path: Path) -> None:

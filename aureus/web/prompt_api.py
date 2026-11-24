@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from aureus.common import Clock, ConfigError, RuntimeConfig
+from aureus.common.language_prompts import EXPRESSION_QUALITY
 from aureus.heartbeat import build_prompt_scenes, catalog_template_keys
 from aureus.identity import Identity
 from aureus.organs import (
@@ -78,11 +79,13 @@ def register_prompt_routes(
 
     @app.get("/api/prompts", dependencies=guard)
     async def list_prompts() -> dict[str, Any]:
+        catalog = {
+            name: catalog_template_keys(name, tasks) for name, tasks in (await organs()).items()
+        }
+        if not any(EXPRESSION_QUALITY.key in keys for keys in catalog.values()):
+            catalog["judge"].add(EXPRESSION_QUALITY.key)
         return {
-            "organs": {
-                name: sorted(catalog_template_keys(name, tasks))
-                for name, tasks in (await organs()).items()
-            },
+            "organs": {name: sorted(keys) for name, keys in catalog.items()},
             "templates": [view(key) for key in store.templates],
         }
 
