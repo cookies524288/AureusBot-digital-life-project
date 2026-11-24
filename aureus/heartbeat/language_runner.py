@@ -1,4 +1,9 @@
-"""心跳的增量语言学习任务，材料只来自本次运行的新入站消息（D89）。"""
+"""心跳的增量语言学习任务，材料只来自本次运行的新入站消息（D89）。
+
+表达过滤改编自 MaiBot 1.3.15（GPL-3.0）的 _filter_expressions 和风格清洗；
+沿用本项目的来源键及展示范围。
+https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/src/learners/expression_learner.py#L639
+"""
 
 import asyncio
 import json
@@ -113,7 +118,10 @@ def _decode(text: str) -> Any:
 
 
 def _parse_proposals(
-    proposals: list[object], kind: LanguageKind, records: dict[str, int]
+    proposals: list[object],
+    kind: LanguageKind,
+    records: dict[str, LanguageSample],
+    banned_names: set[str],
 ) -> list[LanguageProposal]:
     parsed: list[LanguageProposal] = []
     for proposal in proposals[: _MAX_PROPOSALS[kind]]:
@@ -124,14 +132,20 @@ def _parse_proposals(
             number = str(number)
         if not isinstance(number, str) or number not in records:
             continue
+        sample = records[number]
         if kind == LanguageKind.EXPRESSION:
             phrase, detail = proposal.get("style"), proposal.get("situation")
-            if isinstance(phrase, str):
-                phrase = phrase.removeprefix("使用 ").removeprefix("使用：")
+            if not isinstance(phrase, str) or "SELF" in sample.content:
+                continue
+            phrase = phrase.strip()
+            prefix = "使用：" if phrase.startswith("使用：") else "使用"
+            phrase = phrase.removeprefix(prefix).strip()
+            if not phrase or phrase.casefold() in banned_names:
+                continue
         else:
             phrase, detail = proposal.get("content"), ""
         if isinstance(phrase, str) and isinstance(detail, str):
-            parsed.append(LanguageProposal(kind, phrase, detail, (records[number],)))
+            parsed.append(LanguageProposal(kind, phrase, detail, (sample.record_id,)))
     return parsed
 
 
@@ -142,14 +156,18 @@ async def learn_language(
     samples: Sequence[LanguageSample],
     *,
     conversation_key: str | None = None,
+    bot_names: Sequence[str] = (),
 ) -> None:
     """独立抽取表达和候选黑话，并只对同会话的有效来源推断。"""
     try:
         await asyncio.to_thread(store.observe, samples, ())
         if conversation_key is None:
             return
+        banned_names = {name.strip().casefold() for name in bot_names if name.strip()}
         for kind in LanguageKind:
-            attempts = await _extract(store, organ, call, samples, conversation_key, kind)
+            attempts = await _extract(
+                store, organ, call, samples, conversation_key, kind, banned_names
+            )
             for attempt in attempts:
                 await _infer(store, organ, call, attempt)
     except sqlite3.Error:
@@ -163,22 +181,26 @@ async def _extract(
     samples: Sequence[LanguageSample],
     scope: str,
     kind: LanguageKind,
+    banned_names: set[str],
 ) -> list[JargonInference]:
     fresh = await asyncio.to_thread(store.pending_extraction, kind, samples)
     if not fresh:
         return []
-    presented = {sample.record_id: sample.content[:_MAX_SAMPLE_CHARS] for sample in fresh}
+    evidence = {sample.record_id: sample for sample in fresh}
+    presented = {
+        record_id: sample.content[:_MAX_SAMPLE_CHARS] for record_id, sample in evidence.items()
+    }
     result = await _ask(call, build_extraction(organ, kind, tuple(presented.values())))
     if not isinstance(result, list):
         return []
-    records = {str(number): record for number, record in enumerate(presented, start=1)}
+    records = {str(number): sample for number, sample in enumerate(evidence.values(), start=1)}
     return await asyncio.to_thread(
         store.observe_extraction,
         kind,
         scope,
         fresh,
         presented,
-        _parse_proposals(result, kind, records),
+        _parse_proposals(result, kind, records, banned_names),
     )
 
 
