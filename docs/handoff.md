@@ -10,7 +10,7 @@
 
 ## 新会话从哪开始
 
-当前以 [3.15 台账](tasks/3.15.md)、[规划器任务](tasks/3.15a.md)和[固定版差异](tasks/3.15-parity.md)为准。逐步使用已有 `debug-restart.ps1 --restart` 在维护者本机交互确认（不在聊天中提供密码），或通过已登录网页重启；每次核对正式启动器、新监听者、首页及 QQ 连接。总览之后的队列是 `3da9945` 工具协议、`efbdc83` 的 utils 压缩；以台账的实际接管记录为准。以下是本轮开工时的历史起点。
+当前以 [3.15 台账](tasks/3.15.md)、[规划器任务](tasks/3.15a.md)和[固定版差异](tasks/3.15-parity.md)为准。`66db7ec` 已合入工具协议 `3da9945`，等待原实例正常重启，之前的监听者是 `18040`。可使用原托盘或已登录网页，也可在本机交互运行 `debug-restart.ps1 --restart`（不在聊天中提供密码）；每次核对正式启动器、新监听者、首页及 QQ 连接。`efbdc83` 的 utils 压缩和 `067d3ca` 的资源分页仍在独立分支；以台账的实际接管记录为准。以下是本轮开工时的历史起点。
 
 1. 先看[补充任务汇总](tasks/supplemental.md)，尤其是[长期记忆差异](tasks/supplemental.md#maibot-memory-parity)、[学习差异](tasks/supplemental.md#maibot-learning-parity)和[提示词差异](tasks/supplemental.md#maibot-prompt-parity)。编号任务、[实施约定](tasks/README.md)及证据仍保留；旧专项原文在 `aab708a:docs/tasks/`。
 2. 上次开发中断时，**从本地生成完整包、图片 v2 成员接入、在线表达的模型自评**尚未上线。另有向量包成员、关系回收站等差异。不要把已有的知识包导出当作完整包导出，也不要把写入前规则过滤当作模型自评。按维护者的新指示选下一步，不在交接时继续开发。
