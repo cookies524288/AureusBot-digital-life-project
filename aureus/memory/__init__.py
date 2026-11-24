@@ -10,7 +10,8 @@ from aureus.memory.emoji import (
     EmojiStore,
 )
 from aureus.memory.flow import MemoryEvent, MemoryEventType
-from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphSource
+from aureus.memory.graph import MemoryGraph, MemoryGraphEvidence, MemoryGraphNode, MemoryGraphSource
+from aureus.memory.graph_query import MemoryGraphPage, MemoryGraphRelationDetail
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -72,6 +73,9 @@ __all__ = [
     "MemoryEvidence",
     "MemoryGraph",
     "MemoryGraphEvidence",
+    "MemoryGraphNode",
+    "MemoryGraphPage",
+    "MemoryGraphRelationDetail",
     "MemoryGraphSource",
     "MemoryHit",
     "MemoryIndex",

@@ -30,6 +30,13 @@ from aureus.memory.edits import (
 )
 from aureus.memory.flow import MemoryEvent, MemoryEventType, browse_flow, open_flow, publish_events
 from aureus.memory.graph import MemoryGraph, MemoryGraphSource, put_graph_sources, read_graph
+from aureus.memory.graph_query import (
+    MAX_GRAPH_PAGE_SIZE,
+    MemoryGraphItem,
+    MemoryGraphPage,
+    graph_detail,
+    query_graph,
+)
 from aureus.memory.history import (
     HistoricalMemory,
     MemoryEvidence,
@@ -220,6 +227,27 @@ class MemoryIndex:
     def read_graph(self, *, allowed_sources: Collection[MemorySource]) -> MemoryGraph:
         """显式获准的原件范围内读取图来源；不初始化、扩权或推测关系。"""
         return read_graph(self._db_path, allowed_sources=allowed_sources, now=self._clock.now())
+
+    def query_graph(
+        self,
+        *,
+        allowed_sources: Collection[MemorySource],
+        query: str = "",
+        neighbor_of: MemorySource | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> MemoryGraphPage:
+        """只读查询获准的实体和关系；页参数越界时抛 ValueError。"""
+        if offset < 0 or not 1 <= limit <= MAX_GRAPH_PAGE_SIZE:
+            raise ValueError(f"关系图分页要求 offset 非负、limit 为 1 至 {MAX_GRAPH_PAGE_SIZE}")
+        graph = self.read_graph(allowed_sources=allowed_sources)
+        return query_graph(graph, query=query, neighbor_of=neighbor_of, offset=offset, limit=limit)
+
+    def graph_detail(
+        self, source: MemorySource, *, allowed_sources: Collection[MemorySource]
+    ) -> MemoryGraphItem | None:
+        """只读获准原件的图详情；未授权、失效或未知来源均返回 None。"""
+        return graph_detail(self.read_graph(allowed_sources=allowed_sources), source)
 
     def get_history(self, source: MemorySource) -> HistoricalMemory | None:
         """读指定来源的原文及证据，包括归档记录。"""
