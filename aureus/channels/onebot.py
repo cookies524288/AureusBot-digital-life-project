@@ -56,18 +56,18 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
     sender_id = account_id(payload.get("user_id"))
     if sender_id is None and "user_id" not in payload and isinstance(sender, dict):
         sender_id = account_id(sender.get("user_id"))
-    message_id = _read_id(payload.get("message_id"), _MESSAGE_ID)
+    identifier = message_id(payload.get("message_id"))
     kind = payload.get("message_type")
     group_id = account_id(payload.get("group_id"))
-    if not sender_id or sender_id == receiving_account or not message_id:
+    if not sender_id or sender_id == receiving_account or not identifier:
         return None
     if kind == "group" and group_id:
-        route = MessageRoute(receiving_account, "group", group_id, message_id)
+        route = MessageRoute(receiving_account, "group", group_id, identifier)
         visibility = VisibilityScope.GROUP
     elif kind == "private":
         if payload.get("sub_type") == "group" and group_id is None:
             return None
-        route = MessageRoute(receiving_account, "private", sender_id, message_id, group_id)
+        route = MessageRoute(receiving_account, "private", sender_id, identifier, group_id)
         visibility = VisibilityScope.PRIVATE
     else:
         return None
@@ -87,7 +87,7 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
         mentioned=mentioned,
         quoted_message_id=quoted,
         source_timestamp=timestamp if type(timestamp) is int else None,
-        source_message_id=f"{receiving_account}:{message_id}",
+        source_message_id=f"{receiving_account}:{identifier}",
         attachments=attachments,
     )
 

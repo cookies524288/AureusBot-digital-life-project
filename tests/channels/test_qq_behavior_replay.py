@@ -18,7 +18,7 @@ from aureus.core.model_runtime import ModelRuntime
 from aureus.feedback import COMMITMENT_KEPT, Outcome
 from aureus.heartbeat import build_prompt_scenes, registered_templates
 from aureus.heartbeat.events import EVENT_RECALL_REPLY_DELIVERED
-from aureus.heartbeat.inbox_store import InboxMessage
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage
 from aureus.memory import (
     HistoricalMemory,
     LanguageKind,
@@ -297,11 +297,15 @@ async def test_qq_recall_receipts_only_mark_successful_text_parts(
 @pytest.mark.parametrize("has_incoming_quote", [False, True])
 @pytest.mark.parametrize("request_quote", [None, False, True])
 async def test_qq_reply_parts_quote_only_on_request(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    is_private: bool, has_incoming_quote: bool, request_quote: bool | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    is_private: bool,
+    has_incoming_quote: bool,
+    request_quote: bool | None,
 ) -> None:
     clock = ManualClock(START)
     async with open_replay(tmp_path, monkeypatch, clock, split_reply=True) as replay:
+        replay.fake.receipt_ids[:] = [7011, 7012]
         replay.planner.plan = {"reply": True, "intent": "继续聊天"}
         if request_quote is not None:
             replay.planner.plan["quote_source"] = request_quote
@@ -335,10 +339,25 @@ async def test_qq_reply_parts_quote_only_on_request(
         heard, answer = replay.records()
         assert heard.metadata["quoted_message_id"] == ("700" if has_incoming_quote else None)
         assert answer.metadata["in_reply_to"] == [heard.id]
+        channel, store = replay.core.qq, replay.core.inbox_store
+        assert channel is not None and store is not None
+        await asyncio.gather(*channel._sending)
+        conversation = ConversationKey(
+            "qq",
+            str(ACCOUNT),
+            "private" if is_private else "group",
+            str(2100 if is_private else GROUP),
+        )
+        archived = [
+            row.perception for row in store.list_messages(conversation) if row.direction == "outgoing"
+        ]
+        assert [part.content for part in archived] == ["后续段", "第一段"]
+        assert [part.quoted_message_id for part in archived] == [None, "701" if request_quote else None]
+        assert all(part.visibility is answer.visibility for part in archived)
 
 
 async def test_qq_quote_targets_stay_with_each_same_named_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async with open_replay(tmp_path, monkeypatch, ManualClock(START)) as replay:
         replay.planner.plan = {"reply": True, "intent": "回应当前群聊", "quote_source": True}

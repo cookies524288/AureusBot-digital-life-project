@@ -70,6 +70,7 @@ class FakeOneBot:
         self.connections: asyncio.Queue[ServerConnection] = asyncio.Queue()
         self.messages: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.reply_with = ["failed", "timeout"]
+        self.receipt_ids: list[int] = []
         self.handshakes: list[tuple[str, str | None]] = []
 
     async def send(self, remote: ServerConnection, **payload: Any) -> None:
@@ -94,7 +95,8 @@ class FakeOneBot:
             if behavior == "failed":
                 await self.send(remote, **{**response, "status": "failed", "retcode": 100})
             elif behavior == "ok":
-                await self.send(remote, **response, data={"message_id": 6000})
+                receipt_id = self.receipt_ids.pop(0) if self.receipt_ids else 6000
+                await self.send(remote, **response, data={"message_id": receipt_id})
 
 
 def available_port() -> int:

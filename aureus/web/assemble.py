@@ -76,6 +76,7 @@ def open_web(
             config_files=ConfigService(core.paths, core.settings.runtime),
             model_runtime=core.models,
             prompt_identity=lambda: core.heartbeat.identity,
+            planner_tool_definitions=core.heartbeat.planner_tool_definitions,
             open_terminal=open_terminal,
             request_shutdown=core.heartbeat.request_stop,
             request_restart=request_restart,
@@ -84,6 +85,12 @@ def open_web(
             run_model_test=core.gateway.test_model,
             qq_link=core.qq_link,
             inbox_store=core.inbox_store,
+            allows_inbox_conversation=(
+                core.qq.allows_inbox_conversation if core.qq is not None else None
+            ),
+            inbox_archive_account_id=(
+                core.settings.runtime.qq.account_id if core.qq is not None else None
+            ),
             resource_language=core.language,
             resource_memory=core.memory,
             resource_images=core.inbox_images,

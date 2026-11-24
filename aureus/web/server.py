@@ -34,10 +34,11 @@ from aureus.common import Clock, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
 from aureus.heartbeat.inbox_images import InboxImageIndex
-from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.identity import Identity
 from aureus.memory import EmojiStore, ExpressionClusterStore, LanguageStore, MemoryIndex
-from aureus.organs import OrganResponse
+from aureus.memory.imported_messages import ImportedPlatformHistory
+from aureus.organs import OrganResponse, ToolDefinition
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 
@@ -218,6 +219,7 @@ def create_app(
     config_files: ConfigService | None = None,
     model_runtime: ModelRuntime | None = None,
     prompt_identity: Callable[[], Identity] | None = None,
+    planner_tool_definitions: Callable[[], tuple[ToolDefinition, ...]] | None = None,
     open_terminal: Callable[[], Awaitable[None]] | None = None,
     request_shutdown: Callable[[], None] | None = None,
     request_restart: Callable[[], None] | None = None,
@@ -227,6 +229,8 @@ def create_app(
     | None = None,
     qq_link: AccountLink | None = None,
     inbox_store: InboxStore | None = None,
+    allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
+    inbox_archive_account_id: str | None = None,
     resource_language: LanguageStore | None = None,
     resource_memory: MemoryIndex | None = None,
     resource_images: InboxImageIndex | None = None,
@@ -461,7 +465,15 @@ def create_app(
     if settings is not None:
         register_settings_routes(app, settings, require_ready)
 
-    register_inbox_routes(app, inbox_store, require_ready)
+    register_inbox_routes(
+        app,
+        inbox_store,
+        require_ready,
+        allows_inbox_conversation,
+        timeline.platform_history,
+        ImportedPlatformHistory(resource_database) if resource_database is not None else None,
+        inbox_archive_account_id,
+    )
     register_language_package_routes(
         app, require_ready, _same_http_origin, resource_language, clock
     )
@@ -534,7 +546,14 @@ def create_app(
 
     if config_files is not None:
         register_config_routes(
-            app, config_files, auth, require_ready, model_runtime, run_model_test
+            app,
+            config_files,
+            auth,
+            require_ready,
+            model_runtime,
+            run_model_test,
+            planner_tool_definitions=planner_tool_definitions,
+            require_active=require_inspection_access,
         )
         if (
             model_runtime is not None

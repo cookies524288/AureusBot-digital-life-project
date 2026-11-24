@@ -136,11 +136,11 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
         )
         if options.special_contact:
             inbox["special_contact"] = (
-                bool | None, Field(default=None, description="设置或取消当前已认识联系人为特别关心。")
+                bool | None, Field(default=None, description="仅对当前已认识、非主人的联系人设置或取消特别关心。")
             )
         if options.stay_in_conversation:
             inbox["stay_in_conversation"] = (
-                bool | None, Field(default=None, description="留在本会话持续聊天，或退出。")
+                bool | None, Field(default=None, description="当前消息来自平台收件箱时，留在本会话持续聊天，或退出。")
             )
     extras = dict(inbox)
     if options.agenda:
@@ -149,14 +149,18 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
             resolve=(list[_Resolution] | None, Field(default=None, max_length=5, description="已完成或无法完成的日程；放弃须简述原因。")),
         )
     if options.interests:
-        extras["interest"] = (_Interest | None, Field(default=None, description="一项兴趣建议；add 填文字，remove 填编号，replace 两者都填。"))
+        extras["interest"] = (_Interest | None, Field(default=None, description="仅已确认用户的私聊可提出兴趣建议；add 填文字，remove 填编号，replace 两者都填。"))
     if options.expressions:
         extras["expression_intent"] = (_Expression | None, Field(default=None, description="可供选择习得表达的情景、语气等，只填相关项。"))
     if options.emoji:
-        extras["select_emoji"] = (_Emoji | None, Field(default=None, description="建议按情绪匹配表情包，选择失败时仅发文字。"))
+        extras["select_emoji"] = (_Emoji | None, Field(default=None, description="仅 QQ 会话可建议按情绪匹配表情包，选择失败时仅发文字。"))
     if options.quote_source:
         extras["quote_source"] = (
-            bool, Field(default=False, description="是否在本次回复首段引用当前要回复的最新一条消息；默认不引用。")
+            bool,
+            Field(
+                default=False,
+                description="仅有可用平台路由时，选择在本次回复首段引用当前要回复的最新一条消息；默认不引用。",
+            ),
         )
     tools = [
         PlannerTool(

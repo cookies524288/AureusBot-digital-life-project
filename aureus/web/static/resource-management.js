@@ -1,49 +1,77 @@
 'use strict';
 
-function createResourcePager({el, panel, id, request, render, grid = false, prepare, loaded, empty, error, clearOnError = false}) {
-  const list = el('div', {id:id + '-result', class:'resource-list' + (grid ? ' resource-grid' : ''), 'aria-live':'polite'});
+function createResourcePageControls({el, label, select}) {
   const previous = el('button', {type:'button', class:'btn small', text:'上一页', disabled:true});
   const next = el('button', {type:'button', class:'btn small', text:'下一页', disabled:true});
   const status = el('span', {class:'muted', role:'status'});
-  const navigation = el('div', {class:'row resource-pagination', role:'group', 'aria-label':'分页'}, previous, status, next);
-  panel.append(list, navigation);
-  let page = 0, pages = null, serial = 0, limit = 0, active = false, busy = false, cursors = [null];
+  const jump = el('input', {type:'text', inputmode:'numeric', enterkeyhint:'go', class:'resource-page-jump', placeholder:'跳页',
+    'aria-label':'跳转页码（输入后按回车）', title:'输入页码后按回车', disabled:true});
+  const navigation = el('div', {class:'row resource-pagination', role:'group', 'aria-label':label}, previous, status, jump, next);
+  let page = 0, pages = null;
 
-  function measure() {
-    const style = getComputedStyle(list);
-    const gap = parseFloat(style.rowGap);
-    const row = parseFloat(style.getPropertyValue(grid ? '--resource-tile' : '--resource-row'));
-    const rows = Math.max(1, Math.floor((list.clientHeight + gap) / (row + gap)));
-    const columns = grid ? Math.max(1, Math.floor((list.clientWidth + gap) / (row + gap))) : 1;
-    return Math.min(100, rows * columns);
+  function go(target) {
+    jump.value = '';
+    jump.setCustomValidity('');
+    select(target);
   }
-  function sync() {
-    const canNavigate = active && !busy && pages != null;
-    previous.disabled = !canNavigate || page === 0;
-    next.disabled = !canNavigate || cursors.length <= page + 1 || page + 1 >= pages;
+  previous.addEventListener('click', () => go(page - 1));
+  next.addEventListener('click', () => go(page + 1));
+  jump.addEventListener('input', () => jump.setCustomValidity(''));
+  jump.addEventListener('blur', () => jump.setCustomValidity(''));
+  jump.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    const value = jump.value.trim();
+    const target = Number(value) - 1;
+    if (!/^\d+$/.test(value) || target < 0 || target >= pages) {
+      jump.setCustomValidity(`请输入 1 到 ${pages} 之间的页码。`);
+      jump.reportValidity();
+      return;
+    }
+    jump.setCustomValidity('');
+    if (target !== page) go(target);
+    else jump.value = '';
+  });
+  return {navigation, sync(target, total, busy = false) {
+    page = target;
+    pages = total;
+    previous.disabled = pages == null || page === 0;
+    next.disabled = pages == null || page + 1 >= pages;
+    jump.disabled = pages == null || pages <= 1;
+    if (jump.disabled) { jump.value = ''; jump.setCustomValidity(''); }
     navigation.style.visibility = !busy && pages == null ? 'hidden' : '';
-    status.textContent = busy ? '读取中…' : pages == null ? '' : `第 ${pages ? page + 1 : 0} / ${pages} 页`;
-    list.setAttribute('aria-busy', busy);
+    status.textContent = pages == null ? (busy ? '读取中…' : '')
+      : `第 ${pages ? page + 1 : 0} / ${pages} 页${busy ? '…' : ''}`;
+  }};
+}
+
+function createPagedResource({el, list, label = '分页', request, render, measure, prepare, loaded, empty, error,
+  clearOnError = false, isVisible = () => true}) {
+  let page = 0, pages = null, limit = 0, active = false, pending;
+  const controls = createResourcePageControls({el, label, select:read});
+
+  function sync() {
+    controls.sync(page, active ? pages : null, Boolean(pending));
+    list.setAttribute('aria-busy', Boolean(pending));
   }
   function message(text) {
     list.replaceChildren(el('p', {class:'muted resource-empty', text}));
   }
   async function read(target = page) {
-    if (!active) return;
-    const generation = ++serial;
-    busy = true;
+    if (!active || !isVisible()) return;
+    pending?.abort();
+    const controller = new AbortController();
+    pending = controller;
+    page = target;
     sync();
     prepare?.();
     message('读取中…');
-    const response = await request({offset:target * limit, before:cursors[target], limit});
-    if (!active || generation !== serial) return;
-    busy = false;
+    const response = await request({offset:target * limit, limit, signal:controller.signal});
+    if (pending !== controller || !isVisible()) return;
+    pending = null;
     if (!response.ok) {
       pages = null;
-      if (clearOnError) {
-        page = 0;
-        cursors = [null];
-      }
+      if (clearOnError) page = 0;
       sync();
       list.replaceChildren(el('div', {class:'row resource-empty'}, el('span', {text:'读取失败'}),
         el('button', {class:'btn small', type:'button', text:'重试', onclick:() => read(clearOnError ? 0 : target)})));
@@ -52,13 +80,9 @@ function createResourcePager({el, panel, id, request, render, grid = false, prep
     }
     const total = response.data.total;
     pages = Number.isInteger(total) && total >= 0 ? Math.ceil(total / limit) : null;
-    if (target > 0 && ((pages != null && target >= pages) || !response.data.items.length)) {
-      return read(pages == null ? target - 1 : Math.min(target - 1, Math.max(0, pages - 1)));
+    if (target > 0 && pages != null && target >= pages) {
+      return read(Math.max(0, pages - 1));
     }
-    page = target;
-    const following = response.data.next_offset ?? response.data.next_before;
-    cursors = cursors.slice(0, page + 1);
-    if (following != null) cursors.push(following);
     sync();
     if (response.data.items.length) list.replaceChildren(...response.data.items.map(render));
     else message(response.data.enabled ? (empty?.(response.data) ?? '没有符合条件的记录') : '此功能当前关闭');
@@ -68,17 +92,34 @@ function createResourcePager({el, panel, id, request, render, grid = false, prep
     limit = newLimit;
     page = 0;
     pages = null;
-    cursors = [null];
     return read();
   }
-  function resize() {
-    if (!active || !list.clientWidth) return;
-    const capacity = measure();
-    if (capacity !== limit) reset(capacity);
+  return {
+    list, navigation:controls.navigation, reset, read,
+    show() { active = true; const capacity = measure(); return capacity === limit ? read() : reset(capacity); },
+    hide() { active = false; pending?.abort(); pending = null; pages = null; sync(); prepare?.(); },
+    resize() {
+      if (!active || !list.clientWidth) return;
+      const capacity = measure();
+      if (capacity !== limit) reset(capacity);
+    },
+  };
+}
+
+function createResourcePager({el, panel, id, grid = false, ...options}) {
+  const list = el('div', {id:id + '-result', class:'resource-list' + (grid ? ' resource-grid' : ''), 'aria-live':'polite'});
+  const pager = createPagedResource({...options, el, list, measure});
+  panel.append(list, pager.navigation);
+
+  function measure() {
+    const style = getComputedStyle(list);
+    const gap = parseFloat(style.rowGap);
+    const row = parseFloat(style.getPropertyValue(grid ? '--resource-tile' : '--resource-row'));
+    const rows = Math.max(1, Math.floor((list.clientHeight + gap) / (row + gap)));
+    const columns = grid ? Math.max(1, Math.floor((list.clientWidth + gap) / (row + gap))) : 1;
+    return Math.min(100, rows * columns);
   }
-  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(list);
-  previous.addEventListener('click', () => { if (!previous.disabled) return read(page - 1); });
-  next.addEventListener('click', () => { if (!next.disabled) return read(page + 1); });
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(pager.resize).observe(list);
   if (grid) {
     const sizes = el('div', {class:'row', role:'group', 'aria-label':'缩略图大小'});
     const buttons = ['small', 'medium', 'large'].map((size, index) => el('button', {
@@ -91,17 +132,13 @@ function createResourcePager({el, panel, id, request, render, grid = false, prep
           button.classList.toggle('primary', selected);
           button.setAttribute('aria-pressed', selected);
         }
-        resize();
+        pager.resize();
       }
     }));
     sizes.append(...buttons);
     panel.insertBefore(sizes, list);
   }
-  return {
-    list, reset, read,
-    show() { active = true; const capacity = measure(); return capacity === limit ? read() : reset(capacity); },
-    hide() { active = busy = false; serial++; sync(); prepare?.(); },
-  };
+  return pager;
 }
 
 function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAGES}) {
@@ -173,9 +210,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       params = getParams(form.elements);
       return pager.reset();
     }
-    const pager = createResourcePager({...options, el, error:fail, request:({offset, limit}) => {
+    const pager = createResourcePager({...options, el, error:fail, request:({offset, limit, signal}) => {
       params ??= getParams(form.elements);
-      return api(endpoint + '?' + new URLSearchParams({...params, offset, limit}));
+      return api(endpoint + '?' + new URLSearchParams({...params, offset, limit}), 'GET', undefined, {}, signal);
     }});
     form.addEventListener('submit', event => { event.preventDefault(); apply(); });
     form.addEventListener('change', event => { if (event.target.name !== 'q') apply(); });
@@ -565,20 +602,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function emojiBatchQueue(register) {
     const pageSize = 3;
     const items = el('div', {class:'stack emoji-upload-items'});
-    const status = el('span', {class:'muted', role:'status'});
-    const previous = action('上一页', () => show(page - 1));
-    const next = action('下一页', () => show(page + 1));
-    const navigation = el('div', {class:'row resource-pagination', role:'group', 'aria-label':'批量上传分页', hidden:true},
-      previous, status, next);
+    const controls = createResourcePageControls({el, label:'批量上传分页', select:show});
     let entries = [], page = 0;
 
     function show(target = page) {
       page = target;
       const pages = Math.ceil(entries.length / pageSize);
-      navigation.hidden = !pages;
-      previous.disabled = page === 0;
-      next.disabled = page + 1 >= pages;
-      status.textContent = pages ? `第 ${page + 1} / ${pages} 页` : '';
+      controls.navigation.hidden = !pages;
+      controls.sync(page, pages);
       const offset = page * pageSize;
       items.replaceChildren(...entries.slice(offset, offset + pageSize).map((entry, index) => {
         const name = `${offset + index + 1}. ${entry.image.name}`;
@@ -590,7 +621,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }
     register.addEventListener('change', () => show());
     return {
-      fields:[items, navigation],
+      fields:[items, controls.navigation],
       select(files) {
         entries = Array.from(files, image => ({image, description:'', result:''}));
         show(0);
@@ -685,18 +716,66 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     actions.append(update(item.is_banned ? '恢复' : '禁用', {is_banned:!item.is_banned}));
     return actions;
   }
-  function renderMedia(item, refresh, batch) {
+  const emojiReviewLabels = {unreviewed:'未人工审核', approved:'已通过', rejected:'已拒绝'};
+  const emojiReviewBadges = {unreviewed:'未审', approved:'通过', rejected:'拒绝'};
+  function emojiReviewForm(item, refresh, pending) {
+    if (pending.has(item.digest)) return;
+    const title = item.text || '未填写描述';
+    const review = item.review ?? 'unreviewed';
+    const message = el('p', {class:'muted', role:'status'});
+    async function submit(verdict) {
+      if (pending.has(item.digest)) return;
+      pending.add(item.digest);
+      controls.disabled = true;
+      message.textContent = '正在保存审批…';
+      try {
+        const response = await api('/api/resources/emoji/' + encodeURIComponent(item.digest) + '/review',
+          'PATCH', {verdict});
+        if (!response.ok || response.data?.review !== verdict) {
+          message.textContent = response.ok ? '无法确认审批结果，请刷新后重试。' : errorText(response);
+          if (!controls.isConnected || !$('editor-dialog').open) toast(message.textContent, 'error');
+          return;
+        }
+        toast('表情审批：' + emojiReviewLabels[verdict]);
+        if (controls.isConnected && $('editor-dialog').open) $('editor-dialog').close();
+        await refresh();
+      } finally { pending.delete(item.digest); controls.disabled = false; }
+    }
+    const controls = el('fieldset', {class:'row'},
+      el('button', {type:'button', class:'btn primary small', text:'通过审批', disabled:review === 'approved',
+        onclick:() => submit('approved')}),
+      el('button', {type:'button', class:'btn danger small', text:'拒绝审批', disabled:review === 'rejected',
+        onclick:() => submit('rejected')}));
+    detail('表情审批', fullImage('/api/resources/media/' + encodeURIComponent(item.digest) + '?kind=emoji'),
+      field('描述', title), field('当前结论', emojiReviewLabels[review]),
+      el('p', {class:'muted', text:'拒绝后不再选用。通过不改变登记或禁用状态；仍须已登记、未禁用且原图可用才能发送。'}),
+      controls, message);
+  }
+  function renderMedia(item, refresh, batch, openReview) {
     const emoji = item.media_kind === 'emoji';
     const status = emoji ? (item.is_removed ? '已移除' : item.is_banned ? '已禁用' : item.is_registered ? '已登记' : '未登记') : item.status;
     const title = item.text || '未填写描述';
+    const review = item.review ?? 'unreviewed';
     const url = item.digest ? '/api/resources/media/' + encodeURIComponent(item.digest) + (emoji ? '?kind=emoji' : '') : null;
     const tile = mediaTile(emoji ? status + ' · ' + title : title, url, '原图不可用', () => detail(emoji ? '表情详情' : '图片详情', fullImage(url),
       field('描述', title), field('状态', term(status)), field('来源', sourceText(item.source)),
+      emoji && field('审批', emojiReviewLabels[review]),
       emoji && field('格式', item.media_type?.split('/')[1]?.toUpperCase()),
       emoji && field('标签', item.tags?.join('、')),
       emoji && field('收集次数', item.collection_count), emoji && field('使用次数', item.use_count),
       !url && field('原图', '缺少原件'), emoji && url && !item.is_removed && emojiActions(item, refresh)));
-    return batch && item.entry_key ? el('div', {class:'resource-tile-selection'}, tile, batch.checkbox(item)) : tile;
+    if (!batch || !item.entry_key) return tile;
+    const approval = url && !item.is_removed && action(emojiReviewBadges[review], () => openReview(item));
+    if (approval) {
+      const label = '表情审批 · ' + emojiReviewLabels[review] + ' · ' + title;
+      approval.classList.add('emoji-review-control');
+      approval.classList.toggle('danger', review === 'rejected');
+      approval.setAttribute('aria-label', label);
+      approval.title = label;
+      tile.classList.add('emoji-reviewable');
+      tile.title = title;
+    }
+    return el('div', {class:'resource-tile-selection'}, tile, batch.checkbox(item), approval || null);
   }
   function mediaView(panel, kind) {
     const emoji = kind === 'emoji';
@@ -704,12 +783,13 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       ...Object.entries(options).map(([value, text]) => el('option', {value, text}))));
     const status = emoji ? select('表情状态', 'status',
       {'':'全部', registered:'已登记', unregistered:'未登记', banned:'已禁用'}) : null;
+    const review = emoji ? select('人工审批', 'review', {'':'全部', ...emojiReviewLabels}) : null;
     const format = emoji ? select('表情格式', 'format', {'':'全部', png:'PNG', jpeg:'JPEG', gif:'GIF', webp:'WebP'}) : null;
     const sort = emoji ? select('表情排序', 'sort',
       {recent:'最近收集', most_used:'使用最多', most_collected:'收集最多', last_used:'最近使用'}) : null;
     const label = kind === 'emoji' ? '搜索表情包' : '搜索迁入图片';
     const removed = kind === 'emoji' ? el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除') : null;
-    const form = searchForm(label, label, status, format, sort, removed);
+    const form = searchForm(label, label, status, review, format, sort, removed);
     const counts = emoji ? el('div', {class:'muted', id:'emoji-library-counts'}) : null;
     const batch = kind === 'emoji' ? batchControls(item => item.entry_key, '/api/resources/emoji/batch',
       (entry_keys, removed) => ({entry_keys, removed}), () => pager.read()) : null;
@@ -717,6 +797,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const batchUpload = kind === 'emoji' ? action('批量上传', () => emojiBatchForm(pager.read)) : null;
     let checkingIntegrity = false;
     let emojiEnabled = false;
+    const pendingReviews = new Set();
+    const openReview = item => emojiReviewForm(item, pager.read, pendingReviews);
     const integrity = emoji ? action('完整性预览', async event => {
       if (checkingIntegrity || !emojiEnabled) return;
       const button = event.currentTarget;
@@ -736,7 +818,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     panel.append(form);
     if (counts) panel.append(counts);
     const pager = searchable({panel, grid:true, id:kind === 'emoji' ? 'learning-emoji' : 'archived-images',
-      render:item => renderMedia(item, pager.read, batch), prepare:() => {
+      render:item => renderMedia(item, pager.read, batch, openReview),
+      prepare:() => {
         batch?.clear();
         syncEmojiActions(false);
       },
@@ -748,7 +831,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         }
       }},
       form, '/api/resources/media', fields => ({kind, q:fields.q.value, ...(emoji ? {
-        status:fields.status.value, format:fields.format.value, sort:fields.sort.value,
+        status:fields.status.value, review:fields.review.value, format:fields.format.value, sort:fields.sort.value,
         removed:fields.removed.checked,
       } : {})}));
     return pager;
@@ -934,9 +1017,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   picturePanel.append(resetImages);
   let pictureParams = {q:'', availability:''};
   const pictures = createResourcePager({el, panel:picturePanel, id:'pictures', grid:true, error:fail,
-    request:({offset, limit}) => similarTo == null
-      ? api('/api/resources/pictures?' + new URLSearchParams({...pictureParams, offset, limit}))
-      : api('/api/resources/images?' + new URLSearchParams({similar_to:similarTo, limit})),
+    request:({offset, limit, signal}) => api(similarTo == null
+      ? '/api/resources/pictures?' + new URLSearchParams({...pictureParams, offset, limit})
+      : '/api/resources/images?' + new URLSearchParams({similar_to:similarTo, limit}), 'GET', undefined, {}, signal),
     empty:() => similarTo == null ? '没有符合条件的图片' : '没有找到相似图片',
     render:item => {
       const title = item.text || item.conversation || '未填写描述';
@@ -965,10 +1048,13 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
     const dialog = $('editor-dialog');
     const memberLimit = 3;
+    let members;
     panel.append(el('div', {class:'row resource-filters'}, action('刷新', () => pager.reset()), count));
 
     function invalidate() {
       count.textContent = '';
+      members?.hide();
+      members = null;
       if ($('editor-body').querySelector('[data-cluster-detail]')) {
         if (dialog.open) dialog.close();
         $('editor-body').replaceChildren();
@@ -977,45 +1063,29 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
 
     function open(item) {
       const body = el('div', {class:'stack resource-detail', 'data-cluster-detail':'', 'aria-live':'polite'});
-      const status = el('span', {class:'muted', role:'status'});
-      let offset = 0, nextOffset = null;
-      const previous = action('上一页', () => read(Math.max(0, offset - memberLimit)));
-      const next = action('下一页', () => read(nextOffset));
-      const navigation = el('div', {class:'row resource-pagination', role:'group', 'aria-label':'成员分页'},
-        previous, status, next);
-
-      async function read(target) {
-        previous.disabled = next.disabled = true;
-        status.textContent = '读取中…';
-        body.replaceChildren();
-        const params = new URLSearchParams({location:item.location, offset:target, limit:memberLimit});
-        const response = await api(endpoint + '/detail?' + params);
-        if (!dialog.open || !body.isConnected) return;
-        if (!response.ok) {
+      members?.hide();
+      members = createPagedResource({el, list:body, label:'成员分页', measure:() => memberLimit,
+        isVisible:() => dialog.open && body.isConnected,
+        request:async ({offset, limit, signal}) => {
+          const params = new URLSearchParams({location:item.location, offset, limit});
+          const response = await api(endpoint + '/detail?' + params, 'GET', undefined, {}, signal);
+          if (response.ok) return {...response, data:{...response.data, items:response.data.members, enabled:true}};
+          return response;
+        },
+        render:member => el('div', {class:'stack'}, field('表达方式', member.text), field('使用情景', member.detail)),
+        loaded:data => body.prepend(el('p', {class:'muted', text:`共 ${data.total} 条可见表达`})),
+        error:response => {
           fail(response);
-          return pager.reset();
-        }
-        const {members, total, next_offset} = response.data;
-        if (!members.length && target > 0) {
-          return read(Math.max(0, Math.ceil(total / memberLimit) - 1) * memberLimit);
-        }
-        offset = target;
-        nextOffset = next_offset;
-        previous.disabled = offset === 0;
-        next.disabled = nextOffset == null;
-        status.textContent = `第 ${Math.floor(offset / memberLimit) + 1} / ${Math.ceil(total / memberLimit)} 页`;
-        body.replaceChildren(el('p', {class:'muted', text:`共 ${total} 条可见表达`}),
-          ...members.map(member => el('div', {class:'stack'},
-            field('表达方式', member.text), field('使用情景', member.detail))));
-      }
-
-      openEditor('表达簇成员', body, false, [navigation]);
-      return read(0);
+          if (response.status === 404) pager.reset();
+        },
+      });
+      openEditor('表达簇成员', body, false, [members.navigation]);
+      return members.show();
     }
 
     const pager = createResourcePager({el, panel, id:'learning-clusters', error:fail, prepare:invalidate, clearOnError:true,
-      request:async ({offset, limit}) => {
-        const response = await api(endpoint + '?' + new URLSearchParams({offset, limit}));
+      request:async ({offset, limit, signal}) => {
+        const response = await api(endpoint + '?' + new URLSearchParams({offset, limit}), 'GET', undefined, {}, signal);
         if (response.ok) response.data.enabled = true;
         return response;
       },
@@ -1031,7 +1101,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   const learning = {jargon:learningView('jargon'), expression:learningView('expression'),
     clusters:clusterView($('learning-panel-clusters')), emoji:mediaView($('learning-panel-emoji'), 'emoji')};
   const operations = createResourcePager({el, panel:$('memory-panel-operations'), id:'memory-operations', error:fail,
-    request:({offset, limit}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit})),
+    request:({offset, limit, signal}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit}),
+      'GET', undefined, {}, signal),
     empty:() => '没有可见的移除或恢复记录',
     render:item => el('div', {class:'resource-record'},
       el('span', {text:`${item.kind === 'remove' ? '移除' : '恢复'} ${item.changed} 条`}),
@@ -1081,10 +1152,10 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         ...nodes.map(node => action(`浏览 ${node.name} 的一跳关系`, () => browse(node.source)))));
     }
     const pager = createResourcePager({el, panel, id:'memory-graph', error:fail, prepare:invalidate, clearOnError:true,
-      request:async ({offset, limit}) => {
+      request:async ({offset, limit, signal}) => {
         const params = new URLSearchParams({q:query, offset, limit});
         if (anchor) params.set('neighbor_of', anchor);
-        const response = await api(endpoint + '?' + params);
+        const response = await api(endpoint + '?' + params, 'GET', undefined, {}, signal);
         if (response.ok) response.data.enabled = true;
         return response;
       },

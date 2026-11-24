@@ -63,6 +63,7 @@ def _item(path: str, kind: str, label: str, number: int) -> dict[str, object]:
     if path.endswith("/media"):
         digest = sha256(f"browser-emoji-{number}".encode()).hexdigest()
         return {
+            "entry_key": f"asset:{digest}",
             "text": text,
             "description": text,
             "tags": [],
@@ -118,6 +119,7 @@ def _item(path: str, kind: str, label: str, number: int) -> dict[str, object]:
 
 class ResourceServer(ThreadingHTTPServer):
     emoji_uploads: dict[str, dict[str, object]]
+    emoji_reviews: dict[str, str]
     removed_memories: set[tuple[str, int]]
     expression_reviews: dict[str, list[dict[str, str]]]
     recall_rating: str | None
@@ -128,6 +130,10 @@ class ResourceFixture(SimpleHTTPRequestHandler):
     @property
     def emoji_uploads(self) -> dict[str, dict[str, object]]:
         return cast(ResourceServer, self.server).emoji_uploads
+
+    @property
+    def emoji_reviews(self) -> dict[str, str]:
+        return cast(ResourceServer, self.server).emoji_reviews
 
     @property
     def removed_memories(self) -> set[tuple[str, int]]:
@@ -316,6 +322,12 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         if not self.path.startswith(prefix):
             self.send_error(404)
             return
+        if self.path.endswith("/review"):
+            digest = self.path.removeprefix(prefix).removesuffix("/review")
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+            self.emoji_reviews[digest] = body["verdict"]
+            self._send_json({"review": body["verdict"]})
+            return
         digest = self.path.removeprefix(prefix)
         item = self.emoji_uploads.get(digest)
         if item is None:
@@ -367,6 +379,10 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         if path.endswith("/media") and kind == "emoji":
             uploads = [item for item in self.emoji_uploads.values() if query in str(item)]
             results = uploads + results
+            for item in results:
+                item["review"] = self.emoji_reviews.get(str(item["digest"]), "unreviewed")
+            if review := params.get("review"):
+                results = [item for item in results if item["review"] == review[0]]
             all_uploads = list(self.emoji_uploads.values())
             counts = {
                 "total": TOTAL + len(all_uploads),
@@ -532,6 +548,7 @@ def _open_browser(profile: Path, memory_transfer: TestClient | None = None) -> I
     chrome = _chrome()
     server = ResourceServer(("127.0.0.1", 0), partial(ResourceFixture, directory=STATIC))
     server.emoji_uploads = {}
+    server.emoji_reviews = {}
     server.removed_memories = set()
     server.expression_reviews = {}
     server.recall_rating = None
@@ -995,6 +1012,83 @@ def test_emoji_filters_sort_and_keep_global_counts_on_narrow_screen(browser: Bro
     )
 
 
+def test_emoji_card_review_keeps_latest_filter_and_reports_failure(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      const review = () => find('button[aria-label="表情审批 · 未人工审核 · 合成表情000"]');
+      await waitFor(review, '表情卡有审批入口');
+      press('小');
+      await waitFor(() => review() && button('下一页')?.disabled === false, '小号缩略图已载入');
+      const frame = review().parentElement.getBoundingClientRect();
+      const spot = review().getBoundingClientRect();
+      check(spot.right <= frame.right && frame.right - spot.right <= 5 &&
+        spot.bottom <= frame.bottom && frame.bottom - spot.bottom <= 5 &&
+        document.documentElement.scrollWidth <= innerWidth, '小屏右下角内可点击');
+      review().focus();
+    """,
+    )
+    for event_type in ("keyDown", "keyUp"):
+        browser.command(
+            "Input.dispatchKeyEvent",
+            type=event_type,
+            key="Enter",
+            code="Enter",
+            windowsVirtualKeyCode=13,
+        )
+    _run(
+        browser,
+        """
+      const dialog = document.querySelector('#editor-dialog');
+      const reject = () => [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent === '拒绝审批');
+      await waitFor(() => dialog.open && reject(), '键盘直接打开审批而不是详情');
+      const original = window.fetch;
+      let save, oldPage, writes = 0;
+      window.fetch = (url, options) => {
+        const path = new URL(url, location.href);
+        if (path.pathname.endsWith('/review') && options.method === 'PATCH') {
+          check(JSON.parse(options.body).verdict === 'rejected', '发送独立审批结论');
+          if (++writes === 1) return Promise.resolve(Response.json({detail:'合成审批失败'}, {status:503}));
+          return new Promise(resolve => { save = () => resolve(original(url, options)); });
+        }
+        if (path.pathname === '/api/resources/media' && Number(path.searchParams.get('offset')) > 0) {
+          return new Promise(resolve => { oldPage = resolve; });
+        }
+        return original(url, options);
+      };
+      try {
+        reject().click();
+        await waitFor(() => dialog.innerText.includes('合成审批失败') && !reject().matches(':disabled'),
+          '失败保留审批操作，可重试');
+        check(!document.querySelector('#toasts').textContent.includes('表情审批：已拒绝'),
+          '失败不报告保存成功');
+        reject().click();
+        await waitFor(() => save && reject().matches(':disabled'), '同一份审批不能重复提交');
+        document.querySelector('#editor-close').click();
+        press('下一页');
+        await waitFor(() => oldPage, '保存未完成时可抢先翻页');
+        const filter = find('select[name="review"]');
+        filter.value = 'rejected';
+        filter.dispatchEvent(new Event('change', {bubbles:true}));
+        await waitFor(() => page() === '第 0 / 0 页', '拒绝筛选先返回空结果');
+        save();
+        await waitFor(() => page() === '第 1 / 1 页' &&
+          find('button[aria-label="表情审批 · 已拒绝 · 合成表情000"]'), '保存刷新当前筛选并回显');
+        oldPage(Response.json({enabled:true, total:320, items:[{
+          text:'迟到的合成表情', media_kind:'emoji', is_registered:true,
+        }]}));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        check(page() === '第 1 / 1 页' && button('已登记 · 合成表情000') && !text('迟到的合成表情'),
+          '审批不改登记，迟到的翻页不覆盖筛选');
+      } finally { window.fetch = original; }
+    """,
+    )
+
+
 def test_emoji_integrity_preview_runs_only_on_click_on_narrow_screen(browser: Browser) -> None:
     browser.open("learning", 390, 740)
     _run(
@@ -1368,6 +1462,7 @@ def test_emoji_batch_upload_paginates_per_image_descriptions(browser: Browser) -
       const status = () => nav()?.querySelector('[role="status"]').textContent;
       const dialogButton = label => [...form.querySelectorAll('button')]
         .find(node => node.textContent === label);
+      const jump = nav().querySelector('.resource-page-jump');
       const descriptions = () => [...form.querySelectorAll('textarea')].slice(1);
       const fill = (control, text) => {{
         control.value = text;
@@ -1385,9 +1480,11 @@ def test_emoji_batch_upload_paginates_per_image_descriptions(browser: Browser) -
       check(dialogButton('下一页').disabled && descriptions().length === 1 &&
         form.scrollWidth <= dialog.clientWidth, '窄屏长文件名不撑宽，末页只有一张');
       fill(form.querySelector('textarea'), '共享缺省');
-      dialogButton('上一页').click();
+      fill(jump, '1');
+      jump.dispatchEvent(new KeyboardEvent('keydown', {{key:'Enter', cancelable:true}}));
       check(descriptions()[0].value === '青兔打招呼 🐰' && descriptions()[1].value === '红兔道谢',
-        '翻页保留重名文件各自的草稿');
+        '跳页不提交上传表单，保留重名文件各自的草稿');
+      check(requests.length === 0, '跳页不上传任何图片');
       register.click();
       check(!descriptions().length && !form.querySelector('textarea').getClientRects().length,
         '取消勾选完全隐藏输入');
@@ -1435,6 +1532,95 @@ def test_memory_pagination_details_and_button_states(browser: Browser) -> None:
       click('[data-memory-tab="images"]');
       await waitFor(() => text('合成图片000') && !text('合成人物000'), '图片记忆切换迁入素材');
       check(button('下一页').getBoundingClientRect().bottom <= innerHeight, '图片页窄屏可分页');
+    """,
+    )
+
+
+def test_resource_pagination_applies_latest_navigation_intent(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000') && !button('下一页')?.disabled, '文字记忆首页');
+      const jump = find('.resource-page-jump');
+      const list = find('#memory-result');
+      const next = () => button('下一页');
+      const previous = () => button('上一页');
+      const totalPages = Number(page().match(/\/ (\d+)/)[1]);
+      const queue = [];
+      const original = window.fetch;
+      window.fetch = (url, options) => {
+        const path = new URL(url, location.href);
+        if (path.pathname !== '/api/resources/memory' || options.method !== 'GET')
+          return original(url, options);
+        return new Promise(resolve => queue.push({params:path.searchParams, signal:options.signal, resolve}));
+      };
+      const send = (index, title, total = 320) => queue[index].resolve(Response.json({
+        enabled:true, total, items:title ? [{text:title, is_recallable:true}] : [],
+      }));
+      const fail = (index, detail) => queue[index].resolve(Response.json({detail}, {status:503}));
+      const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const submitJump = value => {
+        jump.value = String(value);
+        jump.dispatchEvent(new Event('input', {bubbles:true}));
+        jump.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', cancelable:true}));
+      };
+      const target = index => {
+        const params = queue[index].params;
+        return Number(params.get('offset')) / Number(params.get('limit')) + 1;
+      };
+      try {
+        check(jump.getAttribute('aria-label')?.includes('跳转页码') && !jump.disabled, '有名称的可用跳页输入');
+        jump.focus();
+        check(document.activeElement === jump, '可以键盘聚焦');
+        submitJump(totalPages + 1);
+        submitJump('1.5');
+        check(queue.length === 0 && !jump.validity.valid, '拒绝越界和小数页码');
+        click('#memory-select-all');
+        check(!find('#memory-correct').disabled, '当前页原本有选中项');
+        press('下一页');
+        check(target(0) === 2 && !next().disabled && !previous().disabled && !jump.disabled &&
+          list.getAttribute('aria-busy') === 'true', '首个翻页开始后仍可选择下一页');
+        check(find('#memory-correct').disabled && find('#memory-select-all').disabled,
+          '发出新翻页意图立即撤销旧批量选择');
+        press('下一页');
+        check(target(1) === 3 && queue[0].signal.aborted, '第二次下一页以目标第二页为基准');
+        submitJump(totalPages);
+        check(target(2) === totalPages && next().disabled && !previous().disabled,
+          '读取中直接跳到末页，立即应用边界');
+        send(2, '最新末页');
+        await waitFor(() => text('最新末页') && page() === `第 ${totalPages} / ${totalPages} 页`, '末页完成');
+        send(0, '迟到的第二页');
+        fail(1, '迟到的第三页错误');
+        await settle();
+        check(text('最新末页') && !text('迟到的第二页') && !text('读取失败') &&
+          !document.querySelector('#toasts').textContent.includes('迟到的第三页错误'), '迟到成功或失败都不污染新页');
+        check(!find('#memory-select-all').checked && find('#memory-correct').disabled,
+          '新页不会继承批量选择');
+
+        press('上一页');
+        submitJump(1);
+        check(target(3) === totalPages - 1 && target(4) === 1 && previous().disabled,
+          '反向翻页后可跳回首页且不能越界');
+        fail(4, '当前首页失败');
+        await waitFor(() => button('重试') && text('读取失败'), '最新失败显示重试');
+        send(3, '迟到的上一页');
+        await settle();
+        check(!text('迟到的上一页') && button('重试') && jump.disabled, '迟到成功不遮盖最新失败');
+        press('重试');
+        check(target(5) === 1, '重试最新失败的目标页');
+        send(5, '恢复的首页');
+        await waitFor(() => text('恢复的首页'), '重试首页完成');
+
+        submitJump(totalPages);
+        send(6, null, 1);
+        await waitFor(() => queue[7], '资料缩减重新读取最后一个有效页');
+        check(target(7) === 1, '资料缩减不留在越界页');
+        send(7, '缩减后的唯一资料', 1);
+        await waitFor(() => page() === '第 1 / 1 页' && text('缩减后的唯一资料'), '新总数与有效页相符');
+        check(previous().disabled && next().disabled && jump.disabled &&
+          document.documentElement.scrollWidth === 390, '单页禁用导航且窄屏不溢出');
+      } finally { window.fetch = original; }
     """,
     )
 
@@ -2035,12 +2221,15 @@ def test_expression_cluster_members_paginate_at_390px(browser: Browser) -> None:
       check(body.scrollHeight <= body.clientHeight + 1, '大簇的详情不形成长滚动');
       nav('下一页').click();
       await waitFor(() => release, '第二页请求已发出');
-      check(nav('上一页').disabled && nav('下一页').disabled && !has('合成分页成员0'),
-        '加载期间不可翻页且清除旧成员');
-      release();
-      await waitFor(() => pageStatus('第 2 / 3 页') && has('合成分页成员3'), '详情第二页');
-      nav('下一页').click();
+      check(!nav('上一页').disabled && !nav('下一页').disabled && !has('合成分页成员0'),
+        '成员加载期间清除旧成员，但仍可翻页');
+      const delayedSecond = release;
+      const jump = dialog().querySelector('.resource-page-jump');
+      jump.value = '3';
+      jump.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', cancelable:true}));
       await waitFor(() => pageStatus('第 3 / 3 页') && has('合成分页成员7'), '详情末页');
+      delayedSecond();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       check(nav('下一页').disabled && !nav('上一页').disabled && !has('合成分页成员3'), '末页有界');
       release = null;
       nav('上一页').click();

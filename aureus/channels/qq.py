@@ -84,7 +84,7 @@ class QQChannel:
         self._transport = OneBotTransport(
             config, token.get_secret_value() if token else None, self._receive
         )
-        self._seen: OrderedDict[tuple[str, str, str], None] = OrderedDict()
+        self._seen: OrderedDict[tuple[ConversationKey, str], None] = OrderedDict()
         self._sending: set[asyncio.Task[None]] = set()
         self._last_send: dict[ConversationKey, asyncio.Task[None]] = {}
         self._connection: asyncio.Task[None] | None = None
@@ -140,7 +140,7 @@ class QQChannel:
             return
         if not self._allows_route(route):
             return
-        key = QQ_CHANNEL_NAME, route.account_id, route.message_id
+        key = ConversationKey.from_perception(perception), route.message_id
         if key in self._seen:
             return
         if not (self._consume_command and self._consume_command(perception)):
@@ -281,6 +281,8 @@ class QQChannel:
             return
         if not self._allows_route(route):
             raise OneBotError("QQ 目的地超出允许范围")
+        if message.quote_source and not self.can_quote_reply(route):
+            raise OneBotError("此 QQ 回复路由不支持引用")
         if message.emoji_digest is not None and not self._allows_emoji(message, route):
             raise OneBotError("QQ 表情目的地或当前权限不允许发送")
         socket = self._transport.socket
@@ -342,10 +344,36 @@ class QQChannel:
                 ):
                     return
             params = encode_message(message, route, image=image)
-            await self._transport.call(socket, "send_msg", params)
+            receipt = await self._transport.call(socket, "send_msg", params)
+            await self._save_delivered(message, route, receipt.get("message_id"))
             if message.confirm_delivery is not None:
                 message.confirm_delivery()
             if digest is not None and self._record_emoji_use is not None:
                 await asyncio.to_thread(self._record_emoji_use, digest)
         except (OSError, TimeoutError, WebSocketException, OneBotError, SQLiteError) as error:
             logger.warning("QQ 发送失败（%s）", type(error).__name__)
+
+    async def _save_delivered(
+        self, message: OutgoingMessage, route: MessageRoute, receipt_id: object
+    ) -> None:
+        if self._inbox_store is None:
+            return
+        identifier = message_id(receipt_id)
+        if identifier is None:
+            logger.warning("QQ 发送回执缺少有效消息键，无法归档外发消息")
+            return
+        perception = Perception(
+            message.channel,
+            route.account_id,
+            "[表情]" if message.emoji_digest is not None else message.content,
+            message.visibility,
+            TrustLevel.VERIFIED_CONTACT,
+            route=replace(route, message_id=identifier),
+            quoted_message_id=route.message_id if message.quote_source else None,
+        )
+        try:
+            await asyncio.to_thread(
+                self._inbox_store.add_delivered, perception, sender_name=message.sender_name
+            )
+        except SQLiteError:
+            logger.exception("QQ 消息已发送，但外发历史写入失败")

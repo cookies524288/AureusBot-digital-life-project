@@ -20,6 +20,7 @@ from aureus.organs import (
     ModelsConfig,
     OrganCallError,
     OrganResponse,
+    ToolDefinition,
     validate_models_config,
 )
 from aureus.organs.llm_adapter import ModelProbeError, model_probe_inputs, probe_model
@@ -161,6 +162,9 @@ def register_config_routes(
     model_runtime: ModelRuntime | None = None,
     run_model_test: Callable[[Callable[[], Awaitable[OrganResponse]]], Awaitable[OrganResponse]]
     | None = None,
+    *,
+    require_active: Callable[..., Awaitable[str]],
+    planner_tool_definitions: Callable[[], tuple[ToolDefinition, ...]] | None = None,
 ) -> None:
     """注册配置接口；统一要求已登录且已修改默认密码。"""
     if model_runtime is not None:
@@ -169,7 +173,18 @@ def register_config_routes(
     @app.get("/api/models")
     async def view_models(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
         with _translate_errors(service):
-            return await asyncio.to_thread(service.view_models)
+            models = await asyncio.to_thread(service.view_models)
+        if planner_tool_definitions is not None:
+            models["planner_organ"] = service.runtime.heartbeat.plan_organ
+        return models
+
+    @app.get("/api/organs/{organ}/planner-tools")
+    async def view_planner_tools(
+        organ: str, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, tuple[ToolDefinition, ...]]:
+        if planner_tool_definitions is None or organ != service.runtime.heartbeat.plan_organ:
+            raise HTTPException(404, detail="该器官不负责会话规划。")
+        return {"tools": planner_tool_definitions()}
 
     @app.post("/api/models/catalog")
     async def catalog(
@@ -366,7 +381,7 @@ def register_config_routes(
             return {"ok": True, "restart_required": service.restart_required}
 
     @app.get("/api/config")
-    async def view_config(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
+    async def view_config(_token: Annotated[str, Depends(require_active)]) -> dict[str, Any]:
         with _translate_errors(service):
             return await asyncio.to_thread(service.view_runtime)
 
@@ -399,6 +414,21 @@ def register_config_routes(
                 value, changed = await asyncio.to_thread(service.restore_runtime, field)
             return {
                 "value": value,
+                "changed": changed,
+                "restart_required": service.restart_required,
+            }
+
+    @app.post("/api/config/restore-defaults")
+    async def restore_runtime_defaults(
+        request: Request, _token: Annotated[str, Depends(require_active)]
+    ) -> dict[str, Any]:
+        with _translate_errors(service):
+            body = await _body(request)
+            async with service.write_lock:
+                _confirm(auth, body, request)
+                config, changed = await asyncio.to_thread(service.restore_all_runtime)
+            return {
+                "config": config,
                 "changed": changed,
                 "restart_required": service.restart_required,
             }

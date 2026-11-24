@@ -9,7 +9,14 @@ from websockets.asyncio.server import serve
 
 from aureus.channels.qq import QQChannel
 from aureus.common import ManualClock, QQConfig
-from aureus.heartbeat import Perception, TrustLevel, VisibilityScope
+from aureus.heartbeat import (
+    MessageKind,
+    MessageRoute,
+    OutgoingMessage,
+    Perception,
+    TrustLevel,
+    VisibilityScope,
+)
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, FakeOneBot, event
 
@@ -70,3 +77,58 @@ async def test_qq_persists_allowed_conversations_before_notifying(tmp_path: Path
     assert reopened.list_messages(first.conversation, before_id=first.id) == []
     other = ConversationKey("qq", "9999", "group", str(GROUP))
     assert reopened.list_messages(other) == []
+
+
+@pytest.mark.asyncio
+async def test_qq_history_only_accepts_platform_deliveries(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    path = tmp_path / "aureus.db"
+    store = InboxStore(path, clock)
+    fake = FakeOneBot()
+    fake.reply_with = ["failed", "ok", "ok"]
+    notified: asyncio.Queue[InboxMessage] = asyncio.Queue()
+    async with asyncio.timeout(5), serve(fake.handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        config = QQConfig(
+            enabled=True,
+            account_id=str(ACCOUNT),
+            endpoint=f"ws://127.0.0.1:{port}/onebot",
+        )
+        async with QQChannel(
+            config,
+            None,
+            Receiver(),
+            lambda _account: False,
+            inbox_store=store,
+            on_inbox_message=notified.put_nowait,
+        ) as channel:
+            remote = await fake.connections.get()
+            await fake.send(remote, **event(31, 2200, "群消息", group=GROUP))
+            await fake.send(remote, **event(31, 2200, "别的会话同键", group=GROUP + 1))
+            inbound = await notified.get()
+            assert (await notified.get()).conversation.recipient_id == str(GROUP + 1)
+            route = MessageRoute(str(ACCOUNT), "group", str(GROUP), "31")
+            for text in ("平台拒绝", "真正发送", "回执重复"):
+                channel.show(
+                    OutgoingMessage(
+                        "qq",
+                        "2200",
+                        text,
+                        MessageKind.REPLY,
+                        "自己",
+                        route=route,
+                        visibility=VisibilityScope.GROUP,
+                    )
+                )
+            await asyncio.gather(*channel._sending)
+            await fake.send(remote, **event(32, 2200, "迟到", group=GROUP, time=1))
+            late = await notified.get()
+            assert late.timestamp < inbound.timestamp
+    reopened = InboxStore(path, clock)
+    history = reopened.list_messages(inbound.conversation)
+    assert [(row.direction, row.perception.content) for row in history] == [
+        ("incoming", "迟到"), ("outgoing", "真正发送"), ("incoming", "群消息")
+    ]
+    assert history[1].perception.sender_id == str(ACCOUNT)
+    assert history[1].perception.route == MessageRoute(str(ACCOUNT), "group", str(GROUP), "6000")
+    assert [row.id for row in reopened.list_unread(inbound.conversation)] == [inbound.id, late.id]

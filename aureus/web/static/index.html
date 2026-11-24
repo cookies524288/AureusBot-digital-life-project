@@ -47,10 +47,22 @@ h1,h2,h3,h4,p{margin:0}
 .muted{color:var(--text-2)}
 .mono{font-family:var(--mono)}
 ::selection{background:var(--accent-soft)}
+@media not all and (forced-colors:active){
+@supports selector(::-webkit-scrollbar){
+::-webkit-scrollbar{width:12px;height:12px}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:var(--surface-2)}
+::-webkit-scrollbar-thumb{background:var(--text-2);border:2px solid var(--surface-2);border-radius:0}
+::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{background:var(--accent-strong)}
+}
+@supports not selector(::-webkit-scrollbar){
+:root{scrollbar-color:var(--text-2) var(--surface-2)}
+}
+}
+:where(.chat-log,.cfg-details,.dialog-body):focus-visible{outline:2px solid var(--accent-strong);outline-offset:-2px}
 /* ---------- 布局：窄图标栏（鼠标放上去整条展开，叠在页面上方，不挤内容）+ 圆角主面板；参考 VS Code 浅色 ---------- */
 body{background:var(--frame)}
 #app{position:relative;display:grid;grid-template-columns:var(--nav-w) 1fr;height:100%;min-height:0}
-nav.side{position:absolute;z-index:30;top:0;bottom:0;left:0;width:var(--nav-w);display:flex;flex-direction:column;gap:2px;padding:10px 8px;background:var(--frame);border-right:1px solid transparent;overflow-x:hidden;overflow-y:auto;scrollbar-width:none;transition:width var(--dur) var(--ease),border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
+nav.side{position:absolute;z-index:30;top:0;bottom:0;left:0;width:var(--nav-w);display:flex;flex-direction:column;gap:2px;padding:10px 8px;background:var(--frame);border-right:1px solid transparent;overflow-x:hidden;overflow-y:auto;transition:width var(--dur) var(--ease),border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
 /* 用 :has(:focus-visible) 而不是 :focus-within：鼠标点过按钮后按钮一直有焦点，用后者栏会卡在展开状态 */
 nav.side:hover,nav.side:has(:focus-visible){width:var(--nav-open);border-right-color:var(--border);box-shadow:8px 0 28px rgba(88,110,117,.14)}
 .brand{position:relative;flex:none;height:40px;margin-bottom:8px;font-weight:700;font-size:16px;letter-spacing:.3px;white-space:nowrap}
@@ -116,7 +128,7 @@ linear-gradient(90deg,var(--border),transparent 85%) left bottom/100% 1px no-rep
 nav.side,nav.side:hover,nav.side:has(:focus-visible){position:static;grid-row:2;width:auto;flex-direction:row;gap:0;padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:var(--surface);border-right:0;border-top:1px solid var(--border);box-shadow:none;overflow-x:auto;overflow-y:hidden}
 .brand,.nav-group,.nav-spacer,.nav-foot #terminal-btn{display:none}
 .nav-foot{display:contents}
-nav.side .nav-item{flex:1 1 0;min-width:0;flex-direction:column;justify-content:center;gap:2px;height:auto;padding:6px 2px;font-size:11px;text-align:center}
+nav.side .nav-item{flex:1 0 auto;min-inline-size:44px;width:auto;flex-direction:column;justify-content:center;gap:2px;height:auto;padding:6px;font-size:11px;text-align:center}
 nav.side .nav-item::before{display:none}
 .nav-label{opacity:1;transform:none}
 section.page{padding:18px 16px 24px}
@@ -313,6 +325,11 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 #prompt-preview{width:min(850px,calc(100% - 24px))}
 .prompt-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 16px}
 .prompt-preview .dialog-body{max-height:70dvh;overflow:auto}
+.planner-tool{padding:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg)}
+.planner-tool p,.planner-tool dd{margin:4px 0;color:var(--text-2)}
+.planner-tool dt,.planner-tool h4{font-family:var(--mono);overflow-wrap:anywhere}
+.planner-tool dt{margin-top:8px}
+.planner-tool summary{cursor:pointer;font-size:13px}
 .prompt-scene{padding:8px 22px 12px;margin:0;border-bottom:1px solid var(--border)}
 @media(max-width:700px){.prompt-layout{grid-template-columns:minmax(0,1fr)}.prompt-directory{max-height:24vh}.prompt-source{min-height:13rem}}
 /* ---------- 模型和器官 ---------- */
@@ -337,7 +354,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .cfg-layout{flex:1;display:grid;gap:20px;grid-template-columns:180px minmax(0,1fr);grid-template-rows:minmax(0,1fr);min-height:0}
 .cfg-layout:has(#cf-content.hidden){grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .cfg-layout:has(#cf-content.hidden)>.cfg-tabs{display:none}
-.cfg-tabs,.cfg-details{min-width:0;min-height:0;overflow:hidden auto;overscroll-behavior:contain;scrollbar-width:thin}
+.cfg-tabs,.cfg-details{min-width:0;min-height:0;overflow:hidden auto;overscroll-behavior:contain}
 .cfg-tabs{display:flex;flex-direction:column;gap:2px}
 .cfg-tabs .nav-item{flex:none}
 @media (max-width:820px){.cfg-layout{gap:12px;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}.cfg-tabs{flex-direction:row;overflow:auto hidden}.cfg-tabs .nav-item{width:auto}}
@@ -466,8 +483,13 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .resource-tile-selection{position:relative;min-width:0}
 .resource-tile-selection>.resource-tile{width:100%}
 .resource-tile-selection>input[type=checkbox]{position:absolute;top:7px;right:7px;z-index:1}
+.resource-tile-selection>.emoji-review-control{position:absolute;bottom:3px;right:3px;min-width:44px;min-height:36px;padding:2px 4px}
+.resource-tile.emoji-reviewable>span:last-child{padding-right:44px;text-align:left}
+@media(pointer:coarse){.resource-tile-selection>.emoji-review-control{min-height:44px}}
 .resource-tile .resource-placeholder{display:grid;place-items:center;background:var(--surface-2);border-radius:var(--radius-sm);white-space:normal;text-align:center}
 .resource-pagination{justify-content:center;gap:8px;min-height:32px}
+.resource-pagination input.resource-page-jump[type=text][inputmode=numeric]{width:4em;text-align:center;padding:4px;font-size:13px}
+.resource-pagination [role=status]{font-size:13px}
 .resource-detail{overflow-wrap:anywhere;gap:12px}
 .emoji-upload-items{overflow-wrap:anywhere}
 .emoji-batch-upload [hidden]{display:none}
@@ -664,7 +686,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div><h2 style="font-size:17px">私聊</h2></div>
 <span class="tag" id="conn-tag"><span class="dot" id="conn-dot"></span><span id="conn-text">连接中</span></span>
 </div>
-<div id="chat-log" class="chat-log" aria-live="polite"></div>
+<div id="chat-log" class="chat-log" role="region" aria-label="私聊消息" tabindex="0" aria-live="polite"></div>
 <div class="composer">
 <textarea id="chat-text" rows="1" placeholder="说点什么（Enter 发送，Shift+Enter 换行）"></textarea>
 <button id="chat-send" class="btn primary" disabled><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-send"/></svg>发送</button>
@@ -833,7 +855,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary" disabled><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
-<div class="row"><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
+<div class="row"><button id="cf-restore-all" class="btn danger" disabled>恢复默认设置</button><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
 <div class="page-body cfg-layout">
 <div id="cf-tabs" class="cfg-tabs"></div>
 <div id="cf-details" class="cfg-details" role="region" aria-label="设置项" tabindex="0"><div class="stack">
@@ -889,11 +911,22 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-text" closedby="any"><form method="dialog"><p id="confirm-text"></p><div class="dialog-foot"><button class="btn" value="no">否</button><button class="btn primary" value="yes">是</button></div></form></dialog>
+<dialog id="cf-restore-all-dialog" class="editor-dialog" aria-labelledby="cf-restore-all-title" aria-describedby="cf-restore-all-scope"><form id="cf-restore-all-form" class="dialog-shell">
+<header class="dialog-head"><h3 id="cf-restore-all-title">恢复默认设置</h3></header>
+<div class="dialog-body stack"><div class="stack" id="cf-restore-all-scope"><p>已保存的可恢复运行设置将恢复为默认值，重启后生效；此浏览器的界面字体会立即恢复默认，未保存的修改会丢弃。</p>
+<p>只读项、没有默认值的设置、账户凭据和绑定、人设、密钥、模型及其它页面的配置和数据均保留。</p></div>
+<label class="field"><span>当前密码</span><input id="cf-restore-all-password" type="password" autocomplete="current-password" required></label>
+<div id="cf-restore-all-error" class="banner danger hidden" role="alert"></div></div>
+<footer class="dialog-foot"><button id="cf-restore-all-cancel" class="btn" type="button" autofocus>取消</button><button id="cf-restore-all-submit" class="btn danger" type="submit">确认恢复</button></footer>
+</form></dialog>
 <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
 <dialog id="provider-key-dialog" class="editor-dialog" aria-labelledby="provider-key-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="provider-key-title"></h3><form method="dialog"><button class="btn small" aria-label="关闭新增 API 密钥"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header><div id="provider-key-body" class="dialog-body"></div><footer id="provider-key-footer" class="dialog-foot"></footer></div></dialog>
 <dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title" closedby="any"><div class="dialog-shell">
 <header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" aria-label="关闭预览" autofocus><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header>
 <div id="prompt-preview-scene"></div><div id="prompt-preview-body" class="dialog-body" tabindex="0"></div></div></dialog>
+<dialog id="planner-tools" class="editor-dialog prompt-preview" aria-labelledby="planner-tools-title" closedby="any"><div class="dialog-shell">
+<header class="dialog-head"><h3 id="planner-tools-title">工具列表</h3><form method="dialog"><button class="btn small" autofocus>返回配置</button></form></header>
+<div id="planner-tools-body" class="dialog-body stack" tabindex="0"></div></div></dialog>
 
 <script src="/assets/organ-graph.js"></script>
 <script src="/assets/resource-management.js"></script>
@@ -1184,7 +1217,7 @@ function showAuth(view, message) {
   pageNavigation = null;
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
-  for (const id of ['provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview']) if ($(id).open) $(id).close();
+  for (const id of ['planner-tools', 'provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview', 'cf-restore-all-dialog']) if ($(id).open) $(id).close();
   $('ky-add').disabled = true;
   if (typeof closeSocket === 'function') closeSocket();
   $('app').classList.add('hidden');
@@ -1808,8 +1841,8 @@ $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
 PAGES.timeline = { load: () => loadTimeline(false) };
 // ---------- 平台收件箱 ----------
-const inbox = {selected:null, next:null, conversationRequest:0, messageRequest:0};
-const inboxKey = conversation => JSON.stringify(conversation.key);
+const inbox = {selected:null, next:null, nextSource:null, conversationRequest:0, messageRequest:0};
+const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
 
 function selectInboxConversation(conversation) {
   inbox.selected = conversation;
@@ -1821,7 +1854,7 @@ function selectInboxConversation(conversation) {
   return loadInboxMessages();
 }
 
-function renderInboxConversations(conversations) {
+function renderInboxConversations(conversations, archives) {
   const platforms = new Map();
   for (const conversation of conversations) {
     const platform = conversation.key.platform;
@@ -1842,6 +1875,14 @@ function renderInboxConversations(conversations) {
     }
     return section;
   }));
+  if (archives.length) {
+    $('inbox-conversations').append(el('section', {}, el('h3', {text:'未归类历史'}),
+      ...archives.map(item => el('button', {
+        type:'button', class:'btn inbox-conversation', 'aria-pressed':'false',
+        'data-conversation':inboxKey(item), text:item.name,
+        onclick:() => selectInboxConversation(item),
+      }))));
+  }
 }
 
 async function loadInbox() {
@@ -1849,14 +1890,15 @@ async function loadInbox() {
   const res = await api('/api/inbox/conversations');
   if (request !== inbox.conversationRequest || session !== state.loaded) return;
   if (!res.ok) { fail(res); return; }
-  const {enabled, conversations} = res.data;
+  const {enabled, conversations, archives = []} = res.data;
+  const entries = [...conversations, ...archives];
   const empty = $('inbox-empty');
   empty.textContent = enabled ? '还没有收到消息。' : 'QQ 收件箱未启用。';
-  empty.classList.toggle('hidden', !!conversations.length);
-  $('inbox-layout').classList.toggle('hidden', !conversations.length);
-  renderInboxConversations(conversations);
-  const selected = inbox.selected && conversations.find(item => inboxKey(item) === inboxKey(inbox.selected));
-  if (conversations.length) await selectInboxConversation(selected || conversations[0]);
+  empty.classList.toggle('hidden', !!entries.length);
+  $('inbox-layout').classList.toggle('hidden', !entries.length);
+  renderInboxConversations(conversations, archives);
+  const selected = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
+  if (entries.length) await selectInboxConversation(selected || entries[0]);
   else {
     inbox.selected = null;
     ++inbox.messageRequest;
@@ -1868,17 +1910,23 @@ async function loadInboxMessages(more = false) {
   const list = $('inbox-messages'), status = $('inbox-message-status'), button = $('inbox-more');
   if (!inbox.selected || (more && (!inbox.next || button.disabled))) return;
   const request = ++inbox.messageRequest, session = state.loaded;
-  const query = new URLSearchParams(Object.entries(inbox.selected.key).filter(([, value]) => value !== null));
-  if (more) query.set('before_id', String(inbox.next));
+  const archive = inbox.selected.archive;
+  const query = new URLSearchParams(archive ? {source:archive} :
+    Object.entries(inbox.selected.key).filter(([, value]) => value !== null));
+  if (more) {
+    query.set('before_id', String(inbox.next));
+    if (!archive && inbox.nextSource) query.set('before_source', inbox.nextSource);
+  }
   else {
     inbox.next = null;
+    inbox.nextSource = null;
     list.replaceChildren();
     status.textContent = '正在加载消息…';
     status.classList.remove('hidden');
     button.classList.add('hidden');
   }
   button.disabled = true;
-  const res = await api('/api/inbox/messages?' + query);
+  const res = await api('/api/inbox/' + (archive ? 'uncategorized?' : 'messages?') + query);
   if (request !== inbox.messageRequest || session !== state.loaded) return;
   button.disabled = false;
   status.classList.add('hidden');
@@ -1889,16 +1937,18 @@ async function loadInboxMessages(more = false) {
     } else fail(res);
     return;
   }
-  const {messages, next_before_id} = res.data;
+  const {messages, next_before_id, next_before_source} = res.data;
   list.append(...messages.map(message => el('article', {class:'inbox-message'},
-    el('div', {class:'row'}, el('strong', {text:message.sender_name || message.sender_id}),
-      el('time', {class:'muted', datetime:message.timestamp, text:fmtTime(message.timestamp, true)})),
+    el('div', {class:'row'}, el('strong', {text:message.sender_name || message.sender_id || '未知发件人'}),
+      message.timestamp ? el('time', {class:'muted', datetime:message.timestamp, text:fmtTime(message.timestamp, true)}) :
+        el('span', {class:'muted', text:'时间未知'})),
     el('p', {text:message.content}))));
   if (!list.childElementCount) {
     status.textContent = '这个会话暂无消息。';
     status.classList.remove('hidden');
   }
   inbox.next = next_before_id;
+  inbox.nextSource = next_before_source;
   button.classList.toggle('hidden', !inbox.next);
 }
 $('inbox-refresh').addEventListener('click', loadInbox);
@@ -2059,7 +2109,7 @@ $('ps-save-baseline').addEventListener('click', () => {
 PAGES.persona = { load: loadPersona };
 // ---------- 模型库与器官分工（D86）：参考 MaiBot 公开界面交互，保留本页视觉 ----------
 // 参考提交及文件见 docs/tasks/2.12.md 第 2 轮；只参考交互，未复制代码。
-const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], connections: [], provider: '',
+const mdl = { cfg: null, baseline: null, choices: {}, keys: {}, builtin: [], connections: [], plannerOrgan: '', provider: '',
   dirty: false, revision: 0, saved: 0, pending: 0, queue: Promise.resolve() };
 const MODEL_KIND_LABELS = { llm: '语言模型', embedding: '文本嵌入', image_embedding: '图片嵌入', transcription: '语音转写' };
 const MODEL_KIND_OPTIONS = Object.entries(MODEL_KIND_LABELS).map(([value, label]) => ({ value, label }));
@@ -2120,6 +2170,7 @@ async function loadModelsConfig() {
   mdl.choices = res.data.choices || {}; mdl.keys = res.data.key_status || {}; mdl.entries = res.data.key_entries || [];
   mdl.builtin = res.data.builtin_organs || [];
   mdl.connections = res.data.organ_connections || [];
+  mdl.plannerOrgan = res.data.planner_organ || '';
   refreshDirty();
   return true;
 }
@@ -2674,7 +2725,7 @@ function organCard(name, organ) {
 function renderOrgans() {
   if (!$('page-organs').classList.contains('active')) return;
   if (!organGraph) organGraph = new OrganFlowView($('og-grid'), $('og-routes'), openOrganEditor);
-  const names = [...new Set([...mdl.builtin, ...Object.keys(mdl.cfg.organs)])];
+  const names = [...new Set([...mdl.builtin, ...Object.keys(mdl.cfg.organs), mdl.plannerOrgan])].filter(Boolean);
   const cards = names.map(id => ({ id, element: organCard(id, mdl.cfg.organs[id] || emptyOrgan()) }));
   organGraph.update(cards, mdl.connections);
 }
@@ -2736,6 +2787,9 @@ function openOrganEditor(name) {
   const effortField = el('div', { class: 'field' }, el('label', { text: '思考等级' }), effort);
   body.append(list, search, picker, chainActions, effortField, temperature.node, maxTokens.node);
   body.append(el('button', { class: 'btn', type: 'button', text: '预览完整提示词', onclick: () => openPromptPreview(name) }));
+  if (name === mdl.plannerOrgan) body.append(el('button', {
+    class: 'btn', type: 'button', text: '工具列表', onclick: () => openPlannerTools(name),
+  }));
   openEditor(name.toUpperCase(), body, true); refreshList();
   notifyModelWarnings([name]);
 }
@@ -2749,6 +2803,41 @@ async function loadOrgansPage() {
   if (result === true) { renderOrgans(); notifyModelWarnings(); }
 }
 PAGES.organs = { load: loadOrgansPage };
+
+function plannerToolCard({ name, description, parameters }) {
+  const fields = Object.entries(parameters.properties || {});
+  const list = fields.length ? [
+    el('dl', {}, ...fields.flatMap(([key, field]) => [
+      el('dt', { text: key + (parameters.required?.includes(key) ? '（必填）' : '（可选）') }),
+      el('dd', { text: field.description || '' }),
+    ])),
+    el('details', {}, el('summary', { text: '查看参数类型和限制' }),
+      el('pre', { text: JSON.stringify(parameters, null, 2) })),
+  ] : [el('p', { text: '无参数。' })];
+  return el('section', { class: 'planner-tool' }, el('h4', { text: name }),
+    el('p', { text: description }), ...list);
+}
+
+async function openPlannerTools(organ) {
+  const dialog = $('planner-tools');
+  const body = $('planner-tools-body');
+  $('planner-tools-title').textContent = organ.toUpperCase() + ' · 工具列表';
+  const loading = el('p', { role: 'status', text: '正在加载…' });
+  body.replaceChildren(loading);
+  body.scrollTop = 0;
+  dialog.showModal();
+  const response = await api('/api/organs/' + encodeURIComponent(organ) + '/planner-tools');
+  if (!dialog.open || loading.parentElement !== body) return;
+  if (!response.ok) {
+    body.replaceChildren(el('p', { class: 'banner', role: 'alert', text: errorText(response) }));
+    return;
+  }
+  const tools = response.data.tools;
+  body.replaceChildren(...(tools.length ? [
+    el('p', { class: 'muted', text: '以下工具按当前运行配置列出。单轮规划会按会话范围限制工具和参数。' }),
+    ...tools.map(plannerToolCard),
+  ] : [el('p', { class: 'empty', text: '当前规划器没有已启用的模型。' })]));
+}
 
 // ---------- 高级管理：按器官查找提示词及逐项恢复 ----------
 const promptCatalog = { organs: {}, templates: [], selected: '' };
@@ -3123,6 +3212,7 @@ function refreshConfigDirty() {
   const keys = Object.keys(cf.changes);
   $('cf-save').disabled = cf.busy || (!keys.length && !cf.invalid.size);
   $('cf-reset').disabled = cf.busy || (!keys.length && !cf.invalid.size);
+  $('cf-restore-all').disabled = cf.busy || !cf.data;
   $('cf-section').inert = cf.busy;
   $('cf-tabs').inert = cf.busy;
   const needPassword = cf.pwSections.has(cf.tab) || keys.some(key => key.includes('.') && cf.pwSections.has(key.split('.')[0]));
@@ -3215,6 +3305,10 @@ function cfRow(sec, field) {
       !readonly && !cf.noDefault.has(key) && Object.hasOwn(prop, 'default')
         ? restoreButton(name, key, button => restoreConfigField(sec, field, button)) : null));
 }
+function restoreConfigFont() {
+  document.documentElement.dataset.font = DEFAULT_UI_FONT;
+  try { localStorage.removeItem('aureus-font'); } catch (e) { /* 当前页面仍可恢复 */ }
+}
 function renderConfigSection(sec) {
   $('cf-details').scrollTop = 0;
   const container = $('cf-section');
@@ -3235,8 +3329,8 @@ function renderConfigSection(sec) {
       try { localStorage.setItem('aureus-font', font.value); } catch (e) { /* 当前页面仍可切换 */ }
     });
     const resetFont = restoreButton('界面字体', 'font', () => {
-      document.documentElement.dataset.font = font.value = DEFAULT_UI_FONT;
-      try { localStorage.removeItem('aureus-font'); } catch (e) { /* 当前页面仍可恢复 */ }
+      restoreConfigFont();
+      font.value = DEFAULT_UI_FONT;
     });
     container.append(el('div', { class: 'cfg-field' }, el('label', {class:'name', for:'cf-font'}, settingTerm('界面字体', '选择这台浏览器显示 Aureus 时使用的字体。', 'font')),
       el('div', { class: 'cfg-control' }, font, resetFont)));
@@ -3326,6 +3420,56 @@ $('cf-reset').addEventListener('click', async () => {
   cf.busy = true; refreshConfigDirty();
   try { await loadConfigPage(true); }
   finally { cf.busy = false; refreshConfigDirty(); }
+});
+
+const configRestoreDialog = $('cf-restore-all-dialog');
+function clearConfigRestoreDialog() {
+  $('cf-restore-all-password').value = '';
+  showBanner('cf-restore-all-error', '');
+}
+$('cf-restore-all').addEventListener('click', () => {
+  if (cf.busy || !cf.data || configRestoreDialog.open) return;
+  clearConfigRestoreDialog();
+  configRestoreDialog.showModal();
+});
+$('cf-restore-all-cancel').addEventListener('click', () => {
+  if (!cf.busy) configRestoreDialog.close();
+});
+configRestoreDialog.addEventListener('close', () => {
+  if (!configRestoreDialog.open) clearConfigRestoreDialog();
+});
+configRestoreDialog.addEventListener('cancel', event => { if (cf.busy) event.preventDefault(); });
+$('cf-restore-all-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const input = $('cf-restore-all-password');
+  const password = input.value;
+  if (cf.busy || !configRestoreDialog.open || !password) return;
+  const session = state.loaded;
+  clearConfigRestoreDialog();
+  const controls = [input, $('cf-restore-all-cancel'), $('cf-restore-all-submit')];
+  for (const control of controls) control.disabled = true;
+  cf.busy = true; refreshConfigDirty();
+  let restored = false;
+  try {
+    const res = await api('/api/config/restore-defaults', 'POST', { password });
+    if (session !== state.loaded) return;
+    if (!res.ok) { showBanner('cf-restore-all-error', errorText(res)); return; }
+    configLoadRevision++;
+    cf.data = res.data.config;
+    cf.changes = {};
+    cf.invalid.clear();
+    $('cf-password').value = '';
+    restoreConfigFont();
+    renderConfigSection(cf.tab);
+    if (res.data.restart_required) showRestart();
+    restored = true;
+    toast(res.data.changed.length ? '已恢复默认设置，重启后运行设置生效。' : '已恢复默认设置。', 'ok');
+  } finally {
+    for (const control of controls) control.disabled = false;
+    cf.busy = false; refreshConfigDirty();
+    if (restored) configRestoreDialog.close();
+    else if (configRestoreDialog.open) input.focus();
+  }
 });
 // ---------- 观察：只读，用 /api/overview 和 /api/timeline（D85）；曲线和花费没有网页接口，不假造 ----------
 const MONITOR_REFRESH_MS = 10000;

@@ -1,5 +1,6 @@
 """配置接口共用的临时目录、真登录和假心跳，不读用户配置。"""
 
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -8,10 +9,10 @@ from aureus.channels import WebChannel
 from aureus.common import AureusPaths, ManualClock, RuntimeConfig, WebConfig
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import registered_templates
-from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.identity import Identity
 from aureus.memory import EmojiStore
-from aureus.organs import KeyResolver, OrganBus, PromptStore
+from aureus.organs import KeyResolver, OrganBus, PromptStore, ToolDefinition
 from aureus.timeline import TimelineDatabase
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 from aureus.web.config_files import ConfigService
@@ -26,8 +27,10 @@ class ConfigRig:
         password_set: bool = True,
         prompt_identity: Identity | None = None,
         inbox_store: InboxStore | None = None,
+        allows_inbox_conversation: Callable[[ConversationKey], bool] | None = None,
         emoji_store: EmojiStore | None = None,
         runtime: RuntimeConfig | None = None,
+        planner_tool_definitions: Callable[[], tuple[ToolDefinition, ...]] | None = None,
     ) -> None:
         self.paths = AureusPaths(tmp_path)
         self.paths.ensure_directories()
@@ -67,8 +70,11 @@ class ConfigRig:
             config_files=self.service,
             model_runtime=self.models,
             prompt_identity=read_identity if prompt_identity is not None else None,
+            planner_tool_definitions=planner_tool_definitions,
             inbox_store=inbox_store,
+            allows_inbox_conversation=allows_inbox_conversation,
             resource_emojis=emoji_store,
+            resource_database=self.paths.database_file,
         )
         self.client = TestClient(self.app, client=("127.0.0.1", 50000))
 
