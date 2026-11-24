@@ -1,12 +1,15 @@
 """平台收件箱网页接口使用临时库，不消耗心跳未读。"""
 
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
+from PIL import Image
+
 from aureus.common import ManualClock
-from aureus.heartbeat import MessageRoute, Perception, TrustLevel
+from aureus.heartbeat import MediaReference, MessageRoute, Perception, TrustLevel
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
-from aureus.memory import HistoricalMemory, MemoryIndex, MemorySource
+from aureus.memory import EmojiStore, HistoricalMemory, MemoryIndex, MemorySource
 from aureus.timeline import ActorType, VisibilityScope
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import NOW
@@ -178,6 +181,10 @@ def test_legacy_history_pages_across_live_boundary_without_guessing(tmp_path: Pa
         }).json()
         assert [row["content"] for row in following["messages"]] == ["旧一"]
         assert following["next_before_id"] is None
+        by_number = rig.client.get(MESSAGES, params={**GROUP, "limit": 2, "page": 2}).json()
+        assert by_number == following
+        assert rig.client.get(MESSAGES, params={**GROUP, "page": 0}).status_code == 422
+        assert rig.client.get(MESSAGES, params={**GROUP, "page": 2, "before_id": 1}).status_code == 422
         catalog = rig.client.get(CONVERSATIONS).json()
         assert [row["key"]["recipient_id"] for row in catalog["conversations"]] == ["2", "5"]
         assert catalog["archives"][0]["archive"] == "timeline"
@@ -239,7 +246,77 @@ def test_imported_archive_pages_raw_messages_without_assigning_routes(tmp_path: 
         assert first["messages"][0]["platform_message_id"] is None
         assert first["messages"][0]["visibility"] is None
         assert second["next_before_id"] is None
+        assert rig.client.get(UNCATEGORIZED, params={
+            "source": "imported", "limit": 1, "page": 2,
+        }).json() == second
         assert rig.client.get(MESSAGES, params=GROUP).json()["messages"] == []
     finally:
         index.close()
+        rig.close()
+
+
+def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    emojis = EmojiStore(tmp_path / "emoji.db", tmp_path / "memory", ManualClock(NOW))
+    emojis.open()
+    encoded = BytesIO()
+    Image.new("RGB", (2, 2), "red").save(encoded, "PNG")
+    photo = encoded.getvalue()
+    digest, _created = emojis.upload(photo, registration_description="编造描述")
+    route = ConversationKey("qq", "1", "group", "2")
+    allowed = {route, ConversationKey("qq", "7", "group", "2")}
+    reads: list[str] = []
+
+    async def read(perception: Perception, reference: MediaReference) -> tuple[bytes, str] | None:
+        reads.append(reference.file_id)
+        assert ConversationKey.from_perception(perception) == route
+        if reference.file_id == "revoked":
+            allowed.clear()
+        return photo, "image/svg+xml" if reference.file_id == "bad-type" else "image/png"
+
+    rig = ConfigRig(tmp_path, inbox_store=store, allows_inbox_conversation=allowed.__contains__,
+                    read_inbox_attachment=read, emoji_store=emojis)
+    components = (
+        MediaReference("voice", "voice"), MediaReference("image", "photo"),
+        MediaReference("image", "emoji", True), MediaReference("image", "bad-type"),
+        MediaReference("image", "revoked"),
+    )
+    try:
+        for platform_id, visibility in (("visible", VisibilityScope.GROUP), ("hidden", VisibilityScope.PRIVATE)):
+            store.add(Perception("qq", "3", "原件", visibility, TrustLevel.VERIFIED_CONTACT,
+                                 route=MessageRoute("1", "group", "2", platform_id), attachments=components))
+        visible = store.list_messages(route, visible_to_user=True)[0]
+        hidden = store.list_messages(route)[0]
+        endpoint = f"{MESSAGES}/{visible.id}/images"
+        assert rig.client.get(f"{endpoint}/1", params=GROUP).status_code == 401
+        rig.log_in()
+        numbered = rig.client.get(MESSAGES, params={**GROUP, "page": 1}).json()
+        assert numbered["messages"][0]["attachments"][2] == {"kind": "image", "is_emoji": True}
+        cursor = rig.client.get(MESSAGES, params=GROUP).json()
+        assert cursor["messages"][0]["attachments"][2]["file_id"] == "emoji"
+        invalid_scope = {**GROUP, "account_id": "7"}
+        for path, scope in (
+            (f"{endpoint}/0", GROUP), (f"{endpoint}/99", GROUP), (f"{endpoint}/1", invalid_scope),
+            (f"{MESSAGES}/{hidden.id}/images/1", GROUP),
+        ):
+            assert rig.client.get(path, params=scope).status_code == 404
+        assert not reads
+        ordinary_description = rig.client.get(f"{endpoint}/1", params={**GROUP, "view": "description"})
+        assert ordinary_description.json()["description"] is None
+        assert not reads
+        result = rig.client.get(f"{endpoint}/1", params=GROUP)
+        assert result.content == photo
+        assert result.headers["Content-Type"] == "image/png"
+        assert result.headers["Cache-Control"] == "no-store"
+        assert result.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        description = rig.client.get(f"{endpoint}/2", params={**GROUP, "view": "description"})
+        assert description.json() == {"source": "emoji_catalog", "description": "编造描述"}
+        emojis.set_removed([f"asset:{digest}"], True)
+        removed = rig.client.get(f"{endpoint}/2", params={**GROUP, "view": "description"})
+        assert removed.json()["description"] is None
+        assert rig.client.get(f"{endpoint}/3", params=GROUP).status_code == 404
+        assert rig.client.get(f"{endpoint}/4", params=GROUP).status_code == 404
+        assert reads == ["photo", "emoji", "emoji", "bad-type", "revoked"]
+        assert store.list_conversations(visible_to_user=True)[0].unread_count == 1
+    finally:
         rig.close()

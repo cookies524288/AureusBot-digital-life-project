@@ -352,6 +352,7 @@ class InboxStore:
         *,
         before_id: int | None = None,
         limit: int = 50,
+        offset: int = 0,
         visible_to_user: bool = False,
     ) -> list[InboxMessage]:
         """按收件箱序号倒序读取一页，游标边界不重复。"""
@@ -359,10 +360,28 @@ class InboxStore:
         with closing(open_connection(self._path)) as database:
             rows = database.execute(
                 f"{_MESSAGES} WHERE {_KEY} {visibility} AND (? IS NULL OR m.id < ?) "
-                "ORDER BY m.id DESC LIMIT ?",
-                (*conversation.parameters(), before_id, before_id, limit),
+                "ORDER BY m.id DESC LIMIT ? OFFSET ?",
+                (*conversation.parameters(), before_id, before_id, limit, offset),
             ).fetchall()
         return [_message(row) for row in rows]
+
+    def count_visible_messages(self, conversation: ConversationKey) -> int:
+        """统计完整路由中可供网页读取的规范原件。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            return int(database.execute(
+                f"SELECT COUNT(*) FROM inbox_messages m JOIN inbox_conversations c "
+                f"ON c.id = m.conversation_id WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE}",
+                conversation.parameters(),
+            ).fetchone()[0])
+
+    def get_visible_message(self, conversation: ConversationKey, identifier: int) -> InboxMessage | None:
+        """用会话完整路由和原件序号读取可见消息；不推进未读进度。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            row = database.execute(
+                f"{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE} AND m.id = ?",
+                (*conversation.parameters(), identifier),
+            ).fetchone()
+        return _message(row) if row is not None else None
 
     def list_unread(self, conversation: ConversationKey, *, limit: int = 50) -> list[InboxMessage]:
         """从最早的未读开始读取一批。"""

@@ -92,6 +92,7 @@ class LegacyPlatformHistory:
         before_id: int | None,
         limit: int,
         archive_account_id: str | None = None,
+        offset: int = 0,
     ) -> list[TimelineRecord]:
         """按追加序号倒序读取精确原路由或显式未归类的独立页。"""
         if route is None:
@@ -111,7 +112,7 @@ class LegacyPlatformHistory:
             rows = database.execute(
                 f"""{_PLATFORM_ROWS}
                 SELECT * FROM classified WHERE {scope} {distinct} AND (? IS NULL OR id < ?)
-                ORDER BY id DESC LIMIT ?""",
-                (*parameters, *distinct_parameters, before_id, before_id, limit),
+                ORDER BY id DESC LIMIT ? OFFSET ?""",
+                (*parameters, *distinct_parameters, before_id, before_id, limit, offset),
             ).fetchall()
         return [_record(row) for row in rows]
