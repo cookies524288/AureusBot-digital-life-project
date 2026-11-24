@@ -1006,6 +1006,104 @@ def test_emoji_integrity_preview_runs_only_on_click_on_narrow_screen(browser: Br
     )
 
 
+@pytest.mark.parametrize("outcome", ["enabled", "disabled", "failed"])
+def test_emoji_actions_wait_for_current_list_after_navigation(
+    browser: Browser, outcome: str
+) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        "const outcome = " + json.dumps(outcome) + ";"
+        """
+      const actions = ['上传表情', '批量上传', '完整性预览'];
+      const allDisabled = () => actions.every(label => button(label)?.disabled);
+      const allEnabled = () => actions.every(label => button(label)?.disabled === false);
+      const go = route => document.querySelector(`.nav-item[data-page="${route}"]`).click();
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      await waitFor(allEnabled, '表情功能开启时可以操作');
+      go('memory');
+      await waitFor(() => text('合成记忆000'), '相邻文字记忆加载');
+      check(!button('批量上传') && button('修正所选').disabled, '相邻记忆不使用表情操作或沿用选择');
+
+      const original = window.fetch;
+      const pending = [];
+      window.fetch = (url, options) => {
+        if (!url.startsWith('/api/resources/media?')) return original(url, options);
+        return new Promise(resolve => {
+          pending.push(response => resolve(response ?? original(url, options)));
+        });
+      };
+      try {
+        go('learning');
+        check(allDisabled() && button('下一页').disabled, '返回表情页的当下禁用旧操作');
+        go('memory');
+        go('learning');
+        await waitFor(() => pending.length >= 2, '拦住旧列表和本次列表');
+        const counts = {total:320, registered:320, unregistered:0, banned:0, removed:0};
+        pending[0](Response.json({enabled:true, total:0, items:[], counts}));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        check(page() === '读取中…' && allDisabled(), '旧响应不能解除本次加载的禁用');
+        let response;
+        if (outcome === 'disabled') {
+          response = Response.json({enabled:false, total:0, items:[], counts});
+        }
+        if (outcome === 'failed') response = Response.json({detail:'合成读取失败'}, {status:503});
+        window.fetch = original;
+        pending.at(-1)(response);
+        if (outcome === 'enabled') {
+          await waitFor(() => text('合成表情000') && allEnabled(), '仅本次成功读取能启用表情操作');
+        } else {
+          const message = outcome === 'disabled' ? '此功能当前关闭' : '读取失败';
+          await waitFor(() => text(message), '本次读取结束');
+          check(allDisabled(), '当前列表关闭或失败时，所有表情操作保持禁用');
+        }
+      } finally { window.fetch = original; }
+    """,
+    )
+
+
+def test_emoji_integrity_completion_does_not_enable_actions_during_list_reload(
+    browser: Browser,
+) -> None:
+    browser.open("learning", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '学习页可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      const preview = () => button('完整性预览');
+      await waitFor(() => preview()?.disabled === false, '完整性预览可用');
+      const original = window.fetch;
+      let finishPreview, finishList;
+      window.fetch = (url, options) => {
+        const path = new URL(url, location.href).pathname;
+        if (path === '/api/resources/emoji/integrity-preview') {
+          return new Promise(resolve => { finishPreview = resolve; });
+        }
+        if (path === '/api/resources/media') {
+          return new Promise(resolve => { finishList = () => resolve(original(url, options)); });
+        }
+        return original(url, options);
+      };
+      try {
+        preview().click();
+        const dialog = document.querySelector('#editor-dialog');
+        await waitFor(() => finishPreview && dialog.open, '预览正在检查');
+        document.querySelector('#editor-close').click();
+        find('input[type=search]').form.requestSubmit();
+        await waitFor(() => finishList, '列表正在重新读取');
+        finishPreview(Response.json({checked:1, unavailable:0, examples:[]}));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        check(page() === '读取中…' && preview().disabled, '旧检查结束不能启用尚未确认的操作');
+        window.fetch = original;
+        finishList();
+        await waitFor(() => text('合成表情000') && !preview().disabled, '新列表读取后可再次检查');
+      } finally { window.fetch = original; }
+    """,
+    )
+
+
 def test_emoji_upload_edit_search_and_status_maintenance(browser: Browser) -> None:
     browser.open("learning", 1280, 900)
     with BytesIO() as stream:
@@ -1133,6 +1231,8 @@ def test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence(browser:
       const beforeCount = countValue();
       const search = panel.querySelector('input[type="search"]');
       search.value = '批次筛选'; search.form.requestSubmit();
+      await waitFor(() => text('没有符合条件的记录') && !button('批量上传').disabled,
+        '筛选完成后可批量上传');
       const nativeFetch = window.fetch;
       const requests = [];
       let release;

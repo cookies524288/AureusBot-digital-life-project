@@ -723,23 +723,24 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       try { await emojiIntegrityPreview(); }
       finally { checkingIntegrity = false; button.disabled = !emojiEnabled; }
     }) : null;
-    if (upload) { upload.disabled = true; form.append(upload); }
-    if (batchUpload) { batchUpload.disabled = true; form.append(batchUpload); }
-    if (integrity) { integrity.disabled = true; form.append(integrity); }
+    function syncEmojiActions(enabled) {
+      emojiEnabled = enabled;
+      if (upload) upload.disabled = !enabled;
+      if (batchUpload) batchUpload.disabled = !enabled;
+      if (integrity) integrity.disabled = !enabled || checkingIntegrity;
+    }
+    syncEmojiActions(false);
+    if (emoji) form.append(upload, batchUpload, integrity);
     if (batch) form.append(batch.remove, batch.restore);
     panel.append(form);
     if (counts) panel.append(counts);
     const pager = searchable({panel, grid:true, id:kind === 'emoji' ? 'learning-emoji' : 'archived-images',
       render:item => renderMedia(item, pager.read, batch), prepare:() => {
-        batch?.clear(); if (upload) upload.disabled = true;
+        batch?.clear();
+        syncEmojiActions(false);
       },
       loaded:data => {
-        if (upload) upload.disabled = !data.enabled;
-        if (batchUpload) batchUpload.disabled = !data.enabled;
-        if (integrity) {
-          emojiEnabled = data.enabled;
-          integrity.disabled = !emojiEnabled || checkingIntegrity;
-        }
+        syncEmojiActions(data.enabled);
         if (counts) {
           const total = data.counts;
           counts.textContent = total ? `全库 ${total.total} 条 · 已登记 ${total.registered} · 未登记 ${total.unregistered} · 已禁用 ${total.banned} · 已移除 ${total.removed}` : '';
