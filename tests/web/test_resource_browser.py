@@ -1278,6 +1278,94 @@ def test_memory_operations_show_states_and_paginate_at_390px(browser: Browser) -
     )
 
 
+def test_memory_graph_pages_and_discards_stale_results_at_390px(browser: Browser) -> None:
+    browser.open("memory", 390, 740)
+    _run(
+        browser,
+        r"""
+      await waitFor(() => text('合成记忆000'), '文字记忆初始查询');
+      const path = '/api/resources/memory/graph';
+      const entity = index => ({kind:'entity', source:`["合成","memory","entities",[${index}]]`,
+        name:`合成图谱实体${index}`, evidence:[]});
+      const relation = {kind:'relation', source:'["合成","memory","relations",[1]]',
+        subject:entity(0), object:entity(1), predicate:'观察', confidence:0.7, evidence:[]};
+      let granted = true, size = 0, delay = '', resume;
+      const realFetch = window.fetch;
+      window.fetch = (resource, options) => {
+        const url = new URL(resource, location.origin);
+        if (![path, path + '/detail'].includes(url.pathname)) return realFetch(resource, options);
+        const params = url.searchParams;
+        let result, status = 200;
+        if (url.pathname.endsWith('/detail')) {
+          result = granted ? entity(0) : {detail:'找不到这条图谱资料。'};
+          status = granted ? 200 : 404;
+        } else {
+          const offset = Number(params.get('offset'));
+          size = Number(params.get('limit'));
+          const neighbor = params.has('neighbor_of');
+          const total = !granted || params.get('q') ? 0 : neighbor ? 1 : size * 2 + 1;
+          result = {covered:granted, total,
+            next_offset:offset + size < total ? offset + size : null,
+            items:Array.from({length:Math.max(0, Math.min(size, total - offset))},
+              (_, index) => neighbor ? relation : entity(offset + index))};
+        }
+        const response = Response.json(result, {status});
+        if (delay === url.pathname) {
+          delay = '';
+          return new Promise(resolve => { resume = () => resolve(response); });
+        }
+        return Promise.resolve(response);
+      };
+      press('关系图');
+      await waitFor(() => page() === '第 1 / 3 页' && text('合成图谱实体0'), '首屏图谱');
+      check(text(`共 ${size * 2 + 1} 项可见资料`), '只显示可见总数');
+      const panel = find('#memory-panel-graph');
+      check(innerWidth === 390 && root().scrollWidth <= innerWidth, '窄屏不横向溢出');
+      const height = panel.scrollHeight;
+      press('下一页');
+      await waitFor(() => page() === '第 2 / 3 页', '第二页');
+      press('下一页');
+      await waitFor(() => page() === '第 3 / 3 页', '末页');
+      check(button('下一页').disabled && panel.scrollHeight <= height + 1, '末页不接成长列表');
+      press('刷新');
+      await waitFor(() => text('合成图谱实体0'), '刷新回到第一页');
+      press('实体 · 合成图谱实体0');
+      await waitFor(() => document.querySelector('#editor-dialog').open, '显示获准详情');
+      document.querySelector('[data-graph-detail] button').click();
+      await waitFor(() => text('合成图谱实体0 → 观察 → 合成图谱实体1'), '单跳保留方向');
+      press('返回全部图谱');
+      await waitFor(() => text('合成图谱实体0'), '返回实体列表');
+      find('#memory-panel-graph input[type=search]').value = '没有命中';
+      press('查询');
+      await waitFor(() => text('没有符合条件的图谱资料') && page() === '第 0 / 0 页',
+        '有覆盖零命中');
+      find('#memory-panel-graph input[type=search]').value = '';
+      press('查询');
+      await waitFor(() => text('合成图谱实体0'), '恢复全量浏览');
+      delay = path + '/detail';
+      press('实体 · 合成图谱实体0');
+      await waitFor(() => resume, '详情正在返回');
+      const oldDetail = resume;
+      resume = null;
+      delay = path;
+      press('刷新');
+      await waitFor(() => resume, '列表正在返回');
+      const oldList = resume;
+      granted = false;
+      press('记忆查询');
+      await waitFor(() => text('合成记忆000'), '离开图谱');
+      press('关系图');
+      await waitFor(() => text('当前没有获准的图谱资料'), '撤权后无覆盖');
+      oldDetail();
+      oldList();
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      check(!panel.textContent.includes('合成图谱实体'), '迟到列表不得重现旧资料');
+      check(!document.querySelector('#editor-dialog').open, '迟到详情不得重开对话框');
+      check(text('当前没有获准的图谱资料') && page() === '第 0 / 0 页', '撤权后保留正确空态');
+    """,
+    )
+
+
 def test_image_prompt_preview_displays_text_then_attachment(browser: Browser) -> None:
     browser.open("timeline", 390, 740)
     _run(

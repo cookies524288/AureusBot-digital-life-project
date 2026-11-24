@@ -1,6 +1,6 @@
 'use strict';
 
-function createResourcePager({el, panel, id, request, render, grid = false, prepare, loaded, empty, error}) {
+function createResourcePager({el, panel, id, request, render, grid = false, prepare, loaded, empty, error, clearOnError = false}) {
   const list = el('div', {id:id + '-result', class:'resource-list' + (grid ? ' resource-grid' : ''), 'aria-live':'polite'});
   const previous = el('button', {type:'button', class:'btn small', text:'上一页', disabled:true});
   const next = el('button', {type:'button', class:'btn small', text:'下一页', disabled:true});
@@ -38,9 +38,14 @@ function createResourcePager({el, panel, id, request, render, grid = false, prep
     if (!active || generation !== serial) return;
     busy = false;
     if (!response.ok) {
+      if (clearOnError) {
+        page = 0;
+        pages = null;
+        cursors = [null];
+      }
       sync();
       list.replaceChildren(el('div', {class:'row resource-empty'}, el('span', {text:'读取失败'}),
-        el('button', {class:'btn small', type:'button', text:'重试', onclick:() => read(target)})));
+        el('button', {class:'btn small', type:'button', text:'重试', onclick:() => read(clearOnError ? 0 : target)})));
       error(response);
       return;
     }
@@ -55,7 +60,7 @@ function createResourcePager({el, panel, id, request, render, grid = false, prep
     if (following != null) cursors.push(following);
     sync();
     if (response.data.items.length) list.replaceChildren(...response.data.items.map(render));
-    else message(response.data.enabled ? (empty?.() ?? '没有符合条件的记录') : '此功能当前关闭');
+    else message(response.data.enabled ? (empty?.(response.data) ?? '没有符合条件的记录') : '此功能当前关闭');
     loaded?.(response.data);
   }
   function reset(newLimit = measure()) {
@@ -782,6 +787,71 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       el('time', {datetime:item.occurred_at, class:'muted',
         text:`${new Date(item.occurred_at).getFullYear()}年${fmtTime(item.occurred_at, true)}`})),
   });
+  function graphView(panel) {
+    const endpoint = '/api/resources/memory/graph';
+    const refresh = action('刷新', () => pager.reset());
+    const unanchor = action('返回全部图谱', () => browse(null));
+    const form = searchForm('搜索关系图', '实体名或关系谓词', refresh, unanchor);
+    const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
+    let generation = 0, anchor = null, query = '';
+    panel.append(form, count);
+    unanchor.classList.add('hidden');
+
+    function invalidate() {
+      generation++;
+      count.textContent = '';
+      const dialog = $('editor-dialog');
+      if (dialog.open && $('editor-body').querySelector('[data-graph-detail]')) dialog.close();
+    }
+    function browse(source) {
+      anchor = source;
+      unanchor.classList.toggle('hidden', !anchor);
+      query = form.elements.q.value = '';
+      return pager.reset();
+    }
+    function label(item) {
+      return item.kind === 'entity' ? `实体 · ${item.name}`
+        : `${item.subject.name} → ${item.predicate} → ${item.object.name}`;
+    }
+    async function open(source) {
+      const current = ++generation;
+      const response = await api(endpoint + '/detail?' + new URLSearchParams({source}));
+      if (current !== generation) return;
+      if (!response.ok) {
+        fail(response);
+        return pager.reset();
+      }
+      const item = response.data;
+      const evidence = item.evidence.map(key => field('证据来源', sourceId(key)));
+      const nodes = item.kind === 'entity' ? [item] : [item.subject, item.object];
+      openEditor('关系图详情', el('div', {class:'stack resource-detail', 'data-graph-detail':''},
+        field('资料', label(item)), field('来源', sourceId(item.source)),
+        field('置信度', item.confidence), ...evidence,
+        ...nodes.map(node => action(`浏览 ${node.name} 的一跳关系`, () => browse(node.source)))));
+    }
+    const pager = createResourcePager({el, panel, id:'memory-graph', error:fail, prepare:invalidate, clearOnError:true,
+      request:async ({offset, limit}) => {
+        const params = new URLSearchParams({q:query, offset, limit});
+        if (anchor) params.set('neighbor_of', anchor);
+        const response = await api(endpoint + '?' + params);
+        if (response.ok) response.data.enabled = true;
+        return response;
+      },
+      empty:data => data.covered ? '没有符合条件的图谱资料' : '当前没有获准的图谱资料',
+      loaded:data => { if (data.covered) count.textContent = `共 ${data.total} 项可见资料`; },
+      render:item => record(label(item), () => open(item.source)),
+    });
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      query = form.elements.q.value;
+      return pager.reset();
+    });
+    return {
+      show:() => pager.show(),
+      hide:() => { pager.hide(); pager.list.replaceChildren(); },
+    };
+  }
+  const graph = graphView($('memory-panel-graph'));
   function showLearning(kind) {
     activeLearning?.hide();
     learningKind = kind;
@@ -796,7 +866,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     memoryTab = tab;
     activate('data-memory-tab', tab);
     switchPanel({query:'memory-panel-query', images:'memory-panel-images', flow:'memory-panel-flow',
-      operations:'memory-panel-operations', transfer:'memory-panel-transfer'}, tab);
+      operations:'memory-panel-operations', transfer:'memory-panel-transfer', graph:'memory-panel-graph'}, tab);
     if (tab === 'query') {
       activate('data-memory-query', queryKind);
       switchPanel({text:'memory-query-text', profiles:'memory-query-profiles'}, queryKind);
@@ -804,6 +874,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     } else if (tab === 'images') activeMemory = pictures;
     else if (tab === 'flow') activeMemory = window.getMemoryFlow?.();
     else if (tab === 'operations') activeMemory = operations;
+    else if (tab === 'graph') activeMemory = graph;
     else window.loadMemoryTransfer?.();
     return activeMemory?.show();
   }
