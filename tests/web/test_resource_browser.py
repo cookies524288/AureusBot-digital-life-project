@@ -1201,6 +1201,90 @@ def test_emoji_batch_upload_cancel_mixed_results_and_filter_persistence(browser:
     )
 
 
+def test_emoji_batch_upload_paginates_per_image_descriptions(browser: Browser) -> None:
+    browser.open("learning", 390, 740)
+    images = []
+    for color in ("green", "red", "blue", "purple"):
+        with BytesIO() as stream:
+            Image.new("RGB", (8, 8), color).save(stream, format="PNG")
+            images.append(base64.b64encode(stream.getvalue()).decode("ascii"))
+    _run(
+        browser,
+        f"""
+      await waitFor(() => find('[data-learning-tab="emoji"]'), '可切换到表情');
+      click('[data-learning-tab="emoji"]');
+      await waitFor(() => button('批量上传') && !button('批量上传').disabled, '表情列表加载');
+      press('批量上传');
+      const dialog = document.querySelector('#editor-dialog');
+      const form = dialog.querySelector('form');
+      const input = form.querySelector('input[type="file"]');
+      const register = form.querySelector('input[type="checkbox"]');
+      const requests = [];
+      const nativeFetch = window.fetch;
+      window.fetch = async (url, options) => {{
+        if (url === '/api/resources/emoji' && options.method === 'POST') {{
+          requests.push([options.body.name, decodeURIComponent(new Headers(options.headers)
+            .get('X-Emoji-Registration-Description') || '')]);
+          if (options.body.name === 'failed.png')
+            return new Response(JSON.stringify({{detail:'合成上传失败'}}),
+              {{status:422, headers:{{'Content-Type':'application/json'}}}});
+        }}
+        return nativeFetch(url, options);
+      }};
+      const transfer = new DataTransfer();
+      const names = ['same.png', 'same.png', 'failed.png', 'long-'.repeat(40) + '.png'];
+      {json.dumps(images)}.forEach((data, index) => {{
+        const bytes = Uint8Array.from(atob(data), byte => byte.charCodeAt(0));
+        transfer.items.add(new File([bytes], names[index], {{type:'image/png'}}));
+      }});
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', {{bubbles:true}}));
+      const nav = () => form.querySelector('[aria-label="批量上传分页"]');
+      const status = () => nav()?.querySelector('[role="status"]').textContent;
+      const dialogButton = label => [...form.querySelectorAll('button')]
+        .find(node => node.textContent === label);
+      const descriptions = () => [...form.querySelectorAll('textarea')].slice(1);
+      const fill = (control, text) => {{
+        control.value = text;
+        control.dispatchEvent(new Event('input', {{bubbles:true}}));
+      }};
+      check(status() === '第 1 / 2 页' && dialogButton('上一页').disabled, '选择后分页显示总页数');
+      check(!register.checked && !descriptions().length, '默认不登记也不显示逐图描述');
+      register.click();
+      check(descriptions().length === 3, '每页最多编辑三张');
+      fill(descriptions()[0], '青兔打招呼 🐰');
+      fill(descriptions()[1], '红兔道谢');
+      fill(descriptions()[2], '测试失败项');
+      form.requestSubmit();
+      check(requests.length === 0 && status() === '第 2 / 2 页', '跨页缺描述时定位且零上传');
+      check(dialogButton('下一页').disabled && descriptions().length === 1 &&
+        form.scrollWidth <= dialog.clientWidth, '窄屏长文件名不撑宽，末页只有一张');
+      fill(form.querySelector('textarea'), '共享缺省');
+      dialogButton('上一页').click();
+      check(descriptions()[0].value === '青兔打招呼 🐰' && descriptions()[1].value === '红兔道谢',
+        '翻页保留重名文件各自的草稿');
+      register.click();
+      check(!descriptions().length && !form.querySelector('textarea').getClientRects().length,
+        '取消勾选完全隐藏输入');
+      register.click();
+      check(descriptions()[0].value === '青兔打招呼 🐰', '再勾选恢复草稿');
+      form.requestSubmit();
+      await waitFor(() => !form.querySelector('fieldset').disabled &&
+        dialog.innerText.includes('合成上传失败'), '逐图显示失败原因');
+      check(JSON.stringify(requests) === JSON.stringify([
+        [names[0], '青兔打招呼 🐰'], [names[1], '红兔道谢'],
+        [names[2], '测试失败项'], [names[3], '共享缺省'],
+      ]), '描述按文件位置发送，失败不阻断后一张');
+      check(dialog.innerText.includes('成功 3') && dialog.innerText.includes('失败 1'),
+        '批次显示全局汇总');
+      dialogButton('下一页').click();
+      check(status() === '第 2 / 2 页' && dialog.innerText.includes('已上传并登记') &&
+        !dialog.innerText.includes('合成上传失败'), '结果也分页显示');
+      window.fetch = nativeFetch;
+    """,
+    )
+
+
 def test_memory_pagination_details_and_button_states(browser: Browser) -> None:
     browser.open("memory", 390, 740)
     _run(

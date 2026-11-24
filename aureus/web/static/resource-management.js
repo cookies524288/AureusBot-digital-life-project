@@ -495,6 +495,10 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     image.addEventListener('error', () => image.replaceWith(field('原图', '暂不可用')));
     return image;
   }
+  const emojiRegistrationHeader = 'X-Emoji-Registration-Description';
+  function emojiRegistrationHeaders(description) {
+    return description ? {[emojiRegistrationHeader]:encodeURIComponent(description)} : {};
+  }
   function emojiUploadRegistration(label) {
     const register = el('input', {type:'checkbox'});
     const description = textControl(label, '', 500, true);
@@ -508,7 +512,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       headers() {
         if (!register.checked) return {};
         const text = description.input.value.trim();
-        if (text) return {'X-Emoji-Registration-Description':encodeURIComponent(text)};
+        if (text) return emojiRegistrationHeaders(text);
         toast('请填写表情描述后再登记。', 'error');
         description.input.focus();
         return null;
@@ -518,7 +522,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function emojiUploadResult(response, headers) {
     if (!response.ok) return errorText(response);
     if (!response.data.created) return '已存在，保留原有记录';
-    return headers['X-Emoji-Registration-Description'] ? '已上传并登记' : '已上传';
+    return headers[emojiRegistrationHeader] ? '已上传并登记' : '已上传';
   }
   function emojiForm(refresh, item) {
     const submit = el('button', {type:'submit', class:'btn primary small', text:item ? '保存' : '上传', disabled:!item});
@@ -557,33 +561,93 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     openEditor(item ? '编辑表情' : '上传表情', form);
   }
+  function emojiBatchQueue(register) {
+    const pageSize = 3;
+    const items = el('div', {class:'stack emoji-upload-items'});
+    const status = el('span', {class:'muted', role:'status'});
+    const previous = action('上一页', () => show(page - 1));
+    const next = action('下一页', () => show(page + 1));
+    const navigation = el('div', {class:'row resource-pagination', role:'group', 'aria-label':'批量上传分页', hidden:true},
+      previous, status, next);
+    let entries = [], page = 0;
+
+    function show(target = page) {
+      page = target;
+      const pages = Math.ceil(entries.length / pageSize);
+      navigation.hidden = !pages;
+      previous.disabled = page === 0;
+      next.disabled = page + 1 >= pages;
+      status.textContent = pages ? `第 ${page + 1} / ${pages} 页` : '';
+      const offset = page * pageSize;
+      items.replaceChildren(...entries.slice(offset, offset + pageSize).map((entry, index) => {
+        const name = `${offset + index + 1}. ${entry.image.name}`;
+        if (!register.checked) return el('p', {text:name + (entry.result ? '：' + entry.result : '')});
+        const description = textControl(name + (entry.result ? '：' + entry.result : ''), entry.description, 500);
+        description.input.addEventListener('input', () => { entry.description = description.input.value; });
+        return description.field;
+      }));
+    }
+    register.addEventListener('change', () => show());
+    return {
+      fields:[items, navigation],
+      select(files) {
+        entries = Array.from(files, image => ({image, description:'', result:''}));
+        show(0);
+      },
+      prepare(shared) {
+        const batch = entries.map(entry => ({entry, text:register.checked ? entry.description.trim() || shared : ''}));
+        const missing = register.checked ? batch.findIndex(({text}) => !text) : -1;
+        if (missing === -1) return batch;
+        show(Math.floor(missing / pageSize));
+        items.querySelectorAll('textarea')[missing % pageSize].focus();
+        toast('请为这张图片填写描述，或填写共享描述后再登记。', 'error');
+        return null;
+      },
+      show,
+    };
+  }
   function emojiBatchForm(refresh) {
     const file = el('input', {type:'file', accept:'image/png,image/jpeg,image/gif,image/webp', multiple:true, required:true});
     const summary = el('p', {class:'muted', 'aria-live':'polite', text:'尚未选择图片'});
-    const results = el('div', {class:'stack', 'aria-live':'polite'});
+    const results = el('p', {class:'muted', role:'status'});
     const submit = el('button', {type:'submit', class:'btn primary small', text:'上传所选图片', disabled:true});
-    const registration = emojiUploadRegistration('表情描述（应用于本批新图）');
-    const controls = el('fieldset', {class:'stack'},
-      el('label', {class:'stack'}, '图片文件', file), summary, ...registration.fields, results, submit);
+    const register = el('input', {type:'checkbox'});
+    const shared = textControl('共享描述（逐图描述留空时使用）', '', 500);
+    const sharedField = el('div', {hidden:true}, shared.field);
+    shared.input.disabled = true;
+    register.addEventListener('change', () => { sharedField.hidden = shared.input.disabled = !register.checked; });
+    const queue = emojiBatchQueue(register);
+    const controls = el('fieldset', {class:'stack emoji-batch-upload'},
+      el('label', {class:'stack'}, '图片文件', file), summary,
+      el('label', {}, register, ' 上传后直接登记'), sharedField, ...queue.fields, results, submit);
     const form = el('form', {class:'stack'}, controls);
     file.addEventListener('change', () => {
       summary.textContent = `已选择 ${file.files.length} 张图片。每张最多 5 MB。`;
-      results.replaceChildren();
+      queue.select(file.files);
+      results.textContent = '';
       submit.disabled = !file.files.length;
     });
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (controls.disabled || !file.files.length) return;
-      const headers = registration.headers();
-      if (!headers) return;
-      const files = [...file.files];
+      const batch = queue.prepare(shared.input.value.trim());
+      if (!batch) return;
       controls.disabled = true;
-      results.replaceChildren();
+      let succeeded = 0, duplicates = 0, failed = 0;
+      for (const {entry} of batch) entry.result = '';
+      queue.show();
+      results.textContent = '上传中…';
       try {
-        for (const image of files) {
-          const response = await api('/api/resources/emoji', 'POST', image, headers);
-          results.append(el('p', {text:image.name + '：' + emojiUploadResult(response, headers)}));
+        for (const {entry, text} of batch) {
+          const headers = emojiRegistrationHeaders(text);
+          const response = await api('/api/resources/emoji', 'POST', entry.image, headers);
+          entry.result = emojiUploadResult(response, headers);
+          if (!response.ok) failed++;
+          else if (response.data.created) succeeded++;
+          else duplicates++;
+          queue.show();
         }
+        results.textContent = `成功 ${succeeded} 张 · 重复 ${duplicates} 张 · 失败 ${failed} 张`;
         await refresh();
       } finally { controls.disabled = false; submit.disabled = !file.files.length; }
     });
