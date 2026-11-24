@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import sqlite3
-from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +23,7 @@ from aureus.heartbeat.language_requests import (
     build_extraction,
     build_with_context,
 )
+from aureus.heartbeat.pending_learning_buffer import PendingLearningBuffer
 from aureus.heartbeat.perception import Perception, TrustLevel
 from aureus.memory import (
     MAX_DETAIL,
@@ -133,22 +133,18 @@ def local_language_scope(perception: Perception) -> str | None:
 
 
 def take_language_batch(
-    queue: deque[QueuedLanguageSample], limit: int
+    queue: PendingLearningBuffer[QueuedLanguageSample], limit: int
 ) -> tuple[str | None, list[LanguageSample]]:
     """以最早的入站为准选同会话样本，保留其余样本的先后顺序。"""
-    head = queue.popleft()
-    samples = [head.sample]
-    if head.conversation is None:
-        return None, samples
-    skipped: list[QueuedLanguageSample] = []
-    while queue and len(samples) < limit:
-        queued = queue.popleft()
-        if queued.conversation == head.conversation:
-            samples.append(queued.sample)
-        else:
-            skipped.append(queued)
-    queue.extendleft(reversed(skipped))
-    return head.conversation, samples
+    pending = queue.snapshot()
+    scope = pending[0].conversation
+    selected = (
+        [item for item in pending if item.conversation == scope][:limit]
+        if scope is not None
+        else pending[:1]
+    )
+    queue.discard(selected)
+    return scope, [item.sample for item in selected]
 
 
 def speaker_key(record: TimelineRecord) -> str:
