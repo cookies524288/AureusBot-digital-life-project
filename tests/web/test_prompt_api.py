@@ -298,7 +298,9 @@ async def test_save_invalid_reset_restart_and_upgrade_share_the_live_default(
     assert tomllib.loads(path.read_text(encoding="utf-8")) == {"reply_length": "短一点 $length。"}
     await organ.process(request)
     assert fake.calls[-1]["messages"][-1]["content"].endswith(default)
-    assert default in client.get("/api/organs/replyer/prompt-preview").text
+    scenes = client.get("/api/organs/replyer/prompt-preview").json()["scenes"]
+    reply = next(scene for scene in scenes if scene["id"] == "reply")
+    assert reply["messages"][-1]["content"].endswith(default)
     restarted = PromptStore(path, registered_templates())
     assert assemble_messages(request, restarted)[-1]["content"].endswith(default)
 
