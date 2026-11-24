@@ -18,6 +18,9 @@ from aureus.common import Clock
 from aureus.common.config import DEFAULT_EMOJI_REGISTRATION_LIMIT
 from aureus.common.sqlite import open_connection
 from aureus.memory.history import MemorySource
+from aureus.memory.learning_workbench_ids import identify as identify_workbench_ids
+from aureus.memory.learning_workbench_ids import initialize as initialize_workbench_ids
+from aureus.memory.learning_workbench_ids import resolve as resolve_workbench_ids
 
 _DIGEST = re.compile(r"[a-f0-9]{64}")
 MAX_EMOJI_BYTES = 5 * 1024 * 1024
@@ -252,6 +255,17 @@ class EmojiStore:
         """初始化表情资源与迁移来源表。"""
         with closing(open_connection(self._database_file)) as connection:
             connection.executescript(_SCHEMA)
+            initialize_workbench_ids(connection)
+
+    def workbench_ids(self, keys: Iterable[str]) -> dict[str, int]:
+        """返回表情目录条目的稳定整数编号。"""
+        with closing(open_connection(self._database_file)) as connection, connection:
+            return identify_workbench_ids(connection, "emoji", keys)
+
+    def resolve_workbench_ids(self, identifiers: Iterable[int]) -> dict[int, str]:
+        """解析已分配的表情工作台编号。"""
+        with closing(open_connection(self._database_file)) as connection:
+            return resolve_workbench_ids(connection, "emoji", identifiers)
 
     def collect(
         self,

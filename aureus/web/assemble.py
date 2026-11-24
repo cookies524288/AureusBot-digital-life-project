@@ -63,6 +63,11 @@ def open_web(
                 raise OrganCallError("emoji", ["表情器官尚未配置。"])
             return await core.gateway.call(request)
 
+        async def learning_call(request: OrganRequest) -> OrganResponse:
+            if core.models is None or request.organ_id not in core.models.available_organs:
+                raise OrganCallError(request.organ_id, ["学习器官尚未配置。"])
+            return await core.gateway.call(request)
+
         auth = WebAuth(passwords, sessions, LoginLimiter(config, clock))
         channel = WebChannel(core.heartbeat)
         core.heartbeat.attach_channel(WEB_CHANNEL_NAME, channel.show)
@@ -124,6 +129,7 @@ def open_web(
             recall_feedback_enabled=core.settings.runtime.memory.recall_feedback_enabled,
             embedding_progress=core.embedding_progress,
             expression_recall=core.heartbeat.expression_recall,
+            learning_call=learning_call,
             expression_cluster_display=(
                 ExpressionClusterDisplay(core.paths.database_file, core.language)
                 if core.language is not None

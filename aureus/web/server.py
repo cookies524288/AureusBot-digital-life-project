@@ -32,7 +32,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import QQAvatars, QQDesktop, WebChannel
-from aureus.common import Clock, WebConfig
+from aureus.common import Clock, SystemClock, WebConfig
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
@@ -79,6 +79,8 @@ from .inbox_api import register_inbox_routes
 from .inbox_operations import register_inbox_operations
 from .inbox_retention_api import register_inbox_retention_routes
 from .language_package_api import register_language_package_routes
+from .learning_workbench_api import register_learning_workbench_routes
+from .learning_workbench_service import LearningWorkbench
 from .memory_graph_api import (
     GraphGrants,
     register_memory_graph_grant_routes,
@@ -96,6 +98,7 @@ from .resource_api import register_resource_routes
 from .session import SessionStore
 from .settings import SettingsService
 from .settings_api import register_settings_routes
+from .text_learning import register_text_learning_routes
 from .timeline_api import HeartbeatView, register_timeline_routes
 
 logger = logging.getLogger(__name__)
@@ -289,6 +292,7 @@ def create_app(
     expression_cluster_display: ExpressionClusterDisplay | None = None,
     embedding_progress: EmbeddingProgress | None = None,
     expression_recall: ExpressionRecall | None = None,
+    learning_call: Callable[[OrganRequest], Awaitable[OrganResponse]] | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
@@ -686,6 +690,27 @@ def create_app(
         inbox=inbox_store,
         can_show_summary=can_show_summary,
         suggest_emoji_replacement=suggest_emoji_replacement,
+    )
+
+    def learning_scopes() -> dict[str, str]:
+        scopes = {'["web","local"]': "网页私聊", '["terminal","local"]': "本机终端"}
+        if inbox_store is not None and allows_inbox_conversation is not None:
+            for conversation in inbox_store.list_conversations(visible_to_user=True):
+                if allows_inbox_conversation(conversation.key):
+                    scopes[conversation.key.language_scope_key()] = conversation.name
+        return scopes
+
+    register_learning_workbench_routes(
+        app,
+        LearningWorkbench(
+            resource_language, resource_emojis, clock or SystemClock(), learning_scopes
+        ),
+        require_ready,
+        _same_http_origin,
+        sessions.is_active,
+    )
+    register_text_learning_routes(
+        app, require_ready, _same_http_origin, sessions.is_active, learning_call
     )
     register_memory_lifecycle_routes(
         app, require_ready, resource_memory, _same_http_origin, sessions.is_active, can_show_summary
