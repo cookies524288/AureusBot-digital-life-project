@@ -1,7 +1,7 @@
 """按原始读权和精确路由读取旧时间线消息，不改写时间线。"""
 
 import json
-from contextlib import closing
+from contextlib import closing, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection, Row
@@ -69,10 +69,8 @@ def _record(row: Row) -> TimelineRecord:
     timestamp = datetime.fromisoformat(row["timestamp"])
     source = details.get("source_timestamp")
     if type(source) is int:
-        try:
+        with suppress(OSError, OverflowError, ValueError):
             timestamp = datetime.fromtimestamp(source, UTC)
-        except (OSError, OverflowError, ValueError):
-            pass
     return TimelineRecord(
         id=row["id"],
         timestamp=timestamp,
@@ -100,8 +98,12 @@ class LegacyPlatformHistory:
         return int(connection.execute("SELECT COALESCE(MAX(id),0) FROM timeline").fetchone()[0])
 
     def retention_candidates(
-        self, connection: Connection, route: LegacyRoute, visibility: VisibilityScope,
-        cutoff_epoch: float, high_water: int,
+        self,
+        connection: Connection,
+        route: LegacyRoute,
+        visibility: VisibilityScope,
+        cutoff_epoch: float,
+        high_water: int,
     ) -> list[tuple[int, str | None]]:
         """保留旧入站记录的定位；从不修改时间线或打开未归类历史。"""
         if route[0] != "qq":
@@ -117,12 +119,17 @@ class LegacyPlatformHistory:
                     THEN details ->> '$.source_timestamp'
                     ELSE unixepoch(timestamp, 'subsec') END < ?
                 AND unixepoch(timestamp, 'subsec') < ? ORDER BY id""",
-            (*route[1:], *route[1:], high_water, high_water, visibility,
-             cutoff_epoch, cutoff_epoch),
+            (
+                *route[1:],
+                *route[1:],
+                high_water,
+                high_water,
+                visibility,
+                cutoff_epoch,
+                cutoff_epoch,
+            ),
         )
-        return [
-            (row[0], row[1] if isinstance(row[1], str) and row[1] else None) for row in rows
-        ]
+        return [(row[0], row[1] if isinstance(row[1], str) and row[1] else None) for row in rows]
 
     def web_private_window(
         self, after_id: int, limit: int, *, connection: Connection | None = None
@@ -133,11 +140,18 @@ class LegacyPlatformHistory:
                 return self.web_private_window(after_id, limit, connection=database)
         rows = connection.execute(
             _WEB_PRIVATE + " AND record.id > :after ORDER BY record.id LIMIT :limit",
-            {"channel": WEB_CHANNEL_NAME, "account": WEB_USER_ID, "after": after_id, "limit": limit},
+            {
+                "channel": WEB_CHANNEL_NAME,
+                "account": WEB_USER_ID,
+                "after": after_id,
+                "limit": limit,
+            },
         )
         return tuple(map(_record, rows))
 
-    def web_private_evidence(self, connection: Connection, identifier: int) -> TimelineRecord | None:
+    def web_private_evidence(
+        self, connection: Connection, identifier: int
+    ) -> TimelineRecord | None:
         """按网页私聊的权限和原件序号复核，不退回按可见性泛查。"""
         row = connection.execute(
             _WEB_PRIVATE + " AND record.id = :identifier",
@@ -184,10 +198,14 @@ class LegacyPlatformHistory:
             parameters = route[1:]
         else:
             return []
-        distinct = "" if route is None else f"""
+        distinct = (
+            ""
+            if route is None
+            else f"""
             AND (typeof(message_key) != 'text' OR message_key = '' OR id IN (
                 SELECT MIN(id) FROM classified WHERE {scope} GROUP BY message_key))
         """
+        )
         distinct_parameters = () if route is None else parameters
         received = "AND actor_type IN ('user', 'person')" if received_only else ""
         with closing(open_connection(self._path, read_only=True)) as database:
@@ -197,7 +215,17 @@ class LegacyPlatformHistory:
                   AND (? IS NULL OR visibility = ?) AND (? IS NULL OR id < ?)
                   AND (? IS NULL OR instr(lower(content), lower(?)) > 0)
                 ORDER BY id DESC LIMIT ? OFFSET ?""",
-                (*parameters, *distinct_parameters, visibility, visibility, before_id, before_id,
-                 keyword, keyword, limit, offset),
+                (
+                    *parameters,
+                    *distinct_parameters,
+                    visibility,
+                    visibility,
+                    before_id,
+                    before_id,
+                    keyword,
+                    keyword,
+                    limit,
+                    offset,
+                ),
             ).fetchall()
         return [_record(row) for row in rows]

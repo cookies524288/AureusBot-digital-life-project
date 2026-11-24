@@ -38,11 +38,17 @@ class FakePlanner:
         if task == "plan":
             calls = ()
             if any(tool.name == "reply" for tool in request.tools):
-                calls = (ToolCall("reply", "fake_reply", {
-                    "addressed_to_me": "yes",
-                    "reply_reference": "回应用户",
-                    "reason": "模拟规划建议",
-                }),)
+                calls = (
+                    ToolCall(
+                        "reply",
+                        "fake_reply",
+                        {
+                            "addressed_to_me": "yes",
+                            "reply_reference": "回应用户",
+                            "reason": "模拟规划建议",
+                        },
+                    ),
+                )
             return OrganResponse(self.organ_id, "", metadata={"type": "fake"}, tool_calls=calls)
         if task == "inbox_select":
             candidates = json.loads(request.prompt.splitlines()[-1])
