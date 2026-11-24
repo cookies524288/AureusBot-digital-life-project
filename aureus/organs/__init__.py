@@ -19,6 +19,10 @@ from .interface import (
     OrganCallError,
     OrganRequest,
     OrganResponse,
+    ToolCall,
+    ToolDefinition,
+    ToolExchange,
+    ToolResult,
 )
 from .llm_adapter import (
     EMPTY_SYSTEM_MESSAGE,
@@ -70,6 +74,10 @@ __all__ = [
     "PromptTemplateError",
     "ProviderProtocol",
     "ReasoningLevel",
+    "ToolCall",
+    "ToolDefinition",
+    "ToolExchange",
+    "ToolResult",
     "assemble_image_messages",
     "assemble_messages",
     "count_prompt_tokens",
