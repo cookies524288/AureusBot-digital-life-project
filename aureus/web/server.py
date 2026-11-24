@@ -472,6 +472,7 @@ def create_app(
         resource_memory,
         clock,
         require_preview_access=require_inspection_access,
+        people=resource_people,
     )
     register_memory_graph_routes(
         app, require_ready, resource_memory, memory_graph_grants, sessions.is_active

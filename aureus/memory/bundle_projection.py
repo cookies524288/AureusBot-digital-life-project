@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
+from aureus.memory.bundle_facts import project_facts
 from aureus.memory.bundle_format import (
     MemoryBundle,
     MemoryBundleError,
@@ -23,7 +24,16 @@ _FULL_KEYS = {
     "paragraph_relations": ("paragraph_hash", "relation_hash"),
     "episodes": ("episode_id",),
     "episode_paragraphs": ("episode_id", "paragraph_hash"),
+    "external_memory_refs": ("external_id",),
+    "fact_claims": ("claim_id",),
+    "fact_evidence": ("claim_id", "evidence_type", "evidence_id", "stance"),
+    "fact_transitions": ("transition_id",),
+    "person_profile_snapshots": ("snapshot_id",),
+    "person_profile_overrides": ("person_id",),
+    "person_profile_alias_overrides": ("person_id",),
 }
+
+PROFILE_TABLES = tuple(table for table in _FULL_KEYS if table.startswith("person_profile_"))
 
 
 def _text(value: object, label: str) -> str:
@@ -59,6 +69,7 @@ class BundleProjection:
 
     records: dict[MemorySource, HistoricalMemory]
     graph: dict[MemorySource, MemoryGraphSource]
+    profiles: dict[str, list[dict[str, Any]]] | None = None
 
     def link(self, table: str, paragraph: MemorySource, target: MemorySource) -> None:
         """建立受独立归属约束的关联证据。"""
@@ -199,15 +210,21 @@ def _full_tables(state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         raise MemoryBundleError(f"完整包包含尚不能恢复的表：{', '.join(unsupported)}")
     result = {table: _rows(tables.get(table, []), table) for table in _FULL_KEYS}
     for table, keys in _FULL_KEYS.items():
-        identities = {tuple(_text(row.get(key), key) for key in keys) for row in result[table]}
+        identities = {tuple(_key(row.get(key), key) for key in keys) for row in result[table]}
         if len(identities) != len(result[table]):
             raise MemoryBundleError(f"完整包 {table} 含重复键。")
     return result
 
 
+def _key(value: object, label: str) -> str:
+    return str(value) if type(value) is int else _text(value, label)
+
+
 def _full_projection(bundle: MemoryBundle, state: dict[str, Any]) -> BundleProjection:
     tables = _full_tables(state)
-    projection = BundleProjection({}, {})
+    projection = BundleProjection(
+        {}, {}, {key: tables[key] for key in PROFILE_TABLES if tables[key]}
+    )
     # 保留上游 ID 和整套证据；不同版本的语义快照不覆盖彼此。
     scope = bundle.digest
 
@@ -277,6 +294,7 @@ def _full_projection(bundle: MemoryBundle, state: dict[str, Any]) -> BundleProje
         )
     if episode_links:
         raise MemoryBundleError("完整包缺少关联的 episode 原件。")
+    project_facts(tables, scope, projection.records, _stamp)
     return projection
 
 
@@ -299,6 +317,6 @@ def project_bundle(bundle: MemoryBundle) -> BundleProjection:
         }
         if state_paragraphs != docs or len(docs) != len(bundle.knowledge["docs"]):
             raise MemoryBundleError("完整包的知识段落和 state.json 不一致。")
-    if not projection.records:
+    if not projection.records and not projection.profiles:
         raise MemoryBundleError("记忆包没有可安装的资料。")
     return projection

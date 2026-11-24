@@ -11,7 +11,9 @@ from typing import Any, BinaryIO
 from aureus.common import Clock, MemoryConfig, SystemClock
 from aureus.common.sqlite import open_connection
 from aureus.memory import bundles
+from aureus.memory.bundle_export import export_knowledge
 from aureus.memory.bundle_format import BundleMode
+from aureus.memory.bundles import BundlePeople
 from aureus.memory.consolidation import (
     CandidateKind,
     ConsolidationBatch,
@@ -433,32 +435,41 @@ class MemoryIndex:
         """将此运行库的长期记忆原件和维护覆盖写入文件。"""
         export_archive(self._db_path, output)
 
-    def preview_bundle(self, file: BinaryIO) -> dict[str, Any]:
+    def preview_bundle(self, file: BinaryIO, people: BundlePeople | None = None) -> dict[str, Any]:
         """校验上传包并检查当前安装条件。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.preview_bundle(connection, file)
+            return bundles.preview_bundle(connection, file, people)
 
-    def install_bundle(self, file: BinaryIO, mode: BundleMode) -> dict[str, Any]:
+    def install_bundle(
+        self, file: BinaryIO, mode: BundleMode, people: BundlePeople | None = None
+    ) -> dict[str, Any]:
         """将兼容的包安装到实际记忆原件和索引。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.install_bundle(connection, file, mode, self._clock.now())
+            return bundles.install_bundle(connection, file, mode, self._clock.now(), people)
 
     def list_bundles(self, offset: int, limit: int) -> list[dict[str, Any]]:
         """浏览包安装记录。"""
         with closing(open_connection(self._db_path)) as connection:
             return bundles.list_bundles(connection, offset, limit)
 
-    def set_bundle_installed(self, installation_id: str, installed: bool) -> bool:
+    def set_bundle_installed(
+        self, installation_id: str, installed: bool, people: BundlePeople | None = None
+    ) -> bool:
         """可逆停用或恢复该包的独占资料。"""
         with closing(open_connection(self._db_path)) as connection:
             return bundles.set_bundle_installed(
-                connection, installation_id, installed, self._clock.now()
+                connection, installation_id, installed, self._clock.now(), people
             )
 
     def export_bundle(self, installation_id: str, output: BinaryIO) -> bool:
         """下载保存的原包资料。"""
         with closing(open_connection(self._db_path)) as connection:
             return bundles.export_bundle(connection, installation_id, output)
+
+    def export_knowledge(self, output: BinaryIO) -> None:
+        """把当前可用知识段落和证据关系打包。"""
+        with closing(open_connection(self._db_path)) as connection:
+            export_knowledge(connection, output, self._clock.now())
 
     def import_archive(self, file: BinaryIO) -> tuple[int, int]:
         """将文件追加到此运行库，返回新增和跳过条数。"""

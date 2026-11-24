@@ -127,6 +127,20 @@ def init_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS people_history_subject ON people_history(person_id)")
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(people_history)")}
+    if "bundle_disabled" not in columns:
+        conn.execute(
+            "ALTER TABLE people_history ADD COLUMN bundle_disabled INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS people_bundle_profiles (
+            installation_id TEXT NOT NULL, profile_id INTEGER NOT NULL, installed INTEGER NOT NULL,
+            PRIMARY KEY (installation_id, profile_id)
+        ) WITHOUT ROWID
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS people_bundles_profile ON people_bundle_profiles(profile_id)"
+    )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS people_history_other ON people_history(other_person_id)"
     )
@@ -206,6 +220,7 @@ def browse_profiles(
            LEFT JOIN people person ON person.id = history.person_id
            WHERE history.kind IN ('person_profile_snapshots', 'person_profile_overrides',
                                   'person_profile_alias_overrides')
+             AND NOT history.bundle_disabled
              AND (? = '' OR instr(lower(history.record), lower(?)) > 0
                          OR instr(lower(person.name), lower(?)) > 0)"""
     params = (query, query, query)
@@ -238,6 +253,7 @@ def browse_profile_resources(
             FROM people_history history LEFT JOIN people person ON person.id = history.person_id
             WHERE history.kind IN ('person_profile_snapshots', 'person_profile_overrides',
                                    'person_profile_alias_overrides')
+                AND NOT history.bundle_disabled
         ), matching AS (
             SELECT * FROM entries
             WHERE :query = '' OR instr(lower(name), lower(:query)) > 0
@@ -293,7 +309,7 @@ def _latest_profiles(
                 ORDER BY json_extract(record, '$.profile_version') DESC, id DESC
             ) AS revision
             FROM people_history
-            WHERE person_id = ? AND pending_reason IS NULL
+            WHERE person_id = ? AND pending_reason IS NULL AND NOT bundle_disabled
                 AND kind IN ('person_profile_snapshots', 'person_profile_overrides',
                              'person_profile_alias_overrides')
         )
