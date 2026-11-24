@@ -10,8 +10,15 @@ import json
 import re
 import zipfile
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, BinaryIO, Literal
+
+from aureus.memory.bundle_images import (
+    IMAGE_LIMIT_BYTES,
+    IMAGE_MEMBER,
+    canonical_image_semantics,
+    validate_images,
+)
 
 type ContentLevel = Literal["knowledge", "full"]
 type BundleMode = Literal["merge", "restore"]
@@ -22,6 +29,10 @@ MAX_BUNDLE_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_BUNDLE_BYTES = MAX_BUNDLE_UNCOMPRESSED_BYTES + 1024 * 1024
 _BASE_MEMBERS = {"manifest.json", "knowledge.json", "checksums.json"}
 _STATE_MEMBER = "state.json"
+_IMAGE_JSON = "images.json"
+VECTOR_MEMBERS = frozenset({"vectors/paragraphs.npz", "vectors/graph.npz", "vectors/images.npz"})
+_MAX_MEMBERS = 4096
+_MAX_VECTOR_MEMBER_BYTES = 16 * 1024 * 1024
 
 
 class MemoryBundleError(ValueError):
@@ -52,7 +63,7 @@ def paragraph_hash(text: str) -> str:
 
 @dataclass(frozen=True)
 class MemoryBundle:
-    """已校验的 v1 记忆包及其原始语义成员。"""
+    """已校验的 v1/v2 记忆包及其原始语义成员。"""
 
     package_id: str
     version: str
@@ -62,6 +73,8 @@ class MemoryBundle:
     manifest: dict[str, Any]
     knowledge: dict[str, Any]
     state: dict[str, Any] | None
+    images: dict[str, Any] | None = None
+    binary_members: dict[str, bytes] = field(default_factory=dict)
 
     @property
     def installation_id(self) -> str:
@@ -87,34 +100,45 @@ def _read_archive_member(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> tup
     return b"".join(chunks), digest.hexdigest()
 
 
-def _read_members(file: BinaryIO) -> dict[str, dict[str, Any]]:
+def _read_members(file: BinaryIO) -> tuple[dict[str, dict[str, Any]], dict[str, bytes]]:
     with zipfile.ZipFile(file, "r") as archive:
         infos = archive.infolist()
         names = {info.filename for info in infos}
-        if len(names) != len(infos) or not names >= _BASE_MEMBERS:
+        if len(infos) > _MAX_MEMBERS or len(names) != len(infos) or not names >= _BASE_MEMBERS:
             raise MemoryBundleError("记忆包包含重复文件项或缺少必要成员。")
-        unknown = names - _BASE_MEMBERS - {_STATE_MEMBER}
+        binary_names = (names & VECTOR_MEMBERS) | {
+            name for name in names if IMAGE_MEMBER.fullmatch(name)
+        }
+        unknown = names - _BASE_MEMBERS - {_STATE_MEMBER, _IMAGE_JSON} - binary_names
         if unknown:
-            raise MemoryBundleError(f"暂不支持记忆包成员：{', '.join(sorted(unknown)[:6])}")
+            raise MemoryBundleError("记忆包包含未知或不受支持的成员路径。")
         if any(info.file_size > MAX_BUNDLE_MEMBER_BYTES for info in infos) or (
             sum(info.file_size for info in infos) > MAX_BUNDLE_UNCOMPRESSED_BYTES
         ):
             raise MemoryBundleError("记忆包单个成员超过 256 MiB 或解压总量超过 1 GiB。")
 
         members: dict[str, dict[str, Any]] = {}
+        binaries: dict[str, bytes] = {}
         computed: dict[str, str] = {}
         for info in infos:
+            if IMAGE_MEMBER.fullmatch(info.filename) and info.file_size > IMAGE_LIMIT_BYTES:
+                raise MemoryBundleError("图片成员字节过多。")
+            if info.filename in VECTOR_MEMBERS and info.file_size > _MAX_VECTOR_MEMBER_BYTES:
+                raise MemoryBundleError("向量成员字节过多。")
             content, checksum = _read_archive_member(archive, info)
-            value = json.loads(content)
-            if not isinstance(value, dict):
-                raise MemoryBundleError(f"记忆包成员不是 JSON 对象：{info.filename}")
-            members[info.filename] = value
+            if info.filename in binary_names:
+                binaries[info.filename] = content
+            else:
+                value = json.loads(content)
+                if not isinstance(value, dict):
+                    raise MemoryBundleError(f"记忆包成员不是 JSON 对象：{info.filename}")
+                members[info.filename] = value
             if info.filename != "checksums.json":
                 computed[info.filename] = checksum
     checksums = members["checksums.json"]
     if checksums.get("algorithm") != "sha256" or checksums.get("files") != computed:
         raise MemoryBundleError("记忆包成员 SHA-256 校验失败或清单不完整。")
-    return members
+    return members, binaries
 
 
 def _identity(package: object) -> tuple[str, str, str]:
@@ -139,22 +163,51 @@ def _identity(package: object) -> tuple[str, str, str]:
 def load_bundle(file: BinaryIO) -> MemoryBundle:
     """在预检和安装时都重新校验 ZIP、成员清单和语义摘要。"""
     try:
-        members = _read_members(file)
+        members, binaries = _read_members(file)
         manifest = members["manifest.json"]
         knowledge = members["knowledge.json"]
         state = members.get(_STATE_MEMBER)
-        if manifest.get("format") != BUNDLE_FORMAT or manifest.get("format_version") != 1:
-            raise MemoryBundleError("仅支持 A_Memorix v1 文字记忆包。")
+        images = members.get(_IMAGE_JSON)
+        version_number = manifest.get("format_version")
+        if (
+            manifest.get("format") != BUNDLE_FORMAT
+            or type(version_number) is not int
+            or version_number not in (1, 2)
+        ):
+            raise MemoryBundleError("仅支持 A_Memorix v1 或 v2 记忆包。")
+        if (version_number == 2) != (images is not None) or (
+            images is None and any(IMAGE_MEMBER.fullmatch(name) for name in binaries)
+        ):
+            raise MemoryBundleError("记忆包版本和图片成员不一致。")
         level = manifest.get("content_level")
         if level not in ("knowledge", "full") or (level == "full") != (state is not None):
             raise MemoryBundleError("记忆包内容级别和 state.json 不一致。")
         if knowledge.get("format") != "lpmm_openie" or knowledge.get("format_version") != 1:
             raise MemoryBundleError("不支持 knowledge.json 的格式。")
-        digest = bundle_digest({"knowledge": knowledge, "state": state})
+        semantic_payload = {"knowledge": knowledge, "state": state}
+        if images is not None:
+            try:
+                validate_images(images, binaries)
+            except ValueError as error:
+                raise MemoryBundleError(str(error)) from error
+            semantic_payload["images"] = canonical_image_semantics(images)
+        components = manifest.get("components")
+        if version_number == 2 or binaries:
+            actual = (members.keys() - _BASE_MEMBERS) | {"knowledge.json"} | binaries.keys()
+            if (
+                not isinstance(components, list)
+                or not all(isinstance(name, str) for name in components)
+                or len(components) != len(actual)
+                or set(components) != actual
+            ):
+                raise MemoryBundleError("记忆包扩展成员与清单不一致。")
+        digest = bundle_digest(semantic_payload)
         if digest != manifest.get("content_digest"):
             raise MemoryBundleError("记忆包内容摘要不一致。")
         package_id, version, name = _identity(manifest.get("package"))
-        return MemoryBundle(package_id, version, name, level, digest, manifest, knowledge, state)
+        return MemoryBundle(
+            package_id, version, name, level, digest, manifest, knowledge, state, images, binaries
+        )
     except (
         zipfile.BadZipFile,
         zlib.error,
@@ -168,13 +221,16 @@ def load_bundle(file: BinaryIO) -> MemoryBundle:
 
 
 def write_bundle(bundle: MemoryBundle, output: BinaryIO) -> None:
-    """按上游格式重新打包保存的安装原件，不加入本机资料。"""
+    """按固定版规范压缩已确立的成员并逐个写入校验和。"""
     members = {
         "manifest.json": _canonical_json_bytes(bundle.manifest),
         "knowledge.json": _canonical_json_bytes(bundle.knowledge),
     }
     if bundle.state is not None:
         members[_STATE_MEMBER] = _canonical_json_bytes(bundle.state)
+    if bundle.images is not None:
+        members[_IMAGE_JSON] = _canonical_json_bytes(bundle.images)
+    members.update(bundle.binary_members)
     checksums = {name: hashlib.sha256(content).hexdigest() for name, content in members.items()}
     members["checksums.json"] = _canonical_json_bytes({"algorithm": "sha256", "files": checksums})
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:

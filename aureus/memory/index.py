@@ -14,6 +14,7 @@ from aureus.memory import bundles
 from aureus.memory.bundle_closure import BundleProfileSource
 from aureus.memory.bundle_export import export_knowledge, generate_bundle
 from aureus.memory.bundle_format import BundleMode, ContentLevel
+from aureus.memory.bundle_images import read_bundle_image
 from aureus.memory.bundle_sources import (
     EXPORT_TABLES,
     BundleSource,
@@ -21,6 +22,7 @@ from aureus.memory.bundle_sources import (
     open_bundle_sources,
     register_bundle_source,
 )
+from aureus.memory.bundle_vectors import search_vectors
 from aureus.memory.bundles import BundlePeople
 from aureus.memory.consolidation import (
     CandidateKind,
@@ -241,10 +243,14 @@ class MemoryIndex:
         clock: Clock | None = None,
         *,
         config: MemoryConfig | None = None,
+        bundle_vector_spaces: dict[str, dict[str, Any]] | None = None,
+        bundle_attachment_root: Path | None = None,
     ) -> None:
         self._db_path, self._timeline = db_path, timeline
         self._clock = clock if clock is not None else SystemClock()
         self._config = config or MemoryConfig()
+        self._bundle_vector_spaces = bundle_vector_spaces or {}
+        self._bundle_attachment_root = bundle_attachment_root
         self._conn: sqlite3.Connection | None = None
         self.graph_display = MemoryGraphDisplay(db_path, self._clock)
         self.summary_evidence: EvidenceCheck | None = None
@@ -581,14 +587,44 @@ class MemoryIndex:
     def preview_bundle(self, file: BinaryIO, people: BundlePeople | None = None) -> dict[str, Any]:
         """校验上传包并检查当前安装条件。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.preview_bundle(connection, file, people)
+            return bundles.preview_bundle(connection, file, people, self._bundle_vector_spaces)
 
     def install_bundle(
         self, file: BinaryIO, mode: BundleMode, people: BundlePeople | None = None
     ) -> dict[str, Any]:
         """将兼容的包安装到实际记忆原件和索引。"""
         with closing(open_connection(self._db_path)) as connection:
-            return bundles.install_bundle(connection, file, mode, self._clock.now(), people)
+            return bundles.install_bundle(
+                connection, file, mode, self._clock.now(), people, self._bundle_vector_spaces
+            )
+
+    def read_bundle_image(self, digest: str) -> tuple[bytes, str] | None:
+        """按摘要读取当前仍有有效包归属的图片。"""
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return read_bundle_image(connection, digest)
+
+    def search_bundle_vectors(
+        self,
+        scope: str,
+        query: Sequence[float],
+        limit: int,
+        *,
+        allowed_sources: Collection[MemorySource] = (),
+    ) -> list[tuple[MemorySource, float]]:
+        """在独立启用的配置空间召回；图空间仍需调用方明确授权。"""
+        fingerprint = self._bundle_vector_spaces.get(scope)
+        if not fingerprint or limit <= 0 or (scope == "graph" and not allowed_sources):
+            return []
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return search_vectors(
+                connection,
+                scope,
+                fingerprint,
+                query,
+                limit,
+                self._clock.now().timestamp(),
+                allowed_sources,
+            )
 
     def list_bundles(self, offset: int, limit: int) -> list[dict[str, Any]]:
         """浏览包安装记录。"""
@@ -627,6 +663,7 @@ class MemoryIndex:
         *,
         output: BinaryIO | None = None,
         expected_digest: str | None = None,
+        include_images: bool = False,
     ) -> dict[str, Any]:
         """预检或下载从此库当前可重建语义生成的新包。"""
         with closing(open_connection(self._db_path, read_only=True)) as connection:
@@ -638,6 +675,8 @@ class MemoryIndex:
                 people,
                 output=output,
                 expected_digest=expected_digest,
+                include_images=include_images,
+                attachment_root=self._bundle_attachment_root,
             )
 
     def import_archive(self, file: BinaryIO) -> tuple[int, int]:

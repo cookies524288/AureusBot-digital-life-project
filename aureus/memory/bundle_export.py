@@ -5,6 +5,7 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 from typing import Any, BinaryIO
 
 from aureus.memory.bundle_closure import BundleProfileSource, add_profiles, build_closure
@@ -17,6 +18,8 @@ from aureus.memory.bundle_format import (
     paragraph_hash,
     write_bundle,
 )
+from aureus.memory.bundle_image_export import export_images
+from aureus.memory.bundle_images import canonical_image_semantics
 from aureus.memory.bundle_sources import select_bundle_records
 from aureus.memory.history import decode_history_row
 from aureus.memory.message_boundary import is_message_source
@@ -179,7 +182,7 @@ _EXCLUDED = (
     "不是全库备份。不包含消息正文、已安装包原件、账号绑定、后台任务、审计和实例配置。",
     "不包含不能确认来源或完整重建的资料、手工画像覆盖和本地别名。",
     "在线总结和未登记的旧迁入快照没有此入口的导出范围。",
-    "图片原件和向量空间未在此版文字包中导出。",
+    "只有明确选中且可核验的归档图片能进入图片扩展。不导出在线对话图片和向量。",
 )
 
 
@@ -225,6 +228,8 @@ def generate_bundle(
     *,
     output: BinaryIO | None = None,
     expected_digest: str | None = None,
+    include_images: bool = False,
+    attachment_root: Path | None = None,
 ) -> dict[str, Any]:
     """预检或生成选定闭包；下载时需要与同范围的最新预检匹配。"""
     with connection:
@@ -244,8 +249,17 @@ def generate_bundle(
         if level == "full"
         else None
     )
-    digest = bundle_digest({"knowledge": knowledge, "state": state})
-    permit = bundle_digest([sorted(source_ids), level, digest])
+    images, binary_members = (
+        export_images(records, closure, attachment_root, is_full=level == "full")
+        if include_images
+        else (None, {})
+    )
+    semantic_payload = {"knowledge": knowledge, "state": state}
+    if images is not None:
+        semantic_payload["images"] = canonical_image_semantics(images)
+    version_number = 2 if images is not None else 1
+    digest = bundle_digest(semantic_payload)
+    permit = bundle_digest([sorted(source_ids), level, include_images, digest])
     counts = {
         table: len(rows)
         for table, rows in closure.tables.items()
@@ -256,10 +270,23 @@ def generate_bundle(
         "version": "1.0.0",
         "name": "Aureus 完整语义包" if state is not None else "Aureus 知识包",
     }
-    components = ["knowledge.json", *(["state.json"] if state is not None else [])]
+    components = sorted(
+        [
+            "knowledge.json",
+            *(["state.json"] if state is not None else []),
+            *(["images.json", *binary_members] if images is not None else []),
+        ]
+    )
+    if images is not None:
+        counts.update(
+            {
+                f"image_{key}": len(images[key])
+                for key in ("assets", "occurrences", "observations", "links")
+            }
+        )
     manifest = {
         "format": BUNDLE_FORMAT,
-        "format_version": 1,
+        "format_version": version_number,
         "content_level": level,
         "created_at": now.isoformat(),
         "content_digest": digest,
@@ -282,15 +309,17 @@ def generate_bundle(
         manifest,
         knowledge,
         state,
+        images,
+        binary_members,
     )
-    can_export = bool(knowledge["docs"])
+    can_export = bool(knowledge["docs"]) or images is not None
     if output is not None:
         if not can_export or expected_digest != permit:
-            raise MemoryBundleConflictError("没有可导出段落，或闭包已变化；请重新预检。")
+            raise MemoryBundleConflictError("没有可导出的资料，或闭包已变化；请重新预检。")
         write_bundle(bundle, output)
     return {
         "content_level": level,
-        "format_version": 1,
+        "format_version": version_number,
         "counts": counts,
         "can_export": can_export,
         "excluded": excluded | closure.skipped,

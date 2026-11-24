@@ -3,8 +3,10 @@
 import json
 import sqlite3
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 from datetime import datetime
+from io import BytesIO
 from typing import Any, BinaryIO, Protocol
 
 from aureus.memory.bundle_format import (
@@ -16,7 +18,9 @@ from aureus.memory.bundle_format import (
     load_bundle,
     write_bundle,
 )
+from aureus.memory.bundle_images import open_bundle_images, store_images
 from aureus.memory.bundle_projection import BundleProjection, project_bundle
+from aureus.memory.bundle_vectors import open_bundle_vectors, prepare_vectors
 from aureus.memory.graph import put_graph_sources
 from aureus.memory.history import MemorySource, put_history_record
 
@@ -72,6 +76,13 @@ def open_bundles(connection: sqlite3.Connection) -> None:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS memory_bundle_owned (entry_id INTEGER PRIMARY KEY)
         """)
+        open_bundle_images(connection)
+        open_bundle_vectors(connection)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS memory_bundle_originals (
+                installation_id TEXT PRIMARY KEY, archive BLOB NOT NULL
+            )
+        """)
 
 
 def _installation(connection: sqlite3.Connection, installation_id: str) -> sqlite3.Row | None:
@@ -106,7 +117,7 @@ def _inspect(
         "package_id": bundle.package_id,
         "name": bundle.name,
         "version": bundle.version,
-        "format_version": 1,
+        "format_version": bundle.manifest["format_version"],
         "content_level": bundle.content_level,
         "counts": dict(Counter(source.table for source in projection.records))
         | {table: len(rows) for table, rows in (projection.profiles or {}).items()},
@@ -114,6 +125,21 @@ def _inspect(
         if installed is None
         else ("installed" if installed["installed"] else "uninstalled"),
         "restore_blocked": _restore_reason(connection, bundle, people),
+        "components": [
+            {"name": "knowledge.json", "status": "install"},
+            *([{"name": "state.json", "status": "install"}] if bundle.state is not None else []),
+            *(
+                [
+                    {
+                        "name": "images.json",
+                        "status": "install",
+                        "reason": "只安装当前图片语义；不恢复聊天定位和旧描述。",
+                    }
+                ]
+                if bundle.images is not None
+                else []
+            ),
+        ],
     }
 
 
@@ -131,15 +157,21 @@ def _prepare_profiles(
 
 
 def preview_bundle(
-    connection: sqlite3.Connection, file: BinaryIO, people: BundlePeople | None
+    connection: sqlite3.Connection,
+    file: BinaryIO,
+    people: BundlePeople | None,
+    spaces: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """核验读包、可投影内容及安装模式，不写数据库。"""
     bundle = load_bundle(file)
     projection = project_bundle(bundle)
     _prepare_profiles(bundle, projection, people)
+    vector_report, _ = prepare_vectors(bundle, projection.records, spaces)
     with connection:
         connection.execute("BEGIN")
-        return _inspect(connection, bundle, projection, people)
+        report = _inspect(connection, bundle, projection, people)
+        report["components"].extend(vector_report)
+        return report
 
 
 def _entry_id_with_ownership(
@@ -233,14 +265,17 @@ def install_bundle(
     mode: BundleMode,
     now: datetime,
     people: BundlePeople | None,
+    spaces: Mapping[str, dict[str, Any]],
 ) -> dict[str, Any]:
     """预检相同资料，再在同一写事务检查目标、登记归属并接入原件。"""
     bundle = load_bundle(file)
     projection = project_bundle(bundle)
     profiles = _prepare_profiles(bundle, projection, people)
+    vector_report, vectors = prepare_vectors(bundle, projection.records, spaces)
     with connection:
         connection.execute("BEGIN IMMEDIATE")
         report = _inspect(connection, bundle, projection, people)
+        report["components"].extend(vector_report)
         if mode == "restore" and report["restore_blocked"]:
             raise MemoryBundleConflictError(report["restore_blocked"])
         if report["status"] == "installed":
@@ -265,6 +300,19 @@ def install_bundle(
             ),
         )
         added = _apply_projection(connection, bundle.installation_id, projection, people)
+        connection.executemany(
+            "INSERT INTO memory_bundle_vectors VALUES (?,?,?,?,?)",
+            ((bundle.installation_id, *vector) for vector in vectors),
+        )
+        if bundle.images is not None:
+            store_images(connection, bundle.installation_id, bundle.images, bundle.binary_members)
+        if bundle.binary_members or bundle.images is not None:
+            original = BytesIO()
+            write_bundle(bundle, original)
+            connection.execute(
+                "INSERT INTO memory_bundle_originals VALUES (?,?)",
+                (bundle.installation_id, original.getvalue()),
+            )
         if people is not None and profiles:
             people.publish_bundle_profiles(connection, bundle.installation_id, profiles)
         return report | {"status": "installed", "added": added, "already_installed": False}
@@ -315,6 +363,12 @@ def export_bundle(connection: sqlite3.Connection, installation_id: str, output: 
     row = _installation(connection, installation_id)
     if row is None:
         return False
+    original = connection.execute(
+        "SELECT archive FROM memory_bundle_originals WHERE installation_id=?", (installation_id,)
+    ).fetchone()
+    if original is not None:
+        output.write(original[0])
+        return True
     bundle = MemoryBundle(
         row["package_id"],
         row["version"],
