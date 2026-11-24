@@ -112,6 +112,16 @@ class LearningBatch(ResourceRemoval):
     kind: LanguageKind
 
 
+class JargonClassification(BaseModel):
+    """维护者修改词条定性，不更改释义或召回授权。"""
+
+    model_config = ConfigDict(extra="forbid")
+    entry_keys: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
+        min_length=1, max_length=MAX_SIZE
+    )
+    status: Literal[JargonStatus.CONFIRMED, JargonStatus.NON_JARGON]
+
+
 class LearningScopeUpdate(BaseModel):
     """包记录的目标会话，未确认时只预览。"""
 
@@ -714,6 +724,21 @@ def register_resource_routes(
     ) -> dict[str, Any]:
         targets = await asyncio.to_thread(known_conversations, include_temporary=True)
         return {"items": [{"key": key, "label": label} for key, label in targets.items()]}
+
+    @app.patch("/api/resources/learning/jargon/classification")
+    async def classify_jargons(
+        request: Request, body: JargonClassification, _token: Annotated[str, Depends(require_ready)]
+    ) -> dict[str, int | JargonStatus]:
+        if same_origin is None or not same_origin(request):
+            raise HTTPException(403, "请在当前网页上定性黑话。")
+        if language is None:
+            raise HTTPException(409, "学习功能当前关闭。")
+        changed = await asyncio.to_thread(
+            language.classify_jargons, body.entry_keys, body.status, review_clock.now()
+        )
+        if changed is None:
+            raise HTTPException(404, "选中条目有误或已移除；没有写入定性记录。")
+        return {"changed": changed, "status": body.status}
 
     @app.get("/api/resources/learning/scope")
     async def list_learning_scope_targets(

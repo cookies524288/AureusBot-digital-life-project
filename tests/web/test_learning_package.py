@@ -200,16 +200,21 @@ def test_legacy_jargon_classification_survives_package_without_gating_meaning(
         params = {"kind": "jargon", "jargon_status": "candidate", "shared": True}
         assert client.get(LEARNING, params=params).json()["total"] == 2
         body = {"entry_keys": [candidate, removed], "status": "non_jargon"}
+        assert client.patch(endpoint, json=body).status_code == 403
         assert client.patch(endpoint, json=body, headers=ORIGIN).status_code == 404
-        assert store.classify_jargons([candidate, removed], JargonStatus.NON_JARGON, NOW) is None
         assert client.get(LEARNING, params=params).json()["total"] == 2
         body["entry_keys"] = [candidate, denied, candidate]
-        assert store.classify_jargons(body["entry_keys"], JargonStatus.NON_JARGON, NOW) == 2
+        assert client.patch(endpoint, json=body, headers=ORIGIN).json() == {
+            "changed": 2,
+            "status": "non_jargon",
+        }
         assert (
             client.get(LEARNING, params=params).json()["items"][0]["entry_key"] == second_candidate
         )
         reference = store.jargon_reference(("月兔",), 500)
         assert "月兔：不作为黑话" in reference and "隐藏释义" not in reference
+        assert store.classify_jargons([denied], JargonStatus.CONFIRMED, NOW) == 1
+        assert "月兔：不作为黑话" in store.jargon_reference(("月兔",), 500)
         payload = client.get(f"{LEARNING}/package/jargon").content
     destination = LanguageStore(tmp_path / "destination.db")
     destination.open()
@@ -229,7 +234,7 @@ def test_legacy_jargon_classification_survives_package_without_gating_meaning(
         assert all(item["pending_scope"] for item in listed)
         assert sorted(item["jargon_status"] for item in listed) == [
             "candidate",
-            "non_jargon",
+            "confirmed",
             "non_jargon",
         ]
 

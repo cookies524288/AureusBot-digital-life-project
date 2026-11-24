@@ -1144,7 +1144,7 @@ def test_language_pages_have_no_manual_approval_controls(browser: Browser) -> No
       await waitFor(() => find('[data-learning-tab="jargon"]'), '学习页就绪');
       click('[data-learning-tab="jargon"]');
       await waitFor(() => text('合成黑话000'), '黑话页已加载');
-      check(!button('定性所选'), '黑话没有批量审批入口');
+      check(button('定性所选')?.disabled, '黑话保留定性，未选中时不可批量提交');
       click('[data-learning-tab="expression"]');
       await waitFor(() => button('合成表达000'), '表达列表就绪');
       check(!button('快速审核') && !button('审核所选'), '表达没有批量审核');

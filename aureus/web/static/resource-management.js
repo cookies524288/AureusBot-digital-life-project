@@ -258,6 +258,29 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     openEditor((item ? '编辑' : '新增') + title, form);
   }
+  function classifyJargon(keys, refresh) {
+    if (!keys.length) return;
+    let busy = false;
+    const buttons = [['confirmed', '确认为黑话'], ['non_jargon', '判为非黑话']].map(([status, label]) =>
+      action(label, async () => {
+        if (busy) return;
+        busy = true;
+        for (const button of buttons) button.disabled = true;
+        try {
+          const result = await api('/api/resources/learning/jargon/classification', 'PATCH',
+            {entry_keys:keys, status});
+          if (!result.ok) { fail(result); return; }
+          toast(`已更新 ${result.data.changed} 条黑话的定性。`);
+          if (buttons[0].isConnected) $('editor-dialog').close();
+          await refresh();
+        } finally {
+          busy = false;
+          for (const button of buttons) button.disabled = false;
+        }
+      }));
+    detail(`定性 ${keys.length} 条黑话资料`,
+      actions('定性结论', ...buttons, action('取消', () => $('editor-dialog').close())));
+  }
   function importLearning(kind, refresh) {
     const endpoint = '/api/resources/learning/package/' + kind;
     const input = el('input', {type:'file', accept:'.json,application/json', required:true});
@@ -440,12 +463,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       const link = el('a', {href:'/api/resources/learning/package/' + kind, download:''});
       document.body.append(link); link.click(); link.remove();
     });
+    const classifyBatch = jargonFilter && action('定性所选', () => classifyJargon(batch.keys(), pager.read));
     const batch = batchControls(item => item.entry_key, '/api/resources/learning/batch',
-      (entry_keys, removed) => ({kind, entry_keys, removed}), () => pager.read());
+      (entry_keys, removed) => ({kind, entry_keys, removed}), () => pager.read(),
+      count => { if (classifyBatch) classifyBatch.disabled = !count || removed.firstChild.checked; });
     const tools = [add, upload, download];
     for (const tool of tools) tool.disabled = true;
     panel.append(toolbar, scopeHint, actions(kind === 'expression' ? '表达操作' : '黑话操作', ...tools),
-      actions('所选资料', batch.remove, batch.restore));
+      actions('所选资料', classifyBatch, batch.remove, batch.restore));
     function render(item) {
       const title = item.text + (item.is_removed ? ' · 已移除' : item.pending_scope ? ' · 待映射' : item.is_enabled ? '' : ' · 已停用')
         + (item.jargon_status ? ' · ' + jargonLabels[item.jargon_status] : '');
@@ -459,6 +484,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         item.jargon_status && !item.detail && field('释义状态', '尚未填写'),
         item.original && field('原件', item.original.filter(Boolean).join('\n')),
         el('div', {class:'row'}, action('编辑', () => editLearning(kind, pager.read, item)),
+          item.jargon_status && !item.is_removed && action('定性', () => classifyJargon([item.entry_key], pager.read)),
           kind === 'expression' && action('表达簇展示授权', () => editClusterGrant(item)),
           item.package_source != null && action('设置生效会话', () => editLearningScope(kind, item, pager.read)),
           !item.pending_scope && !item.is_removed && action(item.is_enabled ? '停用' : '恢复', async event => {
