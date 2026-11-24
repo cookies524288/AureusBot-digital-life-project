@@ -137,7 +137,14 @@ def make_rig(
 async def test_a_reply_is_sent_as_several_short_messages(
     made: list[TimelineDatabase], tmp_path: Path
 ) -> None:
-    rig = make_rig(made, tmp_path)
+    rig = make_rig(
+        made,
+        tmp_path,
+        typing_han_seconds=0.4,
+        typing_other_seconds=0.1,
+        typing_jitter_min_seconds=1.0,
+        typing_jitter_max_seconds=1.0,
+    )
     await rig.say("我今天不太顺")
 
     assert rig.replies() == PIECES[:1]
@@ -197,7 +204,15 @@ async def test_typing_uses_han_other_and_each_jitter_draw(
         return next(draws)
 
     monkeypatch.setattr("aureus.heartbeat.reply_outbox.uniform", jitter)
-    rig = make_rig(made, tmp_path, replies=["开头<n>汉𠀀A!<n>emoji🙂"])
+    rig = make_rig(
+        made,
+        tmp_path,
+        replies=["开头<n>汉𠀀A!<n>emoji🙂"],
+        typing_han_seconds=0.4,
+        typing_other_seconds=0.1,
+        typing_jitter_min_seconds=0.3,
+        typing_jitter_max_seconds=1.7,
+    )
     await rig.say("开始")
     assert rig.replies() == ["开头"]
     assert rig.heartbeat.seconds_until_next_beat() == pytest.approx(1.3)
