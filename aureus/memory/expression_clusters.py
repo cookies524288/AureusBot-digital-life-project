@@ -3,16 +3,38 @@
 import asyncio
 from collections import Counter
 from collections.abc import Awaitable, Callable, Collection, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from hashlib import sha256
 from math import hypot, isfinite, sumprod
+from pathlib import Path
 from random import Random
+from uuid import uuid4
 
+from aureus.common.sqlite import open_connection
 from aureus.memory.language import LanguageStore
 from aureus.memory.language_matching import LanguageEntry
 
 _CLUSTER_SEED = 20260621
 _MAX_ITERATIONS = 100
+_SNAPSHOT_VERSION = 1
+_SNAPSHOT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS expression_cluster_snapshots (
+    snapshot_id TEXT PRIMARY KEY NOT NULL,
+    embedding_space TEXT UNIQUE NOT NULL,
+    format_version INTEGER NOT NULL,
+    cluster_count INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS expression_cluster_members (
+    snapshot_id TEXT NOT NULL
+        REFERENCES expression_cluster_snapshots(snapshot_id) ON DELETE CASCADE,
+    cluster_id INTEGER NOT NULL,
+    member_order INTEGER NOT NULL,
+    entry_key TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    PRIMARY KEY (snapshot_id, cluster_id, member_order)
+);
+"""
 
 type _Vector = tuple[float, ...]
 type _EmbedExpressions = Callable[[tuple[str, ...]], Awaitable[tuple[str, Sequence[_Vector]]]]
@@ -49,6 +71,70 @@ class ExpressionClusters:
             if members:
                 result[cluster_id] = members
         return result
+
+
+class ExpressionClusterStore:
+    """显式存取每个向量空间的当前派生快照。"""
+
+    def __init__(self, db_path: Path) -> None:
+        self._path = db_path
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.executescript("BEGIN;\n" + _SNAPSHOT_SCHEMA)
+
+    def save(self, snapshot: ExpressionClusters) -> None:
+        """原子替换该空间的快照，不修改表达原件或授权。"""
+        snapshot_id = uuid4().hex
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "DELETE FROM expression_cluster_snapshots WHERE embedding_space = ?",
+                (snapshot.embedding_space,),
+            )
+            connection.execute(
+                """
+                INSERT INTO expression_cluster_snapshots
+                    (snapshot_id, embedding_space, format_version, cluster_count)
+                VALUES (?, ?, ?, ?)
+                """,
+                (snapshot_id, snapshot.embedding_space, _SNAPSHOT_VERSION, len(snapshot.clusters)),
+            )
+            connection.executemany(
+                """
+                INSERT INTO expression_cluster_members
+                    (snapshot_id, cluster_id, member_order, entry_key, fingerprint)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    (snapshot_id, cluster_id, order, member.entry_key, member.fingerprint)
+                    for cluster_id, cluster in enumerate(snapshot.clusters)
+                    for order, member in enumerate(cluster)
+                ),
+            )
+
+    def load(self, embedding_space: str) -> ExpressionClusters | None:
+        """读取指定空间的当前快照，未知格式不参与召回。"""
+        with closing(open_connection(self._path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT snapshot.format_version, snapshot.cluster_count,
+                    member.cluster_id, member.entry_key, member.fingerprint
+                FROM expression_cluster_snapshots AS snapshot
+                LEFT JOIN expression_cluster_members AS member USING (snapshot_id)
+                WHERE snapshot.embedding_space = ?
+                ORDER BY member.cluster_id, member.member_order
+                """,
+                (embedding_space,),
+            ).fetchall()
+        if not rows:
+            return None
+        if rows[0]["format_version"] != _SNAPSHOT_VERSION:
+            raise ValueError("不支持的表达聚类快照格式版本。")
+        clusters: list[list[_Member]] = [[] for _ in range(rows[0]["cluster_count"])]
+        for row in rows:
+            if row["cluster_id"] is not None:
+                clusters[row["cluster_id"]].append(_Member(row["entry_key"], row["fingerprint"]))
+        return ExpressionClusters(embedding_space, tuple(tuple(cluster) for cluster in clusters))
 
 
 async def build_expression_clusters(
