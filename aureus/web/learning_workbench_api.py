@@ -49,7 +49,8 @@ class LegacyMapping(BaseModel):
     old_chat_id: str = Field(min_length=1, max_length=4096)
     target_chat_id: str | None = Field(default=None, max_length=4096)
     target_chat_ids: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
-        default_factory=list, max_length=100,
+        default_factory=list,
+        max_length=100,
     )
 
 
@@ -306,13 +307,15 @@ def register_learning_workbench_routes(
             if scope is not None and scope not in await run(service.scopes):
                 raise HTTPException(422, "所选来源已撤权或不存在。")
             selected = [
-                row for row in visible
+                row
+                for row in visible
                 if (body.ids is None or row["id"] in body.ids)
-                and (scope is None or row.get("chat_id") == scope
-                     or scope in row.get("session_ids", []))
-                and (not body.is_global or (
-                    not row.get("chat_id") and not row.get("session_ids")
-                ))
+                and (
+                    scope is None
+                    or row.get("chat_id") == scope
+                    or scope in row.get("session_ids", [])
+                )
+                and (not body.is_global or (not row.get("chat_id") and not row.get("session_ids")))
             ]
             if body.ids is not None and len(selected) != len(set(body.ids)):
                 raise HTTPException(400, "部分记录不存在或不属于当前范围。")
@@ -320,23 +323,37 @@ def register_learning_workbench_routes(
             timestamp = workbench_clock.now().isoformat()
             if kind == LanguageKind.EXPRESSION:
                 package = {
-                    "success": True, "version": 1, "type": "maibot.expression.export",
-                    "exported_at": timestamp, "source_chat_name": "Aureus",
-                    "count": len(records), "expressions": records,
+                    "success": True,
+                    "version": 1,
+                    "type": "maibot.expression.export",
+                    "exported_at": timestamp,
+                    "source_chat_name": "Aureus",
+                    "count": len(records),
+                    "expressions": records,
                 }
             else:
                 package = {
-                    "success": True, "version": 1, "type": "maibot.jargon.export",
-                    "exported_at": timestamp, "include_chat_info": False,
-                    "count": len(records), "jargons": records,
+                    "success": True,
+                    "version": 1,
+                    "type": "maibot.jargon.export",
+                    "exported_at": timestamp,
+                    "include_chat_info": False,
+                    "count": len(records),
+                    "jargons": records,
                 }
-            return Response(json.dumps(package, ensure_ascii=False), media_type="application/json",
-                headers={"Cache-Control": "no-store",
-                         "Content-Disposition": f'attachment; filename="aureus-{kind}.json"'})
+            return Response(
+                json.dumps(package, ensure_ascii=False),
+                media_type="application/json",
+                headers={
+                    "Cache-Control": "no-store",
+                    "Content-Disposition": f'attachment; filename="aureus-{kind}.json"',
+                },
+            )
 
         @router.post(path + "/import")
         async def import_entries(
-            request: Request, token: Annotated[str, Depends(authenticated)],
+            request: Request,
+            token: Annotated[str, Depends(authenticated)],
         ) -> dict[str, Any]:
             raw = await request.body()
             if len(raw) > 8 * 1024 * 1024:
@@ -345,9 +362,19 @@ def register_learning_workbench_routes(
                 body = LanguageImport.model_validate_json(raw)
             except ValidationError:
                 raise HTTPException(422, "导入字段格式不符合请求契约。") from None
-            scopes = tuple(dict.fromkeys(filter(None, (
-                body.chat_id, body.session_id, *body.session_ids, *body.target_session_ids,
-            ))))
+            scopes = tuple(
+                dict.fromkeys(
+                    filter(
+                        None,
+                        (
+                            body.chat_id,
+                            body.session_id,
+                            *body.session_ids,
+                            *body.target_session_ids,
+                        ),
+                    )
+                )
+            )
             if body.is_global and scopes:
                 raise HTTPException(422, "共享导入不能同时指定会话。")
             items = body.expressions if kind == LanguageKind.EXPRESSION else body.jargons
@@ -357,9 +384,12 @@ def register_learning_workbench_routes(
                 if body.chat_id and len(scopes) != 1:
                     raise HTTPException(422, "表达方式请选择一个目标会话。")
                 package = {
-                    "success": True, "version": 1, "type": "maibot.expression.export",
+                    "success": True,
+                    "version": 1,
+                    "type": "maibot.expression.export",
                     "exported_at": workbench_clock.now().isoformat(),
-                    "source_chat_name": "Aureus", "count": len(items),
+                    "source_chat_name": "Aureus",
+                    "count": len(items),
                     "expressions": items,
                 }
             else:
@@ -368,9 +398,13 @@ def register_learning_workbench_routes(
                     for item in items
                 ]
                 package = {
-                    "success": True, "version": 1, "type": "maibot.jargon.export",
+                    "success": True,
+                    "version": 1,
+                    "type": "maibot.jargon.export",
                     "exported_at": workbench_clock.now().isoformat(),
-                    "include_chat_info": False, "count": len(items), "jargons": adapted_items,
+                    "include_chat_info": False,
+                    "count": len(items),
+                    "jargons": adapted_items,
                 }
             try:
                 rows = read_package(kind, json.dumps(package, ensure_ascii=False).encode())
@@ -387,9 +421,13 @@ def register_learning_workbench_routes(
                 )
             except ValueError as error:
                 raise HTTPException(422, str(error)) from None
-            return {"success": True, "imported_count": added,
-                    "skipped_count": len(rows) - added, "failed_count": 0,
-                    "message": "导入已完成。"}
+            return {
+                "success": True,
+                "imported_count": added,
+                "skipped_count": len(rows) - added,
+                "failed_count": 0,
+                "message": "导入已完成。",
+            }
 
         @router.post(path + "/clear")
         async def clear(body: dict[str, str]) -> dict[str, Any]:
@@ -397,14 +435,22 @@ def register_learning_workbench_routes(
             if not scope or scope not in await run(service.scopes):
                 raise HTTPException(422, "请选择当前获准的会话。")
             rows = await run(service.language_payloads, kind)
-            identifiers = [row["id"] for row in rows
-                if row.get("chat_id") == scope or scope in row.get("session_ids", [])]
-            targets = [await run(service.language_target, kind, identifier)
-                for identifier in identifiers]
+            identifiers = [
+                row["id"]
+                for row in rows
+                if row.get("chat_id") == scope or scope in row.get("session_ids", [])
+            ]
+            targets = [
+                await run(service.language_target, kind, identifier) for identifier in identifiers
+            ]
             assert service.language is not None
-            if not await run(service.language.set_removed, kind,
-                    [entry.entry_key for entry in targets], True,
-                    allowed=lambda: scope in service.scopes()):
+            if not await run(
+                service.language.set_removed,
+                kind,
+                [entry.entry_key for entry in targets],
+                True,
+                allowed=lambda: scope in service.scopes(),
+            ):
                 raise HTTPException(409, "来源授权已变更；没有修改。")
             return {"success": True, "deleted_count": len(targets), "message": "已可逆移除。"}
 
@@ -427,7 +473,8 @@ def register_learning_workbench_routes(
 
     @router.post("/expression/legacy-import/preview-file")
     async def legacy_preview(
-        token: Annotated[str, Depends(authenticated)], file: Annotated[UploadFile, File(...)],
+        token: Annotated[str, Depends(authenticated)],
+        file: Annotated[UploadFile, File(...)],
     ) -> dict[str, Any]:
         data = await file.read(MAX_LEGACY_BYTES + 1)
         if len(data) > MAX_LEGACY_BYTES:
@@ -473,7 +520,8 @@ def register_learning_workbench_routes(
 
     @router.post("/expression/legacy-import/import")
     async def legacy_import(
-        body: LegacyConfirmation, token: Annotated[str, Depends(authenticated)],
+        body: LegacyConfirmation,
+        token: Annotated[str, Depends(authenticated)],
     ) -> dict[str, Any]:
         preview = previews.get(body.db_path)
         if preview is None or preview[0] != token or preview[1] <= workbench_clock.now():
@@ -508,9 +556,14 @@ def register_learning_workbench_routes(
         )
         if added is None:
             raise HTTPException(409, "登录或来源已变更；没有写入。")
-        return {"success": True, "message": "旧版表达已导入。", "imported_count": added,
-                "skipped_count": sum(len(rows) for rows, _ in groups) - added, "failed_count": 0,
-                "ignored_group_count": len(saved) - len(groups)}
+        return {
+            "success": True,
+            "message": "旧版表达已导入。",
+            "imported_count": added,
+            "skipped_count": sum(len(rows) for rows, _ in groups) - added,
+            "failed_count": 0,
+            "ignored_group_count": len(saved) - len(groups),
+        }
 
     @router.post("/expression/")
     async def create_expression(body: ExpressionFields) -> dict[str, Any]:
@@ -569,7 +622,8 @@ def register_learning_workbench_routes(
 
     @router.post("/jargon/batch/set-jargon")
     async def classify(
-        body: JargonBatch, token: Annotated[str, Depends(authenticated)],
+        body: JargonBatch,
+        token: Annotated[str, Depends(authenticated)],
     ) -> dict[str, Any]:
         changed = await run(
             service.classify_jargons, body.ids, body.is_jargon, lambda: session_is_active(token)
@@ -617,17 +671,21 @@ def register_learning_workbench_routes(
     @router.get("/emoji/stats/summary")
     async def emoji_stats() -> dict[str, Any]:
         counts = await run(service.emoji_counts)
-        return {"success": True, "data": {
-            "total": counts["total"],
-            "registered": counts["registered"],
-            "banned": counts["banned"],
-            "unregistered": counts["unregistered"],
-            "known": counts["registered"] + counts["banned"],
-            "unknown": counts["unregistered"],
-            "adopted": counts["registered"],
-            "discarded": counts["removed"],
-            "formats": {}, "top_used": [],
-        }}
+        return {
+            "success": True,
+            "data": {
+                "total": counts["total"],
+                "registered": counts["registered"],
+                "banned": counts["banned"],
+                "unregistered": counts["unregistered"],
+                "known": counts["registered"] + counts["banned"],
+                "unknown": counts["unregistered"],
+                "adopted": counts["registered"],
+                "discarded": counts["removed"],
+                "formats": {},
+                "top_used": [],
+            },
+        }
 
     @router.post("/emoji/{identifier}/register")
     async def register_emoji(identifier: int) -> dict[str, Any]:
@@ -635,24 +693,27 @@ def register_learning_workbench_routes(
         assert service.emojis is not None and entry.digest is not None
         if entry.is_removed:
             raise HTTPException(409, "已移除的表情不能登记。")
-        await run(service.emojis.update_catalog, entry.digest,
-                  is_registered=True, is_banned=False)
+        await run(service.emojis.update_catalog, entry.digest, is_registered=True, is_banned=False)
         return {**await emoji(identifier), "message": "表情包已登记。"}
 
     @router.post("/emoji/{identifier}/ban")
     async def ban_emoji(identifier: int) -> dict[str, Any]:
         entry = await run(service.find_emoji, identifier)
         assert service.emojis is not None and entry.digest is not None
-        await run(service.emojis.update_catalog, entry.digest,
-                  is_registered=False, is_banned=True)
+        await run(service.emojis.update_catalog, entry.digest, is_registered=False, is_banned=True)
         return {**await emoji(identifier), "message": "表情包已封禁。"}
 
     @router.post("/emoji/batch/delete")
     async def batch_delete_emoji(body: EmojiBatch) -> dict[str, Any]:
         if not await run(service.set_emoji_removed, body.emoji_ids, True):
             raise HTTPException(409, "所选表情已变化，没有修改。")
-        return {"success": True, "message": "已可逆移除。",
-                "deleted_count": len(body.emoji_ids), "failed_count": 0, "failed_ids": []}
+        return {
+            "success": True,
+            "message": "已可逆移除。",
+            "deleted_count": len(body.emoji_ids),
+            "failed_count": 0,
+            "failed_ids": [],
+        }
 
     @router.delete("/emoji/{identifier}")
     async def delete_emoji(identifier: int) -> dict[str, Any]:
@@ -679,15 +740,25 @@ def register_learning_workbench_routes(
         tags = tuple(tag.strip() for tag in description.split(",") if tag.strip())
         if service.emojis is None:
             raise HTTPException(409, "表情库当前关闭。")
-        digest, created = await run(service.emojis.upload, bytes(data),
-                                    registration_description=description, tags=tags,
-                                    is_registered=True, allowed=lambda: session_is_active(token))
-        return {"success": True, "digest": digest, "created": created,
-                "registered": await run(service.emojis.is_registered, digest)}
+        digest, created = await run(
+            service.emojis.upload,
+            bytes(data),
+            registration_description=description,
+            tags=tags,
+            is_registered=True,
+            allowed=lambda: session_is_active(token),
+        )
+        return {
+            "success": True,
+            "digest": digest,
+            "created": created,
+            "registered": await run(service.emojis.is_registered, digest),
+        }
 
     @router.post("/emoji/batch/upload")
     async def batch_upload_emoji(
-        request: Request, token: Annotated[str, Depends(authenticated)],
+        request: Request,
+        token: Annotated[str, Depends(authenticated)],
     ) -> dict[str, Any]:
         if service.emojis is None:
             raise HTTPException(409, "表情库当前关闭。")
@@ -710,14 +781,20 @@ def register_learning_workbench_routes(
 
         try:
             form = await MultiPartParser(
-                request.headers, bounded_body(), max_files=_MAX_BATCH_EMOJIS, max_fields=2,
+                request.headers,
+                bounded_body(),
+                max_files=_MAX_BATCH_EMOJIS,
+                max_fields=2,
             ).parse()
         except MultiPartException as error:
             raise HTTPException(413 if too_large else 422, error.message) from None
         try:
             files = form.getlist("files")
-            if (not files or any(not isinstance(file, MultipartFile) for file in files)
-                    or not set(form.keys()) <= {"files", "emotion", "is_registered"}):
+            if (
+                not files
+                or any(not isinstance(file, MultipartFile) for file in files)
+                or not set(form.keys()) <= {"files", "emotion", "is_registered"}
+            ):
                 raise HTTPException(422, "请选择批量上传的表情图片。")
             emotion = form.get("emotion", "")
             registered_value = form.get("is_registered", "true")
@@ -755,13 +832,24 @@ def register_learning_workbench_routes(
                     continue
                 key = f"asset:{digest}"
                 identifiers = await run(service.emojis.workbench_ids, (key,))
-                details.append({"filename": filename, "success": True, "id": identifiers[key],
-                                "existed": not created,
-                                "registered": await run(service.emojis.is_registered, digest)})
+                details.append(
+                    {
+                        "filename": filename,
+                        "success": True,
+                        "id": identifiers[key],
+                        "existed": not created,
+                        "registered": await run(service.emojis.is_registered, digest),
+                    }
+                )
             uploaded = sum(item["success"] for item in details)
-            return {"success": True, "total": len(details), "uploaded": uploaded,
-                    "failed": len(details) - uploaded, "details": details,
-                    "message": f"成功上传 {uploaded} 个，失败 {len(details) - uploaded} 个。"}
+            return {
+                "success": True,
+                "total": len(details),
+                "uploaded": uploaded,
+                "failed": len(details) - uploaded,
+                "details": details,
+                "message": f"成功上传 {uploaded} 个，失败 {len(details) - uploaded} 个。",
+            }
         finally:
             await form.close()
 
@@ -799,8 +887,13 @@ def register_learning_workbench_routes(
                 skipped += not created
             except (OSError, ValueError):
                 failed += 1
-        return {"success": True, "message": "预热结束。", "generated_count": generated,
-                "skipped_count": skipped, "failed_count": failed}
+        return {
+            "success": True,
+            "message": "预热结束。",
+            "generated_count": generated,
+            "skipped_count": skipped,
+            "failed_count": failed,
+        }
 
     @router.delete("/emoji/thumbnail-cache/clear")
     async def thumbnail_cache_clear() -> dict[str, Any]:
@@ -850,7 +943,9 @@ def register_learning_workbench_routes(
 
     @router.get("/emoji/{identifier}/thumbnail")
     async def media(
-        identifier: int, token: Annotated[str, Depends(authenticated)], original: bool = False,
+        identifier: int,
+        token: Annotated[str, Depends(authenticated)],
+        original: bool = False,
     ) -> Response:
         entry = await run(service.emoji_target, identifier)
         assert service.emojis is not None

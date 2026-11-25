@@ -192,7 +192,8 @@ class ExpressionClusterStore:
                 )
         return tuple(
             VisibleExpressionCluster(
-                _fingerprint(f"{snapshot_id}:{cluster_id}"), tuple(members),
+                _fingerprint(f"{snapshot_id}:{cluster_id}"),
+                tuple(members),
                 spaces_by_snapshot[snapshot_id],
                 cluster_id,
             )

@@ -382,9 +382,7 @@ class EmojiStore:
         if len(tags) > MAX_EMOJI_TAGS or any(len(tag) > MAX_EMOJI_TAG for tag in tags):
             raise ValueError("最多填写 20 个标签，每个不超过 40 字。")
         registered = (
-            registration_description is not None
-            if is_registered is None
-            else is_registered
+            registration_description is not None if is_registered is None else is_registered
         )
         if registered and not description:
             raise ValueError(_REGISTRATION_DESCRIPTION_REQUIRED)

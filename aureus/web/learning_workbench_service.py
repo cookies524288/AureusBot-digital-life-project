@@ -39,8 +39,7 @@ class LearningWorkbench:
         return [
             entry
             for entry in self.language.entries(kind, include_disabled=True)
-            if entry.is_removed == removed
-            and self._entry_in_scopes(entry, current)
+            if entry.is_removed == removed and self._entry_in_scopes(entry, current)
         ]
 
     def language_payloads(
@@ -55,8 +54,10 @@ class LearningWorkbench:
         result = []
         for entry in entries:
             stamp = metadata.get(entry.entry_key, {}).get("created_at")
-            scope = entry.learning_source or entry.restricted_scope or next(
-                (key for key in entry.scope_keys if key in scopes), ""
+            scope = (
+                entry.learning_source
+                or entry.restricted_scope
+                or next((key for key in entry.scope_keys if key in scopes), "")
             )
             common = {
                 "id": identifiers[entry.entry_key],
@@ -171,9 +172,11 @@ class LearningWorkbench:
 
     def language_chats(self, kind: LanguageKind) -> list[dict[str, Any]]:
         """仅列获准目标和角色实际采用的学习、召回状态。"""
-        targets = self.chat_targets() if self.chat_targets is not None else {
-            key: {"chat_name": name} for key, name in self.scopes().items()
-        }
+        targets = (
+            self.chat_targets()
+            if self.chat_targets is not None
+            else {key: {"chat_name": name} for key, name in self.scopes().items()}
+        )
         rows = self.language_payloads(kind)
         if not targets.keys() <= self.scopes().keys():
             raise PermissionError("来源授权已变化，请刷新后重试。")
@@ -204,8 +207,7 @@ class LearningWorkbench:
         keys = {mapping[identifier] for identifier in identifiers}
         scopes = self.scopes()
         entries = {
-            entry.entry_key: entry
-            for entry in self.language.entries(kind, include_disabled=True)
+            entry.entry_key: entry for entry in self.language.entries(kind, include_disabled=True)
         }
         if not keys <= entries.keys():
             raise LookupError("所选记录已经移除或不存在。")
@@ -230,8 +232,7 @@ class LearningWorkbench:
             return False
         scopes = self.scopes()
         entries = {
-            entry.entry_key: entry
-            for entry in self.language.entries(kind, include_disabled=True)
+            entry.entry_key: entry for entry in self.language.entries(kind, include_disabled=True)
         }
         if not set(keys) <= entries.keys():
             return False

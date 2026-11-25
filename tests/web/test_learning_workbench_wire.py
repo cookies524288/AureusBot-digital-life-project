@@ -27,15 +27,25 @@ def test_summary_fields_follow_clock_and_current_records(tmp_path: Path) -> None
     with client:
         summary = "/api/webui/expression/stats/summary"
         assert client.get(summary).raise_for_status().json()["data"]["recent_7days"] == 0
-        client.post("/api/webui/expression/", json={
-            "style": "旧说法", "situation": "庆祝", "chat_id": "source-a",
-        }).raise_for_status()
+        client.post(
+            "/api/webui/expression/",
+            json={
+                "style": "旧说法",
+                "situation": "庆祝",
+                "chat_id": "source-a",
+            },
+        ).raise_for_status()
         clock.advance(timedelta(days=7))
         assert client.get(summary).raise_for_status().json()["data"]["recent_7days"] == 1
         clock.advance(timedelta(seconds=1))
-        client.post("/api/webui/expression/", json={
-            "style": "新说法", "situation": "庆祝", "chat_id": "source-b",
-        }).raise_for_status()
+        client.post(
+            "/api/webui/expression/",
+            json={
+                "style": "新说法",
+                "situation": "庆祝",
+                "chat_id": "source-b",
+            },
+        ).raise_for_status()
         stats = client.get("/api/webui/expression/stats/summary").json()["data"]
         assert stats["total"] == 2 and stats["recent_7days"] == 1
         assert stats["chat_count"] == 2
@@ -43,9 +53,14 @@ def test_summary_fields_follow_clock_and_current_records(tmp_path: Path) -> None
         del scopes["source-a"]
         stats = client.get("/api/webui/expression/stats/summary").json()["data"]
         assert stats["total"] == 1 and "source-a" not in stats["top_chats"]
-        client.post("/api/webui/jargon/", json={
-            "content": "合成词", "meaning": "表示完成", "session_id": "source-b",
-        }).raise_for_status()
+        client.post(
+            "/api/webui/jargon/",
+            json={
+                "content": "合成词",
+                "meaning": "表示完成",
+                "session_id": "source-b",
+            },
+        ).raise_for_status()
         stats = client.get("/api/webui/jargon/stats/summary").json()["data"]
         assert stats["confirmed_jargon"] == stats["manual_jargon"] == 1
         assert stats["confirmed_not_jargon"] == stats["pending"] == 0
@@ -55,7 +70,9 @@ def test_summary_fields_follow_clock_and_current_records(tmp_path: Path) -> None
 
 @pytest.mark.parametrize("revoke", [False, True])
 def test_json_classification_rechecks_source_and_updates_same_store(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, revoke: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    revoke: bool,
 ) -> None:
     client, service, scopes = _client(tmp_path)
     assert service.language is not None
@@ -68,9 +85,18 @@ def test_json_classification_rechecks_source_and_updates_same_store(
     if revoke:
         monkeypatch.setattr(service.language, "classify_jargons", classify_after_scope_change)
     with client:
-        jargon = client.post("/api/webui/jargon/", json={
-            "content": "合成词", "meaning": "表示完成", "session_id": "source-b",
-        }).raise_for_status().json()["data"]
+        jargon = (
+            client.post(
+                "/api/webui/jargon/",
+                json={
+                    "content": "合成词",
+                    "meaning": "表示完成",
+                    "session_id": "source-b",
+                },
+            )
+            .raise_for_status()
+            .json()["data"]
+        )
         path = "/api/webui/jargon/batch/set-jargon"
         payload = {"ids": [jargon["id"]], "is_jargon": False}
         assert client.post(path, params=payload).status_code == 422
@@ -100,12 +126,16 @@ def test_single_emoji_delete_is_same_store_reversible_removal(tmp_path: Path) ->
         image.save(buffer, "PNG")
         original = buffer.getvalue()
     with client:
-        uploaded = client.post("/api/webui/emoji/upload", files={
-            "file": ("not-a-trusted-path.png", original, "image/png"),
-        }, data={"description": "庆祝"})
+        uploaded = client.post(
+            "/api/webui/emoji/upload",
+            files={
+                "file": ("not-a-trusted-path.png", original, "image/png"),
+            },
+            data={"description": "庆祝"},
+        )
         uploaded.raise_for_status()
         row = client.get("/api/webui/emoji/list").json()["data"][0]
-        assert client.delete(f'/api/webui/emoji/{row["id"]}').status_code == 200
+        assert client.delete(f"/api/webui/emoji/{row['id']}").status_code == 200
         assert service.emojis is not None
         assert service.emojis.read_sendable(uploaded.json()["digest"]) is None
         assert service.emojis.read_media(uploaded.json()["digest"]) == original
@@ -113,9 +143,15 @@ def test_single_emoji_delete_is_same_store_reversible_removal(tmp_path: Path) ->
         assert service.emojis.read_sendable(uploaded.json()["digest"]) == original
 
 
-@pytest.mark.parametrize(("legacy_learning_enabled", "recall_enabled", "reference_chars"), [
-    (None, True, 700), (False, True, 700), (True, True, 0), (False, False, 700),
-])
+@pytest.mark.parametrize(
+    ("legacy_learning_enabled", "recall_enabled", "reference_chars"),
+    [
+        (None, True, 700),
+        (False, True, 700),
+        (True, True, 0),
+        (False, False, 700),
+    ],
+)
 def test_chat_targets_use_runtime_language_settings_and_current_scope(
     tmp_path: Path,
     legacy_learning_enabled: bool | None,
@@ -130,7 +166,9 @@ def test_chat_targets_use_runtime_language_settings_and_current_scope(
         key = allowed.language_scope_key()
         for kind in (LanguageKind.EXPRESSION, LanguageKind.JARGON):
             rig.language.add_entry(
-                kind, LanguageContent("合成资料", "合成义项"), origin_scope=key,
+                kind,
+                LanguageContent("合成资料", "合成义项"),
+                origin_scope=key,
                 recorded_at=rig.web.clock.now(),
             )
         configuration = {"recall_enabled": recall_enabled, "reference_chars": reference_chars}
@@ -159,19 +197,26 @@ def test_chat_targets_use_runtime_language_settings_and_current_scope(
             assert all(
                 row["use_expression"] == (recall_enabled and reference_chars > 0) for row in chats
             )
-            group, = [row for row in chats if row["platform"] == "qq"]
+            (group,) = [row for row in chats if row["platform"] == "qq"]
             assert group == {
-                "chat_id": key, "session_id": key, "chat_name": "合成群 allowed",
-                "platform": "qq", "account_id": "bot", "target_id": "allowed", "is_group": True,
+                "chat_id": key,
+                "session_id": key,
+                "chat_name": "合成群 allowed",
+                "platform": "qq",
+                "account_id": "bot",
+                "target_id": "allowed",
+                "is_group": True,
                 "enable_learning": True,
                 "use_expression": recall_enabled and reference_chars > 0,
-                "expression_count": 1, "jargon_count": 0,
+                "expression_count": 1,
+                "jargon_count": 0,
             }
             jargon = client.get("/api/webui/jargon/chats").json()["data"]
             assert next(row for row in jargon if row["session_id"] == key)["jargon_count"] == 1
             rig.allowed.clear()
-            assert all(row["platform"] != "qq" for row in client.get(
-                "/api/webui/expression/chat-targets"
-            ).json()["data"])
+            assert all(
+                row["platform"] != "qq"
+                for row in client.get("/api/webui/expression/chat-targets").json()["data"]
+            )
     finally:
         rig.web.close()

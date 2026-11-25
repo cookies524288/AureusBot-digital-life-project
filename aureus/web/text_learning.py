@@ -104,8 +104,7 @@ async def extract_candidates(
         "从用户提供的文段中学习可复用的表达方式。title 为适用情境，description 为表达方式。"
         if body.kind == LanguageKind.EXPRESSION
         else (
-            "从用户提供的文段中学习黑话、俚语和圈内用语。"
-            "title 为原文黑话，description 为可靠含义。"
+            "从用户提供的文段中学习黑话、俚语和圈内用语。title 为原文黑话，description 为可靠含义。"
         )
     )
     response = await call(
@@ -151,8 +150,7 @@ async def extract_candidates(
                     "title": candidate.title,
                     "description": candidate.description,
                     "evidence": (
-                        "" if candidate.source_id is None
-                        else sources.get(candidate.source_id, "")
+                        "" if candidate.source_id is None else sources.get(candidate.source_id, "")
                     ),
                 }
             )

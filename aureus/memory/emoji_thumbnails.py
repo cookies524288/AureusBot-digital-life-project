@@ -28,8 +28,11 @@ class EmojiThumbnailCache:
 
     def _usable_directory(self) -> Path:
         directory = self._directory
-        if (directory.is_symlink() or directory.is_junction()
-                or not directory.resolve().is_relative_to(self._root.resolve())):
+        if (
+            directory.is_symlink()
+            or directory.is_junction()
+            or not directory.resolve().is_relative_to(self._root.resolve())
+        ):
             raise OSError("缩略图缓存目录不可用。")
         return directory
 

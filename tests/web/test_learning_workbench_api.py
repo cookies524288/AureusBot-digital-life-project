@@ -322,7 +322,8 @@ def test_revoked_scope_blocks_import_export_clear_and_delete_without_changes(
         )
         assert result["imported_count"] == 1
         updated = next(
-            entry for entry in service.language.entries(LanguageKind.EXPRESSION)
+            entry
+            for entry in service.language.entries(LanguageKind.EXPRESSION)
             if entry.entry_key == row["entry_key"]
         )
         assert updated.example == "新例句"

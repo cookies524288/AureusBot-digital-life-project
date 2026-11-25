@@ -876,8 +876,13 @@ class LanguageStore:
             )
 
     def _apply_workbench_group(
-        self, connection: Connection, kind: LanguageKind, rows: Sequence[LanguagePackageRow],
-        scopes: tuple[str, ...], recorded_at: datetime, overwrite: bool,
+        self,
+        connection: Connection,
+        kind: LanguageKind,
+        rows: Sequence[LanguagePackageRow],
+        scopes: tuple[str, ...],
+        recorded_at: datetime,
+        overwrite: bool,
     ) -> int:
         if rows:
             manual_keys = {
@@ -1038,8 +1043,12 @@ class LanguageStore:
         return True
 
     def classify_jargons(
-        self, keys: Sequence[str], status: JargonStatus, now: datetime,
-        *, allowed: Callable[[], bool] = lambda: True,
+        self,
+        keys: Sequence[str],
+        status: JargonStatus,
+        now: datetime,
+        *,
+        allowed: Callable[[], bool] = lambda: True,
     ) -> int | None:
         """锁定后复验整批条目，只记载真正变化的定性。"""
         with closing(open_connection(self._path)) as connection, connection:

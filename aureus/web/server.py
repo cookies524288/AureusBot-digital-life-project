@@ -637,12 +637,16 @@ def create_app(
     def learning_targets() -> dict[str, dict[str, Any]]:
         language_config = learning_language_config
         recall = (
-            resource_language is not None and language_config is not None
-            and language_config.recall_enabled and language_config.reference_chars > 0
+            resource_language is not None
+            and language_config is not None
+            and language_config.recall_enabled
+            and language_config.reference_chars > 0
         )
         targets = {
             json.dumps((platform, "local"), separators=(",", ":")): {
-                "chat_name": name, "platform": platform, "is_group": False,
+                "chat_name": name,
+                "platform": platform,
+                "is_group": False,
             }
             for platform, name in (("web", "网页私聊"), ("terminal", "本机终端"))
         }
@@ -651,8 +655,10 @@ def create_app(
                 key = conversation.key
                 if allows_inbox_conversation(key):
                     targets[key.language_scope_key()] = {
-                        "chat_name": conversation.name, "platform": key.platform,
-                        "is_group": key.kind == "group", "account_id": key.account_id,
+                        "chat_name": conversation.name,
+                        "platform": key.platform,
+                        "is_group": key.kind == "group",
+                        "account_id": key.account_id,
                         "target_id": key.recipient_id,
                     }
         for scope, target in targets.items():
@@ -666,8 +672,11 @@ def create_app(
         return {key: target["chat_name"] for key, target in learning_targets().items()}
 
     workbench = LearningWorkbench(
-        resource_language, resource_emojis, clock or SystemClock(),
-        learning_scopes, learning_targets,
+        resource_language,
+        resource_emojis,
+        clock or SystemClock(),
+        learning_scopes,
+        learning_targets,
     )
     register_expression_cluster_routes(
         app,

@@ -44,7 +44,7 @@ def read_legacy_expressions(data: bytes) -> dict[str, list[LanguagePackageRow]]:
             condition = " AND ".join(indicators) or "1"
             rows = connection.execute(
                 f'SELECT substr("{scope}", 1, 4097), substr(style, 1, 81), '
-                f'substr(situation, 1, 161), {count} FROM {table} WHERE {condition} LIMIT ?',
+                f"substr(situation, 1, 161), {count} FROM {table} WHERE {condition} LIMIT ?",
                 (_MAX_ROWS + 1,),
             )
             for number, (group, style, situation, occurrences) in enumerate(rows, 1):

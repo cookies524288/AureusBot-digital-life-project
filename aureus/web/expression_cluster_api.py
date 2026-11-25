@@ -185,22 +185,34 @@ def register_expression_cluster_routes(
                 entry = entries.get(member.entry_key)
                 if entry is None or (entry.text, entry.detail) != (member.text, member.detail):
                     continue
-                scope = entry.learning_source or entry.restricted_scope or next(
-                    (key for key in entry.scope_keys if key in labels), None
+                scope = (
+                    entry.learning_source
+                    or entry.restricted_scope
+                    or next((key for key in entry.scope_keys if key in labels), None)
                 )
                 keys.append(entry.entry_key)
-                members.append({
-                    "id": identifiers[entry.entry_key], "situation": entry.detail,
-                    "style": entry.text, "count": entry.count,
-                    "chat_id": scope, "chat_name": labels.get(scope) if scope else None,
-                    "checked": entry.review_status == "approved", "modified_by": None,
-                })
+                members.append(
+                    {
+                        "id": identifiers[entry.entry_key],
+                        "situation": entry.detail,
+                        "style": entry.text,
+                        "count": entry.count,
+                        "chat_id": scope,
+                        "chat_name": labels.get(scope) if scope else None,
+                        "checked": entry.review_status == "approved",
+                        "modified_by": None,
+                    }
+                )
             if members:
                 marker = hashlib.sha256(json.dumps([cluster.location, keys]).encode()).hexdigest()
-                result.append({
-                    "embedding_profile_marker": marker, "cluster_id": cluster.cluster_id,
-                    "size": len(members), "members": members,
-                })
+                result.append(
+                    {
+                        "embedding_profile_marker": marker,
+                        "cluster_id": cluster.cluster_id,
+                        "size": len(members),
+                        "members": members,
+                    }
+                )
         return result
 
     async def workbench_clusters(
@@ -225,19 +237,30 @@ def register_expression_cluster_routes(
 
     @app.get(_WORKBENCH)
     async def workbench_list(
-        request: Request, token: Annotated[str, Depends(require_ready)],
+        request: Request,
+        token: Annotated[str, Depends(require_ready)],
     ) -> JSONResponse:
         clusters = await workbench_clusters(request, token)
-        return JSONResponse({
-            "success": True, "index_exists": bool(clusters), "index_path": "",
-            "generated_at": None, "updated_at": None, "embedding_model": None,
-            "embedding_dimension": None, "sample_count": sum(item["size"] for item in clusters),
-            "clusters": [{**item, "members": []} for item in clusters],
-        }, headers=_NO_STORE)
+        return JSONResponse(
+            {
+                "success": True,
+                "index_exists": bool(clusters),
+                "index_path": "",
+                "generated_at": None,
+                "updated_at": None,
+                "embedding_model": None,
+                "embedding_dimension": None,
+                "sample_count": sum(item["size"] for item in clusters),
+                "clusters": [{**item, "members": []} for item in clusters],
+            },
+            headers=_NO_STORE,
+        )
 
     @app.get(_WORKBENCH + "/{cluster_id}/members")
     async def workbench_members(
-        request: Request, token: Annotated[str, Depends(require_ready)], cluster_id: int,
+        request: Request,
+        token: Annotated[str, Depends(require_ready)],
+        cluster_id: int,
         profile_marker: Annotated[str, Query(pattern=r"^[a-f0-9]{64}$")],
         offset: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int | None, Query(ge=1, le=MAX_SIZE)] = None,
@@ -248,10 +271,15 @@ def register_expression_cluster_routes(
                 and cluster["embedding_profile_marker"] == profile_marker
             )
             if matched:
-                members = cluster["members"][offset:None if limit is None else offset + limit]
-                return JSONResponse({
-                    "success": True, "cluster": {**cluster, "members": members}, "data": members,
-                }, headers=_NO_STORE)
+                members = cluster["members"][offset : None if limit is None else offset + limit]
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "cluster": {**cluster, "members": members},
+                        "data": members,
+                    },
+                    headers=_NO_STORE,
+                )
         raise HTTPException(404, _MISSING, headers=_NO_STORE)
 
 
