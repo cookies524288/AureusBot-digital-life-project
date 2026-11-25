@@ -1,6 +1,8 @@
 """用假器官沿入站、规划、回复和重启路径验证 D89 的习得语言。"""
 
+import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import TypedDict
 
@@ -11,7 +13,7 @@ from fastapi.testclient import TestClient
 from aureus.common import ManualClock
 from aureus.core import runtime
 from aureus.core.model_runtime import ModelRuntime
-from aureus.heartbeat import MessageRoute, Perception, TrustLevel
+from aureus.heartbeat import MessageRoute, Perception, TrustLevel, language_runner
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.heartbeat.language_runner import learn_language
 from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore
@@ -151,6 +153,116 @@ async def test_continuous_language_learning_preserves_safety_gates(
         store = LanguageStore(paths.database_file)
         assert bool(store.entries(LanguageKind.EXPRESSION)) == (gate == "allowed")
         await heart.shut_down()
+
+
+@pytest.mark.asyncio
+async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    paths.runtime_config_file.write_text(
+        "[heartbeat]\ninbox_debounce_enabled = false\n"
+        "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n[diary]\nenabled = false\n"
+        '[qq]\nenabled = true\naccount_id = "42"\nendpoint = "ws://127.0.0.1:1"\n',
+        encoding="utf-8",
+    )
+    requests: list[OrganRequest] = []
+    bus = OrganBus()
+    bus.register(LanguageOrgan("summarizer", requests))
+    bus.register(LanguageOrgan("planner", requests))
+    bus.register(LanguageOrgan("replyer", requests))
+
+    def build_bus(
+        _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
+    ) -> ModelRuntime:
+        return ModelRuntime(bus, resolver, fake_organs=False)
+
+    monkeypatch.setattr(runtime, "_build_organ_bus", build_bus)
+    clock = ManualClock(NOW)
+    with runtime.open_core(paths, clock=clock, to_console=False) as core:
+        heart = core.heartbeat
+        heart.wake_up()
+        core.people.ensure_user("合成用户", [("qq", "100")])
+        inbox = core.inbox_store
+        assert inbox is not None
+
+        def submit(text: str, number: str) -> None:
+            message = Perception(
+                "qq",
+                "100",
+                text,
+                VisibilityScope.PRIVATE,
+                TrustLevel.VERIFIED_USER,
+                route=MessageRoute("42", "private", "100", number),
+            )
+            stored = inbox.add(message)
+            assert stored is not None
+            heart.on_inbox_message(stored)
+            heart.beat()
+
+        submit("月兔冲线 月兔冲线", "101")
+        for _ in range(3):
+            heart.beat()
+            await heart.wait_for_thought()
+        first_count = sum(
+            request.context["task"] in {"learn_style", "learn_jargon"} for request in requests
+        )
+        assert first_count == 2
+        state = heart.language_learning_status()
+        assert state["pending"] == 0 and state["status"] == "本批结束"
+        store = LanguageStore(paths.database_file)
+        scope = ConversationKey("qq", "42", "private", "100").language_scope_key()
+        assert (
+            dict((term, count) for term, count, _messages in store.frequency_terms(scope))[
+                "月兔冲线"
+            ]
+            == 2
+        )
+
+        clock.advance(language_runner.LEARNING_COOLDOWN - timedelta(seconds=1))
+        submit("再来 再来 月兔冲线", "102")
+        assert (
+            sum(request.context["task"] in {"learn_style", "learn_jargon"} for request in requests)
+            == first_count
+        )
+        assert heart.language_learning_status()["pending"] == 1
+        clock.advance(timedelta(seconds=1))
+        for _ in range(3):
+            heart.beat()
+            await heart.wait_for_thought()
+        assert (
+            sum(request.context["task"] in {"learn_style", "learn_jargon"} for request in requests)
+            == first_count + 2
+        )
+        frequency = dict((term, count) for term, count, _messages in store.frequency_terms(scope))
+        assert frequency["月兔冲线"] == 3 and frequency["再来"] == 2
+
+        started = asyncio.Event()
+
+        async def blocked_learning(*args: object, **kwargs: object) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(language_runner, "learn_language", blocked_learning)
+        clock.advance(language_runner.LEARNING_COOLDOWN)
+        submit("取消后可重试", "103")
+        await heart.wait_for_thought()
+        heart.beat()
+        await asyncio.wait_for(started.wait(), timeout=3)
+        assert heart.language_learning_status()["pending"] == 1
+        heart.update_available_organs(frozenset({"planner", "replyer"}))
+        await heart.wait_for_thought()
+        heart.beat()
+        assert heart.language_learning_status()["pending"] == 1
+        assert not heart.is_thinking
+        started.clear()
+        heart.update_available_organs(frozenset({"planner", "replyer", "summarizer"}))
+        clock.advance(language_runner.LEARNING_COOLDOWN)
+        heart.beat()
+        await asyncio.wait_for(started.wait(), timeout=3)
+        await heart.shut_down()
+        assert heart.language_learning_status()["pending"] == 1
+        assert not any(task.get_name() == language_runner.TASK_NAME for task in asyncio.all_tasks())
 
 
 @pytest.mark.asyncio
@@ -814,7 +926,9 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             assert ("当「庆祝跑步成绩」时，可用「月兔冲线」" in dialogue_text(reply)) is (injected)
 
         for number, allowed, removed in (
-            ("105", False, False), ("106", True, True), ("107", True, False)
+            ("105", False, False),
+            ("106", True, True),
+            ("107", True, False),
         ):
             heart.set_inbox_route_filter(
                 lambda route, allowed=allowed: allowed or route.recipient_id != "10"

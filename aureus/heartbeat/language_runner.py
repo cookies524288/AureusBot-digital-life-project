@@ -11,6 +11,7 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from aureus.common import Clock
@@ -23,7 +24,6 @@ from aureus.heartbeat.language_requests import (
     build_extraction,
     build_with_context,
 )
-from aureus.heartbeat.pending_learning_buffer import PendingLearningBuffer
 from aureus.heartbeat.perception import Perception, TrustLevel
 from aureus.memory import (
     MAX_DETAIL,
@@ -43,6 +43,7 @@ from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
 
 logger = logging.getLogger(__name__)
 TASK_NAME = "aureus-language-learning"
+LEARNING_COOLDOWN = timedelta(seconds=30)
 _MAX_PROPOSALS = {LanguageKind.EXPRESSION: 10, LanguageKind.JARGON: 30}
 _MAX_SAMPLE_CHARS = 400
 _MAX_RESPONSE_CHARS = 6000
@@ -147,19 +148,16 @@ def allows_learning_scope(scope: str, allows: Callable[[ConversationKey], bool])
         return False
 
 
-def take_language_batch(
-    queue: PendingLearningBuffer[QueuedLanguageSample], limit: int
-) -> tuple[str | None, list[LanguageSample]]:
-    """以最早的入站为准选同会话样本，保留其余样本的先后顺序。"""
-    pending = queue.snapshot()
+def select_language_batch(
+    pending: Sequence[QueuedLanguageSample], limit: int
+) -> list[QueuedLanguageSample]:
+    """以最早可学的入站为准选同会话样本；完成前不从缓冲移除。"""
     scope = pending[0].conversation
-    selected = (
+    return (
         [item for item in pending if item.conversation == scope][:limit]
         if scope is not None
-        else pending[:1]
+        else [pending[0]]
     )
-    queue.discard(selected)
-    return scope, [item.sample for item in selected]
 
 
 def speaker_key(record: TimelineRecord) -> str:
@@ -305,6 +303,7 @@ async def learn_language(
             )
             for attempt in attempts:
                 await _infer(store, organ, call_if_allowed, attempt)
+        await asyncio.to_thread(store.merge_frequency_terms, conversation_key, samples)
     except sqlite3.Error:
         logger.exception("语言学习存储失败")
 
