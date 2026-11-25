@@ -2,7 +2,7 @@
 
 import json
 from contextlib import closing
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -79,6 +79,109 @@ def test_typing_endpoints_return_only_authorized_selected_scope(tmp_path: Path) 
         assert rig.client.get("/api/chat/typing").json() == {"typing": True}
         assert rig.client.post("/api/logout").status_code == 200
         assert rig.client.get("/api/chat/typing").status_code == 401
+    finally:
+        rig.close()
+
+
+def test_inbox_conversations_uses_cached_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    rig = ConfigRig(
+        tmp_path, inbox_store=store, allows_inbox_conversation=lambda key: key.account_id == "1"
+    )
+    try:
+        rig.timeline.append(
+            "message",
+            "旧群消息",
+            ActorType.PERSON,
+            "3",
+            VisibilityScope.GROUP,
+            metadata={
+                "channel": "qq",
+                "account_id": "1",
+                "message_type": "group",
+                "recipient_id": "2",
+                "message_id": "old-1",
+            },
+        )
+        rig.log_in()
+        calls: list[int] = []
+        original = rig.timeline.platform_history.routes
+
+        def counting_routes() -> list[tuple[object, int, datetime]]:
+            calls.append(1)
+            return original()
+
+        monkeypatch.setattr(rig.timeline.platform_history, "routes", counting_routes)
+        first = rig.client.get(CONVERSATIONS).json()
+        second = rig.client.get(CONVERSATIONS).json()
+        assert [row["key"]["recipient_id"] for row in first["conversations"]] == ["2"]
+        assert second == first
+        assert len(calls) == 1
+        rig.clock.advance(timedelta(seconds=59))
+        assert rig.client.get(CONVERSATIONS).json() == first
+        assert len(calls) == 1
+        rig.clock.advance(timedelta(seconds=1))
+        assert rig.client.get(CONVERSATIONS).json() == first
+        assert len(calls) == 2
+    finally:
+        rig.close()
+
+
+def test_inbox_conversations_scans_are_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    rig = ConfigRig(
+        tmp_path, inbox_store=store, allows_inbox_conversation=lambda key: key.account_id == "1"
+    )
+    bulk = json.dumps(
+        {
+            "channel": "qq",
+            "account_id": "1",
+            "message_type": "group",
+            "recipient_id": "2",
+            "message_id": "bulk",
+        },
+        ensure_ascii=False,
+    )
+    archive = json.dumps({"channel": "qq", "sender_name": "匿名"}, ensure_ascii=False)
+    try:
+        with closing(open_connection(rig.paths.database_file)) as database, database:
+            database.execute(
+                "INSERT INTO timeline (timestamp, actor_type, actor_id, event_type, content, "
+                "visibility, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (NOW.isoformat(), "person", "3", "message", "未归类", "group", archive),
+            )
+            database.executemany(
+                "INSERT INTO timeline (timestamp, actor_type, actor_id, event_type, content, "
+                "visibility, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    (NOW.isoformat(), "person", "3", "message", "合成旧消息", "group", bulk)
+                    for _ in range(200_000)
+                ),
+            )
+        rig.log_in()
+        calls = {"routes": 0, "page": 0}
+        original = rig.timeline.platform_history.routes
+
+        def counting_routes() -> list[tuple[object, int, datetime]]:
+            calls["routes"] += 1
+            return original()
+
+        def unexpected_full_page(*_args: object, **_kwargs: object) -> list[object]:
+            calls["page"] += 1
+            raise AssertionError("会话目录不应再整页扫描旧时间线")
+
+        monkeypatch.setattr(rig.timeline.platform_history, "routes", counting_routes)
+        monkeypatch.setattr(rig.timeline.platform_history, "page", unexpected_full_page)
+        first = rig.client.get(CONVERSATIONS).json()
+        second = rig.client.get(CONVERSATIONS).json()
+        assert second == first
+        assert [row["key"]["recipient_id"] for row in first["conversations"]] == ["2"]
+        assert first["archives"][0]["archive"] == "timeline"
+        assert calls == {"routes": 1, "page": 0}
     finally:
         rig.close()
 

@@ -159,6 +159,17 @@ class LegacyPlatformHistory:
         ).fetchone()
         return _record(row) if row is not None else None
 
+    def has_archive(self, archive_account_id: str | None) -> bool:
+        """是否存在未归类的旧时间线消息；只查第一行，不聚合路由（D121）。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            row = database.execute(
+                f"""{_PLATFORM_ROWS}
+                SELECT 1 FROM classified
+                WHERE NOT has_route AND (account IS NULL OR account = ?) LIMIT 1""",
+                (archive_account_id,),
+            ).fetchone()
+        return row is not None
+
     def routes(self) -> list[tuple[LegacyRoute, int, datetime]]:
         """列出有完整路由的旧 QQ 会话，不含未知路由。"""
         with closing(open_connection(self._path)) as database:

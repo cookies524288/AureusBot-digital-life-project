@@ -3,17 +3,19 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from aureus.channels import QQAvatars
+from aureus.common import Clock, SystemClock
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.memory import EmojiStore
 from aureus.memory.imported_messages import ImportedPlatformHistory
-from aureus.timeline.platform_history import LegacyPlatformHistory
+from aureus.timeline.platform_history import LegacyPlatformHistory, LegacyRoute
 
 from .inbox_history import imported_message, inbox_message, timeline_message, timeline_page
 
@@ -21,6 +23,9 @@ DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
 MAX_PAGE_NUMBER = 2**31 - 1
 IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+# 旧路由表要扫整条时间线，变化很慢；页面每次打开不必重新聚合（D121）。
+ROUTE_CACHE_SECONDS = 60.0
+type RouteList = list[tuple[LegacyRoute, int, datetime]]
 
 
 def _conversation_key(
@@ -48,8 +53,18 @@ def register_inbox_routes(
     is_active: Callable[[str], bool] | None = None,
     *,
     is_replying: Callable[[ConversationKey], bool] | None = None,
+    clock: Clock | None = None,
 ) -> None:
     """注册只读查询；收件箱存储每次查询打开独立的数据库连接。"""
+    route_clock = clock or SystemClock()
+    route_cache: tuple[datetime, RouteList] | None = None
+
+    async def cached_routes() -> RouteList:
+        nonlocal route_cache
+        now = route_clock.now()
+        if route_cache is None or now - route_cache[0] >= timedelta(seconds=ROUTE_CACHE_SECONDS):
+            route_cache = (now, await asyncio.to_thread(history.routes))
+        return route_cache[1]
 
     @app.get("/api/inbox/typing")
     async def inbox_typing(
@@ -76,7 +91,7 @@ def register_inbox_routes(
         if store is not None and allows_conversation is not None:
             rows = await asyncio.to_thread(store.list_conversations, visible_to_user=True)
             candidates = {row.key: asdict(row) for row in rows}
-            for route, identifier, timestamp in await asyncio.to_thread(history.routes):
+            for route, identifier, timestamp in await cached_routes():
                 key = ConversationKey(*route)
                 if key not in candidates:
                     name = f"群 {key.recipient_id}" if key.kind == "group" else key.recipient_id
@@ -88,11 +103,9 @@ def register_inbox_routes(
                         "last_timestamp": timestamp,
                     }
         archives = []
-        if await asyncio.to_thread(
-            history.page, None, before_id=None, limit=1, archive_account_id=archive_account_id
-        ):
+        if await asyncio.to_thread(history.has_archive, archive_account_id):
             archives.append({"archive": "timeline", "name": "旧收件 · 未归类"})
-        if imported is not None and await asyncio.to_thread(imported.page, before_id=None, limit=1):
+        if imported is not None and await asyncio.to_thread(imported.has_any):
             archives.append({"archive": "imported", "name": "迁入消息 · 未归类"})
         conversations = [
             row

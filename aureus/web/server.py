@@ -579,6 +579,7 @@ def create_app(
         qq_avatars,
         sessions.is_active,
         is_replying=(lambda key: heartbeat.is_replying_to(conversation=key)) if heartbeat else None,
+        clock=clock,
     )
     register_inbox_operations(
         app,
