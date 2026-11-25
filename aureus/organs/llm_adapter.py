@@ -73,10 +73,24 @@ def _has_reasoning(value: Any) -> bool:
     return False
 
 
+class _FirstChunkTimeoutError(Exception):
+    """测速的流式请求在首包超时前没有收到任何数据（D131）。"""
+
+
+@dataclass
+class _StreamProgress:
+    """流式读取进度：是否收到过数据块，用来判断首包超时能否回退（D131）。"""
+
+    received: bool = False
+
+
 async def _read_stream(
     stream: Any,
     tools: ToolCallCollector | None = None,
     on_first_output: Callable[[], None] | None = None,
+    *,
+    first_chunk_timeout: float | None = None,
+    progress: _StreamProgress | None = None,
 ) -> tuple[str | None, TokenUsage, bool]:
     """读取流式响应：正文、用量，以及有没有收到推理内容。
 
@@ -84,6 +98,8 @@ async def _read_stream(
         stream: litellm 的流式响应，或直连网关时由 `_direct_chat_stream` 生成的同形分片。
         tools: 收集工具调用的收集器；不需要时传 None。
         on_first_output: 第一次收到非空正文或推理内容时调用一次，测速用它记延迟。
+        first_chunk_timeout: 等第一个数据块的最长秒数；超时抛 `_FirstChunkTimeoutError`（D131）。
+        progress: 记录是否收到过任何数据块，测速用它判断首包超时能否回退。
 
     Returns:
         去掉首尾空白的正文（没有正文时为 None）、用量、是否收到过推理内容。
@@ -92,8 +108,25 @@ async def _read_stream(
     usage = TokenUsage(known=False)
     reasoning = False
     first_output = False
+    first_chunk = True
     async with aclosing(stream):
-        async for chunk in stream:
+        iterator = stream.__aiter__()
+        while True:
+            try:
+                if first_chunk and first_chunk_timeout is not None:
+                    async with asyncio.timeout(first_chunk_timeout):
+                        chunk = await anext(iterator)
+                else:
+                    chunk = await anext(iterator)
+            except StopAsyncIteration:
+                break
+            except TimeoutError as error:
+                if first_chunk:
+                    raise _FirstChunkTimeoutError() from error
+                raise
+            first_chunk = False
+            if progress is not None:
+                progress.received = True
             if chunk.choices:
                 choice = chunk.choices[0]
                 delta = choice.delta
@@ -314,6 +347,8 @@ def _load_litellm_completion() -> CompletionFunction:
 
 _MODEL_TEST_INPUT = "Reply OK."
 _MODEL_TEST_MAX_TOKENS = 32
+# 测速的流式请求最多等这么久要第一个数据块（D131）：本地网关可能既不返回数据也不结束。
+PROBE_FIRST_CHUNK_TIMEOUT_SECONDS = 20.0
 
 # 固定的红色 PNG，测速不需要读取用户图片。
 _PROBE_IMAGE = (
@@ -871,31 +906,45 @@ async def probe_model(
             ):
                 failure = "工具调用名称或参数与测试要求不符。"
         else:
-            async with asyncio.timeout(provider.timeout_seconds):
-                stream = await _send_chat(
-                    route,
-                    completion,
-                    {
-                        **params,
-                        **inputs,
-                        "stream": True,
-                        "max_tokens": _MODEL_TEST_MAX_TOKENS,
-                    },
-                    transport=transport,
-                )
-                text, usage, reasoning = await _read_stream(stream, on_first_output=mark_latency)
-            reply = text or ""
-            if text is None:
-                # 流式没有正文：同一请求去掉 stream 再试一次（D127）。这次重试先按
-                # 一次请求估算，拿到非流式响应的真实用量再覆盖（用量以非流式为准）。
-                if not usage.known:
-                    usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
+            first_timeout = min(provider.timeout_seconds, PROBE_FIRST_CHUNK_TIMEOUT_SECONDS)
+            progress = _StreamProgress()
+            first_chunk_timed_out = False
+            text: str | None = None
+            reasoning = False
+            try:
+                async with asyncio.timeout(provider.timeout_seconds):
+                    stream = await _send_chat(
+                        route,
+                        completion,
+                        {
+                            **params,
+                            **inputs,
+                            "stream": True,
+                            "max_tokens": _MODEL_TEST_MAX_TOKENS,
+                        },
+                        transport=transport,
+                    )
+                    text, usage, reasoning = await _read_stream(
+                        stream,
+                        on_first_output=mark_latency,
+                        first_chunk_timeout=first_timeout,
+                        progress=progress,
+                    )
+            except _FirstChunkTimeoutError:
+                first_chunk_timed_out = True
+            except TimeoutError:
+                if progress.received:
+                    raise
+                # 服务商超时不超过 20 秒时首包超时与总超时同时到期，同样按首包超时处理。
+                first_chunk_timed_out = True
+            if first_chunk_timed_out:
+                # 首包超时且没有任何数据：取消这次流式请求，按非流式重试一次（D131）。
                 attempts.append(
                     _probe_attempt(
                         model,
                         provider,
-                        usage,
-                        REASONING_ONLY_REASON if reasoning else EMPTY_REPLY_REASON,
+                        _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS),
+                        "超时",
                     )
                 )
                 usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
@@ -910,13 +959,47 @@ async def probe_model(
                 if actual.known:
                     usage = actual
                 text = _read_text(result)
-                reasoning = reasoning or _read_reasoning(result)
+                reasoning = _read_reasoning(result)
                 if text is not None:
                     reply = text
                     latency = loop.time() - started
                 elif reasoning:
                     reply = REASONING_ONLY_REASON
                     latency = loop.time() - started
+            else:
+                reply = text or ""
+                if text is None:
+                    # 流式没有正文：同一请求去掉 stream 再试一次（D127）。这次重试先按
+                    # 一次请求估算，拿到非流式响应的真实用量再覆盖（用量以非流式为准）。
+                    if not usage.known:
+                        usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
+                    attempts.append(
+                        _probe_attempt(
+                            model,
+                            provider,
+                            usage,
+                            REASONING_ONLY_REASON if reasoning else EMPTY_REPLY_REASON,
+                        )
+                    )
+                    usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
+                    async with asyncio.timeout(provider.timeout_seconds):
+                        result = await _send_chat(
+                            route,
+                            completion,
+                            {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                            transport=transport,
+                        )
+                    actual = extract_usage(result)
+                    if actual.known:
+                        usage = actual
+                    text = _read_text(result)
+                    reasoning = reasoning or _read_reasoning(result)
+                    if text is not None:
+                        reply = text
+                        latency = loop.time() - started
+                    elif reasoning:
+                        reply = REASONING_ONLY_REASON
+                        latency = loop.time() - started
     except Exception as error:
         failure = _failure_reason(error)
         if _rejected_before_processing(error):

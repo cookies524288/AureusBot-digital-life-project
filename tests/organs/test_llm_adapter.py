@@ -814,6 +814,79 @@ async def test_local_chat_probe_uses_direct_http(
     await close_shared_clients()
 
 
+class HangingStream(httpx.AsyncByteStream):
+    """一直不返回数据的响应体，模拟不结束的本地网关流（D131）。"""
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        await asyncio.Event().wait()
+        yield b""
+
+
+@pytest.mark.asyncio
+async def test_probe_first_chunk_timeout_falls_back_to_non_streaming(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(llm_adapter, "PROBE_FIRST_CHUNK_TIMEOUT_SECONDS", 0.05)
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        if bodies[-1].get("stream"):
+            return httpx.Response(
+                200,
+                stream=HangingStream(),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 2},
+            },
+        )
+
+    route = local_chat_route()
+    result = await probe_model(
+        route.model, route.provider, keys, transport=httpx.MockTransport(respond)
+    )
+
+    assert result.suggestion == "OK"
+    assert len(bodies) == 2
+    assert bodies[0]["stream"] is True
+    assert "stream" not in bodies[1]
+    assert bodies[1]["messages"] == bodies[0]["messages"]
+    assert result.attempts[0].succeeded is False
+    assert result.attempts[0].failure_reason == "超时"
+    assert result.attempts[0].estimated is True
+    assert result.attempts[-1].succeeded is True
+    assert result.attempts[-1].budget_tokens == 10
+    assert result.metadata["latency_ms"] >= 0
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_probe_first_chunk_with_data_does_not_fall_back(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(llm_adapter, "PROBE_FIRST_CHUNK_TIMEOUT_SECONDS", 0.05)
+
+    async def partial() -> AsyncIterator[Any]:
+        yield make_stream_chunk(content="O")
+        await asyncio.sleep(0.1)  # 比首包超时更久：首包之后不再计时
+        raise Timeout("流断了")
+
+    completion = FakeCompletion(partial(), make_response("OK", 8, 2))
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    with pytest.raises(OrganCallError, match="超时"):
+        await probe_model(config.models[0], config.providers[0], keys)
+
+    assert len(completion.calls) == 1  # 已经有数据，不再回退非流式
+    assert completion.calls[0]["stream"] is True
+
+
 @pytest.mark.asyncio
 async def test_remote_chat_still_uses_litellm(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
