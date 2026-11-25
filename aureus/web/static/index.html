@@ -535,11 +535,6 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-image{display:grid;justify-content:start;justify-items:end;gap:5px;margin:6px 0 0}
 .inbox-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}
 .inbox-image .btn{justify-self:end}
-.inbox-compose{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:grid;gap:8px}
-.inbox-compose textarea{width:100%;min-height:70px;resize:vertical}
-.inbox-compose input[type=file]{max-width:100%;min-width:0}
-.inbox-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.inbox-layout:not([data-can-operate="true"]) .inbox-row-actions{display:none}
 .resource-page .stack{gap:10px}
 .resource-page>.page-body,.resource-panel{flex:1;min-width:0}
 .resource-navigation,.resource-actions{gap:6px}
@@ -993,17 +988,6 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <p id="inbox-message-status" class="empty hidden" role="status"></p>
 <div id="inbox-messages" class="inbox-messages"></div>
 <div id="inbox-typing" role="status"></div>
-<section id="inbox-operations" class="inbox-compose hidden" aria-label="QQ 会话操作">
-<p id="inbox-operation-status" class="muted hidden" role="status"></p>
-<form id="inbox-send-text" class="stack hidden">
-<label for="inbox-text">发送 QQ 文字</label><textarea id="inbox-text" rows="3" maxlength="2000" required></textarea>
-<div id="inbox-send-anchors" class="inbox-actions"></div>
-<div class="inbox-actions"><button id="inbox-send" type="submit" class="btn primary">发送文字</button><button id="inbox-direct-poke" type="button" class="btn hidden">戳一戳对方</button></div>
-</form>
-<form id="inbox-send-file" class="stack hidden">
-<label for="inbox-file">选择图片或 UTF‑8 文本（最多 700 KiB）</label>
-<div class="inbox-actions"><input id="inbox-file" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.txt" required><button id="inbox-upload" type="submit" class="btn">上传文件</button></div>
-</form></section>
 </div>
 </div></div></section>
 <section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2></div></div>
@@ -2247,8 +2231,7 @@ const INBOX_PAGE_SIZE = 50;
 const INBOX_PREFETCH_PAGES = 2;
 const INBOX_OLDER_THRESHOLD = 120;
 const inbox = {view:null, enabled:false, conversations:[], archives:[], selected:null,
-  conversationRequest:0, messageRequest:0, olderRequest:0, operationRequest:0,
-  selectionGeneration:0, canOperate:false, operating:false, quote:null, mention:null,
+  conversationRequest:0, messageRequest:0, olderRequest:0,
   nextBefore:null, nextBeforeSource:null, loadingOlder:false, historyError:false,
   messageKeys:new Set()};
 const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
@@ -2385,7 +2368,6 @@ function clearInboxThread() {
   ++inbox.olderRequest;
   resetInboxMedia();
   clearInboxRetention();
-  clearInboxOperations();
   inbox.selected = null;
   showInboxConversationList();
   inbox.nextBefore = null;
@@ -2414,7 +2396,6 @@ function showInboxConversationList() {
 
 function selectInboxConversation(conversation) {
   const changed = !inbox.selected || inboxKey(conversation) !== inboxKey(inbox.selected);
-  if (changed) clearInboxOperations();
   inbox.selected = conversation;
   if (changed) followConversationTyping();
   if (changed) showInboxThreadPane();
@@ -2423,115 +2404,9 @@ function selectInboxConversation(conversation) {
     button.setAttribute('aria-pressed', String(button.dataset.conversation === selected));
   }
   $('inbox-thread-name').textContent = conversation.name;
-  return Promise.all([loadInboxMessages(), loadInboxOperations(),
+  return Promise.all([loadInboxMessages(),
     showInboxRetention(conversation.archive ? null : conversation.key)]);
 }
-
-function clearInboxOperations() {
-  ++inbox.operationRequest;
-  ++inbox.selectionGeneration;
-  inbox.canOperate = false;
-  inbox.quote = inbox.mention = null;
-  $('inbox-text').value = '';
-  $('inbox-file').value = '';
-  $('inbox-operations').classList.add('hidden');
-  $('inbox-send-text').classList.add('hidden');
-  $('inbox-send-file').classList.add('hidden');
-  inboxStatus('inbox-operation-status', '');
-  renderInboxOperationControls();
-}
-
-function renderInboxOperationControls() {
-  $('inbox-layout').dataset.canOperate = String(inbox.canOperate);
-  $('inbox-send').disabled = inbox.operating || !inbox.canOperate;
-  $('inbox-direct-poke').disabled = inbox.operating || !inbox.canOperate;
-  $('inbox-upload').disabled = inbox.operating || !inbox.canOperate;
-  $('inbox-send-anchors').replaceChildren(...['quote', 'mention'].flatMap(kind => {
-    const message = inbox[kind];
-    if (!message) return [];
-    return [el('button', {type:'button', class:'btn small',
-      text:kind === 'quote' ? `取消引用 ${message.platform_message_id}` : `取消 @QQ ${message.sender_id}`,
-      onclick:() => { inbox[kind] = null; renderInboxOperationControls(); },
-    })];
-  }));
-}
-
-async function loadInboxOperations() {
-  const selection = inbox.selected, token = ++inbox.operationRequest, session = state.loaded;
-  if (!selection?.key || selection.key.platform !== 'qq') return;
-  const res = await api(`/api/inbox/operations?${inboxScope(selection.key)}`);
-  if (token !== inbox.operationRequest || session !== state.loaded) return;
-  inbox.canOperate = res.ok && res.data.enabled === true;
-  $('inbox-operations').classList.remove('hidden');
-  $('inbox-send-text').classList.toggle('hidden', !inbox.canOperate);
-  $('inbox-send-file').classList.toggle('hidden', !inbox.canOperate);
-  $('inbox-direct-poke').classList.toggle('hidden', selection.key.kind !== 'private');
-  if (!inbox.canOperate) inboxStatus('inbox-operation-status', res.ok ? res.data.reason : errorText(res));
-  renderInboxOperationControls();
-}
-
-async function executeInboxOperation(kind, target, body, completed) {
-  const selected = inbox.selected, session = state.loaded;
-  if (!selected?.key || !inbox.canOperate || inbox.operating) return;
-  const generation = inbox.selectionGeneration;
-  const stillSelected = () => state.loaded === session && inbox.selectionGeneration === generation;
-  inbox.operating = true;
-  renderInboxOperationControls();
-  try {
-    if (!await confirmAction(`${target}？目的地：${selected.name}（QQ ${selected.key.recipient_id}）`)
-        || !stillSelected()) return;
-    inboxStatus('inbox-operation-status', '等待 QQ 回执…');
-    const query = inboxScope(selected.key);
-    let payload = {confirmed:true, ...body}, headers = {};
-    if (kind === 'file') {
-      query.set('confirmed', 'yes');
-      query.set('name', body.file.name);
-      payload = body.file;
-      headers = {'Content-Type':body.type};
-    }
-    const result = await api(`/api/inbox/operations/${kind}?${query}`, 'POST', payload, headers);
-    if (!stillSelected()) return;
-    if (result.ok) await completed(result.data);
-    else inboxStatus('inbox-operation-status', result.status ? errorText(result) : '没有收到回执；请先检查 QQ，不要直接重试。');
-  } finally {
-    inbox.operating = false;
-    renderInboxOperationControls();
-  }
-}
-
-function pokeInboxMember(message = null) {
-  return executeInboxOperation('poke', message ? `戳一戳 QQ ${message.sender_id}` : '戳一戳对方',
-    {member:message?.id ?? null}, () => inboxStatus('inbox-operation-status', 'QQ 已确认戳一戳请求；没有消息编号。'));
-}
-
-$('inbox-send-text').addEventListener('submit', event => {
-  event.preventDefault();
-  const text = $('inbox-text').value.trim(), {quote, mention} = inbox;
-  if (!text) return;
-  const labels = ['发送文字', quote && `引用消息 ${quote.platform_message_id}`, mention && `@QQ ${mention.sender_id}`];
-  executeInboxOperation('text', labels.filter(Boolean).join('、'), {text, quote:quote?.id ?? null, mention:mention?.id ?? null}, data => {
-    if ($('inbox-text').value.trim() === text) $('inbox-text').value = '';
-    if (inbox.quote === quote) inbox.quote = null;
-    if (inbox.mention === mention) inbox.mention = null;
-    inboxStatus('inbox-operation-status', `QQ 已确认发送 · 消息 ${data.message_id}`);
-    return loadInboxMessages();
-  });
-});
-$('inbox-direct-poke').addEventListener('click', () => pokeInboxMember());
-$('inbox-send-file').addEventListener('submit', event => {
-  event.preventDefault();
-  const input = $('inbox-file'), file = input.files[0];
-  if (!file) return;
-  const type = {txt:'text/plain',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp'}[file.name.split('.').pop()?.toLowerCase()];
-  if (!type || !file.size || file.size > 700 * 1024) {
-    inboxStatus('inbox-operation-status', '请选择 700 KiB 以内的 PNG、JPEG、GIF、WebP 或 TXT 文件。');
-    return;
-  }
-  executeInboxOperation('file', `上传「${file.name}」`, {file, type}, data => {
-    if (input.files[0] === file) input.value = '';
-    inboxStatus('inbox-operation-status', `QQ 已确认上传 · 文件 ${data.file_id}`);
-  });
-});
 
 function renderInboxView() {
   const isDesktop = !inbox.view;
@@ -2700,27 +2575,7 @@ function renderInboxMessage(message) {
         el('span', {class:'muted', text:'时间未知'}),
       message.components?.some(item => ['at', 'reply', 'poke'].includes(item.kind)) && message.conversation &&
         el('span', {class:'muted', text:`收发账号 ${message.conversation.account_id} · 会话 ${message.conversation.recipient_id}${message.platform_message_id ? ` · 消息 ${message.platform_message_id}` : ''}`})),
-    el('div', {class:'msg-line'}, avatar, el('div', {class:'bubble'}, ...renderInboxContents(message))),
-    renderInboxMessageActions(message));
-}
-
-function renderInboxMessageActions(message) {
-  if (message.source !== 'inbox' || !message.conversation || !Number.isSafeInteger(message.id)
-      || message.conversation.temporary_group_id || !message.platform_message_id) return null;
-  const scope = JSON.stringify(message.conversation);
-  const choose = kind => {
-    if (!inbox.canOperate || inbox.operating || JSON.stringify(inbox.selected?.key) !== scope) return;
-    inbox[kind] = message;
-    renderInboxOperationControls();
-    $('inbox-text').focus();
-  };
-  const canTarget = message.conversation.kind === 'group' && message.direction === 'incoming' && message.sender_id;
-  return el('div', {class:'inbox-actions inbox-row-actions'},
-    el('button', {type:'button', class:'btn small', text:'引用', onclick:() => choose('quote')}),
-    canTarget && el('button', {type:'button', class:'btn small', text:'@ 此人', onclick:() => choose('mention')}),
-    canTarget && el('button', {type:'button', class:'btn small', text:'戳一戳', onclick:() => {
-      if (JSON.stringify(inbox.selected?.key) === scope) pokeInboxMember(message);
-    }}));
+    el('div', {class:'msg-line'}, avatar, el('div', {class:'bubble'}, ...renderInboxContents(message))));
 }
 
 // 会话按旧在上、新在下显示；消息区自己滚动，进入或刷新后停在最新一条。
