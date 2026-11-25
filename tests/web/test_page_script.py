@@ -98,6 +98,7 @@ function element(tag = 'div') {
       }
       this.removed = true;
     },
+    querySelector() { return element(); },
     querySelectorAll() { return []; },
     showModal() { this.open = true; }, close() { this.open = false; },
   };
