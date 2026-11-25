@@ -46,7 +46,7 @@ window.createMemoryBundlePanel = () => {
         input.addEventListener('change', reset);
         return el('label', {class:'row'}, input, item.instance);
       }));
-      if (!inputs.length) choices.textContent = '没有可选择的可信迁入批次。';
+      if (!inputs.length) choices.textContent = '没有可选择的可信迁入批次。先导入或迁移资料后再生成。';
     }
     review.addEventListener('click', async () => {
       const last = ++settings;
@@ -98,7 +98,7 @@ window.createMemoryBundlePanel = () => {
     const {items, next_offset: next} = response.data;
     offset = next;
     more.hidden = offset === null;
-    listStatus.textContent = !append && items.length === 0 ? '没有安装记录。' : '';
+    listStatus.textContent = !append && items.length === 0 ? '没有安装记录。导入或生成一个记忆包后会显示在这里。' : '';
     if (!append) list.replaceChildren();
     list.append(...items.map(installation));
   }
@@ -118,7 +118,7 @@ window.createMemoryBundlePanel = () => {
       } else message.textContent = errorText(response);
     }});
     return el('div', {class:'resource-record stack'},
-      el('p', {text:`${item.name} · ${item.package_id} · ${item.version} · ${levels[item.content_level]} · ${item.installed ? '已安装' : '已卸载'}`}),
+      el('p', {text:`${item.name} · ${levels[item.content_level]} · ${item.installed ? '已安装' : '已卸载'}`}),
       el('div', {class:'row'}, button,
         el('a', {class:'btn small', href:endpoint + '/download', download:true, text:'下载原包'})));
   }
@@ -160,7 +160,7 @@ window.createMemoryBundlePanel = () => {
     message.textContent = info.status === 'new' ? '预检通过，请选择安装方式。' :
       (info.status === 'installed' ? '此包已安装。' : '此包已卸载，可从安装记录恢复。');
     preview.replaceChildren(
-      el('p', {text:`${info.name} · ${info.package_id} · ${info.version} · ${levels[info.content_level]}`}),
+      el('p', {text:`${info.name} · ${levels[info.content_level]}`}),
       el('p', {text:Object.entries(info.counts).map(([key, count]) => `${labels[key] || key} ${count} 条`).join(' · ')}),
       ...(info.components || []).map(item => el('p', {text:`${item.status === 'skip' ? '跳过' : '将安装'} ${item.name}${item.reason ? '：' + item.reason : ''}`})),
       el('p', {class:'muted', text:info.restore_blocked || '当前可以恢复到空记忆库，提交时会再次检查。'}),

@@ -44,6 +44,7 @@ body{margin:0;font:15px/1.6 var(--font);background:var(--bg);color:var(--text);-
 button,input,select,textarea{font:inherit;color:inherit}
 h1,h2,h3,h4,p{margin:0}
 .hidden{display:none!important}
+[hidden]{display:none!important}
 .muted{color:var(--text-2)}
 .mono{font-family:var(--mono)}
 ::selection{background:var(--accent-soft)}
@@ -856,7 +857,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
   </div>
 </section>
 <section id="page-memory" class="page wide resource-page">
-  <div class="page-head"><h2>长期记忆</h2></div>
+  <div class="page-head"><div><h2>长期记忆</h2><p class="page-note">查询和管理长期记忆的文字记录、人物画像、关系图与图片；移除只停用派生记忆，不删除原始聊天。</p></div></div>
   <div class="page-body stack">
     <div class="row resource-navigation" role="group" aria-label="长期记忆工作台">
       <div class="row" role="group" aria-label="记忆浏览">
@@ -878,18 +879,19 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
       </div>
       <div id="memory-query-text" class="stack resource-panel">
         <form id="memory-search" class="row resource-filters">
-          <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索正文或来源 ID" maxlength="200">
+          <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索正文、人物或来源" maxlength="200">
           <select name="type" aria-label="记忆类型">
             <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="experiences">其他经历</option>
           </select>
           <label id="memory-show-disabled"><input name="disabled" type="checkbox"> 显示停用</label>
           <label><input name="removed" type="checkbox"> 查看已移除</label>
-          <button class="btn small primary">查询</button><button id="memory-refresh" type="button" class="btn small">刷新</button>
+          <button id="memory-refresh" type="button" class="btn small">刷新</button><button class="btn small primary">查询</button>
         </form>
         <div id="memory-selection" class="row resource-actions" role="group" aria-label="所选文字记忆">
           <label><input id="memory-select-all" type="checkbox" disabled> 全选本页</label>
           <button id="memory-correct" class="btn small" disabled>修正所选</button>
           <button id="memory-toggle-removed" type="button" class="btn small" disabled>移除所选</button>
+          <span id="memory-selected-count" class="muted resource-selection-count" role="status" aria-live="polite"></span>
         </div>
         <p id="memory-counts" class="muted resource-counts" aria-live="polite"></p>
       </div>

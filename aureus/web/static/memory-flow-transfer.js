@@ -31,13 +31,14 @@
   function renderEntry(item) {
     const stamp = item.recorded_at ? new Date(item.recorded_at).toLocaleString('zh-CN') : '时间未记录';
     const type = eventTypes[item.event_type] ?? item.event_type;
-    const title = type + ' · ' + stamp + ' · ' + item.summary;
     return el('div', {class:'resource-record'}, el('button', {class:'btn small', type:'button', onclick:() =>
       openEditor(type, el('div', {class:'stack resource-detail'},
         el('time', {datetime:item.recorded_at, text:stamp}),
         el('p', {text:item.summary}),
         item.conversations.length && el('p', {text:'聊天流：' + item.conversations.join(' · ')})))
-    }, el('span', {text:title})));
+    }, el('span', {class:'resource-label'},
+      el('span', {class:'resource-title', text:item.summary}),
+      el('span', {class:'resource-meta', text:type + ' · ' + stamp}))));
   }
 
   function createFlow(panel) {
@@ -88,7 +89,7 @@
     });
     panel.replaceChildren(filters);
     const pager = createResourcePager({el, panel, id:'memory-flow', render:renderEntry, error:fail,
-      empty:() => '没有符合条件的记忆事件', request:({offset, limit, signal}) => {
+      empty:() => '没有符合条件的记忆事件。调整时间范围或事件类型后再试。', request:({offset, limit, signal}) => {
         const params = new URLSearchParams(applied);
         params.set('offset', offset);
         params.set('limit', limit);
@@ -150,11 +151,11 @@
         result.textContent = '未通过检视：' + errorText(response);
         return;
       }
-      const {version, total, counts} = response.data;
+      const {total, counts} = response.data;
       const breakdown = Object.entries(packageLabels).filter(([key]) => counts[key] > 0)
         .map(([key, label]) => `${label} ${counts[key]} 条`).join(' · ');
       summary.replaceChildren(
-        el('p', {text:`文字包版本 ${version}，包内共 ${total} 条。`}),
+        el('p', {text:`文字包共 ${total} 条。`}),
         breakdown && el('p', {text:breakdown}),
         el('p', {class:'muted', text:'这是包内数量，不是预计新增数量。确认后才检查与本地记录是否相同或冲突。'}));
       result.textContent = '检视通过，请确认是否追加导入。';

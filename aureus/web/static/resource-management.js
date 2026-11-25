@@ -1050,6 +1050,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
 
   const selection = $('memory-select-all'), correct = $('memory-correct');
   const toggleRemoved = $('memory-toggle-removed');
+  const selectedCount = $('memory-selected-count');
   let removedView = false;
   function syncSelection() {
     const boxes = [...memory.list.querySelectorAll('input[type=checkbox]')];
@@ -1058,6 +1059,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     selection.indeterminate = selected.size > 0 && !selection.checked;
     correct.disabled = removedView || !selected.size;
     toggleRemoved.disabled = !selected.size;
+    selectedCount.textContent = selected.size ? `已选 ${selected.size} 条` : '';
   }
   function memoryTarget(item) {
     return {kind:item.kind ?? (item.source ? 'history' : 'live'), entry_id:item.entry_id ?? item.record_id};
@@ -1198,30 +1200,34 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function renderMemory(item) {
     const type = labels[item.labels?.[0] ?? item.source?.table ?? 'live'] || item.source?.table;
     if (item.kind === 'summary') return renderSummaryFact(item);
+    const relation = item.source?.table === 'relations';
     const guided = ['fact_claims', 'relations', 'episodes'].includes(item.source?.table);
     const box = guided ? null : el('input', {type:'checkbox', 'aria-label':'选择' + type});
     box?.addEventListener('change', () => {
       if (box.checked) selected.set(box, item); else selected.delete(box);
       syncSelection();
     });
-    const title = (item.is_removed ? '已移除 · ' : item.is_recallable ? '' : '未参与召回 · ') + (item.text.slice(0, 100) || '空文本');
-    return record(title, () => detail(type || '文字记忆', field('正文', item.text), field('原件', item.original_text),
-      field('人物', item.actor_label), field('时间', item.recorded_at && fmtTime(item.recorded_at, true)),
-      field('召回状态', item.is_recallable ? '参与召回' : '不参与召回'), field('原始状态', term(item.status)),
-      field('关系冻结', item.is_frozen), field('关系保护', item.is_protected),
-      field('来源', sourceText(item.source)), field('时间线编号', item.record_id),
-      field('证据', item.evidence?.map(entry => [term(entry.kind) + '：' + entry.reference,
-        sourceText(entry.source), term(entry.status)].filter(Boolean).join(' · ')).join('\n')),
-      guided ? lifecycleActions(item) : !item.is_removed && el('div', {class:'row'}, action('修正', () => editMemories([item])),
-        action(item.is_enabled ? '停用召回' : '恢复召回', async event => {
-          const button = event.currentTarget;
-          if (await change('/api/resources/memory', 'PATCH', {...memoryTarget(item), is_enabled:!item.is_enabled},
-            memory.read, button) && button.isConnected) $('editor-dialog').close();
-        }))), box);
+    const status = item.is_removed ? '已移除' : item.is_recallable ? '' : '未参与召回';
+    const meta = [type, item.recorded_at && fmtTime(item.recorded_at, true), status].filter(Boolean).join(' · ');
+    return record({text:item.text.slice(0, 100) || '空文本', meta},
+      () => detail(type || '文字记忆', field('正文', item.text), field('原件', item.original_text),
+        field('人物', item.actor_label), field('时间', item.recorded_at && fmtTime(item.recorded_at, true)),
+        field('召回状态', item.is_recallable ? '参与召回' : '不参与召回'),
+        relation && field('关系状态', item.is_frozen ? '已冻结' : item.is_protected ? '受保护' : '正常'),
+        field('来源', sourceText(item.source)),
+        field('证据', item.evidence?.map(entry => [term(entry.kind),
+          sourceText(entry.source), term(entry.status)].filter(Boolean).join(' · ')).join('\n')),
+        guided ? lifecycleActions(item) : !item.is_removed && el('div', {class:'row'}, action('修正', () => editMemories([item])),
+          action(item.is_enabled ? '停用召回' : '恢复召回', async event => {
+            const button = event.currentTarget;
+            if (await change('/api/resources/memory', 'PATCH', {...memoryTarget(item), is_enabled:!item.is_enabled},
+              memory.read, button) && button.isConnected) $('editor-dialog').close();
+          }))), box);
   }
   function renderSummaryFact(item) {
     const title = item.text || (item.status === 'superseded' ? '已更正的事实' : '没有证据的事实');
-    return record(title, async () => {
+    const meta = ['会话总结事实', item.status === 'superseded' ? '已更正' : term(item.status)].filter(Boolean).join(' · ');
+    return record({text:title, meta}, async () => {
       const state = el('p', {class:'muted', role:'status', text:'正在复核事实来源…'});
       detail('会话总结事实', state);
       const params = new URLSearchParams({source:locationKey(item.source)});
@@ -1235,8 +1241,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       const fact = response.data;
       detail('会话总结事实', field('事实', fact.text), field('事实来源', sourceText(fact.source)),
         field('状态', fact.status === 'superseded' ? '已更正' : term(fact.status)),
-        field('证据定位', fact.evidence.map(entry => [term(entry.kind), entry.reference,
-          sourceText(entry.source)].join(' · ')).join('\n') || '没有可用证据'),
+        field('证据', fact.evidence.map(entry => [term(entry.kind),
+          sourceText(entry.source)].filter(Boolean).join(' · ')).join('\n') || '没有可用证据'),
         lifecycleActions({...item, ...fact}));
     });
   }
@@ -1245,8 +1251,11 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     selected.clear();
     selection.checked = selection.indeterminate = false;
     selection.disabled = correct.disabled = toggleRemoved.disabled = true;
-    counts.textContent = '';
-  }, loaded:data => {
+    counts.textContent = selectedCount.textContent = '';
+  }, empty:() => removedView
+    ? '没有已移除的文字记忆。'
+    : '没有符合条件的文字记忆。可以先在私聊里聊几句，或调整筛选条件后查询。',
+  loaded:data => {
     if (data.counts) counts.textContent = Object.entries(data.counts).filter(([kind]) => kind in labels)
       .map(([kind, count]) => labels[kind] + ' ' + count).join('　');
     syncSelection();
@@ -1269,7 +1278,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   });
 
   const profilePanel = $('memory-query-profiles');
-  const profileForm = searchForm('搜索人物画像', '搜索人物、画像或来源 ID');
+  const profileForm = searchForm('搜索人物画像', '搜索人物、画像或来源');
   profilePanel.append(profileForm);
   const profileMaintenance = '/api/resources/profiles/maintenance';
   async function openProfileMaintenance(item) {
@@ -1325,7 +1334,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         if (!planned.ok) { showLifecycleError(planned, message, form); return; }
         const preview = planned.data;
         const feedback = el('p', {role:'status'});
-        const pane = el('div', {class:'stack resource-detail'}, field('原件版本', preview.version),
+        const pane = el('div', {class:'stack resource-detail'},
           field('旧画像', preview.before), field('新画像', preview.after), feedback);
         pane.append(actions('画像纠错计划', action('返回草稿', () => openEditor('检修人物画像', form)),
           action('确认应用', event => operate(preview.plan_id, 'apply', pane, feedback, event.currentTarget))));
@@ -1352,7 +1361,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const save = el('button', {class:'btn primary small', text:'保存别名'});
     const undo = action('撤销本机别名', () => write(null));
     const form = el('form', {class:'stack resource-detail'},
-      field('人物编号', item.person_id), field('画像来源', sourceText(item.record)),
+      field('画像来源', sourceText(item.record)),
       field('原有别名', aliases.original_aliases.join('、') || '无'),
       field('当前别名', aliases.effective_aliases.join('、') || '无'),
       field('本机维护', aliases.local_aliases === null ? '未覆盖' : '已覆盖'),
@@ -1380,19 +1389,21 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   const profiles = searchable({panel:profilePanel, id:'profiles', render:item => {
     if (item.entry_type === 'person') {
-      const title = item.name || `人物 #${item.person_id}`;
-      return record(title + ' · 人物档案', () => detail('人物档案', field('人物编号', item.person_id),
+      const title = item.name || '未命名人物';
+      return record({text:title, meta:'人物档案'}, () => detail('人物档案',
         field('当前称呼', item.name), field('首次记录时间', fmtTime(item.first_seen, true))));
     }
     const profile = item.record;
-    const title = item.name || profile.name || profile.nickname || profile.subject_key || '待关联人物';
-    const caption = item.person_id == null ? title : `${title} · 人物 #${item.person_id}`;
-    return record(caption, () => detail(title, field('画像', profile.summary || profile.impression),
-      field('人物', item.person_id), field('原件别名', profile.aliases?.join('、')),
-      field('关联状态', item.pending_reason), field('证据', readable(profile.evidence)), field('来源', sourceText(profile)),
+    const title = item.name || profile.name || profile.nickname || '待关联人物';
+    return record({text:title, meta:'人物画像'}, () => detail(title, field('画像', profile.summary || profile.impression),
+      field('原件别名', profile.aliases?.join('、')),
+      field('关联状态', item.pending_reason), field('来源', sourceText(profile)),
       item.can_edit_aliases ? actions('画像检修', action('检修画像', () => openProfileMaintenance(item)),
         action('维护别名', event => openProfileAliases(item, event.currentTarget))) : null));
-  }}, profileForm, '/api/resources/profiles', fields => ({q:fields.q.value}));
+  }, empty:() => profileForm.elements.q.value.trim()
+    ? '没有符合条件的人物画像，试试清空搜索。'
+    : '还没有人物画像。人物在聊天中出现并被整理后会显示在这里。'},
+  profileForm, '/api/resources/profiles', fields => ({q:fields.q.value}));
 
   const picturePanel = $('memory-pictures');
   const pictureForm = searchForm('搜索图片', '搜索描述、会话或附件', el('label', {}, '原图 ',
@@ -1414,13 +1425,17 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     request:({offset, limit, signal}) => api(similarTo == null
       ? '/api/resources/pictures?' + new URLSearchParams({...pictureParams, offset, limit})
       : '/api/resources/images?' + new URLSearchParams({similar_to:similarTo, limit}), 'GET', undefined, {}, signal),
-    empty:() => similarTo == null ? '没有符合条件的图片' : '没有找到相似图片',
+    empty:() => similarTo != null
+      ? '没有找到相似图片，试试换一张图片或放宽条件。'
+      : pictureForm.elements.q.value.trim() || pictureForm.elements.availability.value
+        ? '没有符合条件的图片，试试清空搜索或原图筛选。'
+        : '还没有图片记忆。聊天中收到并归档图片后会显示在这里。',
     render:item => {
       const title = item.text || item.conversation || '未填写描述';
       const url = item.digest ? '/api/resources/media/' + encodeURIComponent(item.digest) : null;
       return mediaTile(title, url, '原图未归档', () => detail(title, fullImage(url),
         field('时间', item.timestamp && fmtTime(item.timestamp, true)), field('来源', sourceText(item.source)),
-        field('附件', item.attachment), field('消息编号', item.message_id), field('状态', term(item.status)),
+        field('状态', term(item.status)),
         !url && field('原图', '原图未归档'), item.score != null ? field('相似度', Number(item.score).toFixed(3))
           : item.kind === 'inbox' && action('查找相似图片', () => {
             $('editor-dialog').close();
@@ -1651,7 +1666,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   const operations = createResourcePager({el, panel:$('memory-panel-operations'), id:'memory-operations', error:fail,
     request:({offset, limit, signal}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit}),
       'GET', undefined, {}, signal),
-    empty:() => '没有可见的移除或恢复记录',
+    empty:() => '没有可见的移除或恢复记录。在文字查询中选中记录并移除后，操作会记录在这里。',
     render:item => el('div', {class:'resource-record'},
       el('span', {text:`${item.kind === 'remove' ? '移除' : '恢复'} ${item.changed} 条`}),
       el('time', {datetime:item.occurred_at, class:'muted',
@@ -1691,7 +1706,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }
     function render(batch) {
       const group = el('fieldset', {class:'stack'});
-      group.append(el('legend', {text:batch.instance}));
+      group.append(el('legend', {text:instanceLabel(batch.instance)}));
       const options = Object.entries(choices).map(([value, text]) => {
         const input = el('input', {type:'checkbox', value});
         input.checked = batch.categories.includes(value);
@@ -1850,7 +1865,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         field('资料', label(item)), field('来源', sourceId(item.source)),
         ...(item.kind === 'relation' ? [field('起点来源', sourceId(item.subject.source)),
           field('终点来源', sourceId(item.object.source))] : []),
-        field('置信度', item.confidence), ...evidence,
+        ...evidence,
         ...nodes.map(node => action(`浏览 ${node.name} 的一跳关系`, () => browse(node.source))),
         ...(item.kind === 'relation' ? nodes.map((node, index) =>
           action(`查看${index === 0 ? '起点' : '终点'}实体：${node.name}`, () => open(node.source))) : [])));
@@ -1871,7 +1886,11 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         }
         return response;
       },
-      empty:data => data.covered ? '没有符合条件的图谱资料' : '当前没有获准的图谱资料',
+      empty:data => !data.covered
+        ? '当前没有获准的图谱资料。展开「管理图谱展示授权」授权一批资料后再查看。'
+        : query
+          ? '没有符合条件的图谱资料。试试清空搜索或点击「返回全部图谱」。'
+          : '当前没有可见的图谱资料。可换个实体再试，或在「管理图谱展示授权」中检查授权范围。',
       loaded:data => {
         revision = data.revision;
         if (revision) accessTimer = setTimeout(checkAccess, accessInterval);
@@ -1887,7 +1906,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         canvas.draw(data.items);
       },
       render:item => {
-        const row = record(label(item), () => open(item.source));
+        const row = record({text:label(item), meta:item.kind === 'relation' ? '关系' : '实体'}, () => open(item.source));
         const accessibleLabel = `${label(item)} · 来源：${sourceId(item.source)}`;
         row.lastChild.setAttribute('aria-label', accessibleLabel);
         row.lastChild.setAttribute('title', accessibleLabel);
