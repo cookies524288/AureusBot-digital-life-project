@@ -9,7 +9,13 @@
 - 兴趣修改：工具参数无效时不替代发言，补充超长参数用例
 - 记忆图查询：关系操作迁移到生命周期计划
 
-**D104 重启验收**：本地 `main` 在 `0ad9da2` 有这些改动，可用根目录 `Aureus.exe` 重启。观察点：
+**隔离 `--home --fake` 端到端验收（2026-11-25，已通过）**：用临时数据根 `E:/Temp/aureus-e2e` 跑真实入口 `python -m aureus --home <tmp> chat --fake`（不碰正式 `aureus_home/`，不另启用户实例）。
+- 聊天链路：程序正常启动、组装核心、优雅关闭，退出码 0；用户消息 → 规划器 → 回复器 → 投递全部写入时间线（`message` / `reply_reference` / `reply_delivered`），中文按 UTF-8 正确存储。
+- Web 接口：临时端口 18765 启动，首页 200，受保护接口未登录返回 401；逐个探测学习与资源接口（`/api/resources/learning*`、`/api/resources/media`、`/api/resources/memory*`、`/api/resources/emoji*`、`/api/webui/expression*`、`/api/settings`、`/api/overview`、器官预览/进度）均已挂载且受鉴权保护，无 404。
+
+这是隔离验收，不等于维护者在正式实例上的接管验收。全量 `scripts/check.py` 尚未重跑；若跑，会带上 12 个 QQ 通道用例的既有失败（测试内 WebSocket 超时/连接关闭，与主程序功能无关）。
+
+**D104 重启验收**：本地 `main` 在 `daed8c5` 之后有这些改动，可用根目录 `Aureus.exe` 重启。观察点：
 - 表情选择文字和语义路径正常工作
 - 增量学习提示和功能同时出现
 - 人设成长禁用不报错
