@@ -204,7 +204,7 @@ def test_record_is_all_or_nothing(ledger: Ledger) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("message", ["database is locked", "database is busy"])
-async def test_ledger_write_retries_transient_lock(
+async def test_record_with_retry_retries_locked_and_busy_messages(
     ledger: Ledger,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
