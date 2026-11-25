@@ -147,7 +147,7 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
     assert missing_example.evidence_ids == ()
     assert json.loads(expression.source_refs[0]) == ["private-instance", "main", "expressions", [1]]
     for entry in store.entries(LanguageKind.JARGON):
-        if entry.detail in {"证据未知", "原库无引用"}:
+        if entry.detail in {"证据未知", "原库无引用", "已认定非黑话", ""}:
             assert len(entry.source_refs) == 1
             assert entry.evidence_ids == ()
             if entry.detail == "证据未知":
@@ -239,7 +239,8 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
         assert "gg：等候开局" in plan.prompt
         assert "GG：证据未知" in plan.prompt
         assert "GG：原库无引用" in plan.prompt
-        assert "已认定非黑话" not in plan.prompt
+        assert "GG：已认定非黑话" in plan.prompt
+        assert "GG：已认定非黑话" in dialogue_text(reply)
         text = dialogue_text(reply)
         assert "当「庆祝跑步成绩」时，可用「白桦冲线」" in text
         assert "当「庆祝跑步成绩」时，可用「缺例表达」" in text

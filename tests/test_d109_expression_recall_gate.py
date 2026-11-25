@@ -10,14 +10,22 @@ from aureus.memory.language_matching import (
 def test_rejected_or_pending_expression_is_still_selectable_when_enabled() -> None:
     entries = [
         LanguageEntry(
-            "轻松说法", "庆祝", "", 1, (), frozenset(),
+            "轻松说法",
+            "庆祝",
+            "",
+            1,
+            (),
+            frozenset(),
             review_status=ExpressionReviewStatus.REJECTED,
-            requires_approval=True,
         ),
         LanguageEntry(
-            "待定说法", "庆祝", "", 1, (), frozenset(),
+            "待定说法",
+            "庆祝",
+            "",
+            1,
+            (),
+            frozenset(),
             review_status=ExpressionReviewStatus.PENDING,
-            requires_approval=True,
         ),
     ]
     selected = select_expressions(entries, "庆祝", "", (), "speaker")

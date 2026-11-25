@@ -9,14 +9,14 @@ import asyncio
 import json
 import logging
 import sqlite3
-from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from aureus.common import Clock
 from aureus.heartbeat.events import EVENT_MESSAGE
-from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from aureus.heartbeat.language_requests import (
     build_comparison,
     build_content_only,
@@ -39,10 +39,11 @@ from aureus.memory import (
 )
 from aureus.organs import OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
-from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
+from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord, VisibilityScope
 
 logger = logging.getLogger(__name__)
 TASK_NAME = "aureus-language-learning"
+LEARNING_COOLDOWN = timedelta(seconds=30)
 _MAX_PROPOSALS = {LanguageKind.EXPRESSION: 10, LanguageKind.JARGON: 30}
 _MAX_SAMPLE_CHARS = 400
 _MAX_RESPONSE_CHARS = 6000
@@ -132,23 +133,86 @@ def local_language_scope(perception: Perception) -> str | None:
     return None
 
 
-def take_language_batch(
-    queue: deque[QueuedLanguageSample], limit: int
-) -> tuple[str | None, list[LanguageSample]]:
-    """以最早的入站为准选同会话样本，保留其余样本的先后顺序。"""
-    head = queue.popleft()
-    samples = [head.sample]
-    if head.conversation is None:
-        return None, samples
-    skipped: list[QueuedLanguageSample] = []
-    while queue and len(samples) < limit:
-        queued = queue.popleft()
-        if queued.conversation == head.conversation:
-            samples.append(queued.sample)
-        else:
-            skipped.append(queued)
-    queue.extendleft(reversed(skipped))
-    return head.conversation, samples
+def allows_learning_scope(scope: str, allows: Callable[[ConversationKey], bool]) -> bool:
+    """复核平台完整地址；认证的本机来源不使用平台路由权限。"""
+    try:
+        parts = json.loads(scope)
+        if not isinstance(parts, list) or not all(isinstance(part, str) for part in parts):
+            return False
+        if len(parts) == 2:
+            return parts[0] in ("web", "terminal") and bool(parts[1])
+        if len(parts) != 5 or not all(parts[:4]) or parts[2] not in ("group", "private"):
+            return False
+        return allows(ConversationKey.from_scope_key(scope))
+    except ValueError:
+        return False
+
+
+def learning_evidence_available(
+    timeline: TimelineDatabase,
+    inbox: InboxStore | None,
+    scope: str,
+    key: str,
+    record_id: int,
+    connection: sqlite3.Connection | None = None,
+) -> bool:
+    """复核本机认证身份或平台入站原件，并核对稳定来源键。"""
+    try:
+        if not allows_learning_scope(scope, lambda route: route.language_scope_key() == scope):
+            return False
+        record = timeline.get(record_id, connection=connection)
+        if record is None or record.event_type != EVENT_MESSAGE:
+            return False
+        parts = json.loads(scope)
+        if len(parts) == 2:
+            sample = language_sample(record, record.metadata.get("source_message_id"), scope)
+            return (
+                parts == [record.metadata.get("channel"), record.actor_id]
+                and record.actor_type is ActorType.USER
+                and record.metadata.get("trust") == TrustLevel.VERIFIED_USER
+                and record.visibility is VisibilityScope.USER_ONLY
+                and key in (sample.source_key, sample.previous_source_key)
+            )
+        identifier = record.metadata.get("inbox_message_id")
+        if inbox is None or type(identifier) is not int:
+            return False
+        route = ConversationKey.from_scope_key(scope)
+        message = inbox.get_learning_original(route, identifier, connection)
+        if message is None:
+            return False
+        perception = message.perception
+        if (
+            record.actor_type not in (ActorType.USER, ActorType.PERSON)
+            or perception.sender_id != record.actor_id
+            or perception.content != record.content
+            or perception.visibility != record.visibility
+            or record.metadata.get("channel") != route.platform
+            or record.metadata.get("account_id") != route.account_id
+            or record.metadata.get("message_type") != route.kind
+            or record.metadata.get("recipient_id") != route.recipient_id
+            or record.metadata.get("temporary_group_id") != route.temporary_group_id
+            or record.metadata.get("trust") != perception.trust
+            or record.metadata.get("source_message_id") != perception.source_message_id
+            or perception.route is None
+            or perception.route.message_id != record.metadata.get("message_id")
+        ):
+            return False
+        sample = language_sample(record, perception.source_message_id, scope)
+        return key in (sample.source_key, sample.previous_source_key)
+    except (ValueError, TypeError, RecursionError):
+        return False
+
+
+def select_language_batch(
+    pending: Sequence[QueuedLanguageSample], limit: int
+) -> list[QueuedLanguageSample]:
+    """以最早可学的入站为准选同会话样本；完成前不从缓冲移除。"""
+    scope = pending[0].conversation
+    return (
+        [item for item in pending if item.conversation == scope][:limit]
+        if scope is not None
+        else [pending[0]]
+    )
 
 
 def speaker_key(record: TimelineRecord) -> str:
@@ -266,28 +330,42 @@ async def learn_language(
     conversation_key: str | None = None,
     bot_names: Sequence[str] = (),
     expression_quality: ExpressionQuality | None = None,
-) -> None:
+) -> bool:
     """独立抽取表达和候选黑话，并只对同会话的有效来源推断。"""
     try:
+        if conversation_key is not None and not store.learning_source_allowed(conversation_key):
+            return False
         await asyncio.to_thread(store.observe, samples, ())
         if conversation_key is None:
-            return
+            return True
+
+        async def call_if_allowed(request: OrganRequest) -> OrganResponse:
+            if not store.learning_source_allowed(conversation_key):
+                raise CallRejectedError(request.organ_id, "语言学习来源已撤权")
+            return await call(request)
+
         banned_names = {name.strip().casefold() for name in bot_names if name.strip()}
+        successful = True
         for kind in LanguageKind:
-            attempts = await _extract(
+            attempts, extracted = await _extract(
                 store,
                 organ,
-                call,
+                call_if_allowed,
                 samples,
                 conversation_key,
                 kind,
                 banned_names,
                 expression_quality if kind == LanguageKind.EXPRESSION else None,
             )
+            successful = successful and extracted
             for attempt in attempts:
-                await _infer(store, organ, call, attempt)
+                successful = (await _infer(store, organ, call_if_allowed, attempt)) and successful
+        if successful:
+            await asyncio.to_thread(store.merge_frequency_terms, conversation_key, samples)
+        return successful
     except sqlite3.Error:
         logger.exception("语言学习存储失败")
+        return False
 
 
 async def _extract(
@@ -299,17 +377,21 @@ async def _extract(
     kind: LanguageKind,
     banned_names: set[str],
     expression_quality: ExpressionQuality | None,
-) -> list[JargonInference]:
+) -> tuple[list[JargonInference], bool]:
     fresh = await asyncio.to_thread(store.pending_extraction, kind, samples)
+    if not store.learning_source_allowed(scope):
+        return [], False
     if not fresh:
-        return []
+        return [], True
     evidence = {sample.record_id: sample for sample in fresh}
     presented = {
         record_id: sample.content[:_MAX_SAMPLE_CHARS] for record_id, sample in evidence.items()
     }
-    result = await _ask(call, build_extraction(organ, kind, tuple(presented.values())))
+    result, succeeded = await _ask(call, build_extraction(organ, kind, tuple(presented.values())))
+    if not succeeded:
+        return [], False
     if not isinstance(result, list):
-        return []
+        return [], False
     records = {str(number): sample for number, sample in enumerate(evidence.values(), start=1)}
     proposals = _parse_proposals(result, kind, records, banned_names)
     quality = (
@@ -320,7 +402,7 @@ async def _extract(
         if expression_quality is not None
         else None
     )
-    return await asyncio.to_thread(
+    attempts = await asyncio.to_thread(
         store.observe_extraction,
         kind,
         scope,
@@ -329,14 +411,16 @@ async def _extract(
         proposals,
         quality=quality,
     )
+    return attempts, True
 
 
-async def _ask(call: OrganCall, request: OrganRequest) -> Any:
+async def _ask(call: OrganCall, request: OrganRequest) -> tuple[Any, bool]:
     try:
-        return _decode((await call(request)).suggestion)
+        result = _decode((await call(request)).suggestion)
+        return result, result is not None
     except (CallRejectedError, OrganCallError):
         logger.info("语言学习器官本次没有返回提议：%s", request.context["task"])
-        return None
+        return None, False
 
 
 def _meaning(result: object) -> str | None:
@@ -350,25 +434,33 @@ def _meaning(result: object) -> str | None:
 
 async def _infer(
     store: LanguageStore, organ: str, call: OrganCall, attempt: JargonInference
-) -> None:
-    contextual = await _ask(
+) -> bool:
+    contextual, succeeded = await _ask(
         call, build_with_context(organ, attempt.text, attempt.evidence, attempt.previous_meaning)
     )
+    if not succeeded:
+        return False
     if not isinstance(contextual, dict) or type(contextual.get("no_info")) is not bool:
-        return
+        return False
     meaning = _meaning(contextual)
     if contextual["no_info"] or meaning == "":
         await asyncio.to_thread(store.record_jargon_inference, attempt, "insufficient")
-        return
+        return True
     if meaning is None:
-        return
-    standalone = _meaning(await _ask(call, build_content_only(organ, attempt.text)))
+        return False
+    standalone_result, succeeded = await _ask(call, build_content_only(organ, attempt.text))
+    if not succeeded:
+        return False
+    standalone = _meaning(standalone_result)
     if standalone is None:
-        return
-    comparison = await _ask(call, build_comparison(organ, meaning, standalone))
+        return False
+    comparison, succeeded = await _ask(call, build_comparison(organ, meaning, standalone))
+    if not succeeded:
+        return False
     if not isinstance(comparison, dict) or type(comparison.get("is_similar")) is not bool:
-        return
+        return False
     if comparison["is_similar"]:
         await asyncio.to_thread(store.record_jargon_inference, attempt, "similar")
     else:
         await asyncio.to_thread(store.record_jargon_inference, attempt, "accepted", meaning)
+    return True

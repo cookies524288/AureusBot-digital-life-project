@@ -641,7 +641,6 @@ class LanguageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     recall_enabled: bool = True
-    learning_enabled: bool = False
     # 器官绑定固定（D107）；向量索引随嵌入模型自动启用，不再有开关。
     organ: ClassVar[str] = "summarizer"
     expression_quality_enabled: bool = False
@@ -654,7 +653,7 @@ class LanguageConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def ignore_legacy_keys(cls, value: object) -> object:
-        """旧配置里已删除或已固定的键照常读取、忽略（D107）。"""
+        """旧配置里已删除或已固定的键照常读取、忽略（D107、D109）。"""
         return drop_legacy_keys(
             value,
             (
@@ -662,6 +661,7 @@ class LanguageConfig(BaseModel):
                 "expression_quality_organ",
                 "expression_selector_organ",
                 "use_vector_expression",
+                "learning_enabled",
             ),
         )
 

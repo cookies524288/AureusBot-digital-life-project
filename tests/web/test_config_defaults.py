@@ -138,7 +138,6 @@ def test_inbox_read_limit_saves_and_restores_for_restart(rig: ConfigRig) -> None
         "memory.consolidation_batch",
         "memory.consolidation_half_life_days",
         "language.recall_enabled",
-        "language.learning_enabled",
         "language.reference_chars",
     ],
 )
@@ -159,7 +158,6 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
         },
         "language": {
             "recall_enabled": False,
-            "learning_enabled": True,
             "reference_chars": 1500,
         },
     }
@@ -181,6 +179,25 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
         expected = {**defaults[group], **values}
         assert page_config[group] == expected
         assert loaded[group] == expected
+
+
+def test_legacy_language_learning_setting_is_not_visible_or_restorable(rig: ConfigRig) -> None:
+    path = rig.paths.runtime_config_file
+    original = "[language]\nlearning_enabled = false\nreference_chars = 1000\n"
+    path.write_text(original, encoding="utf-8")
+    client = rig.client
+    setting = "language.learning_enabled"
+    view = client.get("/api/config").json()
+    assert "learning_enabled" not in view["config"]["language"]
+    assert "learning_enabled" not in view["schema"]["$defs"]["LanguageConfig"]["properties"]
+    assert (
+        client.put(
+            "/api/config", json={"changes": {"language": {"learning_enabled": True}}}
+        ).status_code
+        == 403
+    )
+    assert client.post(RUNTIME_RESTORE, json={"field": setting}).status_code == 403
+    assert path.read_text(encoding="utf-8") == original
 
 
 def test_model_edit_preserves_sparse_values_and_has_no_restore(rig: ConfigRig) -> None:

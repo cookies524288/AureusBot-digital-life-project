@@ -293,11 +293,14 @@ class TimelineDatabase:
             for row in rows
         ]
 
-    def get(self, record_id: int) -> TimelineRecord | None:
+    def get(
+        self, record_id: int, *, connection: sqlite3.Connection | None = None
+    ) -> TimelineRecord | None:
         """按序号取一条记录；没有则返回 None，数据库未打开时抛出 RuntimeError。"""
-        if self._conn is None:
+        database = connection if connection is not None else self._conn
+        if database is None:
             raise RuntimeError("Database is not open")
-        row = self._conn.execute("SELECT * FROM timeline WHERE id = ?", (record_id,)).fetchone()
+        row = database.execute("SELECT * FROM timeline WHERE id = ?", (record_id,)).fetchone()
         if row is None:
             return None
         return TimelineRecord(

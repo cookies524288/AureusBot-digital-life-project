@@ -109,6 +109,7 @@ from aureus.heartbeat.memory_consolidation import (
 )
 from aureus.heartbeat.memory_consolidation import ConsolidationOutcome, MemoryConsolidator
 from aureus.heartbeat.memory_summary_source import PlatformSummarySource
+from aureus.heartbeat.pending_learning_buffer import PendingLearningBuffer
 from aureus.heartbeat.perception import (
     MessageKind,
     MessageRoute,
@@ -369,7 +370,11 @@ class Heartbeat:
         self._agenda_hooks = AgendaHooks(agenda, timeline, clock, feedback, timezone)
         self._language = language
         self._language_config = language_config or LanguageConfig()
-        self._language_samples: deque[language_runner.QueuedLanguageSample] = deque()
+        self._language_samples = PendingLearningBuffer[language_runner.QueuedLanguageSample](
+            lambda item: item.sample.source_key
+        )
+        self._language_next_learning_at: dict[str | None, datetime] = {}
+        self._language_last_status = "等待新样本"
         # 模型热重载提供当前路线；清空备用器官的模型即可关闭其路由。
         self._available_organs: frozenset[str] = frozenset()
         self._emoji_maintenance = (
@@ -504,6 +509,12 @@ class Heartbeat:
     ) -> None:
         """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
         self._available_organs = available
+        if (
+            self._thought is not None
+            and self._thought.task.get_name() == language_runner.TASK_NAME
+            and not self._has_language_organ()
+        ):
+            self._thought.task.cancel()
         self._conversation.has_text_embedding = "text_embedding" in available
         if self._conversation.expression_recall is not None:
             self._conversation.expression_recall.space = expression_space
@@ -610,6 +621,10 @@ class Heartbeat:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
+        if self._language is not None:
+            self._language.set_learning_source_filter(
+                lambda scope: language_runner.allows_learning_scope(scope, allows)
+            )
         if self._conversation.platform_history is not None:
             self._conversation.platform_history.allows = allows
         if (consolidator := self._memory_consolidator) is not None and consolidator.source:
@@ -726,8 +741,12 @@ class Heartbeat:
         if mood is not None:
             caution = "，谨慎中" if mood.cautious else ""
             lines.append(f"心情 {mood.valence:+.2f}{caution}")
-        if self._thought is not None:
+        if self._thought is not None and self._thought.task.get_name() != language_runner.TASK_NAME:
             lines.append(f"正在想怎么回复 {len(self._thought.replying_to)} 条消息。")
+        if self._language is not None:
+            lines.append(
+                f"语言学习：{self._language_last_status}；{len(self._language_samples)} 条待处理。"
+            )
         if self._halt_status.halted:
             lines.append(f"急停中：{self._halt_status.reason}。收到的消息只记录，不回复。")
         waiting = len(self._unanswered) + len(self._pending)
@@ -744,6 +763,15 @@ class Heartbeat:
     def working_memory_summaries(self) -> dict[str, str]:
         """读取本次运行已恢复的分区摘要，供管理网页展示。"""
         return self._working_memory.summaries() if self._working_memory is not None else {}
+
+    def language_learning_status(self) -> dict[str, object]:
+        """只读的后台学习状态；不包含消息正文或会话标识。"""
+        return {
+            "pending": len(self._language_samples),
+            "dropped": self._language_samples.dropped_count,
+            "status": self._language_last_status,
+            "next_at": next_at.isoformat() if (next_at := self._language_due_at()) else None,
+        }
 
     def working_memory_capacity(self) -> int | None:
         """工作记忆启用时返回生效的配置容量。"""
@@ -862,6 +890,7 @@ class Heartbeat:
     def request_stop(self) -> None:
         """请心跳停下来：跳完当前这一拍就开始关闭。"""
         self._stop_requested = True
+        self._cancel_language_task()
         if self._platform_inbox is not None:
             self._interrupt_inbox(self._platform_inbox, "关闭时取消本批回复，未投递。")
         self._reply_outbox.clear()
@@ -884,14 +913,18 @@ class Heartbeat:
                 self._interrupt_inbox(self._platform_inbox, "维护暂停时取消本批回复，未投递。")
         if paused and self._thought is not None:
             thought = self._thought
+            is_language_learning = thought.task.get_name() == language_runner.TASK_NAME
             self._thought = None
             self._maintenance_task = thought.task
-            self._record_interrupted_round(
-                thought, thought.inbox_discard_reason or "维护暂停时取消本轮回复，未投递。"
-            )
-            if thought.inbox_discard_reason is None:
+            if is_language_learning:
                 thought.task.cancel()
-                self._requeue_reply(thought)
+            else:
+                self._record_interrupted_round(
+                    thought, thought.inbox_discard_reason or "维护暂停时取消本轮回复，未投递。"
+                )
+                if thought.inbox_discard_reason is None:
+                    thought.task.cancel()
+                    self._requeue_reply(thought)
         self._wake.set()
 
     def wake_up(self) -> Downtime:
@@ -1171,10 +1204,10 @@ class Heartbeat:
         if thought.task.cancelled():
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
-        outcome = thought.task.result()
         if thought.task.get_name() == language_runner.TASK_NAME:
             return
-        assert outcome is not None
+        outcome = thought.task.result()
+        assert outcome is not None and not isinstance(outcome, bool)
         if isinstance(outcome, InboxSelection):
             if (
                 inbox is not None
@@ -1862,9 +1895,9 @@ class Heartbeat:
             self._pending.popleft()
             if inbox_message is not None and inbox is not None and residence is None:
                 inbox.store.mark_read([inbox_message.id])
-            if self._language is not None and self._language_config.learning_enabled:
-                self._language_samples.append(
-                    language_runner.queue_language_sample(record, perception, inbox_message)
+            if self._language is not None and self._has_language_organ():
+                self._language_samples.extend(
+                    (language_runner.queue_language_sample(record, perception, inbox_message),)
                 )
             priority = _priority_of(perception, person)
             if (
@@ -1964,8 +1997,16 @@ class Heartbeat:
             round_trace=trace,
         )
 
+    def _has_language_organ(self) -> bool:
+        return (
+            resolve_task_organ(
+                self._language_config.organ, "language_learning", self._available_organs
+            )
+            in self._available_organs
+        )
+
     def _maybe_learn_language(self) -> None:
-        """回复优先。空闲时用同一个器官任务槽处理本次运行的新消息。"""
+        """回复优先；同一来源有新样本时按上游间隔批量学习。"""
         if (
             self._language is None
             or not self._language_samples
@@ -1973,15 +2014,32 @@ class Heartbeat:
             or self._unanswered
             or self._stop_requested
             or not self._permissions.check(ACTION_CALL_ORGAN).allowed
+            or not self._has_language_organ()
         ):
             return
-        scope, samples = language_runner.take_language_batch(self._language_samples, BATCH_SIZE)
+        now = self._clock.now()
+        self._language_next_learning_at = {
+            scope: due for scope, due in self._language_next_learning_at.items() if due > now
+        }
+        eligible = [
+            item
+            for item in self._language_samples.snapshot()
+            if item.conversation not in self._language_next_learning_at
+        ]
+        if not eligible:
+            self._language_last_status = "等待学习间隔"
+            return
+        batch = language_runner.select_language_batch(eligible, BATCH_SIZE)
+        scope = batch[0].conversation
+        if scope is not None:
+            self._language_next_learning_at[scope] = now + language_runner.LEARNING_COOLDOWN
+        self._language_last_status = "学习中"
         task = asyncio.create_task(
             language_runner.learn_language(
                 self._language,
                 self._language_config.organ,
                 self._call_organ,
-                samples,
+                [item.sample for item in batch],
                 conversation_key=scope,
                 bot_names=(self._identity.facts.name, *self._identity.facts.alias_names),
                 expression_quality=(
@@ -1994,8 +2052,42 @@ class Heartbeat:
             ),
             name=language_runner.TASK_NAME,
         )
-        task.add_done_callback(self._on_thought_done)
+        task.add_done_callback(lambda finished: self._finish_language_task(finished, batch))
         self._thought = _Thought(task=task, replying_to=(), strategy=self._current_strategy())
+
+    def _finish_language_task(
+        self, task: asyncio.Task[bool], batch: Sequence[language_runner.QueuedLanguageSample]
+    ) -> None:
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            error = None
+        if task.cancelled():
+            self._language_last_status = "已取消，样本保留"
+        elif error is not None:
+            logger.error("语言学习任务失败（%s）；保留样本供重试。", type(error).__name__)
+            self._language_last_status = "失败，样本保留"
+        elif task.result() is True:
+            self._language_samples.discard(batch)
+            self._language_last_status = "本批结束"
+        else:
+            self._language_last_status = "未完成，样本保留"
+        self._on_thought_done(task)
+
+    def _cancel_language_task(self) -> None:
+        thought = self._thought
+        if thought is not None and thought.task.get_name() == language_runner.TASK_NAME:
+            thought.task.cancel()
+
+    def _language_due_at(self) -> datetime | None:
+        now = self._clock.now()
+        return min(
+            (
+                self._language_next_learning_at.get(item.conversation, now)
+                for item in self._language_samples.snapshot()
+            ),
+            default=None,
+        )
 
     def _maybe_start_initiative(self) -> None:
         """只在这里读取主动需要的材料；失败就跳过这一拍（D78）。"""
@@ -2550,6 +2642,11 @@ class Heartbeat:
         """等到有事（新感知、想法有结果、要求停下）或者到了定时拍。"""
         with contextlib.suppress(TimeoutError):
             timeout = None if self._maintenance_paused else self.seconds_until_next_beat()
+            if timeout is not None and self._has_language_organ():
+                due = self._language_due_at()
+                now = self._clock.now()
+                if due is not None and due > now:
+                    timeout = min(timeout, (due - now).total_seconds())
             await asyncio.wait_for(self._wake.wait(), timeout=timeout)
         # 先清掉再跳：清掉之后才来的事会重新叫醒；之前来的事，接下来这一拍都会处理。
         self._wake.clear()

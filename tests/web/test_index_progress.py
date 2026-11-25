@@ -170,7 +170,9 @@ def test_picture_progress_uses_saved_attachments_and_read_only_session(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_expression_progress_excludes_stale_removed_and_rejected(tmp_path: Path) -> None:
+async def test_expression_progress_excludes_stale_and_removed_but_not_old_reviews(
+    tmp_path: Path,
+) -> None:
     database = tmp_path / "test.db"
     language = LanguageStore(database)
     language.open()
@@ -203,7 +205,7 @@ async def test_expression_progress_excludes_stale_removed_and_rejected(tmp_path:
     language.add_entry(LanguageKind.EXPRESSION, LanguageContent("更新", "测试"))
     result = await progress.read("text_embedding")
     assert result is not None
-    assert (result[0].state, result[0].established, result[0].eligible) == ("partial", 1, 2)
+    assert (result[0].state, result[0].established, result[0].eligible) == ("partial", 2, 3)
 
 
 def test_expression_counts_only_package_grants_for_allowed_scopes(tmp_path: Path) -> None:

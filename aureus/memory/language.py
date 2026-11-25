@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
@@ -43,6 +45,7 @@ from aureus.memory.language_matching import (
     ExpressionReviewStatus,
     JargonStatus,
     LanguageEntry,
+    TermFrequency,
     format_language,
     is_reference,
     match_jargons,
@@ -57,8 +60,8 @@ from aureus.memory.language_online import (
     ready_inferences,
     save_online_term,
 )
+from aureus.memory.learning_workbench_ids import SCHEMA as WORKBENCH_SCHEMA
 from aureus.memory.learning_workbench_ids import identify as identify_workbench_ids
-from aureus.memory.learning_workbench_ids import initialize as initialize_workbench_ids
 from aureus.memory.learning_workbench_ids import resolve as resolve_workbench_ids
 
 MAX_TEXT = 80
@@ -66,6 +69,9 @@ MAX_DETAIL = 160
 MAX_EXAMPLE = 2000
 MAX_REVIEW_REASON = 500
 BATCH_SIZE = ONLINE_BATCH_SIZE
+_FREQUENCY_LIMIT = 1000
+_MIN_TERM_COUNT = 2
+_FREQUENCY_TOKEN = re.compile(r"[a-z][a-z0-9_+-]+|[\u3400-\u9fff]{2,}")
 _MEDIA_MARKERS = ("[表情包", "[图片")
 _EXCLUDED_MARKERS = ("SELF", *_MEDIA_MARKERS)
 _SCHEMA = """
@@ -73,6 +79,14 @@ CREATE TABLE IF NOT EXISTS language_observations (
     source_key TEXT PRIMARY KEY,
     record_id INTEGER NOT NULL,
     speaker TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS language_frequency_terms (
+    source_scope TEXT NOT NULL,
+    term_key TEXT NOT NULL,
+    term TEXT NOT NULL,
+    occurrence_count INTEGER NOT NULL,
+    message_count INTEGER NOT NULL,
+    PRIMARY KEY(source_scope, term_key)
 );
 CREATE TABLE IF NOT EXISTS language_entries (
     id INTEGER PRIMARY KEY,
@@ -295,6 +309,77 @@ class LanguageStore:
     ) -> None:
         self._path = path
         self._old_source_scope = old_source_scope
+        self._allows_learning_source: Callable[[str], bool] | None = None
+        self.learning_evidence_available: Callable[[str, str, int, Connection], bool] | None = None
+
+    def set_learning_source_filter(self, allows: Callable[[str], bool]) -> None:
+        """绑定宿主现行的来源授权；来源会话不是候选的目标范围。"""
+        self._allows_learning_source = allows
+
+    def learning_source_allowed(self, scope: str) -> bool:
+        """判断该来源现在是否允许用于学习或内部召回。"""
+        return self._allows_learning_source is None or self._allows_learning_source(scope)
+
+    def merge_frequency_terms(self, scope: str, samples: Sequence[LanguageSample]) -> int:
+        """同事务消费稳定样本键并合并词频；不保存正文或重复计数。"""
+        if not scope or not samples:
+            return 0
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not self.learning_source_allowed(scope):
+                return 0
+            counts: Counter[str] = Counter()
+            coverage: Counter[str] = Counter()
+            for sample in samples:
+                if not _is_learnable(sample):
+                    continue
+                observed = self._observation(connection, sample)
+                if observed is None or observed[1] != sample.record_id:
+                    continue
+                consumed = connection.execute(
+                    "INSERT OR IGNORE INTO language_extractions VALUES ('frequency', ?)",
+                    (observed[0],),
+                )
+                if consumed.rowcount:
+                    terms = _FREQUENCY_TOKEN.findall(normalize(sample.content[:MAX_EXAMPLE]))
+                    counts.update(terms)
+                    coverage.update(set(terms))
+            updated = 0
+            for key, occurrences in counts.most_common(_FREQUENCY_LIMIT):
+                connection.execute(
+                    """INSERT INTO language_frequency_terms VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(source_scope, term_key) DO UPDATE SET
+                       term=excluded.term,
+                       occurrence_count=language_frequency_terms.occurrence_count
+                           + excluded.occurrence_count,
+                       message_count=language_frequency_terms.message_count
+                           + excluded.message_count""",
+                    (scope, key, key, occurrences, coverage[key]),
+                )
+                updated += 1
+            connection.execute(
+                """DELETE FROM language_frequency_terms WHERE source_scope = ? AND term_key IN (
+                   SELECT term_key FROM language_frequency_terms WHERE source_scope = ?
+                   ORDER BY occurrence_count DESC, message_count DESC, term_key LIMIT -1 OFFSET ?
+                   )""",
+                (scope, scope, _FREQUENCY_LIMIT),
+            )
+            return updated
+
+    def frequency_terms(self, scope: str) -> tuple[tuple[str, int, int], ...]:
+        """按原始频次和跨消息覆盖读取一个来源会话的词频。"""
+        if not self.learning_source_allowed(scope):
+            return ()
+        with closing(open_connection(self._path, read_only=True)) as connection:
+            rows = connection.execute(
+                """SELECT term, occurrence_count, message_count FROM language_frequency_terms
+                   WHERE source_scope = ? AND occurrence_count >= ?
+                   ORDER BY occurrence_count DESC, term_key LIMIT ?""",
+                (scope, _MIN_TERM_COUNT, _FREQUENCY_LIMIT),
+            )
+            return tuple(
+                (row["term"], row["occurrence_count"], row["message_count"]) for row in rows
+            )
 
     def _observation(
         self, connection: Connection, sample: LanguageSample
@@ -326,8 +411,9 @@ class LanguageStore:
     def open(self) -> None:
         """初始化语言子系统持有的表。"""
         with closing(open_connection(self._path)) as connection:
-            connection.executescript(_SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA)
-            initialize_workbench_ids(connection)
+            connection.executescript(
+                _SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA + WORKBENCH_SCHEMA
+            )
 
     def workbench_ids(self, kind: LanguageKind, keys: Iterable[str]) -> dict[str, int]:
         """返回语言条目的稳定整数编号，不改变语言条目本身。"""
@@ -360,7 +446,12 @@ class LanguageStore:
             ):
                 raise LanguageTargetError("language_target_not_runtime")
             connection.executescript(
-                "BEGIN IMMEDIATE;\n" + _SCHEMA + IMPORT_SCHEMA + ONLINE_SCHEMA + QUALITY_SCHEMA
+                "BEGIN IMMEDIATE;\n"
+                + _SCHEMA
+                + IMPORT_SCHEMA
+                + ONLINE_SCHEMA
+                + QUALITY_SCHEMA
+                + WORKBENCH_SCHEMA
             )
             return publish_rows(connection, instance, manifest, source_counts, rows)
 
@@ -442,6 +533,8 @@ class LanguageStore:
         """独立消费成功的抽取，并返回本轮达到门槛的黑话候选。"""
         with closing(open_connection(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
+            if not self.learning_source_allowed(scope):
+                return []
             accepted: dict[int, tuple[str, str]] = {}
             for sample in samples:
                 fragment = presented.get(sample.record_id, "")
@@ -530,6 +623,12 @@ class LanguageStore:
         ):
             outcome, meaning = "insufficient", ""
         with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT scope FROM language_online_terms WHERE id = ?", (attempt.term_id,)
+            ).fetchone()
+            if row is None or not self.learning_source_allowed(row["scope"]):
+                return
             connection.execute(
                 "INSERT OR IGNORE INTO language_jargon_decisions VALUES (?, ?, ?, ?)",
                 (attempt.term_id, attempt.evidence_count, outcome, meaning),
@@ -689,26 +788,30 @@ class LanguageStore:
                 if entry.is_removed:
                     raise LookupError("已移除条目不能导出。")
                 if kind == LanguageKind.EXPRESSION:
-                    result.append({
-                        "situation": entry.detail,
-                        "style": entry.text,
-                        "content_list": json.dumps([entry.example] if entry.example else []),
-                        "count": entry.count,
-                        "last_active_time": None,
-                        "create_time": None,
-                        "checked": False,
-                        "modified_by": None,
-                    })
+                    result.append(
+                        {
+                            "situation": entry.detail,
+                            "style": entry.text,
+                            "content_list": json.dumps([entry.example] if entry.example else []),
+                            "count": entry.count,
+                            "last_active_time": None,
+                            "create_time": None,
+                            "checked": False,
+                            "modified_by": None,
+                        }
+                    )
                 else:
-                    result.append({
-                        "content": entry.text,
-                        "meaning": entry.detail,
-                        "count": entry.count,
-                        "is_jargon": entry.jargon_status == JargonStatus.CONFIRMED,
-                        "is_complete": bool(entry.detail),
-                        "is_global": False,
-                        "created_by": "MANUAL",
-                    })
+                    result.append(
+                        {
+                            "content": entry.text,
+                            "meaning": entry.detail,
+                            "count": entry.count,
+                            "is_jargon": entry.jargon_status == JargonStatus.CONFIRMED,
+                            "is_complete": bool(entry.detail),
+                            "is_global": False,
+                            "created_by": "MANUAL",
+                        }
+                    )
             return result
 
     def save_package(self, kind: LanguageKind, rows: Sequence[LanguagePackageRow]) -> int:
@@ -757,16 +860,28 @@ class LanguageStore:
                 pair = (normalize(content.text), normalize(content.detail))
                 if pair in existing:
                     continue
-                identifier = connection.execute(
-                    "INSERT INTO language_manual (kind, text, detail, example) "
-                    "VALUES (?, ?, ?, ?) RETURNING id",
-                    (kind, content.text, content.detail, content.example),
-                ).fetchone()[0] if not scopes else None
+                identifier = (
+                    connection.execute(
+                        "INSERT INTO language_manual (kind, text, detail, example) "
+                        "VALUES (?, ?, ?, ?) RETURNING id",
+                        (kind, content.text, content.detail, content.example),
+                    ).fetchone()[0]
+                    if not scopes
+                    else None
+                )
                 if scopes:
                     connection.execute(
                         "INSERT INTO language_package_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (row.digest, kind, content.text, content.detail, content.example,
-                         row.count, row.source_chat_name, row.original),
+                        (
+                            row.digest,
+                            kind,
+                            content.text,
+                            content.detail,
+                            content.example,
+                            row.count,
+                            row.source_chat_name,
+                            row.original,
+                        ),
                     )
                     connection.executemany(
                         "INSERT INTO language_package_scopes VALUES (?, ?)",
@@ -839,8 +954,12 @@ class LanguageStore:
         return previous
 
     def set_removed(
-        self, kind: LanguageKind, keys: Sequence[str], removed: bool,
-        *, allowed: Callable[[], bool] | None = None,
+        self,
+        kind: LanguageKind,
+        keys: Sequence[str],
+        removed: bool,
+        *,
+        allowed: Callable[[], bool] | None = None,
     ) -> bool:
         """标记整批条目移除或恢复，不触碰原件及原有召回设置。"""
         with closing(open_connection(self._path)) as connection, connection:
@@ -1003,7 +1122,6 @@ class LanguageStore:
                 replace(
                     entry,
                     review_status=reviews.get(entry.entry_key, ExpressionReviewStatus.PENDING),
-                    requires_approval=entry.entry_key in checked,
                     restricted_scope=(
                         entry.learning_source
                         if entry.entry_key in checked and checked[entry.entry_key]["is_scoped"]
@@ -1048,9 +1166,44 @@ class LanguageStore:
         ]
         if include_disabled:
             return entries
+        entries = self._eligible_learning_sources(connection, kind, entries)
         if kind == LanguageKind.JARGON:
             return [entry for entry in entries if entry.can_reference_jargon()]
         return [entry for entry in entries if entry.is_enabled]
+
+    def _eligible_learning_sources(
+        self, connection: Connection, kind: LanguageKind, entries: Sequence[LanguageEntry]
+    ) -> list[LanguageEntry]:
+        check = self.learning_evidence_available
+        invalid: set[str] = set()
+        if check is not None:
+            verified: dict[tuple[str, str, int], bool] = {}
+            for row in connection.execute(
+                """SELECT term.id, term.scope, evidence.source_key, observation.record_id
+                   FROM language_online_terms AS term
+                   JOIN language_online_evidence AS evidence ON evidence.term_id = term.id
+                   JOIN language_observations AS observation USING (source_key)
+                   WHERE term.kind = ?""",
+                (kind,),
+            ):
+                entry_key = f"online:{row['id']}"
+                if entry_key in invalid:
+                    continue
+                source = (row["scope"], row["source_key"], row["record_id"])
+                if source not in verified:
+                    verified[source] = self.learning_source_allowed(source[0]) and check(
+                        *source, connection
+                    )
+                if not verified[source]:
+                    invalid.add(entry_key)
+        return [
+            entry
+            for entry in entries
+            if entry.entry_key not in invalid
+            and (
+                entry.learning_source is None or self.learning_source_allowed(entry.learning_source)
+            )
+        ]
 
     def browse_page(
         self,
@@ -1212,6 +1365,24 @@ class LanguageStore:
         """生成规划与回复的黑话参考，按统一库的高频词加权。"""
         with closing(open_connection(self._path)) as connection:
             frequencies = imported_frequencies(connection)
+            if conversation_key is not None and self.learning_source_allowed(conversation_key):
+                rows = connection.execute(
+                    """SELECT term, rank, occurrence_count FROM (
+                       SELECT term, row_number() OVER (
+                           ORDER BY occurrence_count DESC, term_key
+                       ) AS rank,
+                              occurrence_count
+                       FROM language_frequency_terms
+                       WHERE source_scope = ? AND occurrence_count >= ?
+                       )""",
+                    (conversation_key, _MIN_TERM_COUNT),
+                )
+                for row in rows:
+                    key = normalize(row["term"])
+                    previous = frequencies.get(key)
+                    current = TermFrequency(row["rank"], row["occurrence_count"])
+                    if previous is None or current.count > previous.count:
+                        frequencies[key] = current
         entries = self._visible_entries(LanguageKind.JARGON, conversation_key)
         matches = match_jargons(texts, entries, frequencies)
         return format_language(matches, jargon=True, budget=budget)
@@ -1237,12 +1408,11 @@ class LanguageStore:
 
     def expression_pool(self, connection: Connection | None = None) -> list[LanguageEntry]:
         """在应用会话授权前读取有效表达；可在调用方的同库读事务中取值。"""
-        entries = (
+        return (
             self.entries(LanguageKind.EXPRESSION)
             if connection is None
             else self._catalog_entries(connection, LanguageKind.EXPRESSION)
         )
-        return [entry for entry in entries if entry.can_reference_expression()]
 
     def _visible_entries(
         self, kind: LanguageKind, conversation_key: str | None
