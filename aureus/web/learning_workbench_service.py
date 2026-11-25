@@ -79,7 +79,9 @@ class LearningWorkbench:
                     }
                 )
             else:
-                sessions = list(dict.fromkeys(key for key in (scope, *entry.scope_keys) if key in scopes))
+                sessions = list(
+                    dict.fromkeys(key for key in (scope, *entry.scope_keys) if key in scopes)
+                )
                 result.append(
                     {
                         **common,
@@ -138,8 +140,11 @@ class LearningWorkbench:
             targets = [row["chat_id"]] if kind == LanguageKind.EXPRESSION else row["session_ids"]
             conversations.update(key for key in targets if key)
         common = {
-            "total": len(rows), "chat_count": len(conversations),
-            "top_chats": dict(sorted(conversations.items(), key=lambda item: (-item[1], item[0]))[:5]),
+            "total": len(rows),
+            "chat_count": len(conversations),
+            "top_chats": dict(
+                sorted(conversations.items(), key=lambda item: (-item[1], item[0]))[:5]
+            ),
         }
         if kind == LanguageKind.EXPRESSION:
             now = self.clock.now()
@@ -155,7 +160,9 @@ class LearningWorkbench:
         return {
             **common,
             "confirmed_jargon": sum(row["jargon_status"] == JargonStatus.CONFIRMED for row in rows),
-            "confirmed_not_jargon": sum(row["jargon_status"] == JargonStatus.NON_JARGON for row in rows),
+            "confirmed_not_jargon": sum(
+                row["jargon_status"] == JargonStatus.NON_JARGON for row in rows
+            ),
             "pending": sum(row["jargon_status"] == JargonStatus.CANDIDATE for row in rows),
             "manual_jargon": sum(row["created_by"] == "MANUAL" for row in rows),
             "global_count": sum(row["is_global"] for row in rows),
@@ -257,6 +264,9 @@ class LearningWorkbench:
         kind: LanguageKind,
         rows: Sequence[Any],
         scopes: Sequence[str],
+        *,
+        overwrite: bool = False,
+        active: Callable[[], bool] = lambda: True,
     ) -> int:
         """将已由版本化解析器校验的记录写入当前资料库。"""
         if self.language is None:
@@ -269,7 +279,8 @@ class LearningWorkbench:
             rows,
             targets,
             self.clock.now(),
-            allowed=lambda: set(targets) <= self.scopes().keys(),
+            allowed=lambda: active() and set(targets) <= self.scopes().keys(),
+            overwrite=overwrite,
         )
         if result is None:
             raise ValueError("导入来源已撤权；没有修改。")
@@ -310,13 +321,18 @@ class LearningWorkbench:
     ) -> int:
         """整批复验后写入黑话定性；义项仍来自已保存正文。"""
         keys = [
-            entry.entry_key for entry in self.language_targets_for_maintenance(LanguageKind.JARGON, identifiers)
+            entry.entry_key
+            for entry in self.language_targets_for_maintenance(LanguageKind.JARGON, identifiers)
         ]
         assert self.language is not None
         status = JargonStatus.CONFIRMED if verdict else JargonStatus.NON_JARGON
         changed = self.language.classify_jargons(
-            keys, status, self.clock.now(),
-            allowed=lambda: session_active() and self.language_keys_allowed(LanguageKind.JARGON, keys),
+            keys,
+            status,
+            self.clock.now(),
+            allowed=lambda: (
+                session_active() and self.language_keys_allowed(LanguageKind.JARGON, keys)
+            ),
         )
         if changed is None:
             raise LookupError("所选黑话已变化。")
