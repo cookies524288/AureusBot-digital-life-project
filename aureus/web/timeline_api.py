@@ -1,6 +1,7 @@
 """网页时间线和总览：只读核心状态，复用回复上下文查询（D84）。"""
 
-from collections.abc import Awaitable, Callable
+import json
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 from typing import Annotated, Any, Protocol
 
@@ -20,6 +21,56 @@ DEFAULT_HOURS = 24
 MAX_HOURS = 720
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 300
+CONVERSATION_FIELDS = ("platform", "account_id", "kind", "recipient_id")
+
+
+def _conversation_metadata(value: str) -> dict[str, str]:
+    """把网页传来的会话键转成时间线 metadata 条件（平台、账号、类型、对方，D123）。"""
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        decoded = None
+    if not isinstance(decoded, dict):
+        raise HTTPException(422, detail="会话过滤参数要是包含平台、账号、类型和对方的 JSON 对象。")
+    fields: dict[str, str] = {}
+    for name in CONVERSATION_FIELDS:
+        item = decoded.get(name)
+        if not isinstance(item, str) or not item:
+            raise HTTPException(422, detail="会话过滤参数缺少平台、账号、类型或对方。")
+        fields[name] = item
+    return {
+        "channel": fields["platform"],
+        "account_id": fields["account_id"],
+        "message_type": fields["kind"],
+        "recipient_id": fields["recipient_id"],
+    }
+
+
+def _conversation_records(
+    timeline: TimelineDatabase,
+    query: TimelineQuery,
+    conversation: dict[str, str],
+) -> Sequence[TimelineRecord]:
+    """只取这个会话的记录，并按轮次补上判断、规划、投递等没有会话字段的事件（D123）。"""
+    anchors = timeline.query(
+        query.model_copy(update={"metadata": {**query.metadata, **conversation}})
+    )
+    if not anchors:
+        return anchors
+    # 轮次编号等于这一批第一条来信的记录序号；判断等事件只带 round_id，不带会话字段。
+    round_ids = {record.id for record in anchors}
+    for record in anchors:
+        round_id = record.metadata.get("round_id")
+        if isinstance(round_id, int) and not isinstance(round_id, bool) and round_id > 0:
+            round_ids.add(round_id)
+    related = timeline.query(query.model_copy(update={"metadata": {}, "limit": MAX_LIMIT}))
+    merged = {record.id: record for record in anchors}
+    for record in related:
+        round_id = record.metadata.get("round_id")
+        if isinstance(round_id, int) and not isinstance(round_id, bool) and round_id in round_ids:
+            merged[record.id] = record
+    records = sorted(merged.values(), key=lambda record: record.id)
+    return records[-query.limit :]
 
 
 def _timeline_item(
@@ -127,6 +178,7 @@ def register_timeline_routes(
         before_id: str | None = None,
         limit: str = str(DEFAULT_LIMIT),
         types: str = "",
+        conversation: str | None = None,
     ) -> dict[str, Any]:
         try:
             bounded_hours = min(max(int(hours), 1), MAX_HOURS)
@@ -136,15 +188,18 @@ def register_timeline_routes(
             raise HTTPException(422, detail="时间范围、条数和翻页序号要用整数。") from None
         since = clock.now() - timedelta(hours=bounded_hours)
         event_types = tuple({item.strip() for item in types.split(",") if item.strip()})
-        records = timeline.query(
-            TimelineQuery(
-                since_time=since,
-                before_id=before if before is not None and before > 0 else None,
-                latest=True,
-                limit=bounded_limit,
-                event_types=event_types,
-                without_metadata=(INTERNAL_REPLY_RECORD,),
-            )
+        query = TimelineQuery(
+            since_time=since,
+            before_id=before if before is not None and before > 0 else None,
+            latest=True,
+            limit=bounded_limit,
+            event_types=event_types,
+            without_metadata=(INTERNAL_REPLY_RECORD,),
+        )
+        records = (
+            timeline.query(query)
+            if conversation is None
+            else _conversation_records(timeline, query, _conversation_metadata(conversation))
         )
         focus = heartbeat.working_memory_focus()
         if focus is None:

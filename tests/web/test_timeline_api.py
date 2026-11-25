@@ -1,5 +1,6 @@
 """时间线和总览接口：假时钟、真数据库，不开网络端口（D84）。"""
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -15,6 +16,7 @@ from aureus.common import ManualClock, WebConfig
 from aureus.core import CognitiveState
 from aureus.heartbeat import EVENT_REPLY_REFERENCE, Perception, recent_dialogue
 from aureus.heartbeat.events import (
+    EVENT_JUDGMENT,
     EVENT_RECALL_FEEDBACK,
     EVENT_RECALL_REPLY_DELIVERED,
     EVENT_REPLY_DELIVERED,
@@ -303,6 +305,88 @@ def test_power_requires_ready_and_same_origin_and_keeps_web_available(rig: Rig) 
     assert rig.client.post("/api/power/start", headers=origin).json() == {
         "maintenance_paused": False
     }
+
+
+def test_conversation_filter_keeps_only_that_chat_and_its_round_events(rig: Rig) -> None:
+    rig.log_in()
+    conversation = {
+        "platform": "qq",
+        "account_id": "10000",
+        "kind": "group",
+        "recipient_id": "20000",
+    }
+    chat_metadata = {
+        "channel": "qq",
+        "account_id": "10000",
+        "message_type": "group",
+        "recipient_id": "20000",
+    }
+    first = rig.timeline.append("message", "群里的来信", ActorType.USER, metadata=chat_metadata)
+    other = rig.timeline.append(
+        "message", "别的群来信", ActorType.USER, metadata={**chat_metadata, "recipient_id": "30000"}
+    )
+    rig.timeline.append(
+        EVENT_JUDGMENT,
+        "判断了刚收到的消息里的情绪。",
+        ActorType.ME,
+        metadata={"round_id": first.id, "in_reply_to": [first.id]},
+    )
+    rig.timeline.append(
+        EVENT_REPLY_REFERENCE,
+        "建议回复：打招呼",
+        ActorType.ME,
+        metadata={
+            **chat_metadata,
+            "round_id": first.id,
+            "in_reply_to": [first.id],
+            "actions": [{"action": "reply", "status": "completed", "reference": "回复参考"}],
+        },
+    )
+    reply = rig.timeline.append(
+        "message",
+        "回复正文",
+        ActorType.ME,
+        metadata={**chat_metadata, "round_id": first.id, INTERNAL_REPLY_RECORD: True},
+    )
+    rig.timeline.append(
+        EVENT_REPLY_DELIVERED,
+        "回复正文",
+        ActorType.ME,
+        metadata={"channel": "qq", "round_id": first.id, "reply_id": reply.id, "segment": 1},
+    )
+    rig.timeline.append(
+        EVENT_JUDGMENT, "别的群的判断", ActorType.ME, metadata={"round_id": other.id}
+    )
+    records = rig.client.get(
+        "/api/timeline", params={"conversation": json.dumps(conversation)}
+    ).json()["records"]
+    assert [record["content"] for record in records] == [
+        "群里的来信",
+        "判断了刚收到的消息里的情绪。",
+        "建议回复：打招呼",
+        "回复正文",
+    ]
+    assert [record.get("round_id") for record in records] == [None, first.id, first.id, first.id]
+    assert all("别的群" not in record["content"] for record in records)
+    unfiltered = rig.client.get("/api/timeline").json()["records"]
+    assert [record["content"] for record in unfiltered] == [
+        "群里的来信",
+        "别的群来信",
+        "判断了刚收到的消息里的情绪。",
+        "建议回复：打招呼",
+        "回复正文",
+        "别的群的判断",
+    ]
+
+
+@pytest.mark.parametrize(
+    "value", ["不是 JSON", "[]", '{"platform":"qq"}', '{"platform":"qq","account_id":""}']
+)
+def test_conversation_filter_rejects_malformed_values(rig: Rig, value: str) -> None:
+    rig.log_in()
+    response = rig.client.get("/api/timeline", params={"conversation": value})
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], str)
 
 
 def test_types_filter_and_private_metadata_are_returned_without_mutation(rig: Rig) -> None:
