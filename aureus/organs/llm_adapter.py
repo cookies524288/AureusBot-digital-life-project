@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import atexit
 import base64
 import json
 import os
@@ -423,6 +424,35 @@ def _embedding_client(
     client = httpx.AsyncClient(transport=transport, trust_env=trust_env)
     _EMBEDDING_CLIENTS.append(_EmbeddingClientEntry(loop, transport, trust_env, client))
     return client
+
+
+async def close_embedding_clients() -> None:
+    """关闭当前事件循环里共用的嵌入客户端（D128）。"""
+    loop = asyncio.get_running_loop()
+    for entry in list(_EMBEDDING_CLIENTS):
+        if entry.loop is loop:
+            _EMBEDDING_CLIENTS.remove(entry)
+            await entry.client.aclose()
+
+
+def _close_embedding_clients_at_exit() -> None:
+    """进程退出时关闭所有还开着的嵌入客户端（D128）。
+
+    正式运行的 asyncio.run 结束时，事件循环已经关闭，不能再在里面等待；
+    这里用一个短循环关闭连接池。仍在别的线程运行的循环交给它自己收尾。
+    """
+    entries = list(_EMBEDDING_CLIENTS)
+    _EMBEDDING_CLIENTS.clear()
+    for entry in entries:
+        if entry.client.is_closed or entry.loop.is_running():
+            continue
+        try:
+            asyncio.run(entry.client.aclose())
+        except Exception as error:
+            logger.debug("退出时关闭嵌入客户端失败：{}", type(error).__name__)
+
+
+atexit.register(_close_embedding_clients_at_exit)
 
 
 def _request_time() -> float:

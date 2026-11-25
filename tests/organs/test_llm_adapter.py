@@ -33,6 +33,7 @@ from aureus.organs.llm_adapter import (
     RETRY_BACKOFF_SECONDS,
     EmbeddingOrgan,
     LLMOrgan,
+    close_embedding_clients,
     count_prompt_tokens,
     probe_model,
 )
@@ -578,6 +579,35 @@ async def test_local_embedding_probe_uses_direct_client(
     assert bodies == [{"model": "local-embed", "input": [_MODEL_TEST_INPUT]}]
 
 
+@pytest.mark.parametrize(
+    ("mode", "reason"),
+    [
+        ("connect", "连不上服务商"),
+        ("status", "服务商内部错误"),
+        ("json", "返回内容为空或格式异常"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_local_embedding_probe_failures_are_reported(
+    keys: KeyResolver, mode: str, reason: str
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if mode == "connect":
+            raise httpx.ConnectError("连不上", request=request)
+        if mode == "status":
+            return httpx.Response(500, json={})
+        return httpx.Response(200, text="不是 JSON")
+
+    route = local_embedding_route()
+    with pytest.raises(OrganCallError, match=reason) as error:
+        await probe_model(
+            route.model, route.provider, keys, transport=httpx.MockTransport(respond)
+        )
+
+    assert error.value.attempts[0].succeeded is False
+    assert error.value.attempts[0].failure_reason == reason
+
+
 @pytest.mark.asyncio
 async def test_probe_latency_excludes_client_creation(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
@@ -634,6 +664,41 @@ async def test_embedding_client_is_reused_between_calls(
 
     assert len(created) == 1
     assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_embedding_client_closes_on_shutdown(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created: list[httpx.AsyncClient] = []
+
+    class CountingClient(httpx.AsyncClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            created.append(self)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(llm_adapter.httpx, "AsyncClient", CountingClient)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    organ = EmbeddingOrgan(
+        "text_embedding",
+        [local_embedding_route()],
+        keys,
+        transport=httpx.MockTransport(respond),
+    )
+    request = OrganRequest("text_embedding", "", embedding_inputs=("甲",))
+    await organ.process(request)
+    assert len(created) == 1
+    assert not created[0].is_closed
+
+    await close_embedding_clients()
+
+    assert created[0].is_closed
+    await organ.process(request)
+    assert len(created) == 2
+    await close_embedding_clients()
 
 
 @pytest.mark.asyncio
