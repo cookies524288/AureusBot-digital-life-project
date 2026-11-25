@@ -23,10 +23,14 @@ from tests.web.test_server import FakeHeartbeat
 def test_summary_fields_follow_clock_and_current_records(tmp_path: Path) -> None:
     client, service, scopes = _client(tmp_path)
     with client:
+        summary = "/api/webui/expression/stats/summary"
+        assert client.get(summary).raise_for_status().json()["data"]["recent_7days"] == 0
         client.post("/api/webui/expression/", json={
             "style": "旧说法", "situation": "庆祝", "chat_id": "source-a",
         }).raise_for_status()
-        service.clock.advance(timedelta(days=8))
+        service.clock.advance(timedelta(days=7))
+        assert client.get(summary).raise_for_status().json()["data"]["recent_7days"] == 1
+        service.clock.advance(timedelta(seconds=1))
         client.post("/api/webui/expression/", json={
             "style": "新说法", "situation": "庆祝", "chat_id": "source-b",
         }).raise_for_status()
@@ -48,7 +52,7 @@ def test_summary_fields_follow_clock_and_current_records(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("revoke", [False, True])
-def test_query_classification_rechecks_source_and_updates_same_store(
+def test_json_classification_rechecks_source_and_updates_same_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, revoke: bool,
 ) -> None:
     client, service, scopes = _client(tmp_path)
@@ -65,7 +69,12 @@ def test_query_classification_rechecks_source_and_updates_same_store(
         jargon = client.post("/api/webui/jargon/", json={
             "content": "合成词", "meaning": "表示完成", "session_id": "source-b",
         }).raise_for_status().json()["data"]
-        result = client.post(f'/api/webui/jargon/batch/set-jargon?ids={jargon["id"]}&is_jargon=false')
+        path = "/api/webui/jargon/batch/set-jargon"
+        payload = {"ids": [jargon["id"]], "is_jargon": False}
+        assert client.post(path, params=payload).status_code == 422
+        [unchanged] = service.language.entries(LanguageKind.JARGON)
+        assert unchanged.jargon_status == JargonStatus.CONFIRMED
+        result = client.post(path, json=payload)
         if revoke:
             assert result.status_code == 404, result.text
         else:
@@ -74,7 +83,9 @@ def test_query_classification_rechecks_source_and_updates_same_store(
             stats = client.get("/api/webui/jargon/stats/summary").json()["data"]
             assert stats["confirmed_not_jargon"] == 1
         rows = service.language.entries(LanguageKind.JARGON, include_disabled=True)
-        assert rows[0].jargon_status == (JargonStatus.CONFIRMED if revoke else JargonStatus.NON_JARGON)
+        assert rows[0].jargon_status == (
+            JargonStatus.CONFIRMED if revoke else JargonStatus.NON_JARGON
+        )
         if not revoke:
             [candidate] = service.language.entries(LanguageKind.JARGON)
             assert candidate.jargon_status == JargonStatus.NON_JARGON
@@ -104,7 +115,10 @@ def test_single_emoji_delete_is_same_store_reversible_removal(tmp_path: Path) ->
     (None, True, 700), (False, True, 700), (True, True, 0), (False, False, 700),
 ])
 def test_chat_targets_use_runtime_language_settings_and_current_scope(
-    tmp_path: Path, legacy_learning_enabled: bool | None, recall_enabled: bool, reference_chars: int,
+    tmp_path: Path,
+    legacy_learning_enabled: bool | None,
+    recall_enabled: bool,
+    reference_chars: int,
 ) -> None:
     rig = VectorRig(tmp_path)
     try:
@@ -121,19 +135,28 @@ def test_chat_targets_use_runtime_language_settings_and_current_scope(
         if legacy_learning_enabled is not None:
             configuration["learning_enabled"] = legacy_learning_enabled
         app = create_app(
-            config=rig.web.config, auth=rig.web.auth, sessions=rig.web.sessions,
-            channel=WebChannel(FakeHeartbeat()), timeline=rig.web.timeline,
-            resource_language=rig.language, inbox_store=rig.inbox,
+            config=rig.web.config,
+            auth=rig.web.auth,
+            sessions=rig.web.sessions,
+            channel=WebChannel(FakeHeartbeat()),
+            timeline=rig.web.timeline,
+            resource_language=rig.language,
+            inbox_store=rig.inbox,
             allows_inbox_conversation=rig.allowed.__contains__,
             learning_language_config=LanguageConfig.model_validate(configuration),
+            clock=rig.web.clock,
         )
         with TestClient(app) as client:
             client.cookies.set(SESSION_COOKIE, rig.web.sessions.create())
+            summary = client.get("/api/webui/expression/stats/summary").raise_for_status().json()
+            assert summary["data"]["recent_7days"] == 1
             chats = client.get("/api/webui/expression/chats").raise_for_status().json()["data"]
             assert chats == client.get("/api/webui/expression/chat-targets").json()["data"]
             assert {row["platform"] for row in chats} == {"web", "terminal", "qq"}
             assert all(row["enable_learning"] is True for row in chats)
-            assert all(row["use_expression"] == (recall_enabled and reference_chars > 0) for row in chats)
+            assert all(
+                row["use_expression"] == (recall_enabled and reference_chars > 0) for row in chats
+            )
             group, = [row for row in chats if row["platform"] == "qq"]
             assert group == {
                 "chat_id": key, "session_id": key, "chat_name": "合成群 allowed",
