@@ -243,6 +243,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   function detail(title, ...content) {
     openEditor(title, el('div', {class:'stack resource-detail'}, ...content), true);
+    $('editor-dialog').classList.add('memory-detail-dialog');
   }
   // 列表行：主文本在上，状态、来源等辅助信息另起一行，长文本最多折两行（批次 3）。
   function record(title, open, box) {

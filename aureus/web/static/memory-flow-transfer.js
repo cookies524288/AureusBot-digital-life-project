@@ -12,6 +12,11 @@
   };
   let flow;
 
+  function sectionHead(title, note) {
+    return el('div', {class:'memory-section-head'},
+      el('div', {}, el('h3', {text:title}), el('p', {class:'muted', text:note})));
+  }
+
   document.getElementById('memory-inspection').addEventListener('click', async () => {
     const report = el('div', {class:'stack resource-detail', role:'status'}, '正在核对本地文字索引…');
     openEditor('只读检修', report);
@@ -42,7 +47,6 @@
   }
 
   function createFlow(panel) {
-    const conversation = el('select', {}, el('option', {value:'', text:'全部聊天流'}));
     const type = el('select', {}, el('option', {value:'', text:'全部事件'}),
       Object.entries(eventTypes).map(([value, text]) => el('option', {value, text})));
     const start = el('input', {type:'datetime-local', step:'1'});
@@ -52,12 +56,11 @@
       .map(([hours, label]) => el('button', {class:'btn small', type:'button', text:label,
         onclick:() => apply(hours)}));
     const controls = el('fieldset', {class:'stack', style:'border:0;padding:0;margin:0;min-width:0'},
-      el('div', {class:'row resource-filters'},
-        el('label', {class:'stack'}, '聊天流', conversation),
+      el('div', {class:'row resource-filters memory-flow-filters'},
         el('label', {class:'stack'}, '事件类型', type),
         el('label', {class:'stack'}, '开始时间', start),
         el('label', {class:'stack'}, '结束时间', end)),
-      el('div', {class:'row', style:'flex-wrap:wrap'}, ...shortcuts, refresh));
+      el('div', {class:'row memory-flow-shortcuts'}, ...shortcuts, refresh));
     const filters = el('form', {}, controls);
     let applied = new URLSearchParams();
     let dateDraftChanged = false;
@@ -73,7 +76,6 @@
     function apply(hours) {
       dateDraftChanged = false;
       applied = new URLSearchParams();
-      if (conversation.value) applied.set('conversation', conversation.value);
       if (type.value) applied.set('event_type', type.value);
       if (hours) applied.set('hours', hours);
       else {
@@ -87,7 +89,7 @@
       event.preventDefault();
       apply();
     });
-    panel.replaceChildren(filters);
+    panel.replaceChildren(sectionHead('记忆流', '查看全局记忆事件，按事件类型和时间范围筛选；不区分聊天范围。'), filters);
     const pager = createResourcePager({el, panel, id:'memory-flow', render:renderEntry, error:fail,
       empty:() => '没有符合条件的记忆事件。调整时间范围或事件类型后再试。', request:({offset, limit, signal}) => {
         const params = new URLSearchParams(applied);
@@ -95,10 +97,6 @@
         params.set('limit', limit);
         return api(flowPath + '?' + params, 'GET', undefined, {}, signal);
       }, loaded:data => {
-        const selected = conversation.value;
-        conversation.replaceChildren(el('option', {value:'', text:'全部聊天流'}),
-          ...data.conversations.map(value => el('option', {value, text:value})));
-        conversation.value = selected;
         if (!applied.has('hours')) return;
         applied.delete('hours');
         applied.set('start', data.start);
@@ -183,9 +181,14 @@
       input.value = '';
       input.disabled = false;
     });
-    panel.replaceChildren(el('div', {class:'card stack'},
-      el('p', {text:'文字记忆包包含原件、来源、证据和网页维护的修订及召回设置。已移除项留在本机，不随包导出；图片附件、媒体资产和本地时间线经历也不随包传输。'}),
-      el('div', {class:'row'}, el('a', {class:'btn', href:transferPath, download:true, text:'导出文字记忆包'})),
-      controls), window.createMemoryBundlePanel());
+    panel.replaceChildren(
+      sectionHead('导入导出', '文字记忆包与 MaiBot 知识包都只在全局范围内导入或导出；确认预检结果后才写入。'),
+      el('div', {class:'memory-transfer-grid'},
+        el('div', {class:'card stack memory-transfer-card'},
+          el('h4', {text:'文字记忆包'}),
+          el('p', {text:'文字记忆包包含原件、来源、证据和网页维护的修订及召回设置。已移除项留在本机，不随包导出；图片附件、媒体资产和本地时间线经历也不随包传输。'}),
+          el('div', {class:'row'}, el('a', {class:'btn', href:transferPath, download:true, text:'导出文字记忆包'})),
+          controls),
+        window.createMemoryBundlePanel()));
   };
 })();

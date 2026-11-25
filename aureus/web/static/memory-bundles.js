@@ -173,7 +173,7 @@ window.createMemoryBundlePanel = () => {
   refresh.addEventListener('click', () => load());
   more.addEventListener('click', () => load(true));
   load();
-  return el('div', {class:'card stack'}, el('h3', {text:'MaiBot 知识包与完整包'}),
+  return el('div', {class:'card stack memory-transfer-card'}, el('h4', {text:'MaiBot 知识包与完整包'}),
     el('p', {text:'支持兼容的 .amembundle；预检会列出将安装和跳过的成员，确认后才写入。'}),
     exportPanel(),
     el('label', {class:'stack'}, '选择 MaiBot 记忆包', upload), preview, message,
