@@ -1,6 +1,7 @@
-"""判断器官接进心跳的测试（路线图 2.2，D68）。
+"""判断器官接进心跳的测试（路线图 2.2，D68；D110 改为与规划并行）。
 
-判断在规划之前，任何失败都不影响回复；低档位和开关关着时不调用；每次调用留一条记录。
+判断和规划从同一轮材料同时出发，任何失败都不影响回复；低档位和开关关着时不调用；
+结果由心跳在后续拍收取，每次真正调用留一条记录。
 """
 
 import asyncio
@@ -9,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -18,6 +20,7 @@ from aureus.heartbeat import (
     EVENT_JUDGMENT,
     EVENT_MESSAGE,
     Heartbeat,
+    MessageRoute,
     OutgoingMessage,
     Perception,
     TrustLevel,
@@ -79,6 +82,40 @@ class SlowJudge(ScriptedOrgans):
         return await super().call(request)
 
 
+class GatedJudge(ScriptedOrgans):
+    """第一次判断卡在闸门上，之后按剧本返回；被取消时记下来，便于断言。"""
+
+    def __init__(
+        self,
+        judgments: list[str | BaseException],
+        gate: asyncio.Event,
+        started: asyncio.Event,
+    ) -> None:
+        super().__init__(judgments)
+        self.gate = gate
+        self.started = started
+        self.cancelled = False
+        self.block_next = True
+
+    async def call(self, request: OrganRequest) -> OrganResponse:
+        if request.organ_id != "judge":
+            return await super().call(request)
+        self.requests.append(request)
+        assert self.judge is not None
+        outcome = self.judge.pop(0)
+        if self.block_next:
+            self.block_next = False
+            self.started.set()
+            try:
+                await self.gate.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return OrganResponse(organ_id="judge", suggestion=outcome)
+
+
 @dataclass
 class Rig:
     ledger: Ledger
@@ -99,6 +136,14 @@ class Rig:
         )
         self.heartbeat.beat()
         await self.heartbeat.wait_for_thought()
+        self.heartbeat.beat()
+        await self.settle_judgments()
+
+    async def settle_judgments(self, timeout: float = 6.0) -> None:
+        """等后台判断跑完，再跳一拍让心跳收取（D110：判断不再挡着回复）。"""
+        pending = self.heartbeat._pending_judgments
+        if pending:
+            await asyncio.wait({item.task for item in pending}, timeout=timeout)
         self.heartbeat.beat()
 
     def records(self, event_type: str) -> list[TimelineRecord]:
@@ -130,6 +175,8 @@ def make_rig(
     slow: bool = False,
     timeout_seconds: float = 10.0,
     context_messages: int = 5,
+    organs: ScriptedOrgans | None = None,
+    config: HeartbeatConfig | None = None,
 ) -> Rig:
     clock = ManualClock(NOW)
     db_path = tmp_path / "aureus.db"
@@ -142,7 +189,7 @@ def make_rig(
             "replyer", [CallAttempt("m", "p", prompt_tokens=used_today, completion_tokens=0)]
         )
     emergency_stop = EmergencyStop(tmp_path / "halt.json", clock)
-    organs = SlowJudge(judge) if slow else ScriptedOrgans(judge)
+    organs = organs or (SlowJudge(judge) if slow else ScriptedOrgans(judge))
     beating = Heartbeat(
         clock=clock,
         timeline=timeline,
@@ -154,7 +201,7 @@ def make_rig(
                 "persona": {"immutable": "温和。", "behavior_style": "少打断。"},
             }
         ),
-        config=HeartbeatConfig(),
+        config=config or HeartbeatConfig(),
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,
         timezone=UTC,
@@ -170,14 +217,15 @@ def make_rig(
     return rig
 
 
-async def test_judges_before_planning_and_records_the_result(
+async def test_judgment_runs_alongside_planning_and_records_the_result(
     made: list[Rig], tmp_path: Path
 ) -> None:
+    """D110：判断和规划并行，不再规定谁先调用；判断结果仍按时记进时间线。"""
     rig = make_rig(made, tmp_path, [GOOD_JUDGMENT])
     await rig.exchange("你这个破 AI")
 
-    assert rig.organ_ids() == ["judge", "planner", "replyer"]
-    judge = rig.organs.requests[0]
+    assert set(rig.organ_ids()) == {"judge", "planner", "replyer"}
+    [judge] = [request for request in rig.organs.requests if request.organ_id == "judge"]
     assert judge.purpose is CallPurpose.OPTIONAL
     # 只看不变人格和可变人格，不看行为风格。
     assert "【不变人格】" in judge.system_context
@@ -204,7 +252,7 @@ async def test_a_failed_judgment_leaves_the_reply_unchanged(
     rig = make_rig(made, tmp_path, [outcome])
     await rig.exchange("在吗")
 
-    assert rig.organ_ids() == ["judge", "planner", "replyer"]
+    assert set(rig.organ_ids()) == {"judge", "planner", "replyer"}
     assert rig.replies() == ["好的。"]
     [record] = rig.records(EVENT_JUDGMENT)
     assert "judgment" not in record.metadata
@@ -261,3 +309,206 @@ async def test_judge_gets_only_the_configured_amount_of_history(
     assert "第一句" in prompts[0]
     assert "第一句" not in prompts[1]
     assert "第二句" in prompts[1]
+
+
+async def test_late_judgment_keeps_the_round_key_and_does_not_extend_typing(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    gate, started = asyncio.Event(), asyncio.Event()
+    organs = GatedJudge([GOOD_JUDGMENT], gate, started)
+    rig = make_rig(made, tmp_path, [], organs=organs)
+    assert rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="local",
+            content="你这家伙",
+            visibility=VisibilityScope.USER_ONLY,
+            trust=TrustLevel.VERIFIED_USER,
+        )
+    )
+    rig.heartbeat.beat()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await rig.heartbeat.wait_for_thought()
+    rig.heartbeat.beat()
+
+    records = rig.records(EVENT_MESSAGE)
+    user = next(record for record in records if record.actor_type is ActorType.USER)
+    reply = next(record for record in records if record.actor_type is ActorType.ME)
+    # 正文已经投递、想法也结束了；判断还在跑，不能再让输入提示一直亮着。
+    assert rig.heartbeat.is_thinking is False
+    assert not rig.heartbeat.is_replying_to(web_visibility=VisibilityScope.USER_ONLY)
+
+    gate.set()
+    await rig.settle_judgments()
+    [judgment] = rig.records(EVENT_JUDGMENT)
+    assert judgment.metadata["round_id"] == reply.metadata["round_id"]
+    assert judgment.metadata["in_reply_to"] == [user.id]
+
+
+async def test_declined_reply_still_collects_the_judgment(made: list[Rig], tmp_path: Path) -> None:
+    class DecliningOrgans(ScriptedOrgans):
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            if request.context.get("task") != "plan":
+                return await super().call(request)
+            self.requests.append(request)
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(request, {"reply": False, "reason": "不想回"})
+
+    rig = make_rig(made, tmp_path, [], organs=DecliningOrgans([GOOD_JUDGMENT]))
+    await rig.exchange("在吗")
+
+    assert rig.replies() == []
+    assert len(rig.records(EVENT_JUDGMENT)) == 1
+
+
+async def test_reply_failure_still_collects_the_judgment(made: list[Rig], tmp_path: Path) -> None:
+    class FailingReplyer(ScriptedOrgans):
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            if request.organ_id != "replyer":
+                return await super().call(request)
+            self.requests.append(request)
+            raise OrganCallError("replyer", ["模型失败"])
+
+    rig = make_rig(made, tmp_path, [], organs=FailingReplyer([GOOD_JUDGMENT]))
+    await rig.exchange("在吗")
+
+    assert rig.replies() == []
+    assert len(rig.records(EVENT_JUDGMENT)) == 1
+
+
+async def test_emergency_stop_cancels_pending_judgment_without_state(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    gate, started = asyncio.Event(), asyncio.Event()
+    organs = GatedJudge([GOOD_JUDGMENT], gate, started)
+    rig = make_rig(made, tmp_path, [], organs=organs)
+    assert rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="local",
+            content="在吗",
+            visibility=VisibilityScope.USER_ONLY,
+            trust=TrustLevel.VERIFIED_USER,
+        )
+    )
+    rig.heartbeat.beat()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await rig.heartbeat.wait_for_thought()
+    rig.heartbeat.beat()
+
+    rig.heartbeat.halt("测试急停")
+    for _ in range(50):
+        rig.heartbeat.beat()
+        if not rig.heartbeat._pending_judgments:
+            break
+        await asyncio.sleep(0)
+
+    assert organs.cancelled
+    assert rig.heartbeat._pending_judgments == []
+    assert rig.records(EVENT_JUDGMENT) == []
+
+
+async def test_shutdown_cancels_pending_judgment_without_deadlock(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    gate, started = asyncio.Event(), asyncio.Event()
+    organs = GatedJudge([GOOD_JUDGMENT], gate, started)
+    rig = make_rig(
+        made,
+        tmp_path,
+        [],
+        organs=organs,
+        config=HeartbeatConfig(shutdown_grace_seconds=0.01),
+    )
+    assert rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="local",
+            content="在吗",
+            visibility=VisibilityScope.USER_ONLY,
+            trust=TrustLevel.VERIFIED_USER,
+        )
+    )
+    rig.heartbeat.beat()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await rig.heartbeat.wait_for_thought()
+    rig.heartbeat.beat()
+
+    await asyncio.wait_for(rig.heartbeat.shut_down(), timeout=5)
+
+    assert organs.cancelled
+    assert rig.heartbeat._pending_judgments == []
+    assert rig.records(EVENT_JUDGMENT) == []
+
+
+async def test_lost_source_permission_discards_late_judgment(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    class FakeInbox:
+        allowed = True
+
+        def allows(self, key: object) -> bool:
+            return self.allowed
+
+        def permits(self, residence: object) -> bool:
+            return False
+
+    gate, started = asyncio.Event(), asyncio.Event()
+    organs = GatedJudge([GOOD_JUDGMENT], gate, started)
+    rig = make_rig(made, tmp_path, [], organs=organs)
+    assert rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="local",
+            content="在吗",
+            visibility=VisibilityScope.USER_ONLY,
+            trust=TrustLevel.VERIFIED_USER,
+            route=MessageRoute("bot", "group", "group-1", "message-1"),
+        )
+    )
+    rig.heartbeat.beat()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await rig.heartbeat.wait_for_thought()
+    rig.heartbeat.beat()
+
+    [pending] = rig.heartbeat._pending_judgments
+    inbox = FakeInbox()
+    inbox.allowed = False
+    rig.heartbeat._platform_inbox = cast(Any, inbox)
+    gate.set()
+    await asyncio.wait({pending.task}, timeout=5)
+    rig.heartbeat._collect_finished_judgments()
+
+    assert organs.cancelled is False  # 任务本身跑完了，是采纳前复核时发现来源已撤权
+    assert rig.heartbeat._pending_judgments == []
+    assert rig.records(EVENT_JUDGMENT) == []
+
+
+async def test_invalidated_round_discards_late_judgment(made: list[Rig], tmp_path: Path) -> None:
+    gate, started = asyncio.Event(), asyncio.Event()
+    organs = GatedJudge([GOOD_JUDGMENT], gate, started)
+    rig = make_rig(made, tmp_path, [], organs=organs)
+    assert rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="local",
+            content="在吗",
+            visibility=VisibilityScope.USER_ONLY,
+            trust=TrustLevel.VERIFIED_USER,
+        )
+    )
+    rig.heartbeat.beat()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await rig.heartbeat.wait_for_thought()
+    rig.heartbeat.beat()
+
+    [pending] = rig.heartbeat._pending_judgments
+    # 防抖重开、抢占和撤权都走这条路径：轮次作废后，迟到的判断不再写状态。
+    rig.heartbeat._invalidate_judgments(round_trace=pending.round_trace)
+    await asyncio.wait({pending.task}, timeout=5)
+    rig.heartbeat._collect_finished_judgments()
+
+    assert organs.cancelled
+    assert rig.heartbeat._pending_judgments == []
+    assert rig.records(EVENT_JUDGMENT) == []

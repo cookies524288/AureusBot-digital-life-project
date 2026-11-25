@@ -133,15 +133,18 @@ def env(tmp_path: Path) -> Iterator[Env]:
 
 
 async def test_retaliation_is_allowed_when_anger_is_high(env: Env) -> None:
-    rig, _ = env.build([_judgment(1.0)], config=ANGRY)
+    """D110：本轮判断下一轮才生效，所以先让第一轮把怒气记下，再看第二轮的上下文。"""
+    calm = '{"others": [], "toward_me": []}'
+    rig, _ = env.build([_judgment(1.0), calm], config=ANGRY)
     await rig.exchange("你这个破 AI")
+    await rig.exchange("还骂你")
 
-    [planner] = [r for r in rig.organs.requests if r.organ_id == "planner"]
-    [replyer] = [r for r in rig.organs.requests if r.organ_id == "replyer"]
+    planner = [r for r in rig.organs.requests if r.organ_id == "planner"][-1]
+    replyer = [r for r in rig.organs.requests if r.organ_id == "replyer"][-1]
     for request in (planner, replyer):
         assert "允许质疑、反驳" in request.system_context
         assert "不许辱骂" in request.system_context
-    [reply] = [m for m in rig.records(EVENT_MESSAGE) if m.actor_type.value == "me"]
+    [reply] = [m for m in rig.records(EVENT_MESSAGE) if m.actor_type.value == "me"][-1:]
     assert reply.metadata["hormones"]["retaliation"] == "allowed"
 
 
@@ -149,41 +152,64 @@ async def test_retaliation_is_capped_by_code_not_by_the_model(env: Env) -> None:
     config = HormonesConfig(
         enabled=True, retaliate_at=0.25, cold_shoulder_at=0.9, max_retaliations=2
     )
-    rig, _ = env.build([_judgment(1.0)] * 3, config=config)
-    for text in ("破 AI 1", "破 AI 2", "破 AI 3"):
+    calm = '{"others": [], "toward_me": []}'
+    judgments: list[str | BaseException] = [
+        _judgment(1.0),
+        _judgment(1.0),
+        _judgment(1.0),
+        calm,
+    ]
+    rig, _ = env.build(judgments, config=config)
+    for text in ("破 AI 1", "破 AI 2", "破 AI 3", "破 AI 4"):
         await rig.exchange(text)
 
     replyers = [r for r in rig.organs.requests if r.organ_id == "replyer"]
-    assert "不再回击" not in replyers[1].system_context
-    assert "不再回击" in replyers[2].system_context
-    assert "允许质疑" not in replyers[2].system_context
+    # 第一轮还没有怒气；第二、三轮各回击一次，第四轮到了代码里的上限。
+    assert "允许质疑" not in replyers[0].system_context
+    assert "不再回击" not in replyers[2].system_context
+    assert "不再回击" in replyers[3].system_context
+    assert "允许质疑" not in replyers[3].system_context
 
 
 async def test_cold_shoulder_limit_does_not_override_stop(env: Env) -> None:
-    rig, _ = env.build([_judgment(1.0)] * 2, config=ANGRY, plans=[DECLINE, DECLINE])
+    reply = '{"reply": true, "intent": "回应", "length": "短", "reason": "要回"}'
+    calm = '{"others": [], "toward_me": []}'
+    rig, _ = env.build(
+        [_judgment(1.0), _judgment(0.0), calm],
+        config=ANGRY,
+        plans=[reply, DECLINE, DECLINE],
+    )
     await rig.exchange("骂你骂你")
+    await rig.exchange("再骂你")
 
-    [planner] = [r for r in rig.organs.requests if r.organ_id == "planner"]
-    assert "可以选择这次不回复" in planner.system_context
+    planners = [r for r in rig.organs.requests if r.organ_id == "planner"]
+    assert "可以选择这次不回复" in planners[1].system_context
     [declined] = rig.records(EVENT_REPLY_DECLINED)
     assert declined.metadata["hormones"]["cold_shoulder_allowed"] is True
-    assert rig.replies() == []
+    assert len(rig.replies()) == 1
 
-    await rig.exchange("再骂你")
+    await rig.exchange("还骂你")
     assert len(rig.records(EVENT_REPLY_DECLINED)) == 2
-    assert rig.organ_ids() == ["judge", "planner", "judge", "planner"]
-    assert rig.replies() == []
+    assert rig.organ_ids().count("planner") == 3
+    assert len(rig.replies()) == 1
     assert rig.records(EVENT_REPLY_DECLINED)[-1].metadata["hormones"]["must_reply"] is True
 
 
 async def test_cold_shoulder_limit_does_not_force_a_reply_without_a_valid_plan(env: Env) -> None:
-    rig, _ = env.build([_judgment(1.0)] * 2, config=ANGRY, plans=[DECLINE, "无法解析"])
+    reply = '{"reply": true, "intent": "回应", "length": "短", "reason": "要回"}'
+    calm = '{"others": [], "toward_me": []}'
+    rig, _ = env.build(
+        [_judgment(1.0), _judgment(0.0), calm],
+        config=ANGRY,
+        plans=[reply, DECLINE, "无法解析"],
+    )
     await rig.exchange("骂你骂你")
     await rig.exchange("再骂你")
+    await rig.exchange("还骂你")
 
-    assert rig.organ_ids() == ["judge", "planner", "judge", "planner"]
+    assert rig.organ_ids().count("planner") == 3
     assert len(rig.records(EVENT_REPLY_DECLINED)) == 1
-    assert rig.replies() == []
+    assert len(rig.replies()) == 1
 
 
 async def test_without_anger_the_planner_may_still_decline_freely(env: Env) -> None:
@@ -197,14 +223,16 @@ async def test_without_anger_the_planner_may_still_decline_freely(env: Env) -> N
 async def test_hurt_shortens_the_reply_by_one_level(env: Env) -> None:
     config = HormonesConfig(enabled=True, hurt_shorten_at=0.3)
     plan = '{"reply": true, "intent": "回应", "length": "长", "reason": "要回"}'
-    rig, _ = env.build([REJECTION], config=config, plans=[plan])
+    calm = '{"others": [], "toward_me": []}'
+    rig, _ = env.build([REJECTION, calm], config=config, plans=[plan, plan])
     await rig.exchange("我不想理你")
+    await rig.exchange("好吧")
 
-    [replyer] = [r for r in rig.organs.requests if r.organ_id == "replyer"]
-    # 规划器要长回复，低落把上限降到「中」，回复器只被要求三五句话。
+    replyer = [r for r in rig.organs.requests if r.organ_id == "replyer"][-1]
+    # 第一轮判断在第二轮才生效：规划器要长回复，低落把上限降到「中」，回复器只被要求三五句话。
     assert "三五句话" in replyer.prompt + replyer.system_context
     assert "可以展开说" not in replyer.prompt + replyer.system_context
-    [reply] = [m for m in rig.records(EVENT_MESSAGE) if m.actor_type.value == "me"]
+    [reply] = [m for m in rig.records(EVENT_MESSAGE) if m.actor_type.value == "me"][-1:]
     assert reply.metadata["hormones"]["shorten_reply"] is True
 
 

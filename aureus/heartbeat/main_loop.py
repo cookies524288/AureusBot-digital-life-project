@@ -59,6 +59,7 @@ from aureus.heartbeat.conversation import (
     _InitiativeJob,
     _JudgeAttempt,
     _organ_request,
+    _PendingJudgment,
     _person_id_of,
     _PlannerRun,
     _reply_job,
@@ -484,6 +485,8 @@ class Heartbeat:
         self._pending: deque[tuple[Perception, InboxMessage | None]] = deque()
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
         self._thought: _Thought | None = None
+        # 判断与回复分开持有：回复交付后仍在跑、等后续拍收取（D110）。
+        self._pending_judgments: list[_PendingJudgment] = []
         self._planner_restarts: dict[ConversationKey, int] = {}
         self._inbox_followups: set[ConversationKey] = set()
         self._wake = asyncio.Event()
@@ -1067,6 +1070,7 @@ class Heartbeat:
         had_thought = self._thought is not None
         diary_running = bool(self._thought and self._thought.task.get_name() == "aureus-diary")
         self._collect_finished_thought()
+        self._collect_finished_judgments()
         if inbox is not None:
             self._take_active_inbox(inbox)
         self._memory.index_more()
@@ -1121,6 +1125,7 @@ class Heartbeat:
         try:
             try:
                 await self._settle_thought_before_shutdown()
+                await self._settle_judgments_before_shutdown()
                 self._take_in_perceptions()
                 if self._emoji_maintenance is not None:
                     await self._emoji_maintenance.wait()
@@ -1153,6 +1158,7 @@ class Heartbeat:
             self._reply_outbox.clear()
             if self._platform_inbox is not None:
                 self._interrupt_inbox(self._platform_inbox, "急停时取消本批回复，未投递。")
+            self._invalidate_all_judgments()
         if status.halted != previous.halted:
             self._timeline.append(
                 event_type=EVENT_EMERGENCY_STOP if status.halted else EVENT_EMERGENCY_RESUME,
@@ -1278,10 +1284,6 @@ class Heartbeat:
                 and inbox.residence.conversation == target_key
             ):
                 residence = inbox.residence
-        if outcome.judge is not None:
-            judgment_record = self._record_judgment(thought, outcome.judge)
-            self._record_triggers(outcome.judge.triggers)
-            self._record_affinity(person_id, outcome.judge.judgment, judgment_record)
         self._record_reply_reference(thought, outcome.reference_plan, target)
         if outcome.declined:
             if outcome.plan is not None:
@@ -1476,9 +1478,59 @@ class Heartbeat:
             can_deliver=can_deliver,
         )
 
-    def _record_judgment(self, thought: _Thought, attempt: _JudgeAttempt) -> TimelineRecord:
-        """把判断器官的结果记进时间线，只有自己可见（D68 第 7、8 条）。"""
-        metadata = self._round_metadata(thought)
+    def _register_judgment(self, pending: _PendingJudgment) -> None:
+        """收下后台判断的所有权，跑完时叫醒心跳来收取（D110）。"""
+        self._pending_judgments.append(pending)
+        pending.task.add_done_callback(self._on_thought_done)
+
+    def _collect_finished_judgments(self) -> None:
+        """收取跑完的判断；来源权限失效或轮次作废的迟到建议只丢弃，不写状态（D110）。"""
+        if not self._pending_judgments:
+            return
+        remaining: list[_PendingJudgment] = []
+        for pending in self._pending_judgments:
+            if pending.invalidated or not self._judgment_source_allowed(pending):
+                pending.invalidated = True
+                if pending.task.done():
+                    self._discard_judgment_result(pending)
+                else:
+                    pending.task.cancel()
+                    remaining.append(pending)
+                continue
+            if not pending.task.done():
+                remaining.append(pending)
+                continue
+            try:
+                attempt = pending.task.result()
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                logger.exception("判断任务出错，丢弃这次结果")
+                continue
+            if attempt is not None:
+                self._adopt_judgment(pending, attempt)
+        self._pending_judgments = remaining
+
+    def _adopt_judgment(self, pending: _PendingJudgment, attempt: _JudgeAttempt) -> None:
+        """在心跳这一拍采纳判断：按采纳时的时钟算触发，再走既有接口写状态（D110）。"""
+        triggers = (
+            self._conversation.judgment_triggers(
+                attempt.judgment, pending.messages, pending.person_id
+            )
+            if attempt.judgment is not None
+            else ()
+        )
+        record = self._record_adopted_judgment(pending, attempt)
+        self._record_triggers(triggers)
+        self._record_affinity(pending.person_id, attempt.judgment, record)
+
+    def _record_adopted_judgment(
+        self, pending: _PendingJudgment, attempt: _JudgeAttempt
+    ) -> TimelineRecord:
+        """判断记录沿用原轮次的 round_id 和来源，允许晚于回复出现（D68、D110）。"""
+        metadata: dict[str, Any] = {"in_reply_to": [record.id for record in pending.messages]}
+        if pending.round_trace is not None:
+            metadata["round_id"] = pending.round_trace.id
         if attempt.judgment is not None:
             content = "判断了刚收到的消息里的情绪。"
             metadata["judgment"] = attempt.judgment.to_metadata()
@@ -1492,6 +1544,50 @@ class Heartbeat:
             visibility=VisibilityScope.PRIVATE,
             metadata=metadata,
         )
+
+    def _judgment_source_allowed(self, pending: _PendingJudgment) -> bool:
+        """原消息所在的收件会话是否仍有阅读权限；没有就不采纳迟到的判断。"""
+        inbox = self._platform_inbox
+        if pending.residence is not None:
+            return inbox is not None and inbox.permits(pending.residence)
+        if pending.source_key is not None and inbox is not None:
+            return inbox.allows(pending.source_key)
+        return True
+
+    @staticmethod
+    def _discard_judgment_result(pending: _PendingJudgment) -> None:
+        """丢掉不要的结果，取走任务的异常，免得事件循环报“异常没有被接住”。"""
+        if pending.task.cancelled():
+            return
+        with contextlib.suppress(Exception):
+            pending.task.result()
+
+    def _invalidate_judgments(
+        self,
+        *,
+        round_trace: _RoundTrace | None = None,
+        residence: InboxResidence | None = None,
+    ) -> None:
+        """轮次作废或来源撤权时，取消对应的判断并丢弃结果（D110）。"""
+        if round_trace is None and residence is None:
+            return
+        for pending in self._pending_judgments:
+            if pending.invalidated:
+                continue
+            if round_trace is not None and pending.round_trace is not round_trace:
+                continue
+            if residence is not None and pending.residence is not residence:
+                continue
+            pending.invalidated = True
+            if not pending.task.done():
+                pending.task.cancel()
+
+    def _invalidate_all_judgments(self) -> None:
+        """急停等全局原因：所有还挂着的判断都不再采纳。"""
+        for pending in self._pending_judgments:
+            pending.invalidated = True
+            if not pending.task.done():
+                pending.task.cancel()
 
     def _record_affinity(
         self, person_id: int | None, judgment: Judgment | None, source: TimelineRecord
@@ -1623,9 +1719,8 @@ class Heartbeat:
         trace = thought.round_trace
         if trace is None:
             return
+        self._invalidate_judgments(round_trace=trace)
         target = thought.replying_to[-1].perception
-        if trace.judge is not None:
-            self._record_judgment(thought, trace.judge)
         self._timeline.append(
             EVENT_PLANNING_INTERRUPTED,
             reason,
@@ -1714,6 +1809,7 @@ class Heartbeat:
         if residence is None:
             return
         inbox.interrupt()
+        self._invalidate_judgments(residence=residence)
         self._planner_restarts.pop(residence.conversation, None)
         queued = [heard for heard in self._unanswered if heard.residence is residence]
         if queued:
@@ -1741,6 +1837,7 @@ class Heartbeat:
 
     def _discard_inbox_thought(self, thought: _Thought, reason: str) -> None:
         if thought.inbox_discard_reason is None:
+            self._invalidate_judgments(round_trace=thought.round_trace)
             self._thought = replace(thought, inbox_discard_reason=reason)
             thought.task.cancel()
 
@@ -1793,6 +1890,7 @@ class Heartbeat:
         if not run.is_planning or run.restart_requested:
             return False
         run.restart_requested = True
+        self._invalidate_judgments(round_trace=thought.round_trace)
         thought.task.cancel()
         return True
 
@@ -1982,7 +2080,9 @@ class Heartbeat:
         if self._config.inbox_debounce_enabled and _platform_key(batch[-1]) is not None:
             run = _PlannerRun()
             job = replace(job, planner_run=run)
-        task = asyncio.create_task(self._conversation._think(job), name="aureus-thought")
+        task = asyncio.create_task(
+            self._conversation._think(job, self._register_judgment), name="aureus-thought"
+        )
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(
             task=task,
@@ -2695,6 +2795,24 @@ class Heartbeat:
         self._thought = None
         self._record_abandoned(thought, halted=False)
 
+    async def _settle_judgments_before_shutdown(self) -> None:
+        """关闭前给后台判断一段时间，收下已完成的有效结果，再取消其余的（D41、D110）。"""
+        running = {pending.task for pending in self._pending_judgments if not pending.task.done()}
+        if running:
+            await asyncio.wait(running, timeout=self._config.shutdown_grace_seconds)
+        self._collect_finished_judgments()
+        remaining = [pending for pending in self._pending_judgments if not pending.task.done()]
+        for pending in remaining:
+            pending.invalidated = True
+            pending.task.cancel()
+        if remaining:
+            await asyncio.wait(
+                {pending.task for pending in remaining}, timeout=_CANCEL_WAIT_SECONDS
+            )
+            if any(not pending.task.done() for pending in remaining):
+                logger.warning("判断任务取消后 %s 秒还没停下，不再等它", _CANCEL_WAIT_SECONDS)
+        self._pending_judgments.clear()
+
     def _record_abandoned(self, thought: _Thought, *, halted: bool) -> None:
         """记下被取消的想法：网关没机会记账，这次可能用掉的 token 不在账本里（0.8 已知缺口）。
 
@@ -2702,6 +2820,7 @@ class Heartbeat:
             thought: 被取消的想法。
             halted: 是因为急停取消的；否则是关闭时等不到。
         """
+        self._invalidate_judgments(round_trace=thought.round_trace)
         if thought.inbox_discard_reason is not None:
             self._record_interrupted_round(thought, thought.inbox_discard_reason)
             return

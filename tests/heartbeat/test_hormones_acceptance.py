@@ -17,13 +17,17 @@ HALF_LIVES_TO_CALM = 8
 
 
 async def test_offense_makes_it_angry_then_it_calms_down_and_can_say_why(env: Env) -> None:
-    rig, hormones = env.build([_judgment(1.0), _judgment(0.0)], config=ANGRY)
+    rig, hormones = env.build([_judgment(1.0), _judgment(0.0), _judgment(0.0)], config=ANGRY)
     assert hormones is not None
 
     await rig.exchange("你这个破 AI")
 
-    # 生气，回复的上下文里有回击说明和原因
+    # D110：判断在回复之后才被采纳，所以本轮先把怒气记下，下一轮的回答才带情绪。
     assert hormones.level(HormoneKind.ANGER, env.clock.now()) >= ANGRY.retaliate_at
+    replyer = [r for r in rig.organs.requests if r.organ_id == "replyer"][-1]
+    assert "允许质疑、反驳" not in replyer.system_context
+
+    await rig.exchange("还骂你")
     replyer = [r for r in rig.organs.requests if r.organ_id == "replyer"][-1]
     assert "允许质疑、反驳" in replyer.system_context
     assert "主要原因" in replyer.system_context

@@ -216,6 +216,8 @@ class _ReplyJob:
     can_quote: bool = False
     history_route: ConversationKey | None = None
     history_visibility: VisibilityScope = VisibilityScope.PRIVATE
+    # 这批消息所在的收件会话；判断晚到时用它复核来源权限（D110）。
+    residence: InboxResidence | None = None
     round_trace: "_RoundTrace | None" = None
 
 
@@ -225,8 +227,6 @@ class _JudgeAttempt:
 
     judgment: Judgment | None = None
     failure: str = ""
-    # 这次判断引起的激素触发（D69 第 2 条）；后台任务只算出来，由收结果的那一拍写进状态和时间线。
-    triggers: tuple[HormoneTrigger, ...] = ()
 
 
 @dataclass
@@ -235,9 +235,25 @@ class _RoundTrace:
 
     id: int
     actions: list[PlannerAction] = field(default_factory=list)
-    judge: _JudgeAttempt | None = None
     cleanup_preview: CleanupPreview | None = None
     used_platform_history: bool = False
+
+
+@dataclass(eq=False)
+class _PendingJudgment:
+    """还在后台跑、或跑完还没被心跳收取的判断（D110、D117）。
+
+    判断和回复各走各的：回复交付后这里仍可保留，下一拍由心跳复核来源权限和轮次后
+    再写状态；轮次被抢占、重开、撤权、急停或关闭时由心跳取消并丢弃结果。
+    """
+
+    task: asyncio.Task[_JudgeAttempt | None]
+    messages: Sequence[TimelineRecord]
+    person_id: int | None
+    round_trace: _RoundTrace | None
+    residence: InboxResidence | None
+    source_key: ConversationKey | None
+    invalidated: bool = False
 
 
 def _trace_action(job: _ReplyJob, action: PlannerAction) -> None:
@@ -256,8 +272,6 @@ class _ThoughtOutcome:
     reference_plan: Plan | None = None
     # 规划器决定不回复：没有 response，也不是失败，不发失败通知。
     declined: bool = False
-    # 判断器官的结果；没调用判断（开关关着、档位低、没配器官）时是 None。
-    judge: _JudgeAttempt | None = None
     # 这次回复用的激素影响；收结果的那一拍用它记回击次数和不回次数。
     effects: HormoneEffects | None = None
     # 主动联系独立解析，不能拿普通回复的兜底来替它决定开口（D76）。
@@ -324,6 +338,7 @@ def _reply_job(batch: Sequence[_Heard], conversation_job: Callable[..., _ReplyJo
         _person_id_of(batch[-1].record),
         viewer_is_user=batch[-1].is_user,
     )
+    job = replace(job, residence=batch[-1].residence)
     if any(heard.perception.attachments for heard in batch):
         return replace(job, media_sources=tuple(heard.perception for heard in batch))
     return job
@@ -735,21 +750,19 @@ class ConversationFlow:
             return ""
         return describe_body_state(reading, body.config, strategy.describe())
 
-    async def _think(self, job: _ReplyJob) -> _ThoughtOutcome:
-        """在后台先规划，明确需要开口才调用回复器。"""
+    async def _think(
+        self,
+        job: _ReplyJob,
+        register_judgment: Callable[["_PendingJudgment"], None] | None = None,
+    ) -> _ThoughtOutcome:
+        """在后台规划、回复；判断从同一份材料并行启动，不回写本轮状态（D110）。"""
         originals = job.messages
         if job.media_sources:
             messages = await self.inbox_media.enrich(
                 job.messages, job.media_sources, job.strategy.model_preference
             )
             job = replace(job, messages=messages)
-        attempt = await self._judge_emotion(job)
-        if job.round_trace is not None:
-            job.round_trace.judge = attempt
-        if attempt is not None or job.media_sources:
-            job = self._apply_hormones(
-                job, attempt.triggers if attempt is not None else (), now=self._clock.now()
-            )
+        self._start_judgment(job, register_judgment)
         recall = _RoundRecall()
         if self._memory_config.heuristic_recall_enabled and self._can_recall():
             words = heuristic_keywords(originals)
@@ -775,11 +788,9 @@ class ConversationFlow:
             _trace_action(
                 job, PlannerAction("query_memory", "rejected", "记忆来源已变化，本轮不发言")
             )
-            return _ThoughtOutcome(declined=True, judge=attempt, effects=job.effects)
+            return _ThoughtOutcome(declined=True, effects=job.effects)
         except CallRejectedError as rejection:
-            return _ThoughtOutcome(
-                notice=f"没能调用模型，这次没有回复：{rejection.reason}", judge=attempt
-            )
+            return _ThoughtOutcome(notice=f"没能调用模型，这次没有回复：{rejection.reason}")
         if outcome.response is not None:
             outcome = await self._finish_reply(job, outcome, outcome.response)
             if outcome.response is None:
@@ -789,7 +800,6 @@ class ConversationFlow:
         return replace(
             outcome,
             reference_plan=outcome.reference_plan or plan,
-            judge=attempt,
             effects=job.effects,
         )
 
@@ -829,9 +839,7 @@ class ConversationFlow:
         try:
             draft = prepare_reply(response.suggestion)
             if not draft.sections:
-                return replace(
-                    outcome, response=None, notice="模型返回了空回复，这次没有回复。"
-                )
+                return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
             text = draft.text.strip()
             if self._config.split_reply_enabled:
                 suggestion = (
@@ -845,9 +853,7 @@ class ConversationFlow:
             else:
                 sections = (text,)
             if not sections:
-                return replace(
-                    outcome, response=None, notice="模型返回了空回复，这次没有回复。"
-                )
+                return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
             emoji = await self._await_emoji_selection(emoji_task)
             return replace(
                 outcome,
@@ -882,9 +888,7 @@ class ConversationFlow:
         """正文就绪后最多再等一个宽限时间；超时就取消表情任务，只发文字（D117）。"""
         if task is None:
             return None
-        done, _ = await asyncio.wait(
-            {task}, timeout=self._config.emoji_selection_grace_seconds
-        )
+        done, _ = await asyncio.wait({task}, timeout=self._config.emoji_selection_grace_seconds)
         if task in done:
             try:
                 return task.result()
@@ -906,7 +910,7 @@ class ConversationFlow:
                 task.result()
             return
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
 
     async def _suggest_reply_splits(self, job: _ReplyJob, draft: ReplyDraft) -> str | None:
@@ -924,8 +928,34 @@ class ConversationFlow:
             return None
         return response.suggestion
 
+    def _start_judgment(
+        self,
+        job: _ReplyJob,
+        register_judgment: Callable[["_PendingJudgment"], None] | None,
+    ) -> None:
+        """把判断放进独立任务，和规划同时出发（D110、D117）；本轮不再等它。"""
+        config = self._judge
+        if (
+            register_judgment is None
+            or config is None
+            or not config.enabled
+            or not judge_allowed(job.strategy.effective_tier)
+        ):
+            return
+        task = asyncio.create_task(self._judge_emotion(job), name="aureus-judgment")
+        register_judgment(
+            _PendingJudgment(
+                task=task,
+                messages=job.messages,
+                person_id=job.person_id,
+                round_trace=job.round_trace,
+                residence=job.residence,
+                source_key=job.history_route,
+            )
+        )
+
     async def _judge_emotion(self, job: _ReplyJob) -> _JudgeAttempt | None:
-        """先调判断器官（D68）。不调用时返回 None；调用了就一定返回结果，任何失败都不影响回复。
+        """调判断器官（D68），结果交给心跳在后续轮次收取。任何失败都不影响回复。
 
         为什么都不抛：判断只是参考，它被网关拒绝不代表回复也会被拒（回复算「回应用户」）。
         """
@@ -968,15 +998,19 @@ class ConversationFlow:
         if judgment is None:
             logger.warning("判断器官的建议看不懂，跳过判断")
             return _JudgeAttempt(failure="返回的内容看不懂")
-        return _JudgeAttempt(judgment=judgment, triggers=self._triggers_from(judgment, job))
+        return _JudgeAttempt(judgment=judgment)
 
-    def _triggers_from(self, judgment: Judgment, job: _ReplyJob) -> tuple[HormoneTrigger, ...]:
-        """判断结果变成激素触发（D69 第 2 条）。只算不写；认不出是谁发的就不触发。"""
+    def judgment_triggers(
+        self,
+        judgment: Judgment,
+        messages: Sequence[TimelineRecord],
+        person_id: int | None,
+    ) -> tuple[HormoneTrigger, ...]:
+        """判断被采纳时再算触发（D69 第 2 条、D110）：时钟和最近的触发都按这一刻算。"""
         hormones = self._hormones
-        latest = job.messages[-1]
-        person_id = job.person_id
-        if hormones is None:
+        if hormones is None or not messages:
             return ()
+        latest = messages[-1]
         now = self._clock.now()
         direct = (
             make_triggers_from_judgment(
@@ -991,17 +1025,21 @@ class ConversationFlow:
             if person_id is not None
             else []
         )
-        return (*direct, *self._empathy_from(judgment, job, hormones, now))
+        return (*direct, *self._empathy_from(judgment, messages, hormones, now))
 
     def _empathy_from(
-        self, judgment: Judgment, job: _ReplyJob, hormones: Hormones, now: datetime
+        self,
+        judgment: Judgment,
+        messages: Sequence[TimelineRecord],
+        hormones: Hormones,
+        now: datetime,
     ) -> tuple[HormoneTrigger, ...]:
         empathy = self._empathy
         if empathy is None or not empathy.enabled or not judgment.others:
             return ()
         focus = self._empathy_focus.source_ids()
         candidates = self._empathy_focus.candidates(focus)
-        sources = {record.id: record for record in job.messages if record.id in focus}
+        sources = {record.id: record for record in messages if record.id in focus}
         used = {
             (trigger.source_record_id, trigger.empathy_for.casefold())
             for trigger in candidates
@@ -1010,8 +1048,8 @@ class ConversationFlow:
         empathic: list[HormoneTrigger] = []
         for item in judgment.others:
             source_id = item.source_record_id
-            if source_id is None and len(job.messages) == 1:
-                source_id = job.messages[0].id
+            if source_id is None and len(messages) == 1:
+                source_id = messages[0].id
             source = sources.get(source_id) if source_id is not None else None
             if source is None or (person_id := _person_id_of(source)) is None:
                 continue

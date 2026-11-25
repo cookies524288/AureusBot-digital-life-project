@@ -1,5 +1,6 @@
 """同理心接进心跳的测试（路线图 2.5，D72）：别人难过它也难过，好感高的人引起的更强。"""
 
+import asyncio
 import json
 from collections.abc import Iterator
 from datetime import UTC, timedelta
@@ -32,6 +33,7 @@ from tests.heartbeat.test_judging_flow import (
     CHANNEL,
     MONTHLY_LIMIT,
     NOW,
+    GatedJudge,
     Rig,
     ScriptedOrgans,
 )
@@ -65,6 +67,7 @@ class Env:
         empathy: EmpathyConfig | None = None,
         with_affinity: bool = True,
         config: HeartbeatConfig | None = None,
+        organs: ScriptedOrgans | None = None,
     ) -> tuple[Rig, Hormones, AffinityBook | None]:
         """stranger=True 时说话的是一个陌生人（好感 30），否则是用户（好感 80）。"""
         db_path = self.tmp_path / "aureus.db"
@@ -83,7 +86,7 @@ class Env:
             affinity.open()
             self.closers.append(affinity)
         stop = EmergencyStop(self.tmp_path / "halt.json", self.clock)
-        organs = ScriptedOrgans(judge)
+        organs = organs or ScriptedOrgans(judge)
         hormones = Hormones(HormonesConfig(enabled=True))
         config = config or HeartbeatConfig()
         beating = Heartbeat(
@@ -132,6 +135,7 @@ class Env:
         rig.heartbeat.beat()
         await rig.heartbeat.wait_for_thought()
         rig.heartbeat.beat()
+        await rig.settle_judgments()
 
     def close(self) -> None:
         for item in reversed(self.closers):
@@ -153,7 +157,9 @@ async def _hurt_after_one_sad_message(env: Env, *, stranger: bool) -> float:
 
 
 async def test_sad_message_makes_it_sad_and_says_why(env: Env) -> None:
-    rig, hormones, _ = env.build([SAD])
+    """D110：判断与规划并行，本轮回复用启动时快照；共情从下一轮才进入回复上下文。"""
+    calm = '{"others": [], "toward_me": []}'
+    rig, hormones, _ = env.build([SAD, calm])
     await env.say(rig, "我今天被裁员了")
 
     assert hormones.level(HormoneKind.HURT, env.clock.now()) == 0
@@ -164,6 +170,13 @@ async def test_sad_message_makes_it_sad_and_says_why(env: Env) -> None:
     assert record.metadata["empathy_for"] == "sender"
     assert record.metadata["empathy_affinity"] == 80.0
     assert record.metadata["reason"] == "替对方难过"
+    replyer = [r for r in rig.organs.requests if r.organ_id == "replyer"][-1]
+    # 按 D110 改写：原来断言同一轮回复就带上共情和心情，现在只等下一轮。
+    assert "替对方难过" not in replyer.system_context
+    assert "低落" not in replyer.system_context
+    assert "心情 -0.13" not in replyer.system_context
+
+    await env.say(rig, "还是很难过")
     replyer = [r for r in rig.organs.requests if r.organ_id == "replyer"][-1]
     assert "低落" in replyer.system_context and "替对方难过" in replyer.system_context
     assert "心情 -0.13" in replyer.system_context
@@ -324,7 +337,40 @@ async def test_batched_judgment_uses_the_explicit_source_and_not_the_last_messag
     rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
     rig.heartbeat.beat()
+    await rig.settle_judgments()
 
     [record] = rig.records(EVENT_EMPATHY)
     assert record.metadata["source_record_id"] == source_id
     assert record.metadata["empathy_for"] == "小橘"
+
+
+async def test_late_empathy_is_dropped_when_the_source_left_the_focus(env: Env) -> None:
+    """D110：判断晚到时来源已经离开工作记忆保留区，就不能再添回一份共情。"""
+    config = HeartbeatConfig(working_memory_capacity=20, working_memory_retain=5)
+    gate, started = asyncio.Event(), asyncio.Event()
+    organs = GatedJudge([SAD], gate, started)
+    rig, hormones, _ = env.build([], config=config, organs=organs)
+
+    assert rig.heartbeat.submit(
+        Perception(
+            channel=CHANNEL,
+            sender_id="local",
+            content="我今天被裁员了",
+            visibility=VisibilityScope.USER_ONLY,
+            trust=TrustLevel.VERIFIED_USER,
+        )
+    )
+    rig.heartbeat.beat()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await rig.heartbeat.wait_for_thought()
+    rig.heartbeat.beat()
+    assert len(rig.replies()) == 1
+
+    for index in range(6):
+        rig.timeline.append("agenda_added", f"后来的经历 {index}", ActorType.ME)
+
+    gate.set()
+    await rig.settle_judgments()
+
+    assert rig.records(EVENT_EMPATHY) == []
+    assert hormones.level(HormoneKind.HURT, env.clock.now()) == 0
