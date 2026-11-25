@@ -55,6 +55,8 @@ class SafetyConfig(BaseModel):
     max_calls_per_minute: int = Field(default=20, ge=1)
     max_consecutive_failures: int = Field(default=5, ge=1)
     failure_pause_seconds: int = Field(default=300, ge=1)
+    # 网关同时放行的器官调用数（D117，修订 D48 的串行做法）。
+    max_concurrent_organ_calls: int = Field(default=5, ge=1, le=8)
 
 
 class HeartbeatConfig(BaseModel):
@@ -75,6 +77,8 @@ class HeartbeatConfig(BaseModel):
     shutdown_grace_seconds: float = Field(default=60.0, ge=0)
     # 回复时带上最近多少条对话（包括刚收到的新消息）。
     recent_message_limit: int = Field(default=20, ge=1)
+    # 正文就绪后最多再等表情多久，超时就只发文字（D117）。
+    emoji_selection_grace_seconds: float = Field(default=0.8, ge=0, le=5)
     reply_organ: ClassVar[str] = "replyer"
     # 兼容原配置。各档位的回复流程都先请求规划器。
     planning_enabled: bool = True

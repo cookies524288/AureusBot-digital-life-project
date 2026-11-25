@@ -26,6 +26,8 @@ config_version = 1
 # max_consecutive_failures = 5
 # 暂停多少秒。
 # failure_pause_seconds = 300
+# 同时最多放行几个器官调用，范围 1–8（D117）。
+# max_concurrent_organ_calls = 5
 
 # 心跳（设计见 docs/10-decisions.md 的 D41）。下面的值都是默认值，需要改再取消注释。
 [heartbeat]
@@ -37,6 +39,8 @@ config_version = 1
 # shutdown_grace_seconds = 60
 # 回复时带上最近多少条对话。
 # recent_message_limit = 20
+# 回复正文就绪后最多再等表情多久，超时就只发文字。
+# emoji_selection_grace_seconds = 0.8
 # 各精力档位固定先调用 [organs.planner]，需要回复时使用 [organs.replyer]；在 models.toml 中配置它们的模型。
 # 自主翻阅和规划器调整特别关心的总开关。
 # inbox_attention_enabled = true

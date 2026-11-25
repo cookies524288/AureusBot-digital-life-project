@@ -231,13 +231,25 @@ def test_safety_monthly_limit_must_be_positive(tmp_path: Path, value: str) -> No
 
 
 @pytest.mark.parametrize(
-    "field", ["max_calls_per_minute", "max_consecutive_failures", "failure_pause_seconds"]
+    "field",
+    [
+        "max_calls_per_minute",
+        "max_consecutive_failures",
+        "failure_pause_seconds",
+        "max_concurrent_organ_calls",
+    ],
 )
 @pytest.mark.parametrize("value", ["0", "-1"])
 def test_safety_limits_must_be_at_least_one(tmp_path: Path, field: str, value: str) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[safety]\n{field} = {value}\n")
     assert field in error_message_of(paths)
+
+
+def test_organ_concurrency_cannot_exceed_the_gateway_limit(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[safety]\nmax_concurrent_organ_calls = 9\n")
+    assert "max_concurrent_organ_calls" in error_message_of(paths)
 
 
 @pytest.mark.parametrize(
@@ -346,6 +358,8 @@ def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
         ("roleplay_mode", '"true"'),
         ("tick_interval_seconds", '"60"'),
         ("tick_interval_seconds", "true"),
+        ("emoji_selection_grace_seconds", "-0.1"),
+        ("emoji_selection_grace_seconds", "5.1"),
     ],
 )
 def test_heartbeat_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:

@@ -239,15 +239,17 @@ async def test_call_below_the_limit_is_allowed_and_may_overshoot_it(harness: Har
     assert harness.ledger.tokens_used_in_month(START) == 300
 
 
-async def test_concurrent_calls_cannot_slip_past_the_monthly_limit(harness: Harness) -> None:
-    """审查 S1：上限 100、已用 90，并发两个各花 100 的调用，最多一个成功。"""
+async def test_one_permit_keeps_the_monthly_limit_overshoot_to_one_call(harness: Harness) -> None:
+    """D117：默认改为有界并发后，只有把上限配成 1 才回到 D48 的「至多一次」语义。"""
 
     async def yield_to_other_tasks() -> None:
         await asyncio.sleep(0)
 
     organ = harness.add_organ([ok(make_attempt(50, 50))], during_call=yield_to_other_tasks)
     harness.ledger.record(ORGAN, [make_attempt(45, 45)])
-    gateway = harness.build(SafetyConfig(monthly_token_limit=100))
+    gateway = harness.build(
+        SafetyConfig(monthly_token_limit=100, max_concurrent_organ_calls=1)
+    )
     results = await asyncio.gather(
         gateway.call(harness.request()), gateway.call(harness.request()), return_exceptions=True
     )
@@ -258,7 +260,103 @@ async def test_concurrent_calls_cannot_slip_past_the_monthly_limit(harness: Harn
     assert harness.ledger.tokens_used_in_month(START) == 190
 
 
-async def test_cancelled_call_releases_the_lock_for_the_next_one(harness: Harness) -> None:
+async def test_gateway_allows_bounded_concurrency(harness: Harness) -> None:
+    """D117：最多 5 个调用同时在途，第 6 个在门外等。"""
+    gate = asyncio.Event()
+    inside = 0
+    peak = 0
+
+    async def hold() -> None:
+        nonlocal inside, peak
+        inside += 1
+        peak = max(peak, inside)
+        try:
+            await gate.wait()
+        finally:
+            inside -= 1
+
+    organ = harness.add_organ([ok()], during_call=hold)
+    gateway = harness.build(SafetyConfig(max_concurrent_organ_calls=5))
+    calls = [asyncio.create_task(gateway.call(harness.request())) for _ in range(6)]
+    for _ in range(100):
+        if organ.calls >= 5:
+            break
+        await asyncio.sleep(0)
+    assert peak == 5
+    assert organ.calls == 5  # 第 6 个还在等许可，没有进入器官
+
+    gate.set()
+    results = await asyncio.gather(*calls)
+    assert all(isinstance(result, OrganResponse) for result in results)
+    assert organ.calls == 6
+    assert peak == 5
+
+
+async def test_gateway_budget_overshoot_is_bounded_by_in_flight_calls(
+    harness: Harness,
+) -> None:
+    """D117：检查通过时已经在途的调用都会超出，但至多 N 次。"""
+    gate = asyncio.Event()
+
+    async def hold() -> None:
+        await gate.wait()
+
+    organ = harness.add_organ(
+        [ok(make_attempt(25, 25))], during_call=hold
+    )
+    harness.ledger.record(ORGAN, [make_attempt(45, 45)])
+    gateway = harness.build(
+        SafetyConfig(monthly_token_limit=100, max_concurrent_organ_calls=5)
+    )
+    calls = [asyncio.create_task(gateway.call(harness.request())) for _ in range(5)]
+    for _ in range(100):
+        if organ.calls >= 5:
+            break
+        await asyncio.sleep(0)
+    gate.set()
+    results = await asyncio.gather(*calls)
+
+    assert all(isinstance(result, OrganResponse) for result in results)
+    assert len(harness.ledger.entries()) == 6  # 预置的一条 + 并发放行的 5 条
+    assert harness.ledger.tokens_used_in_month(START) == 90 + 5 * 50
+
+
+async def test_gateway_ledger_failure_still_locks_the_gateway(harness: Harness) -> None:
+    """账本写入失败后，并发进来的调用也全部被拒绝，不会再调用器官。"""
+
+    async def break_the_ledger() -> None:
+        drop_ledger_table(harness.db_path)
+
+    organ = harness.add_organ([ok(make_attempt(10, 10))], during_call=break_the_ledger)
+    gateway = harness.build(SafetyConfig(max_concurrent_organ_calls=5))
+    with pytest.raises(LedgerUnavailableError, match="作废"):
+        await gateway.call(harness.request())
+    results = await asyncio.gather(
+        *(gateway.call(harness.request()) for _ in range(4)), return_exceptions=True
+    )
+    assert all(isinstance(result, LedgerUnavailableError) for result in results)
+    assert organ.calls == 1
+
+
+async def test_runaway_guard_counts_concurrent_calls_without_losing_any(
+    harness: Harness,
+) -> None:
+    async def yield_to_other_tasks() -> None:
+        await asyncio.sleep(0)
+
+    organ = harness.add_organ([ok()], during_call=yield_to_other_tasks)
+    gateway = harness.build(
+        SafetyConfig(max_calls_per_minute=3, max_concurrent_organ_calls=5)
+    )
+    results = await asyncio.gather(
+        *(gateway.call(harness.request()) for _ in range(10)), return_exceptions=True
+    )
+    assert sum(isinstance(result, OrganResponse) for result in results) == 3
+    assert sum(isinstance(result, RunawayBlockedError) for result in results) == 7
+    assert organ.calls == 3
+
+
+async def test_cancelled_call_releases_the_permit_for_the_next_one(harness: Harness) -> None:
     started = asyncio.Event()
 
     async def hang() -> None:
@@ -267,7 +365,8 @@ async def test_cancelled_call_releases_the_lock_for_the_next_one(harness: Harnes
 
     harness.add_organ([ok()], organ_id="slow", during_call=hang)
     harness.add_organ([ok()])
-    gateway = harness.build()
+    # 只给一个许可，取消后如果没释放，下一次调用就会一直等在门外。
+    gateway = harness.build(SafetyConfig(max_concurrent_organ_calls=1))
     slow_call = asyncio.create_task(gateway.call(harness.request("slow")))
     await started.wait()
     slow_call.cancel()

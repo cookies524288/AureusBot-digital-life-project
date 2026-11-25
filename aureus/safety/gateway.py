@@ -78,8 +78,9 @@ class SafetyGateway:
         self._guard = RunawayGuard(config, clock)
         # 账本写入失败后置位，重启之前拒绝所有调用（D40）。
         self._ledger_write_failed = False
-        # 让「检查预算 → 调用器官 → 记账」不被别的调用插进来，见 call()。
-        self._call_lock = asyncio.Lock()
+        # 让「检查预算 → 调用器官 → 记账」整段占一个许可，见 call()。许可数大于 1 时，
+        # 多个器官可以真正同时在途（D117，修订 D48 第 2 条的串行做法）。
+        self._call_permits = asyncio.Semaphore(config.max_concurrent_organ_calls)
         if config.monthly_token_limit is None:
             logger.warning(
                 "月度 token 上限没有设置，用量不受限制。在 [safety] 里写 monthly_token_limit。"
@@ -106,24 +107,24 @@ class SafetyGateway:
         if not self._bus.is_registered(organ_id):
             raise ValueError(f"器官 {organ_id} 未注册")
 
-        # 为什么整段调用都在锁里：预算检查读的是账本，而账本要等调用结束才记账。
-        # 中间隔着 await，不加锁的话，两个并发调用会读到同一个「已用」数字、一起通过
-        # 检查、一起花钱（审查 S1，实测上限 100 用掉 290）。串行之后，上限的语义是
-        # 「到点后不再发起新调用」：最多只有检查通过时正在进行的那一次会超出（D48）。
-        # 代价是同一时刻只有一个器官调用；Phase 0 的心跳本来就是串行的。
-        async with self._call_lock:
-            return await self._call_serialized(request, lambda: self._bus.send(request))
+        # 为什么整段调用都在许可里：预算检查读的是账本，而账本要等调用结束才记账。
+        # 中间隔着 await，不设限的话，两个并发调用会读到同一个「已用」数字、一起通过
+        # 检查、一起花钱（审查 S1，实测上限 100 用掉 290）。同时放行数限制为
+        # max_concurrent_organ_calls（D117）：上限的语义是「到点后不再发起新调用」，
+        # 最多只有检查通过时已经在途的那些调用会超出（D48 第 1 条，按 D117 修订）。
+        async with self._call_permits:
+            return await self._call_admitted(request, lambda: self._bus.send(request))
 
     async def test_model(self, probe: Callable[[], Awaitable[OrganResponse]]) -> OrganResponse:
         """手动测试走同一套预算和记账，独立于后台器官的失败计数。"""
         request = OrganRequest(organ_id="model_test", prompt="", purpose=CallPurpose.USER_REPLY)
-        async with self._call_lock:
-            return await self._call_serialized(request, probe)
+        async with self._call_permits:
+            return await self._call_admitted(request, probe)
 
-    async def _call_serialized(
+    async def _call_admitted(
         self, request: OrganRequest, invoke: Callable[[], Awaitable[OrganResponse]]
     ) -> OrganResponse:
-        """持有调用锁时的完整流程：检查 → 调用器官 → 收尾。"""
+        """持有并发许可时的完整流程：检查 → 调用器官 → 收尾。"""
         organ_id = request.organ_id
         try:
             self._admit(request)
