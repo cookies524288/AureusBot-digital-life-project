@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import closing
 from dataclasses import dataclass, replace
 from hashlib import sha256
@@ -17,6 +17,7 @@ from PIL import Image, ImageSequence
 from aureus.common import Clock
 from aureus.common.config import DEFAULT_EMOJI_REGISTRATION_LIMIT
 from aureus.common.sqlite import open_connection
+from aureus.memory.emoji_thumbnails import EmojiThumbnailCache
 from aureus.memory.history import MemorySource
 from aureus.memory.learning_workbench_ids import identify as identify_workbench_ids
 from aureus.memory.learning_workbench_ids import initialize as initialize_workbench_ids
@@ -249,6 +250,7 @@ class EmojiStore:
         self._database_file = database_file
         self._memory_dir = memory_dir
         self._attachments = memory_dir / "attachments"
+        self.thumbnails = EmojiThumbnailCache(memory_dir, self.thumbnail_digests)
         self._clock = clock
         self.registration_limit = registration_limit
         self._unavailable_digests: frozenset[str] = frozenset()
@@ -372,6 +374,7 @@ class EmojiStore:
         registration_description: str | None = None,
         tags: tuple[str, ...] = (),
         is_registered: bool | None = None,
+        allowed: Callable[[], bool] = lambda: True,
     ) -> tuple[str, bool]:
         """存入经过检查的媒体，返回内容地址和是否新建；重复上传不改元数据。"""
         description = _clean_description(registration_description or "")
@@ -387,9 +390,11 @@ class EmojiStore:
             raise ValueError(_REGISTRATION_DESCRIPTION_REQUIRED)
         _validate_image(data)
         digest = sha256(data).hexdigest()
-        self._write_media(digest, data)
         with closing(open_connection(self._database_file)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
+            if not allowed():
+                raise PermissionError("登录已失效，未保存表情。")
+            self._write_media(digest, data)
             registered = registered and self._has_slot(connection)
             created = connection.execute(
                 """INSERT INTO emoji_assets VALUES (?, ?, ?, ?, 0, 0, 0, ?, NULL)
@@ -880,6 +885,17 @@ class EmojiStore:
                 "SELECT 1 FROM emoji_assets WHERE digest = ?", (digest,)
             ).fetchone()
         return self.read_media(digest) if entry else None
+
+    def thumbnail_digests(self) -> set[str]:
+        """从权威目录读取现役媒体键，不扫描陌生素材文件。"""
+        with closing(open_connection(self._database_file)) as connection:
+            return {
+                row["digest"]
+                for row in connection.execute(
+                    f"{_CATALOG} SELECT digest FROM catalog WHERE NOT is_removed"
+                )
+                if row["digest"] is not None
+            }
 
     def read_catalog_description(self, digest: str) -> str | None:
         """按内容指纹读取未移除的表情描述；不推断描述作者。"""
