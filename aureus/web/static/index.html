@@ -304,7 +304,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .tl-toolbar select{width:auto}
 .chip{padding:3px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text-2);font-size:13px;cursor:pointer}
 .chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong)}
-.summary-card{border-left:4px solid var(--accent);margin-bottom:16px}
+.summary-card{border-left:4px solid var(--accent);margin-top:16px}
 .tl-list{position:relative;display:flex;flex-direction:column;gap:2px;padding-left:22px}
 .tl-list:empty{display:none}
 .tl-list::before{content:'';position:absolute;left:6px;top:8px;bottom:8px;width:2px;background:var(--border)}
@@ -826,10 +826,6 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div></section>
 <section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class="page-body">
-<div class="card summary-card">
-<div class="card-head"><h3>滚动摘要</h3></div>
-<div id="tl-summary" class="muted">暂无滚动摘要。</div>
-</div>
 <div class="tl-toolbar">
 <select id="tl-hours" aria-label="时间范围">
 <option value="1">最近 1 小时</option><option value="6">最近 6 小时</option><option value="24" selected>最近 24 小时</option><option value="72">最近 3 天</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option>
@@ -839,6 +835,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="tl-missing" class="empty hidden"></div>
 <div class="row" style="justify-content:center;margin-bottom:12px"><button id="tl-more" class="btn hidden" disabled>加载更早的</button></div>
 <div id="tl-list" class="tl-list card"></div>
+<div class="card summary-card">
+<div class="card-head"><h3>滚动摘要</h3></div>
+<div id="tl-summary" class="muted">暂无滚动摘要。</div>
+</div>
 </div></section>
 <section id="page-learning" class="page wide resource-page">
   <div class="page-head"><div><h2>学习</h2><p class="page-note">管理 Aureus 学到的表达方式、黑话和表情包。列表只显示摘要，点条目查看完整内容和来源。</p></div><button id="learning-workbench-open" class="btn small" type="button">打开完整学习工作台</button></div>
@@ -2114,10 +2114,11 @@ function tlDivider() {
   return el('div', { class: 'tl-divider', text: '↑ 历史（不会带上）  ↓ 当前上下文（回复时会带上最近 ' + limit + ' 条对话）' });
 }
 
-// 时间线按旧在上、新在下显示；进入时停在最新一条，加载更早时按高度差补回滚动位置。
+// 时间线按旧在上、新在下显示；进入时停在最新一条，加载更早时按列表高度差补回滚动位置。
+// 摘要卡在列表下方，不计入锚点：否则摘要内容变化会被当成列表增高，位置就补错了。
 function timelineScrollAnchor() {
   const page = $('page-timeline');
-  return {top: page.scrollTop, height: page.scrollHeight};
+  return {top: page.scrollTop, height: $('tl-list').offsetHeight};
 }
 function scrollTimelineToLatest() {
   const page = $('page-timeline');
@@ -2125,7 +2126,7 @@ function scrollTimelineToLatest() {
 }
 function restoreTimelineScroll(anchor) {
   const page = $('page-timeline');
-  page.scrollTop = anchor.top + page.scrollHeight - anchor.height;
+  page.scrollTop = anchor.top + $('tl-list').offsetHeight - anchor.height;
 }
 
 let timelineRequest = 0;
