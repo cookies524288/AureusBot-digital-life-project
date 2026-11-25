@@ -496,23 +496,20 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-layout .card{min-width:0}.inbox-conversations{max-height:65dvh;overflow:auto}
 .inbox-conversations h4{margin:8px 0 4px;color:var(--text-2);font-size:12px}
 .inbox-conversation{width:100%;min-height:40px;justify-content:space-between;text-align:left;gap:8px;margin:2px 0}
-.inbox-conversation span:first-child,.inbox-message{overflow-wrap:anywhere}
+.inbox-conversation span:first-child,.inbox-msg{overflow-wrap:anywhere}
 .inbox-conversation[aria-pressed="true"]{border-color:var(--accent)}
 .inbox-unread{flex:none;min-width:22px;height:22px;padding:0 4px;border-radius:999px;background:#b22535;color:#fff;text-align:center;font:12px/22px system-ui}
-.inbox-messages{display:grid;gap:12px}
-.inbox-message{display:flex;gap:8px;align-items:flex-start}
-.inbox-message.outgoing{flex-direction:row-reverse;text-align:right}
-.inbox-avatar{position:relative;display:grid;flex:none;place-items:center;width:32px;height:32px;background:var(--bg);border:1px solid var(--border)}
-.inbox-avatar .ico{width:22px;height:22px;shape-rendering:crispEdges}
+.inbox-messages{display:flex;flex-direction:column;gap:12px}
+.inbox-msg .msg-line{display:flex;gap:8px;align-items:flex-start;min-width:0;max-width:100%}
+.inbox-msg.user .msg-line{flex-direction:row-reverse}
+.inbox-msg .bubble{min-width:0;max-width:100%}
+.inbox-msg .meta{display:flex;gap:4px 10px;align-items:baseline;flex-wrap:wrap;font-size:12px}
+.inbox-msg .bubble p,.inbox-msg .inbox-component{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+.inbox-msg .inbox-component.event{display:block}
+.inbox-avatar{position:relative;display:grid;flex:none;place-items:center;width:28px;height:28px;background:var(--bg);border:1px solid var(--border)}
+.inbox-avatar .ico{width:18px;height:18px;shape-rendering:crispEdges}
 .inbox-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0}
 .inbox-avatar img.loaded{opacity:1}
-.inbox-message-body{min-width:0;max-width:88%;display:grid;justify-items:start;gap:5px}
-.inbox-message.outgoing .inbox-message-body{justify-items:end}
-.inbox-message-meta{display:flex;gap:6px 12px;align-items:baseline;flex-wrap:wrap;font-size:12px}
-.inbox-bubble{max-width:100%;padding:8px 10px;text-align:left;background:var(--bg);border:1px solid var(--border);border-radius:2px 8px 8px 8px}
-.inbox-message.outgoing .inbox-bubble{border-color:var(--accent);border-radius:8px 2px 8px 8px}
-.inbox-bubble p,.inbox-component{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
-.inbox-component.event{display:block}
 .inbox-image{display:grid;justify-content:start;justify-items:end;gap:5px;margin:6px 0 0}
 .inbox-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}
 .inbox-image .btn{justify-self:end}
@@ -584,7 +581,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .memory-graph-viewport .is-muted:not(:hover):not(:focus-visible){opacity:.27}
 .memory-graph-viewport .is-dense .memory-graph-edge:not(:hover):not(:focus) text{visibility:hidden}
 @media(max-width:1050px){.memory-graph-layout{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:680px){.inbox-layout{grid-template-columns:minmax(0,1fr)}.inbox-conversations{max-height:30dvh}.inbox-message-body{max-width:calc(100% - 40px)}}
+@media(max-width:680px){.inbox-layout{grid-template-columns:minmax(0,1fr)}.inbox-conversations{max-height:30dvh}}
 @media(max-width:1100px){.model-library{grid-template-columns:1fr}.model-vendors{position:static}.provider-list{flex-direction:row;flex-wrap:wrap}.provider-row{flex:1 1 100px}.model-price,.model-owners{display:none}}
 @media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
 
@@ -2592,8 +2589,8 @@ function renderInboxMessage(message) {
     });
     avatar.append(picture);
   }
-  return el('article', {class:'inbox-message ' + direction}, avatar,
-    el('div', {class:'inbox-message-body'}, el('div', {class:'inbox-message-meta'},
+  return el('article', {class:`msg inbox-msg ${direction === 'outgoing' ? 'user' : 'person'}`},
+    el('div', {class:'meta'},
       el('strong', {text:message.sender_name || message.sender_id || '未知发件人'}),
       message.sender_id && message.sender_name !== message.sender_id && el('span', {class:'muted', text:`QQ ${message.sender_id}`}),
       direction === 'unknown' && el('span', {class:'muted', text:'方向未知'}),
@@ -2601,7 +2598,8 @@ function renderInboxMessage(message) {
         el('span', {class:'muted', text:'时间未知'}),
       message.components?.some(item => ['at', 'reply', 'poke'].includes(item.kind)) && message.conversation &&
         el('span', {class:'muted', text:`收发账号 ${message.conversation.account_id} · 会话 ${message.conversation.recipient_id}${message.platform_message_id ? ` · 消息 ${message.platform_message_id}` : ''}`})),
-      el('div', {class:'inbox-bubble'}, ...renderInboxContents(message)), renderInboxMessageActions(message)));
+    el('div', {class:'msg-line'}, avatar, el('div', {class:'bubble'}, ...renderInboxContents(message))),
+    renderInboxMessageActions(message));
 }
 
 function renderInboxMessageActions(message) {
