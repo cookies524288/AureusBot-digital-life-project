@@ -306,6 +306,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong)}
 .summary-card{border-left:4px solid var(--accent);margin-bottom:16px}
 .tl-list{position:relative;display:flex;flex-direction:column;gap:2px;padding-left:22px}
+.tl-list:empty{display:none}
 .tl-list::before{content:'';position:absolute;left:6px;top:8px;bottom:8px;width:2px;background:var(--border)}
 .tl-item{position:relative;padding:8px 12px;border-radius:var(--radius-sm)}
 .tl-item::before{content:'';position:absolute;left:-20px;top:16px;width:10px;height:10px;border-radius:50%;background:var(--surface);border:2px solid var(--text-2)}
@@ -374,7 +375,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .cfg-search{display:flex;gap:6px}
 .cfg-search input{min-width:0;flex:1}
 .cfg-search button{flex:none}
-.cfg-search-results{max-height:48%}
+.cfg-search-results{max-height:48%;padding:4px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)}
 .cfg-search-results .nav-item{display:grid;gap:2px;overflow-wrap:anywhere}
 .cfg-search-state,.cfg-path{color:var(--text-2);font-size:12px;font-weight:400;overflow-wrap:anywhere}
 .cfg-tabs,.cfg-details,.cfg-search-results{min-width:0;min-height:0;overflow:hidden auto;overscroll-behavior:contain}
@@ -490,7 +491,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .key-card{min-width:0;overflow-wrap:anywhere}.key-card .row{justify-content:space-between}.key-card h3{min-width:0}.key-card .key-actions{justify-content:flex-end;margin-top:20px}
 .key-actions .btn{display:grid;place-items:center;min-width:34px;min-height:34px;padding:6px}
 .inbox-platforms{display:flex;gap:16px;flex-wrap:wrap}
-.inbox-platform{display:grid;gap:8px;justify-items:stretch;min-width:min(160px,100%)}
+.inbox-platform{display:grid;justify-items:stretch;min-width:min(160px,100%)}
 .inbox-platform-enter{min-height:112px;display:grid;gap:8px;justify-items:center;align-content:center}
 .inbox-platform-icon{width:36px;height:36px;color:var(--accent);shape-rendering:crispEdges}
 .inbox-layout{display:grid;grid-template-columns:minmax(165px,1fr) minmax(0,2.5fr);gap:12px;align-items:start}
@@ -620,6 +621,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 /* 器官关系图：颜色表示连线方向，所有器官共用一张像素块面。 */
 .og-overview{--step:#52756a;--branch:#957343;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:clamp(12px,2.5vw,24px)}
 :root[data-theme=dark] .og-overview{--step:#9fbeac;--branch:#d4b075}
+.og-board{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+.og-board-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:16px 16px 6px}
 .og-flow-head{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:14px}.og-flow-head h3,.og-map-title{margin:0;font-size:17px}
 .og-flow{display:grid;gap:16px;list-style:none;margin:0;padding:0}.og-flow>li{position:relative;display:grid;gap:8px}
 .og-flow>li:not(:last-child)::after{content:"↓";position:absolute;top:100%;left:50%;translate:-50% 0;color:var(--step);font:700 16px/16px var(--font)}
@@ -826,7 +829,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 <div id="tl-missing" class="empty hidden"></div>
 <div class="row" style="justify-content:center;margin-bottom:12px"><button id="tl-more" class="btn hidden" disabled>加载更早的</button></div>
-<div id="tl-list" class="tl-list"></div>
+<div id="tl-list" class="tl-list card"></div>
 </div></section>
 <section id="page-learning" class="page wide resource-page">
   <div class="page-head"><div><h2>学习</h2><p class="page-note">管理 Aureus 学到的表达方式、黑话和表情包。列表只显示摘要，点条目查看完整内容和来源。</p></div><button id="learning-workbench-open" class="btn small" type="button">打开完整学习工作台</button></div>
@@ -999,8 +1002,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div></div></div></section>
 <section id="page-organs" class="page wide"><div class="page-head"><div><h2>器官</h2></div><span id="og-status" class="tag" role="status">已自动保存</span></div>
 <div class="page-body stack"><div id="og-missing" class="empty hidden"></div><div id="og-content" class="hidden"><div class="og-board">
-<h3 class="og-map-title">器官配置与调用关系</h3>
-<button id="og-search-settings" type="button" class="btn small">配置网页搜索（WEB_SEARCH）</button>
+<div class="og-board-head"><h3 class="og-map-title">器官配置与调用关系</h3>
+<button id="og-search-settings" type="button" class="btn small">配置网页搜索（WEB_SEARCH）</button></div>
 <div class="og-toolbar"><div class="og-legend" aria-label="逻辑流向图例"><span><i></i>核心调用</span><span><i class="return"></i>器官返回</span><span><i class="relay"></i>经 CORE 衔接</span></div><button id="og-reset" type="button" class="btn small">复位布局</button></div>
 <div id="og-grid" class="og-stage" role="group" aria-label="器官逻辑流向" aria-describedby="og-help"></div>
 <div class="og-footer" id="og-help">拖动模块调整布局，也可聚焦后用方向键移动。点击器官配置模型。</div>
@@ -1031,7 +1034,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
 <div class="row"><button id="cf-open-folder" class="btn" type="button">打开配置文件夹</button><button id="cf-restore-all" class="btn danger" disabled>恢复默认设置</button><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
 <div class="page-body cfg-layout">
-<div id="cf-sidebar" class="cfg-sidebar">
+<div id="cf-sidebar" class="cfg-sidebar card">
 <div class="cfg-search"><input id="cf-search" type="text" inputmode="search" aria-label="搜索设置" aria-controls="cf-search-results" placeholder="搜索设置"><button id="cf-search-clear" class="btn small hidden" type="button" aria-label="清空设置搜索">清空</button></div>
 <div id="cf-search-state" class="cfg-search-state" role="status"></div>
 <div id="cf-search-results" class="cfg-search-results hidden" role="region" aria-label="设置搜索结果"></div>
@@ -1044,7 +1047,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="off" style="max-width:220px;margin-left:8px"></div>
 <div id="cf-section"></div>
 </div>
-<section id="qq-link" class="stack hidden" aria-labelledby="qq-link-title">
+<section id="qq-link" class="stack card hidden" aria-labelledby="qq-link-title">
 <h3 id="qq-link-title"></h3>
 <form id="qq-link-form" class="row">
 <label for="qq-link-account">QQ 号</label>
@@ -1064,12 +1067,12 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="page-body stack">
 <div id="prompt-banner" class="banner hidden" role="alert"></div>
 <div class="prompt-layout">
-<div class="stack">
+<div class="stack card">
 <label class="field"><span>器官</span><select id="prompt-organ"></select></label>
 <label class="field"><span>搜索模板</span><input id="prompt-search" type="search"></label>
 <div id="prompt-directory" class="prompt-directory" role="group" aria-label="提示词目录"></div>
 </div>
-<div id="prompt-editor" class="stack"></div>
+<div id="prompt-editor" class="stack card"></div>
 </div></div></section>
 <section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class='page-body stack'>
