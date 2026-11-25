@@ -893,13 +893,12 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-inbox" class="page"><div class="page-head"><h2 id="inbox-heading" tabindex="-1">平台桌面</h2><div class="row"><button id="inbox-home" type="button" class="btn small hidden">返回平台桌面</button><button id="inbox-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div></div>
 <div class="page-body">
 <div id="inbox-desktop" class="stack">
-<p class="muted">点击图标进入会话；右键图标或使用「配置」按钮打开平台设置。</p>
+<p class="muted">点击图标进入会话；右键图标打开平台设置。</p>
 <div id="inbox-platforms" class="inbox-platforms">
-<div class="card inbox-platform">
-<button id="inbox-open-qq" class="btn inbox-platform-enter" type="button" aria-label="进入 QQ 会话"><svg class="ico inbox-platform-icon" aria-hidden="true"><use href="#i-qq-platform"/></svg>QQ</button>
-<button id="inbox-config-qq" class="btn small" type="button" aria-label="配置 QQ / SnowLuma">配置</button>
+<div class="inbox-platform">
+<button id="inbox-open-qq" class="btn inbox-platform-enter" type="button" aria-label="进入 QQ 会话" aria-description="右键配置" title="右键配置"><svg class="ico inbox-platform-icon" aria-hidden="true"><use href="#i-qq-platform"/></svg>QQ</button>
 </div>
-<div id="inbox-archive-tile" class="card inbox-platform hidden">
+<div id="inbox-archive-tile" class="inbox-platform hidden">
 <button id="inbox-open-archive" class="btn inbox-platform-enter" type="button"><svg class="ico inbox-platform-icon" aria-hidden="true"><use href="#i-inbox"/></svg>未归类历史</button>
 </div>
 </div>
@@ -2424,7 +2423,7 @@ function renderInboxView() {
   $('inbox-layout').classList.toggle('hidden', !entries.length);
   $('inbox-heading').textContent = isDesktop ? '平台桌面' : inbox.view === 'qq' ? 'QQ 会话' : '未归类历史';
   inboxStatus('inbox-empty', isDesktop || entries.length ? '' : inbox.view === 'qq' && !inbox.enabled
-    ? 'QQ 收件箱未启用。可返回平台桌面查看配置位置。' : '暂无可查看的消息。');
+    ? 'QQ 收件箱未启用。可返回平台桌面，右键 QQ 图标打开平台设置。' : '暂无可查看的消息。');
   const list = $('inbox-conversations');
   list.replaceChildren();
   const groups = inbox.view === 'archive' ? [['原件', entries]] : [
@@ -2640,7 +2639,6 @@ $('inbox-open-qq').addEventListener('keydown', event => {
     openQQConfig();
   }
 });
-$('inbox-config-qq').addEventListener('click', openQQConfig);
 $('inbox-open-archive').addEventListener('click', () => openInboxView('archive'));
 $('inbox-home').addEventListener('click', () => openInboxView(null));
 $('inbox-refresh').addEventListener('click', loadInbox);
