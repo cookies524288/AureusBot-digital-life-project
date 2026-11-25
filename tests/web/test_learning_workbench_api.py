@@ -306,21 +306,26 @@ def test_revoked_scope_blocks_import_export_clear_and_delete_without_changes(
         assert service.language.entries(LanguageKind.EXPRESSION, include_disabled=True) == before
         scopes["source-a"] = "重新授权"
         assert client.post(prefix + "/export", json={"ids": []}).status_code == 422
-        assert (
+        result = (
             client.post(
                 prefix + "/import",
                 json={
                     "chat_id": "source-a",
                     "conflict_strategy": "overwrite",
-                    "expressions": [{"situation": "庆祝", "style": "不可覆盖"}],
+                    "expressions": [
+                        {"situation": "庆祝", "style": "保留说法", "content_list": '["新例句"]'}
+                    ],
                 },
-            ).status_code
-            == 422
+            )
+            .raise_for_status()
+            .json()
         )
-        assert (
-            client.get(prefix + "/list", params={"chat_id": "source-a"}).json()["data"][0]["style"]
-            == "保留说法"
+        assert result["imported_count"] == 1
+        updated = next(
+            entry for entry in service.language.entries(LanguageKind.EXPRESSION)
+            if entry.entry_key == row["entry_key"]
         )
+        assert updated.example == "新例句"
 
 
 def test_emoji_review_is_independent_and_persistent(tmp_path: Path) -> None:
@@ -352,7 +357,10 @@ def test_emoji_review_is_independent_and_persistent(tmp_path: Path) -> None:
             },
         ).is_success
         assert reopened.read_sendable(digest) == data
-        assert client.get(f"/api/webui/emoji/{identifier}/thumbnail").content == data
+        thumbnail = f"/api/webui/emoji/{identifier}/thumbnail"
+        with Image.open(BytesIO(client.get(thumbnail).raise_for_status().content)) as preview:
+            assert preview.format == "WEBP" and preview.size == (8, 8)
+        assert client.get(thumbnail, params={"original": True}).content == data
 
 
 def test_emoji_upload_register_ban_remove_stats_and_cache_contract(tmp_path: Path) -> None:
@@ -381,6 +389,7 @@ def test_emoji_upload_register_ban_remove_stats_and_cache_contract(tmp_path: Pat
         assert client.post(f"/api/webui/emoji/{identifier}/ban").is_success
         assert service.emojis is not None and service.emojis.read_sendable(digest) is None
         assert client.post(f"/api/webui/emoji/{identifier}/register").status_code == 422
+        assert client.get(f"/api/webui/emoji/{identifier}/thumbnail").is_success
         assert client.post(
             "/api/webui/emoji/batch/delete", json={"emoji_ids": [identifier]}
         ).is_success
@@ -389,9 +398,12 @@ def test_emoji_upload_register_ban_remove_stats_and_cache_contract(tmp_path: Pat
         assert any(item["id"] == identifier for item in removed["data"])
         stats = client.get("/api/webui/emoji/stats/summary")
         assert stats.status_code == 200 and stats.json()["data"]["discarded"] == 1
-        assert client.get("/api/webui/emoji/thumbnail-cache/stats").json()["enabled"] is False
-        assert client.post("/api/webui/emoji/thumbnail-cache/cleanup").status_code == 409
-        assert client.post("/api/webui/emoji/batch/upload", content=b"unused").status_code == 409
+        cache = "/api/webui/emoji/thumbnail-cache"
+        assert client.get(cache + "/stats").raise_for_status().json()["total_count"] == 1
+        assert client.post(cache + "/cleanup").raise_for_status().json()["cleaned_count"] == 1
+        assert client.get(cache + "/stats").raise_for_status().json()["total_count"] == 0
+        assert service.emojis.read_media(digest) == data
+        assert client.post("/api/webui/emoji/batch/upload", content=b"unused").status_code == 422
 
 
 def test_emoji_upload_accepts_exact_dashboard_form_data_contract(tmp_path: Path) -> None:
