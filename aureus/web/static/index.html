@@ -572,6 +572,11 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .resource-pagination input.resource-page-jump[type=text][inputmode=numeric]{width:4em;text-align:center;padding:4px;font-size:13px}
 .resource-pagination [role=status]{font-size:13px}
 .resource-detail{overflow-wrap:anywhere;gap:12px}
+/* 学习页本身是完整工作台：Shadow DOM 宿主铺满页面，样式和浮层都留在影子树内。 */
+#page-learning{--workbench-border:var(--border);--workbench-accent:var(--accent);--workbench-accent-soft:var(--accent-soft);--workbench-radius:var(--radius);--workbench-radius-sm:var(--radius-sm);padding:0;overflow:hidden;position:relative}
+#learning-workbench-host{position:relative;flex:1;min-height:0;width:100%;border-radius:var(--radius);overflow:hidden}
+#learning-workbench-status,#learning-workbench-error{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:var(--bg);color:var(--text-2)}
+#learning-workbench-error{color:var(--text)}
 /* 学习与长期记忆：标题、筛选、列表字段和空状态按主次分层（批次 3）。 */
 .resource-page .page-head .page-note{max-width:72ch;line-height:1.6}
 #page-learning .resource-filters,#page-memory .resource-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 12px}
@@ -846,31 +851,11 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 </div></section>
 <section id="page-learning" class="page wide resource-page">
-  <div class="page-head"><div><h2>学习</h2><p class="page-note">管理 Aureus 学到的表达方式、黑话和表情包。列表只显示摘要，点条目查看完整内容和来源。</p></div><button id="learning-workbench-open" class="btn small" type="button">打开完整学习工作台</button></div>
-  <div id="learning-workbench-host" class="hidden" style="height:calc(100vh - 170px);min-height:360px">
-    <button id="learning-workbench-close" class="btn small" type="button">返回原学习页面</button>
-    <iframe id="learning-workbench-frame" title="完整学习工作台" style="width:100%;height:calc(100% - 38px);border:0;margin-top:8px" referrerpolicy="same-origin"></iframe>
-  </div>
-  <div class="page-body stack">
-    <div class="row resource-navigation" role="group" aria-label="学习类型">
-      <button class="btn small primary" type="button" data-learning-tab="expression" aria-pressed="true" aria-disabled="true" aria-controls="learning-panel-expression">表达方式</button>
-      <button class="btn small" type="button" data-learning-tab="jargon" aria-pressed="false" aria-controls="learning-panel-jargon">黑话</button>
-      <button class="btn small" type="button" data-learning-tab="emoji" aria-pressed="false" aria-controls="learning-panel-emoji">表情包</button>
-    </div>
-    <div id="learning-panel-expression" class="stack resource-panel">
-      <div class="row resource-navigation" role="group" aria-label="表达浏览">
-        <button class="btn small primary" type="button" data-expression-view="list" aria-pressed="true" aria-disabled="true" aria-controls="learning-expression-list">表达列表</button>
-        <button class="btn small" type="button" data-expression-view="quality" aria-pressed="false" aria-controls="learning-panel-quality">质检记录</button>
-        <button class="btn small" type="button" data-expression-view="vectors" aria-pressed="false" aria-controls="learning-panel-vectors">向量空间</button>
-        <button class="btn small" type="button" data-expression-view="clusters" aria-pressed="false" aria-controls="learning-panel-clusters">表达簇</button>
-      </div>
-      <div id="learning-expression-list" class="stack resource-panel"></div>
-      <div id="learning-panel-quality" class="stack resource-panel hidden"></div>
-      <div id="learning-panel-vectors" class="stack resource-panel hidden"></div>
-      <div id="learning-panel-clusters" class="stack resource-panel hidden"></div>
-    </div>
-    <div id="learning-panel-jargon" class="stack resource-panel hidden"></div>
-    <div id="learning-panel-emoji" class="stack resource-panel hidden"></div>
+  <div id="learning-workbench-host"></div>
+  <div id="learning-workbench-status" role="status">正在加载学习工作台…</div>
+  <div id="learning-workbench-error" class="hidden" role="alert">
+    <p id="learning-workbench-error-text"></p>
+    <button id="learning-workbench-retry" class="btn small" type="button">重试</button>
   </div>
 </section>
 <section id="page-memory" class="page wide resource-page">
@@ -1446,7 +1431,7 @@ window.addEventListener('hashchange', () => { if (state.loggedIn) showPage(locat
 // ---------- 主题：默认亮色（不看系统设置），点一下在亮色和深色之间切；只记在这台浏览器里 ----------
 function applyTheme(theme) {
   if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
-  $('learning-workbench-frame')?.contentWindow?.postMessage({type:'aureus-theme', theme}, location.origin);
+  window.__aureusWorkbenchApplyTheme?.(theme);
 }
 try { applyTheme(localStorage.getItem('aureus-theme')); } catch (e) { /* 浏览器不让存就用亮色 */ }
 const DEFAULT_UI_FONT = 'pixel';

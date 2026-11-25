@@ -8,11 +8,11 @@
 
 在本目录执行 `npm ci --ignore-scripts`，再执行 `npm run build`。安装需要 npm 缓存或网络。TypeScript 和 Vite 均使用锁定版本，输出到 `aureus/web/static/learning-workbench`。成品通过 Aureus 的 `/learning-workbench/` 提供，同源加载脚本、字体和 API。
 
-产品学习页面中的「打开完整学习工作台」进入此模块，当前 Aureus 登录同时用于静态入口和 API。保留原页面入口供组合验收期间使用。
+Aureus 学习页本身直接显示此工作台：主页面创建 Shadow DOM 宿主，注入 `workbench.css` 并按需加载 `workbench.js`，不再使用 iframe。当前 Aureus 登录同时用于静态资源和 API。
 
 ## 适配记录
 
-- `src/main.tsx`、`src/host.css` 和 Vite 配置为 Aureus 宿主，提供中文、浏览器历史、共享主题和独立样式。
+- `src/main.tsx`、`src/host.css` 和 Vite 配置为 Aureus 宿主，提供中文、内存路由、Shadow DOM 挂载、共享主题和独立样式。
 - `src/lib/http/instances.ts` 只连接当前 Aureus，认证失效回到已有登录，移除外部统计实例。
 - `src/lib/jargon-api.ts` 的批量定性请求将条目编号 `ids` 和布尔判定 `is_jargon` 放入 JSON 请求体，不放入 URL。
 - `src/components/ui/streamline-icon.tsx` 只使用本地登记图标，缺失图标不从外部服务加载。
