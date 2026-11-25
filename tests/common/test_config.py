@@ -17,6 +17,7 @@ from aureus.common import (
     FeedbackConfig,
     HeartbeatConfig,
     HormonesConfig,
+    IndexingConfig,
     InitiativeConfig,
     InterestsConfig,
     JudgeConfig,
@@ -402,6 +403,50 @@ def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
 def test_heartbeat_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[heartbeat]\n{field} = {text}\n")
+    assert field in error_message_of(paths)
+
+
+# ---------- [indexing] 自动建索引（D125） ----------
+
+INDEXING_FIELDS = tuple(IndexingConfig.model_fields)
+
+
+def test_indexing_defaults_when_section_is_missing(tmp_path: Path) -> None:
+    indexing = load_runtime_config(AureusPaths(tmp_path)).indexing
+    assert indexing == IndexingConfig()
+    assert indexing.auto_build_enabled is True
+    assert (indexing.batch_size, indexing.interval_seconds) == (32, 5.0)
+
+
+def test_indexing_example_values_equal_the_defaults(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    prefixes = tuple(f"# {name} =" for name in INDEXING_FIELDS)
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "indexing")
+    assert sum(line.startswith(prefixes) for line in mine) == len(INDEXING_FIELDS)
+    uncommented = [line.removeprefix("# ") if line.startswith(prefixes) else line for line in lines]
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "\n".join(uncommented))
+    assert load_runtime_config(paths).indexing == IndexingConfig()
+
+
+@pytest.mark.parametrize(
+    ("field", "text"),
+    [
+        ("auto_build_enabled", "1"),
+        ("auto_build_enabled", '"true"'),
+        ("batch_size", "0"),
+        ("batch_size", "201"),
+        ("batch_size", "true"),
+        ("interval_seconds", "-1"),
+        ("interval_seconds", "3601"),
+        ("interval_seconds", '"5"'),
+        ("unknown", "1"),
+    ],
+)
+def test_indexing_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[indexing]\n{field} = {text}\n")
     assert field in error_message_of(paths)
 
 

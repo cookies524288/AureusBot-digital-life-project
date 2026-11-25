@@ -92,6 +92,16 @@ config_version = 1
 # working_memory_capacity = 80
 # working_memory_retain = 25
 
+# 自动建索引（设计见 docs/10-decisions.md 的 D125）。配置好嵌入模型后，
+# 心跳会在后台按批补齐表达、表情描述和已收到图片的向量索引，直到全部建完。
+[indexing]
+# 总开关。关掉后只在回复后按需补建表达、选中表情时建描述缓存、收到图片时建图片索引。
+# auto_build_enabled = true
+# 每批最多处理多少条，范围 1–200。越小越不占带宽和预算，但建完得更久。
+# batch_size = 32
+# 两批之间等多少秒，范围 0–3600；0 表示让出一拍就继续。
+# interval_seconds = 5.0
+
 # 身体信号（设计见 docs/04-body-signals.md、docs/10-decisions.md 的 D56、D57）。
 # 精力来自每月 token 上限：每日额度 = 本月剩余额度 ÷ 本月剩余天数，
 # 所以要在 [safety] 里写了 monthly_token_limit 才有意义；没写时精力记为「不限」。

@@ -15,9 +15,9 @@ import contextlib
 import logging
 import sqlite3
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
-from datetime import datetime, tzinfo
+from datetime import datetime, timedelta, tzinfo
 from enum import Enum, auto
 from typing import Any, cast
 
@@ -37,6 +37,7 @@ from aureus.common import (
     EmpathyConfig,
     ExplorationConfig,
     HeartbeatConfig,
+    IndexingConfig,
     InitiativeConfig,
     JudgeConfig,
     LanguageConfig,
@@ -100,7 +101,8 @@ from aureus.heartbeat.inbox_attention import (
     InboxSelection,
     select_conversations,
 )
-from aureus.heartbeat.inbox_media import AttachmentReader, ImageIndexer
+from aureus.heartbeat.inbox_images import InboxImageIndex
+from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from aureus.heartbeat.initiative import InitiativeDecision, decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
@@ -144,7 +146,7 @@ from aureus.memory import (
     MemoryIndex,
 )
 from aureus.mood import FeedbackOutcome, Mood, MoodReading
-from aureus.organs import CallPurpose, OrganRequest, OrganResponse, ToolDefinition
+from aureus.organs import CallPurpose, OrganCallError, OrganRequest, OrganResponse, ToolDefinition
 from aureus.organs.topology import resolve_task_organ
 from aureus.people import (
     AffinityBook,
@@ -191,6 +193,14 @@ _STRESS_REARM_FRACTION = 0.5
 # 取消进行中的器官调用后，最多再等它这么多秒。正常情况下取消会立刻生效；
 # 万一器官代码吞掉了取消，也不能让关闭流程永远卡住。
 _CANCEL_WAIT_SECONDS = 5.0
+# 后台索引构建（D125）：连续这么多轮没有任何进展就暂停到下一轮，避免对着坏数据空转。
+_INDEX_BUILD_MAX_STALLED_ROUNDS = 3
+# 网关因预算或精力拒绝后至少等这么久再试；心跳本身每拍也会重新检查。
+_INDEXING_REJECTED_PAUSE_SECONDS = 300.0
+# 构建器按这三种索引轮转，与器官面板的统计种类同名。
+_INDEX_EXPRESSION = "expression"
+_INDEX_EMOJI = "emoji_cache"
+_INDEX_IMAGES = "images"
 # 重启时最多读多少条激素触发记录；超过半衰期 8 倍的会被 Hormones 丢掉，这里只防读得太多。
 _HORMONE_RESTORE_LIMIT = 1000
 # /state 里激素的显示名（09 号文档术语表）。
@@ -226,6 +236,7 @@ class Heartbeat:
         organs: OrganCaller,
         identity: Identity,
         config: HeartbeatConfig,
+        indexing: IndexingConfig | None = None,
         permissions: PermissionChecker,
         emergency_stop: EmergencyStop,
         timezone: tzinfo | None = None,
@@ -272,6 +283,7 @@ class Heartbeat:
             organs: 调用器官用的对象，核心组装时传安全网关。
             identity: 身份事实和四层人设。
             config: 心跳配置。
+            indexing: 自动建索引的批大小、批间隔和总开关（D125）。
             permissions: 权限检查器，要和安全网关用同一个。
             emergency_stop: 急停开关，每拍读一次状态；要和权限检查器里的是同一个。
             timezone: 给人看的时间用哪个时区；不给就用这台电脑设置的时区。
@@ -323,6 +335,11 @@ class Heartbeat:
         self._organs = organs
         self._identity = identity
         self._config = config
+        self._indexing = indexing or IndexingConfig()
+        self._indexing_task: asyncio.Task[None] | None = None
+        self._indexing_retry_at: datetime | None = None
+        self._text_spaces: tuple[tuple[int, str], ...] = ()
+        self._inbox_image_index: InboxImageIndex | None = None
         self._permissions = permissions
         self._emergency_stop = emergency_stop
         self._halt_status = HaltStatus(halted=False)  # 最近一拍看到的急停状态
@@ -506,9 +523,19 @@ class Heartbeat:
         return self._conversation.emoji_selector
 
     def update_available_organs(
-        self, available: frozenset[str], *, expression_space: str | None = None
+        self,
+        available: frozenset[str],
+        *,
+        expression_space: str | None = None,
+        text_spaces: tuple[tuple[int, str], ...] = (),
     ) -> None:
-        """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。"""
+        """模型热重载后同步可选总结任务的可用性，不改当天执行记录（D86）。
+
+        嵌入路线变化时先停下后台构建；下一拍按新空间重新开始（D125）。
+        """
+        self._cancel_indexing()
+        self._indexing_retry_at = None
+        self._text_spaces = text_spaces
         self._available_organs = available
         if (
             self._thought is not None
@@ -635,9 +662,10 @@ class Heartbeat:
         """接上通道提供的后台收件箱附件读取器。"""
         self._conversation.inbox_media.read = reader
 
-    def set_inbox_image_indexer(self, indexer: ImageIndexer) -> None:
-        """把已经取回的图片交给同一收件箱的图像索引。"""
-        self._conversation.inbox_media.index_image = indexer
+    def set_inbox_image_indexer(self, indexer: InboxImageIndex) -> None:
+        """把已经取回的图片交给同一收件箱的图像索引，并保留后台回填入口。"""
+        self._inbox_image_index = indexer
+        self._conversation.inbox_media.index_image = indexer.index
 
     def on_inbox_message(self, message: InboxMessage) -> None:
         """来信已保存，重要来信立即叫醒心跳。"""
@@ -701,6 +729,7 @@ class Heartbeat:
         engaged = self._emergency_stop.engage(reason)
         if engaged:
             self._reply_outbox.clear()
+            self._cancel_indexing()
         self._wake.set()
         return engaged
 
@@ -714,6 +743,8 @@ class Heartbeat:
             OSError: 标记文件删不掉，急停还在。
         """
         released = self._emergency_stop.release()
+        if released:
+            self._indexing_retry_at = None
         self._wake.set()
         return released
 
@@ -894,6 +925,7 @@ class Heartbeat:
         """请心跳停下来：跳完当前这一拍就开始关闭。"""
         self._stop_requested = True
         self._cancel_language_task()
+        self._cancel_indexing()
         if self._platform_inbox is not None:
             self._interrupt_inbox(self._platform_inbox, "关闭时取消本批回复，未投递。")
         self._reply_outbox.clear()
@@ -910,10 +942,13 @@ class Heartbeat:
             return
         self._maintenance_paused = paused
         if paused:
+            self._cancel_indexing()
             self._inbox_followups.clear()
             self._reply_outbox.clear()
             if self._platform_inbox is not None:
                 self._interrupt_inbox(self._platform_inbox, "维护暂停时取消本批回复，未投递。")
+        else:
+            self._indexing_retry_at = None
         if paused and self._thought is not None:
             thought = self._thought
             is_language_learning = thought.task.get_name() == language_runner.TASK_NAME
@@ -1074,6 +1109,7 @@ class Heartbeat:
         if inbox is not None:
             self._take_active_inbox(inbox)
         self._memory.index_more()
+        self._maybe_start_indexing()
         self._read_body()
         self._check_stress()
         self._agenda_hooks._check_agenda()
@@ -1142,6 +1178,7 @@ class Heartbeat:
             except Exception:
                 logger.exception("关闭记录没能写进时间线")
         finally:
+            await self._wait_for_indexing()
             if self._conversation.expression_recall is not None:
                 await self._conversation.expression_recall.close()
             self._phase = _Phase.STOPPED
@@ -2420,6 +2457,126 @@ class Heartbeat:
         )
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task, (), strategy)
+
+    # ---------- 自动建索引（D125） ----------
+
+    def _maybe_start_indexing(self) -> None:
+        """有嵌入路线且没有在跑时，启动一个后台构建任务。"""
+        if (
+            self._indexing_task is not None
+            or not self._indexing.auto_build_enabled
+            or self._stop_requested
+            or self._maintenance_paused
+            or self._halt_status.halted
+        ):
+            return
+        now = self._clock.now()
+        if self._indexing_retry_at is not None and now < self._indexing_retry_at:
+            return
+        if not self._index_builders():
+            return
+        self._indexing_task = asyncio.create_task(
+            self._build_indexes(), name="aureus-index-builder"
+        )
+        self._indexing_task.add_done_callback(self._indexing_finished)
+
+    def _index_builders(self) -> list[tuple[str, Callable[[], Awaitable[tuple[bool, bool]]]]]:
+        """当前可自动构建的索引种类；每种返回（是否还有缺项，本批是否处理过）。"""
+        return []
+
+    async def _build_indexes(self) -> None:
+        """按批轮转补齐各索引；每批之后让出，条件不满足或全部完成时退出。
+
+        返回的「是否还有缺项」为假时该种索引本轮完成。单批失败不抛出心跳：
+        预算或精力拒绝暂停一段时间，其它失败记日志后下一轮再试（D125）。
+        """
+        completed: set[str] = set()
+        stalled = 0
+        try:
+            while self._indexing_allowed():
+                builders = self._index_builders()
+                if not builders:
+                    break
+                progressed = False
+                for kind, build in builders:
+                    if kind in completed:
+                        continue
+                    more, did = await build()
+                    if not more:
+                        completed.add(kind)
+                        continue
+                    if did:
+                        progressed = True
+                        await asyncio.sleep(self._indexing.interval_seconds)
+                        break
+                if all(kind in completed for kind, _build in builders):
+                    break
+                if not progressed:
+                    stalled += 1
+                    if stalled >= _INDEX_BUILD_MAX_STALLED_ROUNDS:
+                        logger.warning("索引构建连续 %s 轮没有进展，暂停到下一轮", stalled)
+                        break
+                    await asyncio.sleep(self._indexing.interval_seconds)
+        except asyncio.CancelledError:
+            raise
+        except CallRejectedError as error:
+            self._indexing_retry_at = self._clock.now() + timedelta(
+                seconds=max(self._indexing.interval_seconds, _INDEXING_REJECTED_PAUSE_SECONDS)
+            )
+            logger.info("索引构建暂停（%s），条件恢复后继续", type(error).__name__)
+        except (OrganCallError, ValueError, sqlite3.Error, OSError) as error:
+            self._indexing_retry_at = self._clock.now() + timedelta(
+                seconds=self._indexing.interval_seconds
+            )
+            logger.warning("索引构建这一轮未完成（%s），下一轮继续", type(error).__name__)
+        except Exception:
+            self._indexing_retry_at = self._clock.now() + timedelta(
+                seconds=self._indexing.interval_seconds
+            )
+            logger.exception("索引构建出错，下一轮再试")
+        else:
+            self._indexing_retry_at = self._clock.now() + timedelta(
+                seconds=self._indexing.interval_seconds
+            )
+
+    def _indexing_allowed(self) -> bool:
+        """急停、关闭、维护暂停或总开关关闭时不再继续。"""
+        return (
+            self._indexing.auto_build_enabled
+            and not self._stop_requested
+            and not self._maintenance_paused
+            and not self._halt_status.halted
+        )
+
+    def _cancel_indexing(self) -> None:
+        """立即停下后台构建；已提交的批次保留。"""
+        task = self._indexing_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _wait_for_indexing(self) -> None:
+        """关闭时等后台构建停下；取消不掉时只记日志，不拖住关闭。"""
+        task = self._indexing_task
+        self._indexing_task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("后台索引构建异常结束")
+
+    def _indexing_finished(self, task: asyncio.Task[None]) -> None:
+        """构建任务结束后清掉引用；异常只记日志，不叫醒心跳。"""
+        if self._indexing_task is task:
+            self._indexing_task = None
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error("后台索引构建异常结束（%s）", type(error).__name__)
 
     async def _initiate(self, job: _InitiativeJob) -> _ThoughtOutcome:
         """后台只问器官，不写状态；任何失败都朝不打扰的方向倒。"""

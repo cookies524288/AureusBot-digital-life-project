@@ -340,6 +340,7 @@ def open_core(
             organs=gateway,
             identity=identity,
             config=heartbeat_config,
+            indexing=runtime.indexing,
             timezone=calendar.timezone,
             permissions=permissions,
             emergency_stop=emergency_stop,
@@ -384,7 +385,9 @@ def open_core(
 
         def update_organs(available: frozenset[str]) -> None:
             heartbeat.update_available_organs(
-                available, expression_space=models.local_expression_space
+                available,
+                expression_space=models.local_expression_space,
+                text_spaces=models.embedding_spaces.text,
             )
 
         models.on_reload = update_organs
@@ -438,7 +441,7 @@ def open_core(
                 gateway.call,
                 lambda: "image_embedding" in models.available_organs,
             )
-            heartbeat.set_inbox_image_indexer(inbox_images.index)
+            heartbeat.set_inbox_image_indexer(inbox_images)
             heartbeat.set_inbox_attachment_reader(qq.read_inbox_attachment)
             heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show, can_quote=qq.can_quote_reply)
         embedding_progress = EmbeddingProgress(

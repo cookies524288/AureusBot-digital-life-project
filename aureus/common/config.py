@@ -146,6 +146,20 @@ class HeartbeatConfig(BaseModel):
         return self
 
 
+class IndexingConfig(BaseModel):
+    """配置好嵌入模型后自动持续建索引（aureus.toml 的 [indexing]，设计见 D125）。"""
+
+    # 严格类型，理由同 SafetyConfig：开关写成数字、条数写成字符串要报错，不悄悄转换。
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    # 总开关（D5）。关掉后回到回复后按需补建、人工维护和收到图片时索引。
+    auto_build_enabled: bool = True
+    # 后台构建器每批最多处理多少条表达、表情描述或图片；范围 1–200。
+    batch_size: int = Field(default=32, ge=1, le=200)
+    # 两批之间等待多少秒；0 表示不额外等待，让出一拍就继续。
+    interval_seconds: float = Field(default=5.0, ge=0, le=3600, allow_inf_nan=False)
+
+
 class BodyConfig(BaseModel):
     """身体信号的可调参数（aureus.toml 的 [body]，设计见 04 号文档、D53）。
 
@@ -734,6 +748,7 @@ class RuntimeConfig(BaseModel):
     log_level: LogLevel = "INFO"
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    indexing: IndexingConfig = Field(default_factory=IndexingConfig)
     body: BodyConfig = Field(default_factory=BodyConfig)
     time: TimeConfig = Field(default_factory=TimeConfig)
     snapshots: SnapshotsConfig = Field(default_factory=SnapshotsConfig)
