@@ -50,6 +50,10 @@
   grid-template-columns: 14rem minmax(0, 1fr);
   gap: 20px;
 }
+/* 内联到 Aureus 时没有聊天范围面板，内容直接占满整行。 */
+[data-browser-layout='true'][data-layout='single'] {
+  grid-template-columns: minmax(0, 1fr);
+}
 [data-browser-layout='true']:has(> [data-collapsed='true']) {
   grid-template-columns: 3.25rem minmax(0, 1fr);
 }

@@ -25,6 +25,7 @@ import { useDataList } from '@/hooks/useDataList'
 import { useToast } from '@/hooks/use-toast'
 import { formatChatDisplayName, formatChatTargetLabel } from '@/lib/chat-display'
 import { cn } from '@/lib/utils'
+import { workbenchGlobalScope } from '@/lib/workbench-scope'
 
 import {
   batchDeleteJargons,
@@ -523,8 +524,9 @@ export function JargonManagementPage({ browserHeader }: { browserHeader?: ReactN
           }
         />
         <DataBrowserLayout
+          data-layout={workbenchGlobalScope ? 'single' : undefined}
           sidebar={
-            <ChatScopeFilterPanel
+            workbenchGlobalScope ? null : <ChatScopeFilterPanel
               density="compact"
               title="聊天范围"
               titleMeta={

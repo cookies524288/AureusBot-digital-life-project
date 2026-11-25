@@ -34,6 +34,7 @@ import { useDataList } from '@/hooks/useDataList'
 import { useToast } from '@/hooks/use-toast'
 import { formatChatDisplayName, formatChatTargetLabel } from '@/lib/chat-display'
 import { cn } from '@/lib/utils'
+import { workbenchGlobalScope } from '@/lib/workbench-scope'
 
 import {
   batchDeleteExpressions,
@@ -76,7 +77,8 @@ interface ExpressionFilters {
 }
 
 const INITIAL_FILTERS: ExpressionFilters = {
-  browseMode: 'chat',
+  // 内联到 Aureus 学习页时只保留全局范围，直接显示全部表达方式。
+  browseMode: workbenchGlobalScope ? 'all' : 'chat',
   selectedChatId: '',
   selectedGroupIndex: null,
   sortBy: 'time',
@@ -357,8 +359,9 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
           }
         />
         <DataBrowserLayout
+          data-layout={workbenchGlobalScope ? 'single' : undefined}
           sidebar={
-            <ChatScopeFilterPanel
+            workbenchGlobalScope ? null : <ChatScopeFilterPanel
               density="compact"
               title="聊天范围"
               titleMeta={
@@ -472,7 +475,7 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
                       variant="outline"
                       size="icon-sm"
                       onClick={exportSelectedExpressionsToFile}
-                      disabled={!currentChat || list.selectedCount === 0}
+                      disabled={(!currentChat && !workbenchGlobalScope) || list.selectedCount === 0}
                       title="导出所选"
                       aria-label="导出所选"
                     >
@@ -525,7 +528,7 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
                           从旧版本导入
                         </DropdownMenuItem>
                         <DropdownMenuItem
-                          disabled={!currentChat}
+                          disabled={!currentChat && !workbenchGlobalScope}
                           onSelect={() => importInputRef.current?.click()}
                         >
                           <Upload className="mr-2 h-4 w-4" />

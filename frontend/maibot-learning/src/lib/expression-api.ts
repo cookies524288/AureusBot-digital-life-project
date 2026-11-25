@@ -126,10 +126,11 @@ export async function getExpressionList(params: {
 }
 
 /**
- * 按聊天导出表达方式。导出的 JSON 不包含 session_id。
+ * 导出表达方式；不传 chat_id 时按全局范围导出。导出的 JSON 不包含 session_id。
  */
 export async function exportExpressions(params: {
-  chat_id: string
+  chat_id?: string
+  is_global?: boolean
   ids?: number[]
 }): Promise<ExpressionExportResponse> {
   return backendApi.post<ExpressionExportResponse>(`${API_BASE}/export`, {

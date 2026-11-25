@@ -12,6 +12,7 @@ import { useCallback } from 'react'
 import type { ChangeEvent } from 'react'
 
 import { useToast } from '@/hooks/use-toast'
+import { workbenchGlobalScope } from '@/lib/workbench-scope'
 
 import { clearExpressions, exportExpressions, importExpressions } from '@/lib/expression-api'
 
@@ -48,8 +49,9 @@ export function useExpressionImportExport({
 }: UseExpressionImportExportOptions): UseExpressionImportExportResult {
   const { toast } = useToast()
 
-  // 校验是否已选择具体聊天，未选中时拦截并提示
+  // 校验是否已选择具体聊天；全局范围不需要聊天，返回 null 表示全局。
   const getImportExportChatId = useCallback((): string | null => {
+    if (workbenchGlobalScope) return null
     if (!currentChat) {
       toast({
         title: '请选择聊天',
@@ -81,7 +83,7 @@ export function useExpressionImportExport({
 
   const exportSelectedExpressionsToFile = useCallback(async () => {
     const chatId = getImportExportChatId()
-    if (!chatId || !currentChat) return
+    if (!workbenchGlobalScope && (!chatId || !currentChat)) return
     if (selectedIds.size === 0) {
       toast({
         title: '没有选中项目',
@@ -94,7 +96,8 @@ export function useExpressionImportExport({
     let result
     try {
       result = await exportExpressions({
-        chat_id: chatId,
+        chat_id: chatId ?? undefined,
+        is_global: workbenchGlobalScope,
         ids: Array.from(selectedIds),
       })
     } catch (error) {
@@ -106,7 +109,9 @@ export function useExpressionImportExport({
       return
     }
 
-    const filename = `expressions-${sanitizeFilename(currentChat.chat_name)}-selected.json`
+    const filename = workbenchGlobalScope
+      ? 'expressions-global-selected.json'
+      : `expressions-${sanitizeFilename(currentChat?.chat_name ?? 'chat')}-selected.json`
     downloadJson(filename, result)
     toast({
       title: '导出成功',
@@ -134,7 +139,7 @@ export function useExpressionImportExport({
       const chatId = getImportExportChatId()
       const file = event.target.files?.[0]
       event.target.value = ''
-      if (!chatId || !file) return
+      if ((!workbenchGlobalScope && !chatId) || !file) return
 
       try {
         const payload = JSON.parse(await file.text()) as unknown
@@ -149,7 +154,7 @@ export function useExpressionImportExport({
         }
 
         const result = await importExpressions({
-          chat_id: chatId,
+          ...(workbenchGlobalScope ? { is_global: true } : { chat_id: chatId ?? undefined }),
           expressions: expressionsToImport,
         })
         toast({

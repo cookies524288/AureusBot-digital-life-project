@@ -1,12 +1,144 @@
-html, body, #root { width: 100%; height: 100%; margin: 0; }
-#root { overflow: hidden; }
-
-:root[data-dashboard-style='millennium'] {
-  --primary: 150 28% 34%;
-  --ring: 150 28% 34%;
+/*
+ * Aureus 内联宿主样式。
+ *
+ * 工作台运行在主页面创建的 Shadow DOM 里：颜色、圆角、阴影和字体映射到
+ * Aureus 主页面变量，深浅主题由主页面在宿主上加/去 dark 类后自动跟随。
+ * 宿主上的 data-dashboard-style='aureus' 不命中工作台自带的千禧/未来复古
+ * 皮肤，控件使用基础组件的圆角样式，与 Aureus 保持一致。
+ *
+ * 主页面在 #page-learning 上提供 --workbench-* 别名。工作台自己也会在
+ * 影子树里定义 --border、--accent、--radius 等同名变量，直接引用会被这些
+ * 定义截住；别名在影子树外取值，再在 #root 上换回工作台变量。
+ */
+:host {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
 }
 
-html[data-dashboard-style='millennium'].dark {
-  --primary: 151 32% 57%;
-  --ring: 151 32% 57%;
+#root {
+  /* 工作台内部使用 HSL 三元组，主页面变量是十六进制；用相对颜色语法转换。 */
+  --background: from var(--bg) h s l;
+  --foreground: from var(--text) h s l;
+  --card: from var(--surface) h s l;
+  --card-foreground: from var(--text) h s l;
+  --popover: from var(--surface) h s l;
+  --popover-foreground: from var(--text) h s l;
+  --primary: from var(--workbench-accent) h s l;
+  --primary-foreground: from var(--on-accent) h s l;
+  --secondary: from var(--surface-2) h s l;
+  --secondary-foreground: from var(--text) h s l;
+  --muted: from var(--surface-2) h s l;
+  --muted-foreground: from var(--text-2) h s l;
+  --accent: from var(--workbench-accent-soft) h s l;
+  --accent-foreground: from var(--accent-strong) h s l;
+  --destructive: from var(--danger) h s l;
+  --destructive-foreground: from var(--on-accent) h s l;
+  --border: from var(--workbench-border) h s l;
+  --input: from var(--workbench-border) h s l;
+  --ring: from var(--workbench-accent) h s l;
+  --chart-1: from var(--workbench-accent) h s l;
+  --chart-2: from var(--ok) h s l;
+  --chart-3: from var(--warn) h s l;
+  --chart-4: from var(--accent-strong) h s l;
+  --chart-5: from var(--danger) h s l;
+
+  --visual-radius-sm: var(--workbench-radius-sm);
+  --visual-radius-md: var(--workbench-radius-sm);
+  --visual-radius-lg: var(--workbench-radius);
+  --visual-radius-xl: var(--workbench-radius);
+  --visual-radius-full: 9999px;
+  --surface-radius: var(--workbench-radius);
+
+  --visual-shadow-sm: var(--shadow);
+  --visual-shadow-md: var(--shadow);
+  --visual-shadow-lg: var(--shadow);
+  --visual-shadow-xl: var(--shadow);
+
+  --typography-font-family-base: var(--font);
+  --typography-font-family-code: var(--mono);
+
+  /* surfaces.css 在 :host 上按工作台默认色算好这些派生色，需要在 #root 重算。 */
+  --surface-frame-bg: hsl(var(--card));
+  --surface-data-bg: hsl(var(--background));
+  --surface-line: hsl(var(--border));
+  --surface-ink: hsl(var(--foreground));
+  --list-selected-bg: hsl(var(--primary));
+  --list-selected-ink: hsl(var(--primary-foreground));
+  --list-hover-bg: hsl(var(--muted));
+  --surface-focus: hsl(var(--ring));
+  --table-rule: color-mix(in srgb, hsl(var(--border)) 45%, transparent);
+}
+
+:host,
+#root {
+  width: 100%;
+  height: 100%;
+  /* 内联时高度来自学习页，不能沿用 iframe 里的 100dvh。 */
+  min-height: 0;
+  margin: 0;
+}
+
+#root {
+  overflow: hidden;
+}
+
+/* 与主页面相同的细胶囊滚动条：8px、透明轨道、纯色滑块，不做渐变。 */
+:host,
+:host * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-2) transparent;
+}
+
+:host::-webkit-scrollbar,
+:host *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:host::-webkit-scrollbar-track,
+:host *::-webkit-scrollbar-track,
+:host::-webkit-scrollbar-corner,
+:host *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:host::-webkit-scrollbar-thumb,
+:host *::-webkit-scrollbar-thumb {
+  background-color: var(--text-2);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+:host::-webkit-scrollbar-thumb:hover,
+:host *::-webkit-scrollbar-thumb:hover,
+:host::-webkit-scrollbar-thumb:active,
+:host *::-webkit-scrollbar-thumb:active {
+  background-color: var(--text);
+  background-clip: content-box;
+}
+
+/* Radix ScrollArea 自绘的滚动条也使用同一套胶囊样式。 */
+[data-dashboard-scrollbar='true'] {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 2px !important;
+}
+
+[data-dashboard-scrollbar='true'][data-orientation='vertical'] {
+  width: 8px !important;
+}
+
+[data-dashboard-scrollbar='true'][data-orientation='horizontal'] {
+  height: 8px !important;
+}
+
+[data-dashboard-scrollbar-thumb='true'] {
+  background-color: var(--text-2) !important;
+  border-radius: 9999px !important;
+}
+
+[data-dashboard-scrollbar-thumb='true']:hover {
+  background-color: var(--text) !important;
 }

@@ -513,7 +513,8 @@
   * {
     @apply border-border;
   }
-  body {
+  body,
+  :host {
     @apply bg-background text-foreground;
     font-size: var(--typography-font-size-base);
     line-height: var(--typography-line-height-normal);
@@ -521,6 +522,7 @@
 
   html,
   body,
+  :host,
   #root {
     height: 100%;
     min-height: 100%;
@@ -531,6 +533,7 @@
   @supports (min-height: 100dvh) {
     html,
     body,
+    :host,
     #root {
       height: 100dvh;
       min-height: 100dvh;
