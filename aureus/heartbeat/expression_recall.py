@@ -78,6 +78,7 @@ class ExpressionRecall:
         self.space: str | None = None
         self._backfill: asyncio.Task[None] | None = None
         self._maintenance: asyncio.Task[None] | None = None
+        self._auto_building = False
         self.maintenance_run: ExpressionBackfillRun | None = None
 
     async def close(self) -> None:
@@ -160,8 +161,8 @@ class ExpressionRecall:
 
     @property
     def build_busy(self) -> bool:
-        """当前运行时仍有向量构建任务在途。"""
-        return any(
+        """当前运行时仍有向量构建任务在途，或后台自动构建正在写这一批。"""
+        return self._auto_building or any(
             task is not None and not task.done() for task in (self._backfill, self._maintenance)
         )
 
@@ -237,17 +238,88 @@ class ExpressionRecall:
                 run.state = "failed"
                 logger.warning("人工表达向量补建失败（%s）", type(error).__name__)
 
+    async def build_authorized_batch(self, limit: int) -> tuple[bool, bool]:
+        """心跳自动构建：为所有已授权范围补一批缺项（D125）。
+
+        Returns:
+            （是否还有缺项，本批是否写入过）。按需补建或人工维护在途时让出这一轮。
+        """
+        space = self.space
+        if space is None:
+            return False, False
+        if self.build_busy:
+            return True, False
+        self._auto_building = True
+        try:
+            scopes = await asyncio.to_thread(self.authorized_scopes)
+            entries = await asyncio.to_thread(self._index.candidates, self._language, scopes)
+            return await self._publish_missing(
+                space,
+                entries,
+                limit,
+                purpose=CallPurpose.OPTIONAL,
+                current=self._authorized_fingerprints,
+            )
+        finally:
+            self._auto_building = False
+
+    def authorized_scopes(self) -> frozenset[str]:
+        """语言库里出现、且来源过滤器仍允许的范围；全局候选由索引自己并入。"""
+        pool = self._language.expression_pool()
+        scopes = {scope for entry in pool for scope in entry.scope_keys}
+        scopes.update(entry.restricted_scope for entry in pool if entry.restricted_scope)
+        return frozenset(scope for scope in scopes if self._language.learning_source_allowed(scope))
+
+    async def _authorized_fingerprints(self) -> dict[str, str]:
+        scopes = await asyncio.to_thread(self.authorized_scopes)
+        entries = await asyncio.to_thread(self._index.candidates, self._language, scopes)
+        return {entry.entry_key: fingerprint(entry) for entry in entries}
+
+    async def _publish_missing(
+        self,
+        space: str,
+        entries: Sequence[LanguageEntry],
+        limit: int,
+        *,
+        purpose: CallPurpose,
+        current: Callable[[], Awaitable[dict[str, str]]],
+    ) -> tuple[bool, bool]:
+        """嵌入并发布一批指纹仍有效的缺项；返回（是否还有缺项，本批是否写入）。"""
+        missing = await asyncio.to_thread(self._index.missing, space, entries)
+        batch = missing[:limit]
+        if not batch:
+            return False, False
+        valid = {entry.entry_key: fingerprint(entry) for entry in entries}
+        batch = [entry for entry in batch if valid.get(entry.entry_key) == fingerprint(entry)]
+        if not batch:
+            return True, False
+        vectors = await self._embed(
+            space, tuple(map(embedding_text, batch)), purpose=purpose
+        )
+        current_marks = await current()
+        retained = [
+            (entry, vector)
+            for entry, vector in zip(batch, vectors, strict=True)
+            if current_marks.get(entry.entry_key) == fingerprint(entry)
+        ]
+        if not retained or self.space != space:
+            return True, False
+        retained_entries, retained_vectors = zip(*retained, strict=True)
+        await asyncio.to_thread(
+            self._index.publish, space, retained_entries, retained_vectors
+        )
+        return len(retained) < len(missing), True
+
     async def _build(self, space: str, scope: str | None) -> None:
         try:
             entries = await asyncio.to_thread(self._candidates, scope, ())
-            missing = await asyncio.to_thread(self._index.missing, space, entries)
-            batch = missing[:EXPRESSION_BACKFILL_BATCH]
-            current = await self._current_fingerprints(scope, ()) if batch else {}
-            batch = [entry for entry in batch if current.get(entry.entry_key) == fingerprint(entry)]
-            if batch and self.space == space:
-                vectors = await self._embed(space, tuple(map(embedding_text, batch)))
-                if self.space == space:
-                    await asyncio.to_thread(self._index.publish, space, batch, vectors)
+            await self._publish_missing(
+                space,
+                entries,
+                EXPRESSION_BACKFILL_BATCH,
+                purpose=CallPurpose.USER_REPLY,
+                current=lambda: self._current_fingerprints(scope, ()),
+            )
         except (CallRejectedError, OrganCallError, ValueError, sqlite3.Error) as error:
             logger.warning("表达向量补建未完成（%s），普通回复不受影响", type(error).__name__)
 

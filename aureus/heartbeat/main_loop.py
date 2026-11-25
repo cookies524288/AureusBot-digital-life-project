@@ -2482,7 +2482,17 @@ class Heartbeat:
 
     def _index_builders(self) -> list[tuple[str, Callable[[], Awaitable[tuple[bool, bool]]]]]:
         """当前可自动构建的索引种类；每种返回（是否还有缺项，本批是否处理过）。"""
-        return []
+        builders: list[tuple[str, Callable[[], Awaitable[tuple[bool, bool]]]]] = []
+        recall = self._conversation.expression_recall
+        if recall is not None and recall.space is not None:
+            builders.append((_INDEX_EXPRESSION, self._build_expression_batch))
+        return builders
+
+    async def _build_expression_batch(self) -> tuple[bool, bool]:
+        recall = self._conversation.expression_recall
+        if recall is None or recall.space is None:
+            return False, False
+        return await recall.build_authorized_batch(self._indexing.batch_size)
 
     async def _build_indexes(self) -> None:
         """按批轮转补齐各索引；每批之后让出，条件不满足或全部完成时退出。
