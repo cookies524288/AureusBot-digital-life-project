@@ -134,6 +134,7 @@ class SummaryBatch:
 
     through: int
     requests: tuple[tuple[str, OrganRequest], ...]
+    trimmed: tuple[TimelineRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,7 @@ class SummaryOutcome:
 
     through: int
     summaries: dict[str, str] | None = None
+    trimmed: tuple[TimelineRecord, ...] = ()
 
 
 class WorkingMemory:
@@ -234,13 +236,13 @@ class WorkingMemory:
             )
             for scope, records in groups.items()
         )
-        return SummaryBatch(oldest[-1].id, requests)
+        return SummaryBatch(oldest[-1].id, requests, tuple(oldest))
 
-    def finish(self, outcome: SummaryOutcome, now: datetime) -> None:
+    def finish(self, outcome: SummaryOutcome, now: datetime) -> tuple[TimelineRecord, ...]:
         """成功才共同推进摘要及游标；失败保留原先可见内容。"""
         checkpoint = self._checkpoint
         if checkpoint is None or outcome.through <= checkpoint.through:
-            return
+            return ()
         if outcome.summaries is not None:
             try:
                 self._save(
@@ -250,10 +252,11 @@ class WorkingMemory:
                     )
                 )
                 self._retry_at = None
-                return
+                return outcome.trimmed
             except sqlite3.Error:
                 logger.exception("工作记忆检查点保存失败")
         self._retry_at = now + _RETRY_DELAY
+        return ()
 
     def context(self, *, owner: bool, route: str | None, exclude: Collection[int]) -> str:
         """返回对话可见的最新摘要和原始焦点，排除同请求已有的记录。"""
@@ -347,4 +350,4 @@ async def summarize(
             logger.warning("工作记忆压缩器官返回的摘要为空或超过长度上限")
             return SummaryOutcome(batch.through)
         summaries[scope] = text
-    return SummaryOutcome(batch.through, summaries)
+    return SummaryOutcome(batch.through, summaries, batch.trimmed)

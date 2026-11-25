@@ -107,6 +107,59 @@ def learning_samples(request: OrganRequest) -> list[LearningSample]:
 
 
 @pytest.mark.asyncio
+async def test_working_memory_trim_releases_independent_learning_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    paths.runtime_config_file.write_text(
+        "[heartbeat]\nworking_memory_capacity = 24\nworking_memory_retain = 2\n"
+        "[language]\nexpression_quality_enabled = false\n[diary]\nenabled = false\n",
+        encoding="utf-8",
+    )
+    requests: list[OrganRequest] = []
+    bus = OrganBus()
+    for organ in ("planner", "replyer", "utils", "summarizer"):
+        bus.register(LanguageOrgan(organ, requests))
+
+    def build_bus(
+        _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
+    ) -> ModelRuntime:
+        return ModelRuntime(bus, resolver, fake_organs=True)
+
+    monkeypatch.setattr(runtime, "_build_organ_bus", build_bus)
+    with runtime.open_core(paths, clock=ManualClock(NOW), to_console=False) as core:
+        heart = core.heartbeat
+        heart.attach_channel("web", lambda _message: None)
+        heart.wake_up()
+        for index in range(22):
+            heart.submit(
+                Perception(
+                    "web",
+                    "local",
+                    f"跑步第 {index} 场：GG，月兔冲线。",
+                    VisibilityScope.USER_ONLY,
+                    TrustLevel.VERIFIED_USER,
+                )
+            )
+        heart.beat()
+        await heart.wait_for_thought()
+        assert not any(request.context["task"].startswith("learn_") for request in requests)
+        heart.submit(
+            Perception(
+                "web", "local", "最后一条", VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER
+            )
+        )
+        for _ in range(8):
+            heart.beat()
+            await heart.wait_for_thought()
+        by_task = {request.context["task"]: request for request in requests}
+        assert list(by_task).index("working_memory_summary") < list(by_task).index("learn_style")
+        assert len(learning_samples(by_task["learn_style"])) == 20
+        assert len(learning_samples(by_task["learn_jargon"])) > 20
+        await heart.shut_down()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("gate", ["allowed", "stopped", "budget", "missing", "untrusted"])
 async def test_continuous_language_learning_preserves_safety_gates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gate: str

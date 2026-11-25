@@ -136,7 +136,6 @@ from aureus.hormones import (
 )
 from aureus.identity import Identity, IdentityHistory, IdentityLayer
 from aureus.memory import (
-    BATCH_SIZE,
     DiaryBook,
     EmojiStore,
     ExpressionVectorIndex,
@@ -370,10 +369,9 @@ class Heartbeat:
         self._agenda_hooks = AgendaHooks(agenda, timeline, clock, feedback, timezone)
         self._language = language
         self._language_config = language_config or LanguageConfig()
-        self._language_samples = PendingLearningBuffer[language_runner.QueuedLanguageSample](
-            lambda item: item.sample.source_key
-        )
-        self._language_next_learning_at: dict[str | None, datetime] = {}
+        self._language_learners: dict[
+            tuple[str, language_runner.LanguageKind], language_runner.TrimmedLearner
+        ] = {}
         self._language_last_status = "等待新样本"
         # 模型热重载提供当前路线；清空备用器官的模型即可关闭其路由。
         self._available_organs: frozenset[str] = frozenset()
@@ -745,7 +743,7 @@ class Heartbeat:
             lines.append(f"正在想怎么回复 {len(self._thought.replying_to)} 条消息。")
         if self._language is not None:
             lines.append(
-                f"语言学习：{self._language_last_status}；{len(self._language_samples)} 条待处理。"
+                f"语言学习：{self._language_last_status}；{self._language_pending()} 条待处理。"
             )
         if self._halt_status.halted:
             lines.append(f"急停中：{self._halt_status.reason}。收到的消息只记录，不回复。")
@@ -767,8 +765,10 @@ class Heartbeat:
     def language_learning_status(self) -> dict[str, object]:
         """只读的后台学习状态；不包含消息正文或会话标识。"""
         return {
-            "pending": len(self._language_samples),
-            "dropped": self._language_samples.dropped_count,
+            "pending": self._language_pending(),
+            "dropped": sum(
+                learner.pending.dropped_count for learner in self._language_learners.values()
+            ),
             "status": self._language_last_status,
             "next_at": next_at.isoformat() if (next_at := self._language_due_at()) else None,
         }
@@ -1222,7 +1222,7 @@ class Heartbeat:
             return
         if isinstance(outcome, SummaryOutcome):
             assert self._working_memory is not None
-            self._working_memory.finish(outcome, self._clock.now())
+            self._collect_trimmed_learning(self._working_memory.finish(outcome, self._clock.now()))
             return
         if isinstance(outcome, ConsolidationOutcome):
             assert self._memory_consolidator is not None
@@ -1895,10 +1895,6 @@ class Heartbeat:
             self._pending.popleft()
             if inbox_message is not None and inbox is not None and residence is None:
                 inbox.store.mark_read([inbox_message.id])
-            if self._language is not None and self._has_language_organ():
-                self._language_samples.extend(
-                    (language_runner.queue_language_sample(record, perception, inbox_message),)
-                )
             priority = _priority_of(perception, person)
             if (
                 priority is Priority.CONTACT
@@ -2005,11 +2001,33 @@ class Heartbeat:
             in self._available_organs
         )
 
+    def _language_pending(self) -> int:
+        return sum(len(learner.pending) for learner in self._language_learners.values())
+
+    def _collect_trimmed_learning(self, records: Sequence[TimelineRecord]) -> None:
+        store = self._language
+        if store is None:
+            return
+        for record in records:
+            item = language_runner.trimmed_learning_sample(record)
+            if item is None or item.conversation is None:
+                continue
+            scope = item.conversation
+            if not store.learning_source_allowed(scope):
+                continue
+            for kind in language_runner.LanguageKind:
+                key = (scope, kind)
+                if key not in self._language_learners:
+                    self._language_learners[key] = language_runner.TrimmedLearner(
+                        kind, scope, PendingLearningBuffer(lambda sample: sample.source_key)
+                    )
+                self._language_learners[key].pending.extend((item.sample,))
+
     def _maybe_learn_language(self) -> None:
         """回复优先；同一来源有新样本时按上游间隔批量学习。"""
         if (
             self._language is None
-            or not self._language_samples
+            or not self._language_learners
             or self._thought is not None
             or self._unanswered
             or self._stop_requested
@@ -2018,29 +2036,31 @@ class Heartbeat:
         ):
             return
         now = self._clock.now()
-        self._language_next_learning_at = {
-            scope: due for scope, due in self._language_next_learning_at.items() if due > now
-        }
-        eligible = [
-            item
-            for item in self._language_samples.snapshot()
-            if item.conversation not in self._language_next_learning_at
-        ]
-        if not eligible:
-            self._language_last_status = "等待学习间隔"
+        learner = next(
+            (
+                item
+                for item in self._language_learners.values()
+                if len(item.pending) >= language_runner.MIN_LEARNING_MESSAGES
+                and (item.next_at is None or item.next_at <= now)
+                and self._language.learning_source_allowed(item.scope)
+            ),
+            None,
+        )
+        if learner is None:
+            self._language_last_status = "等待裁切素材或学习间隔"
             return
-        batch = language_runner.select_language_batch(eligible, BATCH_SIZE)
-        scope = batch[0].conversation
-        if scope is not None:
-            self._language_next_learning_at[scope] = now + language_runner.LEARNING_COOLDOWN
+        batch = learner.batch()
+        learner.next_at = now + language_runner.LEARNING_COOLDOWN
         self._language_last_status = "学习中"
         task = asyncio.create_task(
             language_runner.learn_language(
                 self._language,
                 self._language_config.organ,
                 self._call_organ,
-                [item.sample for item in batch],
-                conversation_key=scope,
+                batch,
+                conversation_key=learner.scope,
+                kinds=(learner.kind,),
+                minimum=language_runner.MIN_LEARNING_MESSAGES,
                 bot_names=(self._identity.facts.name, *self._identity.facts.alias_names),
                 expression_quality=(
                     language_runner.ExpressionQuality(
@@ -2052,11 +2072,16 @@ class Heartbeat:
             ),
             name=language_runner.TASK_NAME,
         )
-        task.add_done_callback(lambda finished: self._finish_language_task(finished, batch))
+        task.add_done_callback(
+            lambda finished: self._finish_language_task(finished, learner, batch)
+        )
         self._thought = _Thought(task=task, replying_to=(), strategy=self._current_strategy())
 
     def _finish_language_task(
-        self, task: asyncio.Task[bool], batch: Sequence[language_runner.QueuedLanguageSample]
+        self,
+        task: asyncio.Task[bool],
+        learner: language_runner.TrimmedLearner,
+        batch: Sequence[language_runner.LanguageSample],
     ) -> None:
         try:
             error = task.exception()
@@ -2068,7 +2093,7 @@ class Heartbeat:
             logger.error("语言学习任务失败（%s）；保留样本供重试。", type(error).__name__)
             self._language_last_status = "失败，样本保留"
         elif task.result() is True:
-            self._language_samples.discard(batch)
+            learner.pending.discard(batch)
             self._language_last_status = "本批结束"
         else:
             self._language_last_status = "未完成，样本保留"
@@ -2083,8 +2108,9 @@ class Heartbeat:
         now = self._clock.now()
         return min(
             (
-                self._language_next_learning_at.get(item.conversation, now)
-                for item in self._language_samples.snapshot()
+                item.next_at or now
+                for item in self._language_learners.values()
+                if len(item.pending) >= language_runner.MIN_LEARNING_MESSAGES
             ),
             default=None,
         )

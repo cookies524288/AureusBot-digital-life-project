@@ -320,6 +320,23 @@ class LanguageStore:
         """判断该来源现在是否允许用于学习或内部召回。"""
         return self._allows_learning_source is None or self._allows_learning_source(scope)
 
+    def available_learning_samples(
+        self, scope: str, samples: Sequence[LanguageSample]
+    ) -> list[LanguageSample]:
+        """在请求前复验原件和来源，裁切后清理的消息不进入器官请求。"""
+        if not self.learning_source_allowed(scope):
+            return []
+        check = self.learning_evidence_available
+        if check is None:
+            return list(samples)
+        with closing(open_connection(self._path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            return [
+                sample
+                for sample in samples
+                if check(scope, sample.source_key, sample.record_id, connection)
+            ]
+
     def merge_frequency_terms(self, scope: str, samples: Sequence[LanguageSample]) -> int:
         """同事务消费稳定样本键并合并词频；不保存正文或重复计数。"""
         if not scope or not samples:
