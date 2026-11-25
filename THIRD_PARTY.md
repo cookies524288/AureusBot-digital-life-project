@@ -28,6 +28,8 @@
 | `aureus/heartbeat/pending_learning_buffer.py` | MaiBot 1.3.15 `src/learners/pending_learning_buffer.py` | GPL-3.0 | 保留按消息键去重、100 条上限、最旧淘汰和批次消费；改用 Aureus 类型注解和宿主心跳接线，不引入上游全局配置。 |
 | `aureus/people/profile_aliases.py` 的 `normalize_aliases` | MaiBot 1.3.15 内置 A_Memorix 2.0.0 的 [metadata_profile.py](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/src/A_memorix/core/storage/metadata_profile.py) | AGPL-3.0 | 保留清洗、去重和校验；将阈值具名，不移植上游数据写入或刷新编排。 |
 | `aureus/heartbeat/memory_consolidation.py` 的总结提示词 | MaiBot 1.3.15 固定提交 [a_memorix_chat_summary.prompt](https://github.com/Mai-with-u/MaiBot/blob/062d45cf8bd4272ac57d7ec03fcf405e5a458211/prompts/zh-CN/a_memorix_chat_summary.prompt)，与维护者提供的总结稿对照 | GPL-3.0 | 保留叙事增量、污染过滤、更正、四空、三字段关系及图片定位；新增有界证据片段、稳定发言者与旧事实号校验。只打包本地模板，不打包维护者原稿或迁移上游存储。 |
+| `frontend/maibot-learning`（构建产物 `aureus/web/static/learning-workbench`） | MaiBot dashboard 1.9.9，固定提交 `062d45cf8bd4272ac57d7ec03fcf405e5a458211`；`upstream-files.json` 逐文件记录来源和原始摘要 | AGPL-3.0（目录内 `LICENSE`；`package.json` 标 `AGPL-3.0-only`） | 保留原学习页、表达/黑话/表情页及其 hooks；宿主适配登录、主题、中文、浏览器历史和导航；移除外部统计与远程 CDN，批量定性改走 JSON 请求体，图标只用本地登记。 |
+| `aureus/web/static/learning-workbench/assets/KaTeX_*` | KaTeX 0.16.44（`frontend/maibot-learning/package.json` 的 `katex` 依赖，随 Vite 构建复制） | MIT | 原样随构建产物分发字体，未改字形；静态目录暂未附 MIT 许可文本，以上游依赖包的 `LICENSE` 为准。 |
 
 ## 表情周期维护行为参考
 
@@ -39,6 +41,8 @@
 - Phase 3.4 核对部署包 `maibot-1.3.15.dist-info/METADATA` 和 `licenses/LICENSE`，版本 1.3.15，随包许可证为 GPL 第 3 版。
 - 该仓库根目录还有 `EULA.md` 和 `PRIVACY.md`，没有读过，没有核对它们对源码有没有额外限制。
 - A_Memorix 2.0.0：安装源码随附的 `LICENSE` 为 AGPL-3.0。`LICENSE-MAIBOT-GPL.md` 对 MaiBot 单独授予 GPL-3.0 权利，本项目沿用默认 AGPL-3.0。
+- 学习工作台：2026-11-25 核对 `frontend/maibot-learning/LICENSE` 为 GNU AGPL 第 3 版，`package.json` 的 `license` 为 `AGPL-3.0-only`；`README.md` 记录固定上游提交和逐文件来源。`frontend/maibot-learning/package.json` 锁定 `katex` 0.16.44，构建产物字体位于 `aureus/web/static/learning-workbench/assets/KaTeX_*.{woff,woff2,ttf}` 并由 `assets/index-jjqqu3M1.css` 引用，静态目录没有附带 MIT 许可文本。
+- 学习工作台字体：`aureus/web/static/learning-workbench/fonts/` 随产物分发 Ark Pixel、Departure Mono 和 Jersey 20，各自的 SIL OFL 1.1 文本为 `ArkPixel-OFL.txt`、`DepartureMono-OFL.txt`、`Jersey20-OFL.txt`。
 
 ## 协议参考
 
