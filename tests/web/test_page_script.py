@@ -55,6 +55,10 @@ function element(tag = 'div') {
       },
     },
     append(...children) { for (const child of children) this.insertBefore(child, null); },
+    prepend(...children) {
+      const first = this.children[0] ?? null;
+      for (const child of children) this.insertBefore(child, first);
+    },
     insertBefore(child, next) {
       if (child.parentElement) child.remove();
       const index = next === null ? this.children.length : this.children.indexOf(next);
@@ -179,27 +183,29 @@ def run_page_script(code: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() -> None:
+def test_platform_desktop_prefetches_by_cursor_and_loads_older_on_scroll() -> None:
     run_page_script(
         r"""
         const route = {
           platform:'qq', account_id:'14', kind:'group', recipient_id:'62', temporary_group_id:null,
         };
-        const pending = new Map();
         const stamp = '2026-11-24T01:23:00Z';
-        const messages = page => ({messages:[{source:'inbox', id:page + 10, conversation:route,
-          direction:'outgoing', content:'发件 ' + page, timestamp:stamp,
-          attachments:[{kind:'image', file_id:'https://invalid.test/private'},
-            {kind:'image', file_id:'C:/private.png', is_emoji:true}]},
-          {source:'inbox', id:page + 1, conversation:route,
-            direction:'incoming', content:'来件 ' + page}],
-          next_before_id:page < 3 ? 1 : null});
+        const message = (id, direction, content, extra = {}) => ({
+          source:'inbox', id, conversation:route, direction, content, timestamp:stamp,
+          sender_name:direction === 'outgoing' ? 'Aureus' : '访客',
+          event_type:'message', attachments:[], ...extra,
+        });
+        const requests = [];
+        let olderFails = true;
         state.loggedIn = true;
         fetch = async path => {
           if (path === '/api/inbox/conversations') return reply(200, {
             enabled:true, conversations:[{key:route, name:'同名测试群', unread_count:120}],
             archives:[{archive:'imported', name:'迁入原件'}],
           });
+          if (path.startsWith('/api/inbox/operations?')) {
+            return reply(200, {enabled:false, reason:'未接入发送'});
+          }
           if (path.includes('view=description')) {
             return reply(200, path.includes('/images/1?')
               ? {source:'emoji_catalog', description:'合成描述'}
@@ -208,12 +214,29 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
           if (path.startsWith('/api/inbox/history-cleanup?')) return reply(200, {preview:null});
           if (path.startsWith('/api/inbox/uncategorized?')) return reply(200,
             {messages:[{source:'imported', content:'原件', attachments:[]}], next_before_id:null});
-          assert.match(path, /\/api\/inbox\/messages\?platform=qq&account_id=14/);
-          assert.ok(!path.includes('before_id'));
-          const page = Number(new URLSearchParams(path.split('?')[1]).get('page'));
-          return new Promise(resolve => {
-            pending.set(page, () => resolve(reply(200, messages(page))));
-          });
+          assert.match(path, /^\/api\/inbox\/messages\?/);
+          const query = new URLSearchParams(path.split('?')[1]);
+          requests.push(Object.fromEntries(query));
+          if (!query.has('before_id')) return reply(200, {messages:[
+            message(13, 'outgoing', '发件 3', {attachments:[
+              {kind:'image', file_id:'https://invalid.test/private'},
+              {kind:'image', file_id:'C:/private.png', is_emoji:true},
+            ]}),
+            message(11, 'incoming', '来件 3'),
+          ], next_before_id:10});
+          if (query.get('before_id') === '10') return reply(200, {messages:[
+            message(11, 'incoming', '来件 3'),
+            message(9, 'outgoing', '发件 2'),
+            message(7, 'incoming', '来件 2'),
+          ], next_before_id:6});
+          if (query.get('before_id') === '6') {
+            if (olderFails) { olderFails = false; return reply(500, {detail:'旧消息读取失败。'}); }
+            return reply(200, {messages:[message(5, 'incoming', '来件 1')], next_before_id:null});
+          }
+          throw new Error('unexpected inbox request: ' + path);
+        };
+        const settle = async () => {
+          for (let i = 0; i < 8; i++) await new Promise(setImmediate);
         };
         const click = id => $(id).listeners.click[0]({preventDefault(){}});
         await loadInbox();
@@ -222,24 +245,20 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
         const opening = click('inbox-open-qq');
         assert.equal($('inbox-heading').textContent, 'QQ 会话');
         assert.equal($('inbox-conversations').children[1].children[1].textContent, '99+');
-        assert.equal($('inbox-more').disabled, false);
-        $('inbox-page').value = '2';
-        $('inbox-jump').listeners.submit[0]({preventDefault(){}});
-        assert.equal($('inbox-more').disabled, false);
-        const latest = click('inbox-more');
-        assert.deepEqual([...pending.keys()], [1, 2, 3]);
-        pending.get(3)();
-        await latest;
-        pending.get(1)(); pending.get(2)();
         await opening;
-        await Promise.resolve();
+        assert.deepEqual(requests, [
+          {platform:'qq', account_id:'14', kind:'group', recipient_id:'62', limit:'50'},
+          {platform:'qq', account_id:'14', kind:'group', recipient_id:'62', limit:'50', before_id:'10'},
+        ]);
         const list = $('inbox-messages');
-        assert.equal($('inbox-page').value, '3');
-        assert.equal($('inbox-more').disabled, true);
-        const [incoming, outgoing] = list.children;
-        assert.equal(incoming.className, 'inbox-message incoming');
-        assert.equal(outgoing.className, 'inbox-message outgoing');
-        assert.equal(outgoing.children[1].children[0].children[1].textContent, fmtTime(stamp));
+        assert.deepEqual(Array.from(list.children, node => node.className), [
+          'msg inbox-msg person', 'msg inbox-msg user', 'msg inbox-msg person', 'msg inbox-msg user',
+        ]);
+        assert.deepEqual(Array.from(list.children, node => node.children[1].children[1].children[0].textContent),
+          ['来件 2', '发件 2', '来件 3', '发件 3']);
+        const outgoing = list.children[3];
+        const time = outgoing.children[0].children.find(node => node.tagName === 'TIME');
+        assert.equal(time.textContent, fmtTime(stamp));
         const [body, first, second] = outgoing.children[1].children[1].children;
         assert.equal(body.textContent, '发件 3');
         assert.match(first.children[0].children[0].attributes.src,
@@ -253,10 +272,30 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
         assert.match(second.children[1].textContent, /来源：表情资料库.*\n合成描述/);
         await first.children[2].listeners.click[0]();
         assert.equal(second.children[1].classList.contains('hidden'), false);
+
+        list.scrollTop = 0;
+        list.listeners.scroll[0]();
+        await settle();
+        assert.equal(requests.length, 3);
+        assert.equal(requests[2].before_id, '6');
+        assert.equal($('inbox-history-retry').classList.contains('hidden'), false);
+        assert.match($('inbox-history-text').textContent, /旧消息读取失败/);
+        const failedCount = requests.length;
+        list.listeners.scroll[0]();
+        await settle();
+        assert.equal(requests.length, failedCount);
+        click('inbox-history-retry');
+        await settle();
+        assert.equal(requests.length, failedCount + 1);
+        assert.equal(list.children[0].children[1].children[1].children[0].textContent, '来件 1');
+        assert.equal($('inbox-history-status').classList.contains('hidden'), true);
+
         click('inbox-home');
         await click('inbox-open-archive');
         assert.equal($('inbox-heading').textContent, '未归类历史');
-        assert.equal(list.children[0].className, 'inbox-message unknown');
+        assert.equal($('inbox-messages').children[0].className, 'msg inbox-msg person');
+        assert.ok($('inbox-messages').children[0].children[0].children
+          .some(node => node.textContent === '方向未知'));
         """
     )
 
@@ -356,7 +395,7 @@ def test_inbox_avatars_deduplicated_by_sender() -> None:
         assert.equal(avatarRequests.length, 5);
         assert.equal(peak, 3);
         assert.equal(URL.count, 5);
-        const avatars = $('inbox-messages').children.map(node => node.children[0]);
+        const avatars = $('inbox-messages').children.map(node => node.children[1].children[0]);
         const sources = avatars.map(avatar => avatar.children[1]?.src);
         assert.equal(sources[0], sources[1]);
         assert.equal(sources[2], sources[3]);
@@ -418,7 +457,7 @@ def test_inbox_cleanup_shows_current_scope_and_confirms_only_its_preview() -> No
     """)
 
 
-def test_platform_config_has_mouse_keyboard_and_touch_equivalents() -> None:
+def test_platform_config_has_mouse_and_keyboard_entries() -> None:
     run_page_script(
         r"""
         let prevented = 0, tabs = 0;
@@ -432,9 +471,8 @@ def test_platform_config_has_mouse_keyboard_and_touch_equivalents() -> None:
         $('inbox-open-qq').listeners.contextmenu[0](event);
         $('inbox-open-qq').listeners.keydown[0]({...event, shiftKey:true, key:'F10'});
         $('inbox-open-qq').listeners.keydown[0]({...event, key:'ContextMenu'});
-        await $('inbox-config-qq').listeners.click[0]();
-        assert.deepEqual(nav, ['config', 'config', 'config', 'config']);
-        assert.equal(tabs, 4);
+        assert.deepEqual(nav, ['config', 'config', 'config']);
+        assert.equal(tabs, 3);
         assert.equal(prevented, 3);
         """
     )
