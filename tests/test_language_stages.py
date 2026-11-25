@@ -70,6 +70,38 @@ async def test_distinct_extractions_promote_only_compared_jargon(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["rejected", "invalid_json"])
+async def test_failed_extraction_keeps_sources_for_next_attempt(
+    tmp_path: Path, failure: str
+) -> None:
+    store = LanguageStore(tmp_path / "language.sqlite")
+    store.open()
+    sample = LanguageSample("retry-source", 1, "speaker", "GG，月兔冲线。")
+    should_fail = True
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        nonlocal should_fail
+        task = str(request.context["task"])
+        if task == "learn_style" and should_fail:
+            should_fail = False
+            if failure == "rejected":
+                raise CallRejectedError(request.organ_id, "合成预算拒绝")
+            return OrganResponse(request.organ_id, "{")
+        if task == "learn_style":
+            return OrganResponse(
+                request.organ_id,
+                json.dumps([{"id": 1, "style": "月兔冲线", "situation": "庆祝"}]),
+            )
+        return OrganResponse(request.organ_id, "[]")
+
+    assert not await learn_language(store, "summarizer", call, [sample], conversation_key="会话甲")
+    assert store.pending_extraction(LanguageKind.EXPRESSION, [sample]) == [sample]
+    assert await learn_language(store, "summarizer", call, [sample], conversation_key="会话甲")
+    assert store.pending_extraction(LanguageKind.EXPRESSION, [sample]) == []
+    assert [entry.text for entry in store.entries(LanguageKind.EXPRESSION)] == ["月兔冲线"]
+
+
+@pytest.mark.asyncio
 async def test_extraction_failure_is_independent_and_jargon_retries_at_new_evidence(
     tmp_path: Path,
 ) -> None:

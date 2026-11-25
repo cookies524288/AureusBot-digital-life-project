@@ -275,14 +275,14 @@ async def learn_language(
     conversation_key: str | None = None,
     bot_names: Sequence[str] = (),
     expression_quality: ExpressionQuality | None = None,
-) -> None:
+) -> bool:
     """独立抽取表达和候选黑话，并只对同会话的有效来源推断。"""
     try:
         if conversation_key is not None and not store.learning_source_allowed(conversation_key):
-            return
+            return False
         await asyncio.to_thread(store.observe, samples, ())
         if conversation_key is None:
-            return
+            return True
 
         async def call_if_allowed(request: OrganRequest) -> OrganResponse:
             if not store.learning_source_allowed(conversation_key):
@@ -290,8 +290,9 @@ async def learn_language(
             return await call(request)
 
         banned_names = {name.strip().casefold() for name in bot_names if name.strip()}
+        successful = True
         for kind in LanguageKind:
-            attempts = await _extract(
+            attempts, extracted = await _extract(
                 store,
                 organ,
                 call_if_allowed,
@@ -301,11 +302,15 @@ async def learn_language(
                 banned_names,
                 expression_quality if kind == LanguageKind.EXPRESSION else None,
             )
+            successful = successful and extracted
             for attempt in attempts:
-                await _infer(store, organ, call_if_allowed, attempt)
-        await asyncio.to_thread(store.merge_frequency_terms, conversation_key, samples)
+                successful = (await _infer(store, organ, call_if_allowed, attempt)) and successful
+        if successful:
+            await asyncio.to_thread(store.merge_frequency_terms, conversation_key, samples)
+        return successful
     except sqlite3.Error:
         logger.exception("语言学习存储失败")
+        return False
 
 
 async def _extract(
@@ -317,17 +322,21 @@ async def _extract(
     kind: LanguageKind,
     banned_names: set[str],
     expression_quality: ExpressionQuality | None,
-) -> list[JargonInference]:
+) -> tuple[list[JargonInference], bool]:
     fresh = await asyncio.to_thread(store.pending_extraction, kind, samples)
-    if not fresh or not store.learning_source_allowed(scope):
-        return []
+    if not store.learning_source_allowed(scope):
+        return [], False
+    if not fresh:
+        return [], True
     evidence = {sample.record_id: sample for sample in fresh}
     presented = {
         record_id: sample.content[:_MAX_SAMPLE_CHARS] for record_id, sample in evidence.items()
     }
-    result = await _ask(call, build_extraction(organ, kind, tuple(presented.values())))
+    result, succeeded = await _ask(call, build_extraction(organ, kind, tuple(presented.values())))
+    if not succeeded:
+        return [], False
     if not isinstance(result, list):
-        return []
+        return [], False
     records = {str(number): sample for number, sample in enumerate(evidence.values(), start=1)}
     proposals = _parse_proposals(result, kind, records, banned_names)
     quality = (
@@ -338,7 +347,7 @@ async def _extract(
         if expression_quality is not None
         else None
     )
-    return await asyncio.to_thread(
+    attempts = await asyncio.to_thread(
         store.observe_extraction,
         kind,
         scope,
@@ -347,14 +356,16 @@ async def _extract(
         proposals,
         quality=quality,
     )
+    return attempts, True
 
 
-async def _ask(call: OrganCall, request: OrganRequest) -> Any:
+async def _ask(call: OrganCall, request: OrganRequest) -> tuple[Any, bool]:
     try:
-        return _decode((await call(request)).suggestion)
+        result = _decode((await call(request)).suggestion)
+        return result, result is not None
     except (CallRejectedError, OrganCallError):
         logger.info("语言学习器官本次没有返回提议：%s", request.context["task"])
-        return None
+        return None, False
 
 
 def _meaning(result: object) -> str | None:
@@ -368,25 +379,33 @@ def _meaning(result: object) -> str | None:
 
 async def _infer(
     store: LanguageStore, organ: str, call: OrganCall, attempt: JargonInference
-) -> None:
-    contextual = await _ask(
+) -> bool:
+    contextual, succeeded = await _ask(
         call, build_with_context(organ, attempt.text, attempt.evidence, attempt.previous_meaning)
     )
+    if not succeeded:
+        return False
     if not isinstance(contextual, dict) or type(contextual.get("no_info")) is not bool:
-        return
+        return False
     meaning = _meaning(contextual)
     if contextual["no_info"] or meaning == "":
         await asyncio.to_thread(store.record_jargon_inference, attempt, "insufficient")
-        return
+        return True
     if meaning is None:
-        return
-    standalone = _meaning(await _ask(call, build_content_only(organ, attempt.text)))
+        return False
+    standalone_result, succeeded = await _ask(call, build_content_only(organ, attempt.text))
+    if not succeeded:
+        return False
+    standalone = _meaning(standalone_result)
     if standalone is None:
-        return
-    comparison = await _ask(call, build_comparison(organ, meaning, standalone))
+        return False
+    comparison, succeeded = await _ask(call, build_comparison(organ, meaning, standalone))
+    if not succeeded:
+        return False
     if not isinstance(comparison, dict) or type(comparison.get("is_similar")) is not bool:
-        return
+        return False
     if comparison["is_similar"]:
         await asyncio.to_thread(store.record_jargon_inference, attempt, "similar")
     else:
         await asyncio.to_thread(store.record_jargon_inference, attempt, "accepted", meaning)
+    return True

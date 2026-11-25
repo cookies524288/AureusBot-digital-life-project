@@ -99,7 +99,7 @@ async def test_independent_expression_quality_consumption_and_reply(
     assert requests == expected_requests
     with closing(sqlite3.connect(database)) as connection:
         assert connection.execute(
-            "SELECT kind FROM language_extractions ORDER BY kind"
+            "SELECT kind FROM language_extractions WHERE kind != 'frequency' ORDER BY kind"
         ).fetchall() == [
             ("expression",),
             ("jargon",),

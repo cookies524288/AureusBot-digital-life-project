@@ -913,14 +913,18 @@ class Heartbeat:
                 self._interrupt_inbox(self._platform_inbox, "维护暂停时取消本批回复，未投递。")
         if paused and self._thought is not None:
             thought = self._thought
+            is_language_learning = thought.task.get_name() == language_runner.TASK_NAME
             self._thought = None
             self._maintenance_task = thought.task
-            self._record_interrupted_round(
-                thought, thought.inbox_discard_reason or "维护暂停时取消本轮回复，未投递。"
-            )
-            if thought.inbox_discard_reason is None:
+            if is_language_learning:
                 thought.task.cancel()
-                self._requeue_reply(thought)
+            else:
+                self._record_interrupted_round(
+                    thought, thought.inbox_discard_reason or "维护暂停时取消本轮回复，未投递。"
+                )
+                if thought.inbox_discard_reason is None:
+                    thought.task.cancel()
+                    self._requeue_reply(thought)
         self._wake.set()
 
     def wake_up(self) -> Downtime:
@@ -1200,9 +1204,9 @@ class Heartbeat:
         if thought.task.cancelled():
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
-        outcome = thought.task.result()
         if thought.task.get_name() == language_runner.TASK_NAME:
             return
+        outcome = thought.task.result()
         assert outcome is not None
         if isinstance(outcome, InboxSelection):
             if (
@@ -2052,13 +2056,22 @@ class Heartbeat:
         self._thought = _Thought(task=task, replying_to=(), strategy=self._current_strategy())
 
     def _finish_language_task(
-        self, task: asyncio.Task[None], batch: Sequence[language_runner.QueuedLanguageSample]
+        self, task: asyncio.Task[bool], batch: Sequence[language_runner.QueuedLanguageSample]
     ) -> None:
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            error = None
         if task.cancelled():
             self._language_last_status = "已取消，样本保留"
-        else:
+        elif error is not None:
+            logger.error("语言学习任务失败（%s）；保留样本供重试。", type(error).__name__)
+            self._language_last_status = "失败，样本保留"
+        elif task.result() is True:
             self._language_samples.discard(batch)
             self._language_last_status = "本批结束"
+        else:
+            self._language_last_status = "未完成，样本保留"
         self._on_thought_done(task)
 
     def _cancel_language_task(self) -> None:
