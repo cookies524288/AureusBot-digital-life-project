@@ -12,6 +12,7 @@ from hashlib import sha256
 from itertools import groupby
 from pathlib import Path
 from sqlite3 import Connection, Row, connect
+from typing import Any
 
 from aureus.common.sqlite import open_connection
 from aureus.memory.expression_quality import (
@@ -637,10 +638,14 @@ class LanguageStore:
         *,
         origin_scope: str | None = None,
         recorded_at: datetime | None = None,
+        allowed: Callable[[], bool] | None = None,
     ) -> str:
         """新增一条维护者指定的语言参考，返回稳定标识。"""
         content = content.validated(allow_empty_detail=kind == LanguageKind.JARGON)
         with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if allowed is not None and not allowed():
+                raise ValueError("创建来源已撤权，请刷新后重试。")
             row = connection.execute(
                 "INSERT INTO language_manual (kind, text, detail, example) VALUES (?, ?, ?, ?) "
                 "RETURNING id",
@@ -664,6 +669,48 @@ class LanguageStore:
                 )
             }
 
+    def workbench_exports(
+        self, kind: LanguageKind, keys: Sequence[str], allowed: Callable[[], bool]
+    ) -> list[dict[str, Any]]:
+        """校验全组目标和授权后，导出本项目的 JSON 记录。"""
+        with closing(open_connection(self._path)) as connection:
+            connection.execute("BEGIN")
+            if not allowed():
+                raise PermissionError("来源已撤权。")
+            entries = {
+                entry.entry_key: entry
+                for entry in self._catalog_entries(connection, kind, include_disabled=True)
+            }
+            if not set(keys) <= entries.keys():
+                raise LookupError("所选内容已经变更。")
+            result: list[dict[str, Any]] = []
+            for key in dict.fromkeys(keys):
+                entry = entries[key]
+                if entry.is_removed:
+                    raise LookupError("已移除条目不能导出。")
+                if kind == LanguageKind.EXPRESSION:
+                    result.append({
+                        "situation": entry.detail,
+                        "style": entry.text,
+                        "content_list": json.dumps([entry.example] if entry.example else []),
+                        "count": entry.count,
+                        "last_active_time": None,
+                        "create_time": None,
+                        "checked": False,
+                        "modified_by": None,
+                    })
+                else:
+                    result.append({
+                        "content": entry.text,
+                        "meaning": entry.detail,
+                        "count": entry.count,
+                        "is_jargon": entry.jargon_status == JargonStatus.CONFIRMED,
+                        "is_complete": bool(entry.detail),
+                        "is_global": False,
+                        "created_by": "MANUAL",
+                    })
+            return result
+
     def save_package(self, kind: LanguageKind, rows: Sequence[LanguagePackageRow]) -> int:
         """一次追加整包待映射原件，不修改任何现有条目或覆盖。"""
         with closing(open_connection(self._path)) as connection, connection:
@@ -684,6 +731,58 @@ class LanguageStore:
                     for row in rows
                 ),
             ).rowcount
+
+    def import_workbench_entries(
+        self,
+        kind: LanguageKind,
+        rows: Sequence[LanguagePackageRow],
+        scopes: tuple[str, ...],
+        recorded_at: datetime,
+        allowed: Callable[[], bool],
+    ) -> int | None:
+        """按明确选择导入，保留已有覆盖和包授权；空范围表示手工共享。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if not allowed():
+                return None
+            existing = {
+                (normalize(entry.text), normalize(entry.detail))
+                for entry in self._catalog_entries(connection, kind, include_disabled=True)
+                if (not scopes and entry.package_source is None and entry.learning_source is None)
+                or (scopes and set(scopes) <= set(entry.scope_keys))
+            }
+            added = 0
+            for row in rows:
+                content = row.content.validated(allow_empty_detail=kind == LanguageKind.JARGON)
+                pair = (normalize(content.text), normalize(content.detail))
+                if pair in existing:
+                    continue
+                identifier = connection.execute(
+                    "INSERT INTO language_manual (kind, text, detail, example) "
+                    "VALUES (?, ?, ?, ?) RETURNING id",
+                    (kind, content.text, content.detail, content.example),
+                ).fetchone()[0] if not scopes else None
+                if scopes:
+                    connection.execute(
+                        "INSERT INTO language_package_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (row.digest, kind, content.text, content.detail, content.example,
+                         row.count, row.source_chat_name, row.original),
+                    )
+                    connection.executemany(
+                        "INSERT INTO language_package_scopes VALUES (?, ?)",
+                        ((row.digest, scope) for scope in scopes),
+                    )
+                    key = f"package:{row.digest}"
+                else:
+                    assert identifier is not None
+                    key = _local_key("manual", identifier)
+                    connection.execute(
+                        "INSERT INTO learning_workbench_metadata VALUES (?, ?, NULL, ?)",
+                        (kind, key, recorded_at.timestamp()),
+                    )
+                existing.add(pair)
+                added += 1
+            return added
 
     def package_originals(self, kind: LanguageKind) -> dict[str, tuple[str, str]]:
         """供导出查找待映射条目的原始作用域标签和资源包字段。"""
@@ -739,10 +838,15 @@ class LanguageStore:
                 )
         return previous
 
-    def set_removed(self, kind: LanguageKind, keys: Sequence[str], removed: bool) -> bool:
+    def set_removed(
+        self, kind: LanguageKind, keys: Sequence[str], removed: bool,
+        *, allowed: Callable[[], bool] | None = None,
+    ) -> bool:
         """标记整批条目移除或恢复，不触碰原件及原有召回设置。"""
         with closing(open_connection(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
+            if allowed is not None and not allowed():
+                return False
             if not set(keys) <= {entry.entry_key for entry in self._read_entries(connection, kind)}:
                 return False
             statement = (

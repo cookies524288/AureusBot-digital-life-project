@@ -5,14 +5,17 @@
 """
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from aureus.common import Clock
 from aureus.memory import LanguageKind
+from aureus.memory.language_package import read_package
 from aureus.web.learning_workbench_service import LearningWorkbench
 
 
@@ -42,7 +45,25 @@ class JargonFields(BaseModel):
 class LanguageBatch(BaseModel):
     """整批目标编号。"""
 
-    ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=100)
+    ids: list[Annotated[int, Field(gt=0)]] | None = Field(default=None, max_length=100)
+    chat_id: str | None = Field(default=None, max_length=4096)
+    session_id: str | None = Field(default=None, max_length=4096)
+    is_global: bool = False
+    include_chat_info: bool = False
+
+
+class LanguageImport(BaseModel):
+    """MaiBot 表达资源 v1；黑话保留额外元数据字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+    chat_id: str | None = None
+    session_id: str | None = None
+    session_ids: list[str] = Field(default_factory=list, max_length=100)
+    target_session_ids: list[str] = Field(default_factory=list, max_length=100)
+    is_global: bool = False
+    conflict_strategy: Literal["skip", "overwrite"] = "skip"
+    expressions: list[dict[str, Any]] = Field(default_factory=list, max_length=10000)
+    jargons: list[dict[str, Any]] = Field(default_factory=list, max_length=10000)
 
 
 class JargonBatch(LanguageBatch):
@@ -68,12 +89,30 @@ class EmojiReview(BaseModel):
     verdict: Literal["approved", "rejected"]
 
 
+class TextCandidateImport(BaseModel):
+    """用户在长文预览中勾选的候选。"""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: LanguageKind
+    targets: list[str] = Field(default_factory=list, max_length=100)
+    is_global: bool = False
+    candidates: list[dict[str, str]] = Field(min_length=1, max_length=100)
+
+
+class EmojiBatch(BaseModel):
+    """批量目标仅接受同源、当前可管理整数编号。"""
+
+    model_config = ConfigDict(extra="forbid")
+    emoji_ids: list[int] = Field(min_length=1, max_length=100)
+
+
 def register_learning_workbench_routes(
     app: FastAPI,
     service: LearningWorkbench,
     require_ready: Callable[..., Awaitable[str]],
     same_origin: Callable[[Request], bool],
     session_is_active: Callable[[str], bool],
+    clock: Clock | None = None,
 ) -> None:
     """原工作台路径直接服务同一库；所有变更要求同源和有效登录。"""
 
@@ -87,6 +126,7 @@ def register_learning_workbench_routes(
         return token
 
     router = APIRouter(prefix="/api/webui", dependencies=[Depends(authenticated)])
+    workbench_clock = clock or service.clock
 
     async def run(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         try:
@@ -195,6 +235,8 @@ def register_learning_workbench_routes(
 
         @router.post(path + "/batch/delete")
         async def remove(body: LanguageBatch) -> dict[str, Any]:
+            if not body.ids:
+                raise HTTPException(422, "请至少选择一条记录。")
             targets = [await run(service.language_target, kind, item) for item in body.ids]
             assert service.language is not None
             if not await run(
@@ -202,6 +244,102 @@ def register_learning_workbench_routes(
             ):
                 raise HTTPException(409, "条目已变化，没有修改。")
             return {"success": True, "message": "已可逆移除。", "deleted_count": len(targets)}
+
+        @router.post(path + "/export")
+        async def export(body: LanguageBatch) -> Response:
+            scope = body.chat_id or body.session_id
+            visible = await run(service.language_payloads, kind)
+            if scope is not None and scope not in await run(service.scopes):
+                raise HTTPException(422, "所选来源已撤权或不存在。")
+            selected = [
+                row for row in visible
+                if (body.ids is None or row["id"] in body.ids)
+                and (scope is None or row.get("chat_id") == scope
+                     or scope in row.get("session_ids", []))
+                and (not body.is_global or (
+                    not row.get("chat_id") and not row.get("session_ids")
+                ))
+            ]
+            if body.ids is not None and len(selected) != len(set(body.ids)):
+                raise HTTPException(400, "部分记录不存在或不属于当前范围。")
+            records = await run(service.export_language, kind, [row["id"] for row in selected])
+            timestamp = workbench_clock.now().isoformat()
+            if kind == LanguageKind.EXPRESSION:
+                package = {
+                    "success": True, "version": 1, "type": "maibot.expression.export",
+                    "exported_at": timestamp, "source_chat_name": "Aureus",
+                    "count": len(records), "expressions": records,
+                }
+            else:
+                package = {
+                    "success": True, "version": 1, "type": "maibot.jargon.export",
+                    "exported_at": timestamp, "include_chat_info": False,
+                    "count": len(records), "jargons": records,
+                }
+            return Response(json.dumps(package, ensure_ascii=False), media_type="application/json",
+                headers={"Cache-Control": "no-store",
+                         "Content-Disposition": f'attachment; filename="aureus-{kind}.json"'})
+
+        @router.post(path + "/import")
+        async def import_entries(request: Request) -> dict[str, Any]:
+            raw = await request.body()
+            if len(raw) > 8 * 1024 * 1024:
+                raise HTTPException(413, "资源包不能超过8 MiB。")
+            try:
+                body = LanguageImport.model_validate_json(raw)
+            except ValidationError:
+                raise HTTPException(422, "导入字段格式不符合请求契约。") from None
+            scopes = tuple(dict.fromkeys(filter(None, (
+                body.chat_id, body.session_id, *body.session_ids, *body.target_session_ids,
+            ))))
+            if body.is_global and scopes:
+                raise HTTPException(422, "共享导入不能同时指定会话。")
+            items = body.expressions if kind == LanguageKind.EXPRESSION else body.jargons
+            if not items:
+                raise HTTPException(422, "请选择至少一条候选。")
+            if kind == LanguageKind.EXPRESSION:
+                if body.chat_id and len(scopes) != 1:
+                    raise HTTPException(422, "表达方式请选择一个目标会话。")
+                package = {
+                    "success": True, "version": 1, "type": "maibot.expression.export",
+                    "exported_at": workbench_clock.now().isoformat(),
+                    "source_chat_name": "Aureus", "count": len(items),
+                    "expressions": items,
+                }
+            else:
+                package = {
+                    "success": True, "version": 1, "type": "maibot.jargon.export",
+                    "exported_at": workbench_clock.now().isoformat(),
+                    "include_chat_info": False, "count": len(items), "jargons": items,
+                }
+            try:
+                rows = read_package(kind, json.dumps(package, ensure_ascii=False).encode())
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from None
+            try:
+                added = await run(service.import_language, kind, rows, scopes)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from None
+            return {"success": True, "imported_count": added,
+                    "skipped_count": len(rows) - added, "failed_count": 0,
+                    "message": "导入已完成。"}
+
+        @router.post(path + "/clear")
+        async def clear(body: dict[str, str]) -> dict[str, Any]:
+            scope = body.get("chat_id") or body.get("session_id")
+            if not scope or scope not in await run(service.scopes):
+                raise HTTPException(422, "请选择当前获准的会话。")
+            rows = await run(service.language_payloads, kind)
+            identifiers = [row["id"] for row in rows
+                if row.get("chat_id") == scope or scope in row.get("session_ids", [])]
+            targets = [await run(service.language_target, kind, identifier)
+                for identifier in identifiers]
+            assert service.language is not None
+            if not await run(service.language.set_removed, kind,
+                    [entry.entry_key for entry in targets], True,
+                    allowed=lambda: scope in service.scopes()):
+                raise HTTPException(409, "来源授权已变更；没有修改。")
+            return {"success": True, "deleted_count": len(targets), "message": "已可逆移除。"}
 
         @router.get(path + "/{identifier}")
         async def detail(identifier: int) -> dict[str, Any]:
