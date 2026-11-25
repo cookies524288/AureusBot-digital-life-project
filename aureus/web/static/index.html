@@ -304,8 +304,9 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 @media (max-width:820px){.chat-head,.chat-log,.composer{padding-left:14px;padding-right:14px}.msg{max-width:88%}}
 
 /* ---------- 时间线 ---------- */
-.tl-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.tl-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .tl-toolbar select{width:auto}
+.tl-toolbar-bottom{margin-top:18px;padding-top:14px;border-top:1px dashed var(--stitch)}
 .chip{padding:3px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text-2);font-size:13px;cursor:pointer}
 .chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong)}
 .summary-card{border-left:4px solid var(--accent);margin-top:16px}
@@ -909,18 +910,18 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div></section>
 <section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
 <div class="page-body">
-<div class="tl-toolbar">
-<select id="tl-hours" aria-label="时间范围">
-<option value="1">最近 1 小时</option><option value="6">最近 6 小时</option><option value="24" selected>最近 24 小时</option><option value="72">最近 3 天</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option>
-</select>
-<div id="tl-chips" class="row" style="gap:6px"></div>
-</div>
 <div id="tl-missing" class="empty hidden"></div>
 <div class="row" style="justify-content:center;margin-bottom:12px"><button id="tl-more" class="btn hidden" disabled>加载更早的</button></div>
 <div id="tl-list" class="tl-list card"></div>
 <div class="card summary-card">
 <div class="card-head"><h3>滚动摘要</h3></div>
 <div id="tl-summary" class="muted">暂无滚动摘要。</div>
+</div>
+<div class="tl-toolbar tl-toolbar-bottom">
+<select id="tl-hours" aria-label="时间范围">
+<option value="1">最近 1 小时</option><option value="6">最近 6 小时</option><option value="24" selected>最近 24 小时</option><option value="72">最近 3 天</option><option value="168">最近 7 天</option><option value="720">最近 30 天</option>
+</select>
+<div id="tl-chips" class="row" style="gap:6px"></div>
 </div>
 </div></section>
 <section id="page-learning" class="page wide resource-page">
@@ -2009,33 +2010,534 @@ const EVENT_NAMES = {
   interest_changed: '兴趣变化', exploration_started: '开始探索', exploration_result: '探索结果',
   diary_written: '写了日记', diary_failed: '日记没写成', persona_changed: '人设变了', persona_unchanged: '人设没变',
   persona_review_failed: '人设回顾失败', organ_call_rejected: '调用被拒', organ_call_failed: '调用失败',
-  recall_feedback: '召回评价', recall_reply_delivered: '召回回复投递',
+  recall_feedback: '召回评价', recall_reply_delivered: '召回回复投递', empathy: '共情',
+  working_memory_checkpoint: '工作记忆检查点', special_contact_changed: '特别关心变化',
 };
 const tl = { filter: '', records: [], next: null, context: null };
 const VISIBILITY_NAMES = {private:'仅自己可见', user_only:'仅用户可见', group:'群聊', public:'公开'};
 const CHANNEL_NAMES = {web:'网页', terminal:'终端', qq:'QQ'};
-const DETAIL_NAMES = {
-  channel:'来源通道', account_id:'接收账号', recipient_id:'会话号码', message_type:'会话类型',
-  temporary_group_id:'临时会话所属群', in_reply_to:'对应来信序号', organ_id:'器官',
-  plan:'规划建议', reply:'是否建议回复', intent:'回应意图', length:'篇幅', reason:'依据',
-  strategy:'回复配置', hormones:'激素影响', reply_segments:'记录的文字分段', recall:'召回关键词',
-  recall_keywords:'召回关键词', recall_record_ids:'召回记录序号', recall_source_keys:'召回来源',
-  model_preference:'模型偏好', message_limit:'对话上限', length_limit:'篇幅上限',
-  plan_first:'先规划', to_user:'发给维护者', judgment:'判断结果', probability:'概率',
-  action:'动作', result:'结果', status:'状态', changed:'改动', elapsed_ms:'耗时（毫秒）',
-  id:'序号', source:'来源', text:'文本', content:'内容', summary:'摘要',
-  reply_id:'回复序号', segment:'已投递文字段', evidence_key:'依据编号', rating:'评价',
+// 时间线「详细信息」：字段名、枚举和数值格式集中在这里（3.20，D124）。
+// 事件自己的展示顺序由 TL_EVENT_DETAILS 决定；未知事件和未知字段再用通用规则兜底。
+const TL_HORMONE_NAMES = {anger:'愤怒', joy:'喜悦', hurt:'难过', surprise:'惊讶'};
+const TL_LAYER_NAMES = {facts:'身份事实', immutable:'不变人格', mutable:'可变人格', behavior_style:'行为风格', expression_style:'表达风格'};
+const TL_TRUST_NAMES = {verified_user:'已验证用户', verified_contact:'已验证联系人', unverified:'未验证'};
+const TL_MESSAGE_TYPE_NAMES = {group:'群聊', private:'私聊', temporary:'临时私聊'};
+const TL_TOWARD_ME_NAMES = {offense:'被冒犯', praise:'被夸奖', rejection:'被拒绝或冷落'};
+const TL_AGENDA_STATUS_NAMES = {open:'进行中', done:'做完了', dropped:'做不了', expired:'过期了', cancelled:'已取消'};
+const TL_INTEREST_ACTION_NAMES = {add:'新增', remove:'移除', replace:'替换'};
+const TL_EXPLORATION_OUTCOME_NAMES = {
+  found:'找到了资料', boring:'没有意思', no_results:'没有搜索结果', search_failed:'搜索失败',
+  fetch_failed:'读取网页失败', summary_failed:'总结失败', blocked:'被权限拦下', record_failed:'记录失败',
+};
+const TL_DIARY_FAILURE_NAMES = {
+  organ_failed:'总结器官调用失败', empty:'没有写出内容', too_long:'超过字数上限',
+  file_exists:'当天日记已存在，没有覆盖', write_failed:'写入文件失败',
+};
+const TL_PERSONA_REJECTION_NAMES = {
+  bad_layer:'层不对', locked:'该层被锁定', cooldown:'还在冷却期', unchanged:'和现在一样',
+  too_different:'改动太大', too_long:'太长', bad_reason:'理由不合格', bad_evidence:'依据不合格',
+};
+const TL_PERSONA_REVIEW_FAILURE_NAMES = {organ_failed:'回顾器官调用失败', bad_output:'器官输出读不懂'};
+const TL_RETALIATION_NAMES = {off:'没有说明', allowed:'允许回击', exhausted:'回击次数用完'};
+const TL_INITIATIVE_DECISION_NAMES = {reach_out:'主动联系', skip:'暂不联系', failed:'失败'};
+const TL_ORGAN_ERROR_NAMES = {
+  PermissionDeniedError:'权限不允许', BudgetExceededError:'超出预算', EnergyDepletedError:'精力不足',
+  LedgerUnavailableError:'账本不可用', RunawayBlockedError:'触发失控拦截', CallRejectedError:'调用被拒绝',
+  OrganCallError:'器官调用失败', OrganCallCancelled:'调用被取消',
+};
+const TL_VIA_NAMES = {web:'网页', terminal:'终端'};
+const TL_RATING_NAMES = {useful:'有用', not_useful:'无用'};
+
+// 键 -> 中文标签 + 格式化器；hide 表示只在库里留档、不在详情里显示（内部编号等）。
+const TL_FIELDS = {
+  channel: {label:'来源通道', format: value => CHANNEL_NAMES[value] || value},
+  message_type: {label:'会话类型', format: value => TL_MESSAGE_TYPE_NAMES[value] || value},
+  trust: {label:'可信度', format: value => TL_TRUST_NAMES[value] || value},
+  sender_name: {label:'发送者'},
+  person_name: {label:'联系人'},
+  mentioned: {label:'是否被提到', format: value => tlText(value)},
+  inbox_browsed: {label:'在收件箱里浏览过', format: value => tlText(value)},
+  source_timestamp: {label:'来源时间', format: (value, context) => tlTimeText(value, context)},
+  to_user: {label:'发给维护者', format: value => tlText(value)},
+  initiative: {label:'主动联系', format: value => tlText(value)},
+  initiative_expected: {label:'预计会回应', format: tlPercent},
+  source: {label:'来源'},
+  summary: {label:'摘要'},
+  result: {label:'结果'},
+  changed: {label:'改动', format: value => Array.isArray(value) ? value.join('、') : tlText(value)},
+  elapsed_ms: {label:'耗时（毫秒）'},
+  probability: {label:'概率', format: tlPercent},
+  recall: {label:'召回关键词', format: value => Array.isArray(value) ? value.join('、') : tlText(value)},
+  account_id: {hide: true},
+  recipient_id: {hide: true},
+  temporary_group_id: {hide: true},
+  in_reply_to: {hide: true},
+  message_id: {hide: true},
+  quoted_message_id: {hide: true},
+  source_message_id: {hide: true},
+  inbox_message_id: {hide: true},
+  person_id: {hide: true},
+  source_record_id: {hide: true},
+  reply_id: {hide: true},
+  item_id: {hide: true},
+  interest_id: {hide: true},
+  new_interest_id: {hide: true},
+  started_id: {hide: true},
+  finding_id: {hide: true},
+  feedback_id: {hide: true},
+  due_item_ids: {hide: true},
+  recall_record_ids: {hide: true},
+  recall_source_keys: {hide: true},
+  recall_feedback_refs: {hide: true},
+  evidence_key: {hide: true},
+  evidence: {label:'依据', format: value => Array.isArray(value) ? value.length + ' 条记录' : tlText(value)},
+  // 认知状态
+  current_task: {label:'当前任务'},
+  planning_depth: {label:'规划深度', format: value => typeof value === 'number' && value > 0 ? '第 ' + value + ' 步' : '没有在规划'},
+  planning_confidence: {label:'规划把握', format: tlPercent},
+  confidence_note: {label:'把握说明'},
+  active_hormones: {label:'情绪变化', format: tlHormoneLevels},
+  energy_state: {label:'精力档位'},
+  energy_level: {label:'精力', format: tlPercent},
+  attention_focus: {label:'注意力'},
+  why_this_decision: {label:'理由'},
+  obstacles: {label:'阻碍', format: value => Array.isArray(value) && value.length ? value.join('；') : '—'},
+  next_likely_action: {label:'下一步'},
+  last_updated: {label:'更新时间', format: (value, context) => tlTimeText(value, context)},
+  // 判断
+  judgment: {label:'判断结果', format: (value, context) => tlJudgmentNode(value, context)},
+  failure: {label:'失败原因'},
+  // 激素
+  kind: {label:'激素', format: value => TL_HORMONE_NAMES[value] || value},
+  rise: {label:'上涨', format: value => '↑' + tlNumber(value)},
+  triggered_at: {label:'触发时间', format: (value, context) => tlTimeText(value, context)},
+  source_visibility: {label:'来源可见范围', format: value => VISIBILITY_NAMES[value] || value},
+  empathy_for: {label:'共情对象'},
+  empathy_affinity: {label:'对象好感', format: tlNumber},
+  // 规划建议
+  plan: {label:'规划建议', format: (value, context) => tlPlanNode(value, context)},
+  reply: {label:'是否建议回复', format: value => tlText(value)},
+  intent: {label:'回复方向'},
+  length: {label:'篇幅'},
+  reason: {label:'依据'},
+  commit: {label:'答应的事', format: tlCommitText},
+  resolve: {label:'处理约定', format: tlResolutionNode},
+  interest: {label:'兴趣', format: tlInterestText},
+  select_emoji: {label:'表情', format: tlEmojiText},
+  reach_out: {label:'建议主动联系', format: value => tlText(value)},
+  stay_in_conversation: {label:'留在对话里', format: value => tlText(value)},
+  quote_source: {label:'引用原消息', format: value => tlText(value)},
+  // 回复做法
+  strategy: {label:'回复做法', format: (value, context) => tlStrategyNode(value, context)},
+  energy_tier: {label:'精力档位'},
+  plan_first: {label:'先规划再回复', format: value => value ? '是，先想好再写成话' : '否，规划和回复合并成一次调用'},
+  model_preference: {label:'模型偏好'},
+  message_limit: {label:'参考对话', format: value => '最近 ' + value + ' 条'},
+  length_limit: {label:'篇幅上限'},
+  stress_lowered: {label:'压力偏高降档', format: value => value ? '是，比精力档位低一档' : '否'},
+  // 激素影响
+  hormones: {label:'激素影响', format: (value, context) => tlHormonesNode(value, context)},
+  person_anger: {label:'针对此人的怒气', format: tlNumber},
+  retaliation: {label:'回击', format: value => TL_RETALIATION_NAMES[value] || value},
+  retaliations_used: {label:'已回击次数'},
+  cold_shoulder_allowed: {label:'可以冷处理', format: value => tlText(value)},
+  must_reply: {label:'必须回复', format: value => tlText(value)},
+  shorten_reply: {label:'缩短回复', format: value => tlText(value)},
+  surprised: {label:'惊讶', format: value => tlText(value)},
+  // 设定
+  layers: {label:'改了哪一层', format: value => Array.isArray(value) ? value.map(layer => TL_LAYER_NAMES[layer] || layer).join('、') : tlText(value)},
+  version_ids: {label:'涉及版本', format: value => Array.isArray(value) ? value.join('、') : tlText(value)},
+  up_to_version_id: {label:'版本号'},
+  via: {label:'修改来源', format: value => TL_VIA_NAMES[value] || value},
+  layer: {label:'层', format: value => TL_LAYER_NAMES[value] || value},
+  // 醒来与关闭
+  woke_at: {label:'醒来时间', format: (value, context) => tlTimeText(value, context)},
+  last_record_at: {label:'上次记录时间', format: (value, context) => tlTimeText(value, context)},
+  shutdown_recorded: {label:'上次留下了关闭记录', format: value => tlText(value)},
+  downtime_seconds: {label:'停机时长', format: tlDuration},
+  unanswered_messages: {label:'没来得及回复的消息数'},
+  since: {label:'开始时间', format: (value, context) => tlTimeText(value, context)},
+  // 自检
+  stress: {label:'压力', format: tlPercent},
+  failed_calls: {label:'失败调用'},
+  sampled_calls: {label:'采样调用'},
+  backlog: {label:'积压'},
+  // 日程
+  content: {label:'内容'},
+  due_at: {label:'到期时间', format: (value, context) => tlTimeText(value, context)},
+  status: {label:'状态', format: value => TL_AGENDA_STATUS_NAMES[value] || value},
+  // 主动联系与特别关心
+  reasons: {label:'原因', format: value => Array.isArray(value) ? value.join('；') : tlText(value)},
+  social_need: {label:'社交需要', format: tlPercent},
+  decided: {label:'决定', format: value => TL_INITIATIVE_DECISION_NAMES[value] || value},
+  sent: {label:'已经发出', format: value => tlText(value)},
+  answered: {label:'用户回应了', format: value => tlText(value)},
+  add: {label:'添加', format: value => tlText(value)},
+  through: {hide: true},
+  summaries: {label:'各会话摘要', format: value => value && typeof value === 'object' ? Object.keys(value).length + ' 个会话' : tlText(value)},
+  // 兴趣与探索
+  action: {label:'动作', format: value => TL_INTEREST_ACTION_NAMES[value] || value},
+  text: {label:'内容'},
+  query: {label:'查询'},
+  outcome: {label:'结果', format: value => TL_EXPLORATION_OUTCOME_NAMES[value] || value},
+  url: {label:'网址'},
+  // 日记与人设
+  day: {label:'日期', format: tlDayText},
+  file_name: {label:'文件名'},
+  organ: {label:'器官'},
+  rejected: {label:'没有采纳的原因', format: value => TL_PERSONA_REJECTION_NAMES[value] || value},
+  // 投递与召回
+  segment: {label:'第几段', format: value => typeof value === 'number' ? '第 ' + value + ' 段' : tlText(value)},
+  rating: {label:'评价', format: value => value == null ? '撤销评价' : TL_RATING_NAMES[value] || value},
+  reply_segments: {label:'文字分段', format: value => Array.isArray(value) ? value.length + ' 段' : tlText(value)},
+  recall_keywords: {label:'召回关键词', format: value => Array.isArray(value) ? value.join('、') : tlText(value)},
+  organ_id: {label:'器官'},
 };
 
-function timelineDetails(value, key = '') {
-  if (Array.isArray(value)) return el('ul', {}, value.map(item => el('li', {}, timelineDetails(item, key))));
-  if (value !== null && typeof value === 'object') {
-    return el('dl', {}, Object.entries(value).map(([name, item]) => el('div', {},
-      el('dt', {text:DETAIL_NAMES[name] || name.replaceAll('_', ' ')}), el('dd', {}, timelineDetails(item, name)))));
+function tlEmpty(value) {
+  return value === null || value === undefined || value === '' ||
+    (Array.isArray(value) && !value.length) ||
+    (typeof value === 'object' && value !== null && !Array.isArray(value) && !Object.keys(value).length);
+}
+function tlText(value) {
+  if (value === true) return '是';
+  if (value === false) return '否';
+  if (tlEmpty(value)) return '—';
+  if (Array.isArray(value)) return value.map(tlText).join('、');
+  return String(value);
+}
+// 浮点最多两位小数，去掉末尾多余的 0；整数原样。
+function tlNumber(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return tlText(value);
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
+}
+function tlPercent(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return tlText(value);
+  return Math.round(value * 100) + '%';
+}
+function tlDayKey(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const moment = new Date(value);
+  if (isNaN(moment)) return null;
+  return moment.getFullYear() + '-' + moment.getMonth() + '-' + moment.getDate();
+}
+// 本地时间；记录本身的日期已经显示在标题行，同一份详情里同一天只再显示一次日期。
+function tlTimeText(value, context) {
+  if (typeof value !== 'string' || !value) return tlText(value);
+  const moment = new Date(value);
+  if (isNaN(moment)) return value;
+  const pad = number => String(number).padStart(2, '0');
+  const clock = pad(moment.getHours()) + ':' + pad(moment.getMinutes());
+  const day = tlDayKey(value);
+  if (context && context.day === day) return clock;
+  if (context) context.day = day;
+  return (moment.getMonth() + 1) + '月' + moment.getDate() + '日 ' + clock;
+}
+function tlDayText(value) {
+  if (typeof value !== 'string' || !value) return tlText(value);
+  const moment = new Date(value.length === 10 ? value + 'T00:00:00' : value);
+  if (isNaN(moment)) return value;
+  return (moment.getMonth() + 1) + '月' + moment.getDate() + '日';
+}
+function tlDuration(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return tlText(value);
+  if (value < 60) return '不到 1 分钟';
+  const minutes = Math.round(value / 60);
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return hours ? hours + ' 小时' + (rest ? ' ' + rest + ' 分钟' : '') : rest + ' 分钟';
+}
+function tlHormoneLevels(levels) {
+  const items = Object.entries(levels || {})
+    .filter(([, level]) => typeof level === 'number' && Number(tlNumber(level)) > 0)
+    .map(([kind, level]) => (TL_HORMONE_NAMES[kind] || kind) + ' ' + tlNumber(level));
+  return items.length ? items.join('、') : '—';
+}
+function tlCommitText(value) {
+  if (!value || typeof value !== 'object') return tlText(value);
+  const parts = [];
+  if (value.what) parts.push(value.what);
+  if (value.due) parts.push('到期：' + value.due);
+  return parts.length ? parts.join('，') : '—';
+}
+function tlResolutionNode(value) {
+  if (!Array.isArray(value) || !value.length) return tlText(value);
+  return el('ul', {}, value.map(item => el('li', {text:
+    (item.result === 'done' ? '做完了' : item.result === 'dropped' ? '做不了' : tlText(item.result)) +
+    (item.reason ? '：' + item.reason : '')})));
+}
+function tlInterestText(value) {
+  if (!value || typeof value !== 'object') return tlText(value);
+  const parts = [(TL_INTEREST_ACTION_NAMES[value.action] || tlText(value.action)) + (value.text ? '：' + value.text : '')];
+  if (value.reason) parts.push('原因：' + value.reason);
+  return parts.join('；');
+}
+function tlEmojiText(value) {
+  if (!value || typeof value !== 'object') return tlText(value);
+  const parts = [];
+  if (value.emotion) parts.push('情绪：' + value.emotion);
+  if (typeof value.before_text === 'boolean') parts.push(value.before_text ? '放在文字前' : '放在文字后');
+  return parts.length ? parts.join('，') : '—';
+}
+function tlDetailList(rows) {
+  return el('dl', {}, rows.map(row => el('div', {},
+    el('dt', {text:row.label}), el('dd', {}, row.node))));
+}
+function tlPlanNode(plan, context) {
+  if (!plan || typeof plan !== 'object') return tlText(plan);
+  const order = 'reach_out' in plan
+    ? ['reach_out', 'intent', 'reason']
+    : ['reply', 'intent', 'length', 'reason', 'commit', 'resolve', 'interest', 'select_emoji', 'stay_in_conversation', 'quote_source'];
+  const rows = [];
+  for (const key of order) {
+    const spec = TL_FIELDS[key];
+    if (!(key in plan) || !spec || spec.hide) continue;
+    rows.push({label:spec.label, node:spec.format ? spec.format(plan[key], context) : tlText(plan[key])});
   }
-  const choices = key === 'channel' ? CHANNEL_NAMES : key === 'message_type' ? {group:'群聊', private:'私聊', temporary:'临时私聊'} : {};
-  const text = value === true ? '是' : value === false ? '否' : value == null || value === '' ? '—' : Object.hasOwn(choices, value) ? choices[value] : String(value);
-  return el('span', {text});
+  return rows.length ? tlDetailList(rows) : '—';
+}
+function tlStrategyNode(strategy, context) {
+  if (!strategy || typeof strategy !== 'object') return tlText(strategy);
+  const rows = [];
+  for (const key of ['plan_first', 'model_preference', 'message_limit', 'length_limit', 'stress_lowered', 'energy_tier']) {
+    const spec = TL_FIELDS[key];
+    if (!(key in strategy) || !spec) continue;
+    rows.push({label:spec.label, node:spec.format ? spec.format(strategy[key], context) : tlText(strategy[key])});
+  }
+  return rows.length ? tlDetailList(rows) : '—';
+}
+// 只列真正起作用的项：0 怒气、没回击、没有的布尔项都不显示。
+function tlHormonesNode(effects) {
+  if (!effects || typeof effects !== 'object') return tlText(effects);
+  const rows = [];
+  if (typeof effects.person_anger === 'number' && Number(tlNumber(effects.person_anger)) > 0) {
+    rows.push({label:'针对此人的怒气', node:tlNumber(effects.person_anger)});
+  }
+  if (effects.retaliation && effects.retaliation !== 'off') {
+    rows.push({label:'回击', node:TL_RETALIATION_NAMES[effects.retaliation] || effects.retaliation});
+  }
+  if (typeof effects.retaliations_used === 'number' && effects.retaliations_used > 0) {
+    rows.push({label:'已回击次数', node:String(effects.retaliations_used)});
+  }
+  for (const key of ['cold_shoulder_allowed', 'must_reply', 'shorten_reply', 'surprised']) {
+    if (effects[key] === true) rows.push({label:TL_FIELDS[key].label, node:'是'});
+  }
+  return rows.length ? tlDetailList(rows) : '—';
+}
+function tlJudgmentNode(judgment) {
+  if (!judgment || typeof judgment !== 'object') return tlText(judgment);
+  const rows = [];
+  const others = Array.isArray(judgment.others) ? judgment.others : [];
+  if (others.length) {
+    rows.push({label:'判断到的情绪', node:el('ul', {}, others.map(item => el('li', {text:
+      (item.subject === 'sender' ? '发消息的人' : item.subject || '某人') + '：' +
+      (TL_HORMONE_NAMES[item.emotion] || item.emotion) +
+      '，强度 ' + tlPercent(item.intensity) + '，把握 ' + tlPercent(item.confidence)})))});
+  }
+  const toward = Array.isArray(judgment.toward_me) ? judgment.toward_me : [];
+  if (toward.length) {
+    rows.push({label:'冲着它来的事', node:el('ul', {}, toward.map(item => el('li', {text:
+      (TL_TOWARD_ME_NAMES[item.kind] || item.kind) +
+      '（强度 ' + tlPercent(item.intensity) + '，把握 ' + tlPercent(item.confidence) + '）'})))});
+  }
+  if (!rows.length) rows.push({label:'判断结果', node:'没有发现明显的情绪'});
+  return tlDetailList(rows);
+}
+function tlHiddenKey(key) {
+  const spec = TL_FIELDS[key];
+  if (spec) return spec.hide === true;
+  return /(^|_)id$/i.test(key) || /_ids$/i.test(key) || key === 'outbox_internal';
+}
+function tlGenericValue(value, context) {
+  if (Array.isArray(value)) {
+    if (!value.length) return '—';
+    return el('ul', {}, value.map(item => el('li', {}, tlGenericValue(item, context))));
+  }
+  if (value !== null && typeof value === 'object') {
+    const rows = Object.entries(value)
+      .filter(([key]) => !tlHiddenKey(key))
+      .map(([key, item]) => ({label:TL_FIELDS[key]?.label || key.replaceAll('_', ' '), node:tlGenericValue(item, context)}));
+    return rows.length ? tlDetailList(rows) : '—';
+  }
+  return tlText(value);
+}
+
+// 每种事件先按固定顺序展示最有用的字段；没列到的字段交给「其它」兜底。
+const TL_EVENT_DETAILS = {
+  cognitive_state(metadata, add, addRow, skip) {
+    for (const key of ['current_task', 'planning_depth', 'planning_confidence', 'confidence_note', 'active_hormones']) add(key);
+    skip('energy_state', 'energy_level');
+    const level = metadata.energy_level;
+    addRow('精力', metadata.energy_state
+      ? metadata.energy_state + (typeof level === 'number' ? '（' + tlPercent(level) + '）' : '')
+      : tlPercent(level));
+    for (const key of ['attention_focus', 'why_this_decision', 'obstacles', 'next_likely_action', 'last_updated']) add(key);
+  },
+  judgment(metadata, add) {
+    add('judgment');
+    if (metadata.failure) add('failure');
+  },
+  hormone_triggered(metadata, add, addRow, skip) {
+    if ('kind' in metadata && 'rise' in metadata) {
+      skip('kind', 'rise');
+      addRow('激素变化', (TL_HORMONE_NAMES[metadata.kind] || metadata.kind) + ' ↑' + tlNumber(metadata.rise));
+    } else {
+      add('kind');
+      add('rise');
+    }
+    for (const key of ['triggered_at', 'reason', 'source_visibility', 'empathy_for', 'empathy_affinity']) add(key);
+  },
+  empathy(metadata, add, addRow, skip) {
+    if ('kind' in metadata && 'rise' in metadata) {
+      skip('kind', 'rise');
+      addRow('激素变化', (TL_HORMONE_NAMES[metadata.kind] || metadata.kind) + ' ↑' + tlNumber(metadata.rise));
+    } else {
+      add('kind');
+      add('rise');
+    }
+    for (const key of ['triggered_at', 'reason', 'source_visibility', 'empathy_for', 'empathy_affinity']) add(key);
+  },
+  reply_reference(metadata, add) {
+    for (const key of ['channel', 'message_type', 'plan']) add(key);
+  },
+  reply_declined(metadata, add) {
+    for (const key of ['plan', 'strategy', 'hormones']) add(key);
+  },
+  identity_changed(metadata, add, addRow) {
+    add('layers');
+    addRow('更新结果', '已更新');
+    for (const key of ['up_to_version_id', 'version_ids', 'via']) add(key);
+  },
+  message(metadata, add, addRow, skip) {
+    for (const key of ['channel', 'trust', 'sender_name', 'person_name', 'message_type', 'source_timestamp']) add(key);
+    skip('mentioned', 'inbox_browsed', 'to_user', 'initiative');
+    if (metadata.mentioned) add('mentioned');
+    if (metadata.inbox_browsed) add('inbox_browsed');
+    if (metadata.to_user) add('to_user');
+    if (metadata.initiative) {
+      add('initiative');
+      add('initiative_expected');
+    }
+  },
+  woke_up(metadata, add) {
+    for (const key of ['woke_at', 'last_record_at', 'shutdown_recorded', 'downtime_seconds']) add(key);
+  },
+  shut_down(metadata, add) {
+    for (const key of ['reason', 'unanswered_messages']) add(key);
+  },
+  emergency_stop(metadata, add) {
+    for (const key of ['reason', 'since']) add(key);
+  },
+  emergency_resume(metadata, add) {
+    for (const key of ['reason', 'since']) add(key);
+  },
+  self_check(metadata, add) {
+    for (const key of ['stress', 'failed_calls', 'sampled_calls', 'backlog']) add(key);
+  },
+  organ_call_rejected(metadata, add) {
+    add('organ_id');
+    add('kind', {label:'拒绝原因', format: value => TL_ORGAN_ERROR_NAMES[value] || value});
+  },
+  organ_call_failed(metadata, add) {
+    add('organ_id');
+  },
+  organ_call_abandoned(metadata, add) {
+    add('organ_id');
+  },
+  agenda_added(metadata, add) {
+    for (const key of ['content', 'due_at', 'status', 'reason']) add(key);
+  },
+  agenda_due(metadata, add) {
+    for (const key of ['content', 'due_at', 'status', 'reason']) add(key);
+  },
+  agenda_closed(metadata, add) {
+    for (const key of ['content', 'due_at', 'status', 'reason']) add(key);
+  },
+  initiative_considered(metadata, add, addRow, skip) {
+    add('reasons');
+    add('plan');
+    for (const key of ['social_need', 'decided', 'sent']) add(key);
+    skip('failure');
+    if (metadata.failure) add('failure');
+  },
+  initiative_result(metadata, add) {
+    add('answered');
+  },
+  special_contact_changed(metadata, add) {
+    add('add', {label:'添加特别关心'});
+    add('reason');
+  },
+  working_memory_checkpoint(metadata, add) {
+    add('summaries');
+  },
+  interest_changed(metadata, add) {
+    for (const key of ['action', 'text', 'reason']) add(key);
+  },
+  exploration_started(metadata, add) {
+    add('query');
+  },
+  exploration_result(metadata, add, addRow, skip) {
+    for (const key of ['outcome', 'url']) add(key);
+    skip('failure');
+    if (metadata.failure) add('failure');
+  },
+  diary_written(metadata, add) {
+    for (const key of ['day', 'file_name', 'organ']) add(key);
+  },
+  diary_failed(metadata, add) {
+    add('day');
+    add('failure', {label:'失败原因', format: value => TL_DIARY_FAILURE_NAMES[value] || value});
+  },
+  persona_changed(metadata, add) {
+    for (const key of ['layer', 'content', 'reason', 'evidence']) add(key);
+  },
+  persona_unchanged(metadata, add) {
+    for (const key of ['day', 'layer', 'rejected']) add(key);
+  },
+  persona_review_failed(metadata, add) {
+    add('day');
+    add('failure', {label:'失败原因', format: value => TL_PERSONA_REVIEW_FAILURE_NAMES[value] || value});
+  },
+  reply_delivered(metadata, add) {
+    for (const key of ['channel', 'segment']) add(key);
+  },
+  reply_delivery_failed(metadata, add) {
+    for (const key of ['channel', 'segment']) add(key);
+  },
+  recall_reply_delivered(metadata, add) {
+    add('segment');
+  },
+  recall_feedback(metadata, add) {
+    add('rating');
+  },
+  planning_interrupted(metadata, add) {
+    add('channel');
+  },
+};
+
+function timelineDetailRows(metadata, eventType, recordTime) {
+  const context = {day:tlDayKey(recordTime)};
+  const used = new Set();
+  const rows = [];
+  const add = (key, override = {}) => {
+    used.add(key);
+    if (!(key in metadata)) return;
+    const spec = {...TL_FIELDS[key], ...override};
+    if (!spec.label || spec.hide) return;
+    const value = metadata[key];
+    const node = spec.format ? spec.format(value, context) : tlText(value);
+    if (node !== null && node !== undefined) rows.push({label:spec.label, node});
+  };
+  const addRow = (label, node) => {
+    if (node !== null && node !== undefined && node !== '') rows.push({label, node});
+  };
+  const skip = (...keys) => { for (const key of keys) used.add(key); };
+  const builder = TL_EVENT_DETAILS[eventType];
+  if (builder) builder(metadata, add, addRow, skip, context);
+  else for (const key of Object.keys(metadata)) if (TL_FIELDS[key]) add(key);
+  const leftovers = Object.entries(metadata).filter(([key]) => !used.has(key) && !tlHiddenKey(key));
+  if (leftovers.length) rows.push({label:'其它', node:tlGenericValue(Object.fromEntries(leftovers), context)});
+  return rows;
 }
 
 function renderTimelineChips() {
@@ -2124,8 +2626,12 @@ function timelineItem(rec, inContext, {
       el('strong', {text: `${PLANNER_ACTION_NAMES[action] || '行动'} · ${PLANNER_ACTION_STATES[status] || '未知状态'}`}),
       reason ? el('div', {text:`依据或结果：${reason}`}) : null,
       reference ? el('div', {text:`回复参考（不是已发正文）：${reference}`}) : null))) : null;
-  const keys = Object.keys(metadata);
-  const meta = keys.length ? el('details', { class: 'muted tl-details' }, el('summary', { text: '详细信息（' + keys.length + ' 项）' }), timelineDetails(metadata)) : null;
+  const detailRows = timelineDetailRows(metadata, rec.event_type, rec.time);
+  // 有行动记录时正文让给「本轮行动记录」，规划方向、篇幅和依据仍在详情里保留一份（3.20 验收第 4 条）。
+  if (rec.event_type === 'reply_reference' && Array.isArray(actions) && actions.length && rec.content) {
+    detailRows.unshift({label:'规划内容', node:rec.content});
+  }
+  const meta = detailRows.length ? el('details', { class: 'muted tl-details' }, el('summary', { text: '详细信息（' + detailRows.length + ' 项）' }), tlDetailList(detailRows)) : null;
   return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, actionList, meta,
     feedbackId ? recallFeedback(feedbackId) : null);
 }
@@ -2190,6 +2696,17 @@ function restoreTimelineScroll(anchor) {
   const page = $('page-timeline');
   page.scrollTop = anchor.top + $('tl-list').offsetHeight - anchor.height;
 }
+// 切换筛选只换列表内容，不把页面拉回最新：按整页可滚动高度的比例记住位置，内容变高变矮后按比例补回。
+function timelineScrollRatio() {
+  const page = $('page-timeline');
+  const range = page.scrollHeight - page.clientHeight;
+  return {ratio: range > 0 ? page.scrollTop / range : 0, top: page.scrollTop};
+}
+function restoreTimelineScrollRatio(anchor) {
+  const page = $('page-timeline');
+  const range = page.scrollHeight - page.clientHeight;
+  page.scrollTop = range > 0 ? Math.round(anchor.ratio * range) : anchor.top;
+}
 
 let timelineRequest = 0;
 let timelineQuery = '';
@@ -2207,7 +2724,9 @@ async function loadTimeline(more, switching = false) {
     timelineQuery = '';
     tl.next = null;
     pendingLiveUpdates.delete(list);
-    list.textContent = '读取中…';
+    // 旧内容先留着，请求回来再整体替换；否则列表先塌成一行，滚动位置会先跳一下。
+    if (!list.childElementCount) list.textContent = '读取中…';
+    else list.setAttribute('aria-busy', 'true');
     button.classList.add('hidden');
   }
   const request = ++timelineRequest, session = state.loaded;
@@ -2218,12 +2737,14 @@ async function loadTimeline(more, switching = false) {
     missing.textContent = NOT_BUILT_TEXT;
     missing.classList.remove('hidden');
     $('tl-list').textContent = '';
+    list.removeAttribute('aria-busy');
     timelineQuery = '';
     button.classList.add('hidden');
     return;
   }
   missing.classList.add('hidden');
   if (!res.ok) {
+    list.removeAttribute('aria-busy');
     button.disabled = !tl.next || base !== timelineQuery;
     if (replacesFilter) list.textContent = errorText(res);
     else fail(res);
@@ -2250,17 +2771,20 @@ async function loadTimeline(more, switching = false) {
   button.disabled = !tl.next;
   button.classList.toggle('hidden', !tl.next);
   const anchor = more ? timelineScrollAnchor() : null;
-  if (switching) {
-    pendingLiveUpdates.delete(list);
-    renderTimeline();
-    scrollTimelineToLatest();
-  } else if (more) {
+  if (more) {
     updateLiveRegion(list, () => { renderTimeline(); restoreTimelineScroll(anchor); });
+  } else if (switching) {
+    updateLiveRegion(list, () => {
+      const position = timelineScrollRatio();
+      renderTimeline();
+      restoreTimelineScrollRatio(position);
+    });
   } else {
     updateLiveRegion(list, () => { renderTimeline(); scrollTimelineToLatest(); });
   }
+  list.removeAttribute('aria-busy');
 }
-$('tl-hours').addEventListener('change', () => loadTimeline(false));
+$('tl-hours').addEventListener('change', () => loadTimeline(false, true));
 $('tl-refresh').addEventListener('click', () => loadTimeline(false));
 $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
