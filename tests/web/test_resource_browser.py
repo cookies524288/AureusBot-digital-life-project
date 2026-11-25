@@ -148,10 +148,10 @@ class ResourceFixture(SimpleHTTPRequestHandler):
         if url.path.startswith("/assets/"):
             self.path = url.path.removeprefix("/assets")
             super().do_GET()
-        elif url.path == "/":
+        elif url.path == "/" or url.path.startswith("/learning-workbench/"):
             super().do_GET()
         elif url.path == "/api/status":
-            self._send_json({"must_change_password": False})
+            self._send_json({"must_change_password": False, "bot_pronoun": "ta"})
         elif url.path == "/api/organs/vlm/prompt-preview":
             self._send_json(
                 {
@@ -250,6 +250,9 @@ class ResourceFixture(SimpleHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self) -> None:
+        if self.path == "/api/login":
+            self._send_json({"ok": True})
+            return
         if self.path in (MEMORY_TRANSFER_ENDPOINT, MEMORY_TRANSFER_ENDPOINT + "/preview"):
             client = cast(ResourceServer, self.server).memory_transfer
             if client is not None:

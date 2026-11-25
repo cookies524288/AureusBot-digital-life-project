@@ -86,6 +86,7 @@ from .memory_graph_api import (
     register_memory_graph_grant_routes,
     register_memory_graph_routes,
 )
+from .learning_assets import register_learning_assets
 from .memory_inspection_api import register_memory_inspection_routes
 from .memory_lifecycle_api import (
     register_memory_lifecycle_routes,
@@ -780,6 +781,7 @@ def create_app(
 
     # ---------- 网页本身 ----------
     # 和 API 一起加载，避免更新磁盘文件后旧进程提供依赖新接口的页面。
+    register_learning_assets(app, require_ready)
     index_html = INDEX_PAGE.read_bytes()
     organ_graph = INDEX_PAGE.with_name("organ-graph.js").read_bytes()
     resources_ui = INDEX_PAGE.with_name("resource-management.js").read_bytes()
