@@ -24,6 +24,7 @@ from aureus.organs.interface import (
     ToolResult,
 )
 from aureus.organs.llm_adapter import (
+    _MODEL_TEST_INPUT,
     ASSUMED_COMPLETION_TOKENS,
     EMPTY_REPLY_REASON,
     EMPTY_SYSTEM_MESSAGE,
@@ -527,8 +528,80 @@ async def test_probe_accepts_reasoning_only_and_says_so(
     assert result.metadata["latency_ms"] >= 0
 
 
+LOCAL_EMBEDDING_URL = "http://127.0.0.1:12345/v1"
+
+
+def local_embedding_route() -> ModelRoute:
+    provider = ProviderConfig(name="local", protocol="openai", base_url=LOCAL_EMBEDDING_URL)
+    model = ModelConfig(
+        name="local-embed", identifier="local-embed", provider="local", kind="embedding"
+    )
+    return ModelRoute(model, provider, None, None)
+
+
 @pytest.mark.asyncio
-async def test_embedding_probe_returns_latency_and_requests_one_vector(
+async def test_local_embedding_probe_uses_direct_client(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_import() -> Any:
+        raise AssertionError("本地嵌入不应导入 litellm")
+
+    monkeypatch.setattr(llm_adapter, "_import_litellm", fail_import)
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == LOCAL_EMBEDDING_URL + "/embeddings"
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"data": [{"index": 0, "embedding": [0.5, 0.25]}], "usage": {"prompt_tokens": 3}},
+        )
+
+    route = local_embedding_route()
+    response = await probe_model(
+        route.model, route.provider, keys, transport=httpx.MockTransport(respond)
+    )
+
+    assert response.suggestion == "[0.5, 0.25]"
+    assert response.metadata["kind"] == "embedding"
+    assert response.attempts[0].prompt_tokens == 3
+    assert bodies == [{"model": "local-embed", "input": [_MODEL_TEST_INPUT]}]
+
+
+@pytest.mark.asyncio
+async def test_embedding_client_is_reused_between_calls(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    created: list[httpx.AsyncClient] = []
+
+    class CountingClient(httpx.AsyncClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            created.append(self)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(llm_adapter.httpx, "AsyncClient", CountingClient)
+    organ = EmbeddingOrgan(
+        "text_embedding",
+        [local_embedding_route()],
+        keys,
+        transport=httpx.MockTransport(respond),
+    )
+    request = OrganRequest("text_embedding", "", embedding_inputs=("甲",))
+    await organ.process(request)
+    await organ.process(request)
+
+    assert len(created) == 1
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_remote_embedding_still_uses_litellm(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = SimpleNamespace(data=[{"embedding": [0.1]}], usage=make_response(None, 5, 0).usage)

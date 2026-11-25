@@ -16,6 +16,7 @@ import os
 import wave
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
+from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
 from ipaddress import ip_address
@@ -125,10 +126,14 @@ LITELLM_PREFIX_BY_PROTOCOL: dict[ProviderProtocol, str] = {
 FAILURE_REASON_BY_ERROR_NAME = {
     "Timeout": "超时",
     "TimeoutError": "超时",
+    "TimeoutException": "超时",
     "RateLimitError": "被限流",
     "AuthenticationError": "认证失败（密钥无效？）",
     "ContextWindowExceededError": "超出上下文长度",
     "APIConnectionError": "连不上服务商",
+    "ConnectError": "连不上服务商",
+    "NetworkError": "连不上服务商",
+    "ProtocolError": "连不上服务商",
     "ServiceUnavailableError": "服务商暂时不可用",
     "InternalServerError": "服务商内部错误",
     "BadRequestError": "请求被拒绝（参数不被支持？）",
@@ -185,6 +190,11 @@ class _RouteFailureError(Exception):
 
 
 def _failure_reason(error: Exception) -> str:
+    # 直连路径自己判定的失败（比如返回体不是合法 JSON）已经带着中文说明。
+    if isinstance(error, _RouteFailureError):
+        return error.reason
+    if isinstance(error, httpx.HTTPStatusError):
+        return _http_status_reason(error.response.status_code)
     # 沿继承链找：litellm 的 Timeout 继承自 APIConnectionError，
     # 先匹配到更具体的那个。
     for error_class in type(error).__mro__:
@@ -192,6 +202,19 @@ def _failure_reason(error: Exception) -> str:
         if reason is not None:
             return reason
     return f"未知错误（{type(error).__name__}）"
+
+
+def _http_status_reason(status: int) -> str:
+    """把直连请求的 HTTP 状态码翻译成和 litellm 一致的失败说明。"""
+    if status in (401, 403):
+        return "认证失败（密钥无效？）"
+    if status == 429:
+        return "被限流"
+    if status in (400, 404, 422):
+        return "请求被拒绝（参数不被支持？）"
+    if status >= 500:
+        return "服务商内部错误"
+    return f"服务商返回 HTTP {status}"
 
 
 def _rejected_before_processing(error: Exception) -> bool:
@@ -368,20 +391,125 @@ def _probe_attempt(
     )
 
 
+@dataclass
+class _EmbeddingClientEntry:
+    """同一个事件循环里共用的一条嵌入 HTTP 客户端（D128）。"""
+
+    loop: asyncio.AbstractEventLoop
+    transport: httpx.AsyncBaseTransport | None
+    trust_env: bool
+    client: httpx.AsyncClient
+
+
+_EMBEDDING_CLIENTS: list[_EmbeddingClientEntry] = []
+
+
+def _embedding_client(
+    transport: httpx.AsyncBaseTransport | None, *, trust_env: bool
+) -> httpx.AsyncClient:
+    """取得当前事件循环共用的嵌入客户端，保留连接池（D128）。
+
+    客户端绑定事件循环，不能跨循环共用，所以按循环分开；transport 只用于测试。
+    """
+    loop = asyncio.get_running_loop()
+    for entry in _EMBEDDING_CLIENTS:
+        if (
+            entry.loop is loop
+            and entry.transport is transport
+            and entry.trust_env is trust_env
+            and not entry.client.is_closed
+        ):
+            return entry.client
+    client = httpx.AsyncClient(transport=transport, trust_env=trust_env)
+    _EMBEDDING_CLIENTS.append(_EmbeddingClientEntry(loop, transport, trust_env, client))
+    return client
+
+
+async def _post_embeddings(
+    base: str,
+    payload: dict[str, Any],
+    params: dict[str, Any],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    local: bool = False,
+) -> Any:
+    """直接请求 OpenAI 兼容的 `/embeddings`，形状与 litellm 的嵌入响应一致（D128）。
+
+    Args:
+        base: 服务商地址，末尾不带斜杠。
+        payload: 请求体。
+        params: 服务商参数，提供超时和可选的 API 密钥。
+        transport: 测试用的假网络；正式运行传 None。
+        local: 回环免费端点，不使用环境里的代理。
+
+    Returns:
+        带 data 和 usage 的响应；data 由调用方校验。
+    """
+    headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
+    client = _embedding_client(transport, trust_env=not local)
+    response = await client.post(
+        base + "/embeddings", headers=headers, json=payload, timeout=params["timeout"]
+    )
+    response.raise_for_status()
+    try:
+        result = response.json()
+    except ValueError as error:
+        raise _RouteFailureError(EMPTY_REPLY_REASON) from error
+    if not isinstance(result, dict):
+        raise _RouteFailureError(EMPTY_REPLY_REASON)
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    return SimpleNamespace(
+        data=result.get("data"),
+        usage=SimpleNamespace(
+            prompt_tokens=usage.get("prompt_tokens", usage.get("total_tokens")),
+            completion_tokens=0,
+        ),
+    )
+
+
 async def probe_model(
     model: ModelConfig,
     provider: ProviderConfig,
     resolver: KeyResolver,
     capability: str | None = None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> OrganResponse:
-    """测量首段正文（或推理内容）或向量的返回时间，报告一次调用的用量。"""
+    """测量首段正文（或推理内容）或向量的返回时间，报告一次调用的用量。
+
+    Args:
+        model: 要测的模型。
+        provider: 模型所属的服务商。
+        resolver: 密钥解析器。
+        capability: 要测的能力；不给就按模型类型推断。
+        transport: 测试用的假网络；正式运行传 None。
+    """
     organ_id = "model_test"
     if model.kind == "image_embedding":
         loop = asyncio.get_running_loop()
-        started = loop.time()
-        organ = EmbeddingOrgan(organ_id, [ModelRoute(model, provider, None, None)], resolver)
+        organ = EmbeddingOrgan(
+            organ_id,
+            [ModelRoute(model, provider, None, None)],
+            resolver,
+            transport=transport,
+        )
         image = base64.b64decode(_PROBE_IMAGE.split(",", 1)[1])
+        started = loop.time()
         response = await organ.process(OrganRequest(organ_id, "", embedding_inputs=(image,)))
+        response.suggestion = json.dumps(response.embeddings[0])
+        response.metadata.update(latency_ms=round((loop.time() - started) * 1000), kind=model.kind)
+        return response
+    route = ModelRoute(model, provider, None, None)
+    if model.kind == "embedding" and local_expression_endpoint(route) is not None:
+        # 回环免费的嵌入直连，不导入也不经过 litellm（D128）。
+        organ = EmbeddingOrgan(organ_id, [route], resolver, transport=transport)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        response = await organ.process(
+            OrganRequest(organ_id, "", embedding_inputs=(_MODEL_TEST_INPUT,))
+        )
         response.suggestion = json.dumps(response.embeddings[0])
         response.metadata.update(latency_ms=round((loop.time() - started) * 1000), kind=model.kind)
         return response
@@ -658,17 +786,19 @@ class EmbeddingOrgan:
     async def _send(
         self, route: ModelRoute, inputs: tuple[str | bytes, ...], params: dict[str, Any]
     ) -> Any:
-        if self.organ_id == LOCAL_EXPRESSION_EMBEDDING:
-            base = local_expression_endpoint(route)
-            if base is None:
-                raise _RouteFailureError("表达嵌入需要本机回环地址")
-            return await self._post_embeddings(
-                base,
-                {"model": route.model.identifier, "input": list(inputs)},
-                params,
-                local=True,
-            )
         if route.model.kind == "embedding":
+            base = local_expression_endpoint(route)
+            if base is not None:
+                # 回环免费的嵌入直连，复用连接池（D128）。
+                return await _post_embeddings(
+                    base,
+                    {"model": route.model.identifier, "input": list(inputs)},
+                    params,
+                    transport=self._transport,
+                    local=True,
+                )
+            if self.organ_id == LOCAL_EXPRESSION_EMBEDDING:
+                raise _RouteFailureError("表达嵌入需要本机回环地址")
             protocol = route.provider.protocol
             if protocol == "openai_responses":
                 protocol = "openai"
@@ -688,26 +818,7 @@ class EmbeddingOrgan:
                 if isinstance(value, bytes)
             ],
         }
-        return await self._post_embeddings(base, payload, params)
-
-    async def _post_embeddings(
-        self, base: str, payload: dict[str, Any], params: dict[str, Any], *, local: bool = False
-    ) -> Any:
-        headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
-        async with httpx.AsyncClient(
-            timeout=params["timeout"], transport=self._transport, trust_env=not local
-        ) as client:
-            response = await client.post(base + "/embeddings", headers=headers, json=payload)
-            response.raise_for_status()
-            result = response.json()
-        usage = result.get("usage") or {}
-        return SimpleNamespace(
-            data=result.get("data"),
-            usage=SimpleNamespace(
-                prompt_tokens=usage.get("prompt_tokens", usage.get("total_tokens")),
-                completion_tokens=0,
-            ),
-        )
+        return await _post_embeddings(base, payload, params, transport=self._transport)
 
 
 def local_expression_endpoint(route: ModelRoute) -> str | None:
