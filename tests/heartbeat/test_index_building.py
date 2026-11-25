@@ -1,15 +1,26 @@
 """心跳后台自动建索引：假器官、手动时钟，不联网（D125）。"""
 
 import asyncio
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from aureus.common import HeartbeatConfig, IndexingConfig, LanguageConfig, ManualClock
+from aureus.common.sqlite import open_connection
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import EmbeddingSpaces, ModelRuntime
-from aureus.heartbeat import Heartbeat
+from aureus.heartbeat import (
+    Heartbeat,
+    MediaReference,
+    MessageRoute,
+    Perception,
+    TrustLevel,
+    VisibilityScope,
+)
+from aureus.heartbeat.inbox_images import InboxImageIndex
+from aureus.heartbeat.inbox_store import InboxStore
 from aureus.identity import Identity
 from aureus.memory import (
     EmojiStore,
@@ -98,6 +109,7 @@ class Harness:
         *,
         expressions: int = 0,
         emoji: int = 0,
+        inbox: bool = False,
         indexing: IndexingConfig | None = None,
     ) -> None:
         self.clock = ManualClock(START)
@@ -124,6 +136,7 @@ class Harness:
                 self.emoji_store.collect(
                     PNG + bytes([number]), description=f"表情{number:02}", register=True
                 )
+        self.inbox = InboxStore(self.database, self.clock) if inbox else None
         self.stop = EmergencyStop(tmp_path / "halt.json", self.clock)
         self.heartbeat = Heartbeat(
             clock=self.clock,
@@ -142,6 +155,7 @@ class Harness:
             language_config=LanguageConfig(),
             expression_index=self.expression_index,
             emoji_store=self.emoji_store,
+            inbox_store=self.inbox,
         )
         self.heartbeat.wake_up()
 
@@ -212,6 +226,46 @@ async def test_emoji_cache_prebuild_reaches_complete(tmp_path: Path) -> None:
     assert selector is not None
     assert await selector.cache_coverage(((1, TEXT_SPACE),)) == [(1, 3, 3)]
     assert [len(request.embedding_inputs) for request in harness.call.requests] == [2, 1]
+
+
+@pytest.mark.asyncio
+async def test_image_backfill_indexes_existing_unindexed_images(tmp_path: Path) -> None:
+    """图片嵌入可用时回填已收到但未建索引的图片，只处理当前获准会话（验收 2）。"""
+    harness = Harness(tmp_path, inbox=True)
+    assert harness.inbox is not None
+
+    def message(group: str, name: str, *files: str) -> Perception:
+        return Perception(
+            "qq",
+            "bot",
+            "图片",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", group, name),
+            attachments=tuple(MediaReference("image", file_id) for file_id in files),
+        )
+
+    harness.inbox.add(message("group-1", "m1", "file-1", "file-2"))
+    harness.inbox.add(message("group-2", "m2", "file-3"))
+    images = InboxImageIndex(harness.database, harness.call.call, lambda: True)
+
+    async def read(perception: Perception, attachment: MediaReference) -> tuple[bytes, str]:
+        return attachment.file_id.encode(), "image/png"
+
+    harness.heartbeat.set_inbox_route_filter(lambda key: key.recipient_id == "group-1")
+    harness.heartbeat.set_inbox_attachment_reader(read)
+    harness.heartbeat.set_inbox_image_indexer(images)
+    await harness.beat_and_wait()
+
+    with closing(open_connection(harness.database)) as connection:
+        rows = connection.execute(
+            "SELECT attachment FROM inbox_image_vectors ORDER BY attachment"
+        ).fetchall()
+    assert [row[0] for row in rows] == ["file-1", "file-2"]
+    assert [request.organ_id for request in harness.call.requests] == [
+        "image_embedding",
+        "image_embedding",
+    ]
 
 
 @pytest.mark.asyncio

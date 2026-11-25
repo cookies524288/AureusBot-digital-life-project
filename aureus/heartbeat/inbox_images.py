@@ -12,7 +12,12 @@ from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from aureus.common.sqlite import open_connection
-from aureus.heartbeat.inbox_store import USER_VISIBLE_INBOX_MESSAGE, ConversationKey
+from aureus.heartbeat.inbox_media import AttachmentReader
+from aureus.heartbeat.inbox_store import (
+    USER_VISIBLE_INBOX_MESSAGE,
+    ConversationKey,
+    InboxStore,
+)
 from aureus.heartbeat.perception import MediaReference, Perception
 from aureus.organs import OrganCallError, OrganRequest, OrganResponse
 from aureus.safety import CallRejectedError
@@ -35,6 +40,10 @@ _SOURCE = """
     JOIN inbox_conversations c ON c.id = m.conversation_id
 """
 _PUBLIC_FIELDS = "v.id, v.attachment, m.id AS message_id, m.timestamp, c.name AS conversation"
+_CONVERSATION_KEY = (
+    "c.platform = ? AND c.account_id = ? AND c.kind = ? AND c.recipient_id = ? "
+    "AND c.temporary_group_id = ?"
+)
 _COVERAGE = f"""
 WITH candidates AS (
     SELECT DISTINCT m.id AS message_id, m.conversation_id, attachment.value ->> '$[1]' AS file_id
@@ -70,6 +79,11 @@ class InboxImageIndex:
         with closing(open_connection(path)) as connection:
             connection.executescript(_SCHEMA)
 
+    @property
+    def enabled(self) -> bool:
+        """图片嵌入模型当前是否可用。"""
+        return self._enabled()
+
     async def index(self, perception: Perception, attachment: MediaReference, image: bytes) -> None:
         """收到有效图片时保存向量；被网关拒绝或模型失败时保留原消息。"""
         if not self._enabled() or perception.route is None or attachment.kind != "image":
@@ -79,28 +93,116 @@ class InboxImageIndex:
         except SQLiteError:
             logger.exception("图片向量索引写入失败")
 
+    async def backfill_batch(
+        self,
+        store: InboxStore,
+        read: AttachmentReader,
+        allows: Callable[[ConversationKey], bool],
+        limit: int,
+    ) -> tuple[bool, bool]:
+        """按会话权限回填一批已收到但未建索引的图片（D125）。
+
+        Returns:
+            （是否还有未建索引的图片，本批是否写入过向量）。
+        """
+        if not self._enabled():
+            return False, False
+        conversations = await asyncio.to_thread(store.visible_conversation_keys)
+        remaining = limit
+        written = 0
+        skipped = 0
+        for conversation in conversations:
+            if remaining <= 0:
+                break
+            if not allows(conversation):
+                continue
+            rows = await asyncio.to_thread(self._unindexed_images, conversation, remaining)
+            for message_id, position in rows:
+                loaded = await asyncio.to_thread(
+                    store.get_visible_image, conversation, message_id, position
+                )
+                if loaded is None:
+                    skipped += 1
+                    continue
+                perception, attachment, _note = loaded
+                media = await read(perception, attachment)
+                if media is None:
+                    skipped += 1
+                    continue
+                data, _mime = media
+                try:
+                    saved = await self._index(
+                        perception, attachment, data, propagate_rejection=True
+                    )
+                except SQLiteError:
+                    logger.exception("图片向量索引写入失败")
+                    saved = False
+                if saved:
+                    written += 1
+                    remaining -= 1
+                else:
+                    skipped += 1
+        return remaining == 0 or skipped > 0, written > 0
+
+    def _unindexed_images(
+        self, conversation: ConversationKey, limit: int
+    ) -> list[tuple[int, int]]:
+        """该会话中仍随可见入站消息保存、尚未建索引的图片（消息序号，附件位置）。"""
+        with closing(open_connection(self._path, read_only=True)) as connection:
+            rows = connection.execute(
+                f"""SELECT m.id, attachment.key
+                    FROM inbox_messages m JOIN json_each(m.attachments) attachment
+                    WHERE m.direction = 'incoming' AND {USER_VISIBLE_INBOX_MESSAGE}
+                    AND attachment.type = 'array' AND attachment.value ->> '$[0]' = 'image'
+                    AND json_type(attachment.value, '$[1]') = 'text'
+                    AND attachment.value ->> '$[1]' <> ''
+                    AND m.conversation_id IN (
+                        SELECT c.id FROM inbox_conversations c WHERE {_CONVERSATION_KEY}
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM inbox_image_vectors v
+                        WHERE v.message_id = m.id
+                        AND v.attachment = attachment.value ->> '$[1]'
+                    )
+                    ORDER BY m.id, attachment.key LIMIT ?""",
+                (*conversation.parameters(), limit),
+            ).fetchall()
+        return [(int(row[0]), int(row[1])) for row in rows]
+
     async def _index(
-        self, perception: Perception, attachment: MediaReference, image: bytes
-    ) -> None:
+        self,
+        perception: Perception,
+        attachment: MediaReference,
+        image: bytes,
+        *,
+        propagate_rejection: bool = False,
+    ) -> bool:
+        """写入一张图片的向量；返回是否真的保存了。"""
         message_id = await asyncio.to_thread(self._unindexed_source, perception, attachment)
         if message_id is None:
-            return
+            return False
         try:
             response = await self._call(
                 OrganRequest("image_embedding", "", embedding_inputs=(image,))
             )
-        except (CallRejectedError, OrganCallError):
-            return
+        except CallRejectedError:
+            if propagate_rejection:
+                raise
+            return False
+        except OrganCallError:
+            return False
         if len(response.embeddings) != 1 or not isinstance(
             space := response.metadata.get("embedding_space"), str
         ):
-            return
+            return False
         vector = response.embeddings[0]
         norm = hypot(*vector)
-        if norm:
-            await asyncio.to_thread(
-                self._save, message_id, attachment.file_id, space, tuple(x / norm for x in vector)
-            )
+        if not norm:
+            return False
+        await asyncio.to_thread(
+            self._save, message_id, attachment.file_id, space, tuple(x / norm for x in vector)
+        )
+        return True
 
     def _unindexed_source(self, perception: Perception, attachment: MediaReference) -> int | None:
         route = perception.route

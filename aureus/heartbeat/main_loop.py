@@ -2487,13 +2487,19 @@ class Heartbeat:
         if recall is not None and recall.space is not None:
             builders.append((_INDEX_EXPRESSION, self._build_expression_batch))
         selector = self._conversation.emoji_selector
-        if (
-            selector is not None
-            and self._conversation.has_text_embedding
-            and self._text_spaces
-        ):
+        if selector is not None and self._conversation.has_text_embedding and self._text_spaces:
             builders.append((_INDEX_EMOJI, self._build_emoji_batch))
+        if self._image_backfill_available():
+            builders.append((_INDEX_IMAGES, self._build_image_batch))
         return builders
+
+    def _image_backfill_available(self) -> bool:
+        return (
+            self._inbox_image_index is not None
+            and self._inbox_image_index.enabled
+            and self._conversation.inbox_media.read is not None
+            and self._platform_inbox is not None
+        )
 
     async def _build_expression_batch(self) -> tuple[bool, bool]:
         recall = self._conversation.expression_recall
@@ -2506,6 +2512,16 @@ class Heartbeat:
         if selector is None or not self._conversation.has_text_embedding:
             return False, False
         return await selector.prebuild_cache(self._text_spaces, self._indexing.batch_size)
+
+    async def _build_image_batch(self) -> tuple[bool, bool]:
+        images = self._inbox_image_index
+        inbox = self._platform_inbox
+        read = self._conversation.inbox_media.read
+        if images is None or inbox is None or read is None or not images.enabled:
+            return False, False
+        return await images.backfill_batch(
+            inbox.store, read, inbox.allows, self._indexing.batch_size
+        )
 
     async def _build_indexes(self) -> None:
         """按批轮转补齐各索引；每批之后让出，条件不满足或全部完成时退出。
