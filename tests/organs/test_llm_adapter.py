@@ -577,6 +577,7 @@ async def test_local_embedding_probe_uses_direct_client(
     assert response.metadata["kind"] == "embedding"
     assert response.attempts[0].prompt_tokens == 3
     assert bodies == [{"model": "local-embed", "input": [_MODEL_TEST_INPUT]}]
+    await close_embedding_clients()
 
 
 @pytest.mark.parametrize(
@@ -606,6 +607,7 @@ async def test_local_embedding_probe_failures_are_reported(
 
     assert error.value.attempts[0].succeeded is False
     assert error.value.attempts[0].failure_reason == reason
+    await close_embedding_clients()
 
 
 @pytest.mark.asyncio
@@ -632,6 +634,7 @@ async def test_probe_latency_excludes_client_creation(
     )
 
     assert response.metadata["latency_ms"] == 7
+    await close_embedding_clients()
 
 
 @pytest.mark.asyncio
@@ -664,6 +667,7 @@ async def test_embedding_client_is_reused_between_calls(
 
     assert len(created) == 1
     assert len(requests) == 2
+    await close_embedding_clients()
 
 
 @pytest.mark.asyncio
