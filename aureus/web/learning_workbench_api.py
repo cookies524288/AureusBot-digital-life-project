@@ -6,8 +6,11 @@
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+import sqlite3
+from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 
 from fastapi import (
     APIRouter,
@@ -22,12 +25,41 @@ from fastapi import (
 )
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from starlette.datastructures import UploadFile as MultipartFile
+from starlette.formparsers import MultiPartException, MultiPartParser
 
 from aureus.common import Clock
 from aureus.memory import LanguageKind
 from aureus.memory.emoji import MAX_EMOJI_BYTES
+from aureus.memory.language import LanguagePackageRow
 from aureus.memory.language_package import read_package
 from aureus.web.learning_workbench_service import LearningWorkbench
+from aureus.web.legacy_expression_import import MAX_LEGACY_BYTES, read_legacy_expressions
+
+_MAX_BATCH_EMOJIS = 20
+_MAX_BATCH_EMOJI_BYTES = _MAX_BATCH_EMOJIS * MAX_EMOJI_BYTES + 64 * 1024
+_LEGACY_PREVIEW_TTL = timedelta(minutes=15)
+
+
+class LegacyMapping(BaseModel):
+    """旧表达来源与当前目标会话的对应关系。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    old_chat_id: str = Field(min_length=1, max_length=4096)
+    target_chat_id: str | None = Field(default=None, max_length=4096)
+    target_chat_ids: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
+        default_factory=list, max_length=100,
+    )
+
+
+class LegacyConfirmation(BaseModel):
+    """指定预览批次及确认导入的映射。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    db_path: str = Field(min_length=1, max_length=64)
+    mappings: list[LegacyMapping] = Field(min_length=1, max_length=10000)
 
 
 class ExpressionFields(BaseModel):
@@ -87,9 +119,10 @@ class LanguageImport(BaseModel):
     jargons: list[dict[str, Any]] = Field(default_factory=list, max_length=10000)
 
 
-class JargonBatch(LanguageBatch):
+class JargonBatch(BaseModel):
     """单独的黑话词义定性。"""
 
+    ids: list[Annotated[int, Field(gt=0)]] = Field(min_length=1, max_length=100)
     is_jargon: bool
 
 
@@ -156,6 +189,7 @@ def register_learning_workbench_routes(
 
     router = APIRouter(prefix="/api/webui", dependencies=[Depends(authenticated)])
     workbench_clock = clock or service.clock
+    previews: dict[str, tuple[str, datetime, dict[str, list[LanguagePackageRow]]]] = {}
 
     async def run(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         try:
@@ -166,6 +200,8 @@ def register_learning_workbench_routes(
             raise HTTPException(403, str(error)) from None
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
+        except OSError:
+            raise HTTPException(503, "暂时无法读取或保存学习资料。") from None
 
     def register_language(kind: LanguageKind) -> None:
         path = f"/{kind}"
@@ -299,7 +335,9 @@ def register_learning_workbench_routes(
                          "Content-Disposition": f'attachment; filename="aureus-{kind}.json"'})
 
         @router.post(path + "/import")
-        async def import_entries(request: Request) -> dict[str, Any]:
+        async def import_entries(
+            request: Request, token: Annotated[str, Depends(authenticated)],
+        ) -> dict[str, Any]:
             raw = await request.body()
             if len(raw) > 8 * 1024 * 1024:
                 raise HTTPException(413, "资源包不能超过8 MiB。")
@@ -315,8 +353,6 @@ def register_learning_workbench_routes(
             items = body.expressions if kind == LanguageKind.EXPRESSION else body.jargons
             if not items:
                 raise HTTPException(422, "请选择至少一条候选。")
-            if body.conflict_strategy == "overwrite":
-                raise HTTPException(422, "此工作台仅提供安全跳过冲突，不支持覆盖。")
             if kind == LanguageKind.EXPRESSION:
                 if body.chat_id and len(scopes) != 1:
                     raise HTTPException(422, "表达方式请选择一个目标会话。")
@@ -341,7 +377,14 @@ def register_learning_workbench_routes(
             except ValueError as error:
                 raise HTTPException(422, str(error)) from None
             try:
-                added = await run(service.import_language, kind, rows, scopes)
+                added = await run(
+                    service.import_language,
+                    kind,
+                    rows,
+                    scopes,
+                    overwrite=body.conflict_strategy == "overwrite",
+                    active=lambda: session_is_active(token),
+                )
             except ValueError as error:
                 raise HTTPException(422, str(error)) from None
             return {"success": True, "imported_count": added,
@@ -377,6 +420,97 @@ def register_learning_workbench_routes(
 
     for kind in LanguageKind:
         register_language(kind)
+
+    @router.post("/expression/legacy-import/preview")
+    async def legacy_path_preview() -> dict[str, Any]:
+        raise HTTPException(422, "只支持上传旧版数据库，不能访问服务器文件路径。")
+
+    @router.post("/expression/legacy-import/preview-file")
+    async def legacy_preview(
+        token: Annotated[str, Depends(authenticated)], file: Annotated[UploadFile, File(...)],
+    ) -> dict[str, Any]:
+        data = await file.read(MAX_LEGACY_BYTES + 1)
+        if len(data) > MAX_LEGACY_BYTES:
+            raise HTTPException(413, "旧版数据库不能超过 32 MiB。")
+        try:
+            groups = await run(read_legacy_expressions, data)
+        except sqlite3.Error:
+            raise HTTPException(422, "无法读取上传的旧版表达数据库。") from None
+        labels = await run(service.scopes)
+        if not session_is_active(token):
+            raise HTTPException(401, "请先登录。")
+        now = workbench_clock.now()
+        for identifier, (owner, deadline, _) in tuple(previews.items()):
+            if deadline <= now or owner == token or not session_is_active(owner):
+                del previews[identifier]
+        if len(previews) >= 4:
+            raise HTTPException(429, "其他旧版导入预览尚未完成。")
+        identifier = uuid4().hex
+        previews[identifier] = (token, now + _LEGACY_PREVIEW_TTL, groups)
+        return {
+            "success": True,
+            "db_path": identifier,
+            "total_count": sum(map(len, groups.values())),
+            "matched_count": sum(len(rows) for key, rows in groups.items() if key in labels),
+            "unmatched_count": sum(len(rows) for key, rows in groups.items() if key not in labels),
+            "groups": [
+                {
+                    "old_chat_id": key,
+                    "expression_count": len(rows),
+                    "platform": None,
+                    "target_id": None,
+                    "chat_type": None,
+                    "matched_session_id": key if key in labels else None,
+                    "matched_chat_name": labels.get(key),
+                    "matched": key in labels,
+                    "matched_sessions": [{"session_id": key, "chat_name": labels[key]}]
+                    if key in labels
+                    else [],
+                }
+                for key, rows in groups.items()
+            ],
+        }
+
+    @router.post("/expression/legacy-import/import")
+    async def legacy_import(
+        body: LegacyConfirmation, token: Annotated[str, Depends(authenticated)],
+    ) -> dict[str, Any]:
+        preview = previews.get(body.db_path)
+        if preview is None or preview[0] != token or preview[1] <= workbench_clock.now():
+            raise HTTPException(409, "旧版预览已失效，请重新上传。")
+        if service.language is None:
+            raise HTTPException(409, "学习功能当前关闭。")
+        saved = preview[2]
+        groups = []
+        seen = set()
+        for mapping in body.mappings:
+            key = mapping.old_chat_id
+            if key in seen or key not in saved:
+                raise HTTPException(422, "所选旧会话不属于当前预览。")
+            seen.add(key)
+            targets = tuple(
+                dict.fromkeys(filter(None, (mapping.target_chat_id, *mapping.target_chat_ids)))
+            )
+            if targets:
+                groups.append((saved[key], targets))
+        if not groups:
+            raise HTTPException(422, "至少要映射一个当前会话。")
+        scopes = {key for _, targets in groups for key in targets}
+        previews.pop(body.db_path)
+        added = await run(
+            service.language.import_workbench_entries,
+            LanguageKind.EXPRESSION,
+            (),
+            (),
+            workbench_clock.now(),
+            allowed=lambda: session_is_active(token) and scopes <= service.scopes().keys(),
+            groups=groups,
+        )
+        if added is None:
+            raise HTTPException(409, "登录或来源已变更；没有写入。")
+        return {"success": True, "message": "旧版表达已导入。", "imported_count": added,
+                "skipped_count": sum(len(rows) for rows, _ in groups) - added, "failed_count": 0,
+                "ignored_group_count": len(saved) - len(groups)}
 
     @router.post("/expression/")
     async def create_expression(body: ExpressionFields) -> dict[str, Any]:
@@ -435,18 +569,11 @@ def register_learning_workbench_routes(
 
     @router.post("/jargon/batch/set-jargon")
     async def classify(
-        token: Annotated[str, Depends(authenticated)],
-        body: JargonBatch | None = None,
-        ids: Annotated[list[int] | None, Query()] = None,
-        is_jargon: bool | None = None,
+        body: JargonBatch, token: Annotated[str, Depends(authenticated)],
     ) -> dict[str, Any]:
-        if body is not None and (ids is not None or is_jargon is not None):
-            raise HTTPException(422, "请勿混用两种批量定性格式。")
-        targets = body.ids if body is not None else ids
-        verdict = body.is_jargon if body is not None else is_jargon
-        if not targets or verdict is None or any(identifier <= 0 for identifier in targets):
-            raise HTTPException(422, "请选择黑话编号并提供明确的定性。")
-        changed = await run(service.classify_jargons, targets, verdict, lambda: session_is_active(token))
+        changed = await run(
+            service.classify_jargons, body.ids, body.is_jargon, lambda: session_is_active(token)
+        )
         return {"success": True, "message": "已保存定性。", "changed": changed}
 
     @router.get("/emoji/list")
@@ -535,6 +662,7 @@ def register_learning_workbench_routes(
 
     @router.post("/emoji/upload")
     async def upload_emoji(
+        token: Annotated[str, Depends(authenticated)],
         file: Annotated[UploadFile, File(...)],
         description: Annotated[str, Form(...)],
     ) -> dict[str, Any]:
@@ -549,34 +677,145 @@ def register_learning_workbench_routes(
         if not file.filename or not description.strip():
             raise HTTPException(422, "请选择有效图片并填写情感标签。")
         tags = tuple(tag.strip() for tag in description.split(",") if tag.strip())
-        assert service.emojis is not None
+        if service.emojis is None:
+            raise HTTPException(409, "表情库当前关闭。")
         digest, created = await run(service.emojis.upload, bytes(data),
                                     registration_description=description, tags=tags,
-                                    is_registered=True)
+                                    is_registered=True, allowed=lambda: session_is_active(token))
         return {"success": True, "digest": digest, "created": created,
                 "registered": await run(service.emojis.is_registered, digest)}
 
     @router.post("/emoji/batch/upload")
-    async def batch_upload_emoji(request: Request) -> dict[str, Any]:
-        raise HTTPException(409, "批量上传需要逐份媒体和描述；当前宿主只启用单份上传。")
+    async def batch_upload_emoji(
+        request: Request, token: Annotated[str, Depends(authenticated)],
+    ) -> dict[str, Any]:
+        if service.emojis is None:
+            raise HTTPException(409, "表情库当前关闭。")
+        if (
+            request.headers.get("content-type", "").split(";", 1)[0].lower()
+            != "multipart/form-data"
+        ):
+            raise HTTPException(422, "请使用批量表情上传表单。")
+        too_large = False
+
+        async def bounded_body() -> AsyncIterator[bytes]:
+            nonlocal too_large
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > _MAX_BATCH_EMOJI_BYTES:
+                    too_large = True
+                    raise MultiPartException("批量表情文件超过总大小上限。")
+                yield chunk
+
+        try:
+            form = await MultiPartParser(
+                request.headers, bounded_body(), max_files=_MAX_BATCH_EMOJIS, max_fields=2,
+            ).parse()
+        except MultiPartException as error:
+            raise HTTPException(413 if too_large else 422, error.message) from None
+        try:
+            files = form.getlist("files")
+            if (not files or any(not isinstance(file, MultipartFile) for file in files)
+                    or not set(form.keys()) <= {"files", "emotion", "is_registered"}):
+                raise HTTPException(422, "请选择批量上传的表情图片。")
+            emotion = form.get("emotion", "")
+            registered_value = form.get("is_registered", "true")
+            if not isinstance(emotion, str) or registered_value not in ("true", "false", "1", "0"):
+                raise HTTPException(422, "上传的登记状态或情感标签无效。")
+            registered = registered_value in ("true", "1")
+            tags = tuple(part.strip() for part in emotion.split(",") if part.strip())
+            details = []
+            for file in files:
+                assert isinstance(file, MultipartFile)
+                if not session_is_active(token):
+                    raise HTTPException(401, "请先登录。")
+                filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+                try:
+                    data = await file.read(MAX_EMOJI_BYTES + 1)
+                    if len(data) > MAX_EMOJI_BYTES:
+                        raise ValueError(f"图片不能超过 {MAX_EMOJI_BYTES // (1024 * 1024)} MiB。")
+                    digest, created = await asyncio.to_thread(
+                        service.emojis.upload,
+                        data,
+                        registration_description=emotion,
+                        tags=tags,
+                        is_registered=registered,
+                        allowed=lambda: session_is_active(token),
+                    )
+                except PermissionError:
+                    raise HTTPException(401, "请先登录。") from None
+                except ValueError as error:
+                    details.append({"filename": filename, "success": False, "error": str(error)})
+                    continue
+                except OSError:
+                    details.append(
+                        {"filename": filename, "success": False, "error": "无法保存图片。"}
+                    )
+                    continue
+                key = f"asset:{digest}"
+                identifiers = await run(service.emojis.workbench_ids, (key,))
+                details.append({"filename": filename, "success": True, "id": identifiers[key],
+                                "existed": not created,
+                                "registered": await run(service.emojis.is_registered, digest)})
+            uploaded = sum(item["success"] for item in details)
+            return {"success": True, "total": len(details), "uploaded": uploaded,
+                    "failed": len(details) - uploaded, "details": details,
+                    "message": f"成功上传 {uploaded} 个，失败 {len(details) - uploaded} 个。"}
+        finally:
+            await form.close()
 
     @router.get("/emoji/thumbnail-cache/stats")
     async def thumbnail_cache_stats() -> dict[str, Any]:
-        return {"success": True, "enabled": False, "message": "当前没有持久缩略图缓存。",
-                "cache_dir": "", "total_count": 0, "total_size_mb": 0,
-                "emoji_count": 0, "coverage_percent": 0}
+        if service.emojis is None:
+            raise HTTPException(409, "表情库当前关闭。")
+        return {"success": True, **await run(service.emojis.thumbnails.statistics)}
 
     @router.post("/emoji/thumbnail-cache/cleanup")
     async def thumbnail_cache_cleanup() -> dict[str, Any]:
-        raise HTTPException(409, "当前没有持久缩略图缓存可清理。")
+        return await clean_thumbnails(False)
 
     @router.post("/emoji/thumbnail-cache/preheat")
-    async def thumbnail_cache_preheat() -> dict[str, Any]:
-        raise HTTPException(409, "当前没有持久缩略图缓存可预热。")
+    async def thumbnail_cache_preheat(
+        token: Annotated[str, Depends(authenticated)],
+        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    ) -> dict[str, Any]:
+        if service.emojis is None:
+            raise HTTPException(409, "表情库当前关闭。")
+        digests = await run(service.emojis.thumbnail_digests)
+        generated = skipped = failed = 0
+        for digest in sorted(digests)[:limit]:
+            if not session_is_active(token):
+                raise HTTPException(401, "请先登录。")
+            try:
+                source = await run(service.emojis.read_catalog_media, digest)
+                if source is None:
+                    failed += 1
+                    continue
+                _, created = await asyncio.to_thread(
+                    service.emojis.thumbnails.render, digest, source
+                )
+                generated += created
+                skipped += not created
+            except (OSError, ValueError):
+                failed += 1
+        return {"success": True, "message": "预热结束。", "generated_count": generated,
+                "skipped_count": skipped, "failed_count": failed}
 
     @router.delete("/emoji/thumbnail-cache/clear")
     async def thumbnail_cache_clear() -> dict[str, Any]:
-        raise HTTPException(409, "当前没有持久缩略图缓存可清理。")
+        return await clean_thumbnails(True)
+
+    async def clean_thumbnails(clear: bool) -> dict[str, Any]:
+        if service.emojis is None:
+            raise HTTPException(409, "表情库当前关闭。")
+        removed, kept = await run(service.emojis.thumbnails.cleanup, clear=clear)
+        return {
+            "success": True,
+            "message": "缓存清理完成。",
+            "cleaned_count": removed,
+            "kept_count": kept,
+        }
 
     @router.patch("/emoji/{identifier}")
     async def update_emoji(identifier: int, body: EmojiFields) -> dict[str, Any]:
@@ -610,12 +849,22 @@ def register_learning_workbench_routes(
         return {**await emoji(identifier), "message": "已保存独立审批。"}
 
     @router.get("/emoji/{identifier}/thumbnail")
-    async def media(identifier: int, original: bool = False) -> Response:
+    async def media(
+        identifier: int, token: Annotated[str, Depends(authenticated)], original: bool = False,
+    ) -> Response:
         entry = await run(service.emoji_target, identifier)
         assert service.emojis is not None
         data = await run(service.emojis.read_catalog_media, entry.digest) if entry.digest else None
         if data is None:
             raise HTTPException(404, "原件不存在。")
-        return Response(data, media_type=entry.media_type, headers={"Cache-Control": "no-store"})
+        media_type = entry.media_type
+        if not original:
+            assert entry.digest is not None
+            data, _ = await run(service.emojis.thumbnails.render, entry.digest, data)
+            media_type = "image/webp"
+        if not session_is_active(token):
+            raise HTTPException(401, "请先登录。")
+        await run(service.emoji_target, identifier)
+        return Response(data, media_type=media_type, headers={"Cache-Control": "no-store"})
 
     app.include_router(router)
