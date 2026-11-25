@@ -50,7 +50,6 @@ import {
 import { cn } from '@/lib/utils'
 import type { Emoji, EmojiStats } from '@/types/emoji'
 
-import { EmojiCacheMaintenancePanel } from './EmojiCacheMaintenancePanel'
 import { EmojiDetailDialog, EmojiEditDialog, EmojiUploadDialog } from './EmojiDialogs'
 import { EmojiBrowser, type EmojiFilters } from './EmojiBrowser'
 import { MobileEmojiGrid } from './MobileEmojiGrid'
@@ -75,7 +74,6 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false)
-  const [cacheOpen, setCacheOpen] = useState(false)
   const [cardSize, setCardSize] = useState<'small' | 'medium' | 'large'>('medium')
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
   // 手机端：长按进入多选，筛选收进底部弹层
@@ -325,7 +323,6 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
           onBan={handleBan}
           onDelete={handleDelete}
           onUpload={() => setUploadDialogOpen(true)}
-          onOpenCache={() => setCacheOpen(true)}
           error={list.isError ? list.error?.message : undefined}
           onRetry={() => list.refetch()}
           batchActions={
@@ -423,21 +420,8 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
             </Button>
           </div>
         )}
-        {isMobile && (
-          <Button variant="outline" size="sm" onClick={() => setCacheOpen(true)}>
-            缓存维护
-          </Button>
-        )}
+        <p className="text-muted-foreground text-xs">缩略图缓存维护尚未接入。</p>
       </div>
-      <Dialog open={cacheOpen} onOpenChange={setCacheOpen}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>缓存维护</DialogTitle>
-            <DialogDescription>管理缩略图和本地图片缓存</DialogDescription>
-          </DialogHeader>
-          <EmojiCacheMaintenancePanel onCacheChanged={refreshData} />
-        </DialogContent>
-      </Dialog>
       {/* 详情对话框 */}
       <EmojiDetailDialog
         emoji={selectedEmoji}

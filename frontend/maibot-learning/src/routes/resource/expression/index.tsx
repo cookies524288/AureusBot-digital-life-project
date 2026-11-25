@@ -1,16 +1,12 @@
 import {
   ArrowLeft,
   Download,
-  FileClock,
   MoreHorizontal,
   Network,
   Plus,
-  Star,
-  StarOff,
   Trash2,
   Upload,
   X,
-  Zap,
 } from 'lucide-react'
 import { type ReactNode, useRef, useState } from 'react'
 
@@ -31,11 +27,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ExpressionReviewer } from '@/components/expression-reviewer'
 import { MOBILE_GLASS_CLASS } from '@/components/layout/mobile-glass'
 import { MobileHeaderActions } from '@/components/layout/MobileHeaderActions'
-import { useHideMobileTabBar } from '@/components/layout/mobile-nav-context'
-import { useMediaQuery } from '@/hooks/use-media-query'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useDataList } from '@/hooks/useDataList'
 import { useToast } from '@/hooks/use-toast'
@@ -51,11 +44,9 @@ import {
   getExpressionGroups,
   getExpressionList,
   getExpressionStats,
-  getReviewStats,
 } from '@/lib/expression-api'
 
 import { useExpressionImportExport } from './hooks/useExpressionImportExport'
-import { useExpressionReview } from './hooks/useExpressionReview'
 
 import {
   BatchDeleteConfirmDialog,
@@ -66,31 +57,28 @@ import {
   LegacyExpressionImportDialog,
 } from './ExpressionDialogs'
 import { ExpressionClusterBrowser } from './ExpressionClusterBrowser'
+import { ExpressionQualityPanel } from './ExpressionQualityPanel'
 import { ExpressionList } from './ExpressionList'
-import { ExpressionReviewLogPanel } from './ExpressionReviewLogPanel'
 import { ExpressionScopeStatus } from './ExpressionScopeStatus'
 
 import type { ChatInfo, Expression, ExpressionGroupInfo } from '@/types/expression'
 import type { StatsData } from './types'
 
 type IndicatorStatus = 'on' | 'off' | 'mixed'
-type ExpressionReviewFilter = 'all' | 'user_checked' | 'unchecked'
 type BrowseMode = 'chat' | 'group' | 'all'
 
-/** useDataList 的筛选袋：浏览维度 + 审核筛选 */
+/** useDataList 的筛选袋：来源范围和排序。 */
 interface ExpressionFilters {
   browseMode: BrowseMode
   selectedChatId: string
   selectedGroupIndex: number | null
   sortBy: 'time' | 'time_asc' | 'created' | 'created_asc'
-  reviewFilter: ExpressionReviewFilter
 }
 
 const INITIAL_FILTERS: ExpressionFilters = {
   browseMode: 'chat',
   selectedChatId: '',
   selectedGroupIndex: null,
-  reviewFilter: 'all',
   sortBy: 'time',
 }
 
@@ -119,14 +107,12 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
   const [isBatchDeleteDialogOpen, setIsBatchDeleteDialogOpen] = useState(false)
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false)
   const [isMoreActionsOpen, setIsMoreActionsOpen] = useState(false)
-  // 手机上默认进入卡片审核，与设计稿一致；桌面端默认列表
-  const isMobileViewport = useMediaQuery('(max-width: 1023.98px)')
-  const [activeView, setActiveView] = useState<'list' | 'logs' | 'quick' | 'clusters'>('list')
+  const [activeView, setActiveView] = useState<'list' | 'clusters' | 'quality'>('list')
 
-  // 兄弟读：聊天流 / 共享组 / 统计 / 审核统计统一以 'expression' 前缀分层，
+  // 兄弟读：聊天流 / 共享组 / 统计统一以 'expression' 前缀分层，
   // list.invalidate() 失效 ['expression'] 前缀时一并刷新（读失败局部呈现，不弹全局 toast）
 
-  // 列表：分页/搜索/筛选/多选统一由 useDataList 承载，翻页/改参自动重置页码并清空选中
+  // 列表：分页/搜索/筛选/多选统一由 useDataList 承载，保留跨页选中。
   const list = useDataList<Expression, ExpressionFilters, number>({
     domain: 'expression',
     getId: (expression) => expression.id,
@@ -150,7 +136,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
         chat_id: filters.browseMode === 'chat' ? filters.selectedChatId || undefined : undefined,
         chat_ids: selectedGroup && !selectedGroup.is_global ? selectedGroup.chat_ids : undefined,
         include_legacy: true,
-        review_filter: filters.reviewFilter,
         sort_by: filters.sortBy,
       })
       return { items: response.data, total: response.total }
@@ -158,7 +143,7 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
   })
 
   const filters = list.filters
-  const { browseMode, selectedChatId, selectedGroupIndex, reviewFilter } = filters
+  const { browseMode, selectedChatId, selectedGroupIndex } = filters
 
   // 统计：失败时保持占位数值，不打断页面；与列表同领域，list.invalidate() 会一并失效
   const statsQuery = useQuery({
@@ -166,13 +151,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
     queryFn: () => getExpressionStats({ include_legacy: true }),
   })
   const stats: StatsData = statsQuery.data ?? DEFAULT_STATS
-
-  // 审核统计：uncheckedCount 由此派生
-  const reviewStatsQuery = useQuery({
-    queryKey: ['expression', 'review-stats'],
-    queryFn: () => getReviewStats(),
-  })
-  const uncheckedCount = reviewStatsQuery.data?.unchecked ?? 0
 
   // 聊天流列表包含历史及非当前账号的数据，由条目标签区分。
   const chatListQuery = useQuery({
@@ -216,9 +194,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
     list.invalidate()
   }
 
-  // 审核（单条 / 批量）：写成功后 invalidate 重新拉取（服务端为准）
-  const { toggleReviewStatus, batchReviewStatus } = useExpressionReview({ onChanged: refreshAll })
-
   // 当前选中的具体聊天（用于导入导出清除与作用域指示）
   const currentChat =
     browseMode === 'chat' && selectedChatId
@@ -235,17 +210,12 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
       onCloseClearConfirm: () => setIsClearConfirmOpen(false),
     })
 
-  // 手机上卡片审核是全屏的滑卡界面，底部按钮占据标签栏的位置
-  useHideMobileTabBar(isMobileViewport && activeView === 'quick')
-
-  // 顶部视图切换（表达 / 快速审核 / AI审核记录）
-  const handleActiveViewChange = (view: 'list' | 'logs' | 'quick' | 'clusters') => {
+  const handleActiveViewChange = (view: 'list' | 'clusters' | 'quality') => {
     setActiveView(view)
     if (view === 'list') {
       list.refetch()
       statsQuery.refetch()
     }
-    reviewStatsQuery.refetch()
   }
 
   // 聚类项只有 ID，先加载完整记录后复用编辑对话框展示与修改。
@@ -346,7 +316,7 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-3 pb-4 sm:p-4">
-      <p className="text-muted-foreground mb-2 shrink-0 text-xs">表达与有释义的黑话无需人工批准即可用于回复；精选和质检记录不改变此规则。</p>
+      <p className="text-muted-foreground mb-2 shrink-0 text-xs">表达与有释义的黑话无需人工批准即可用于回复，仍遵守来源授权和可逆移除规则。</p>
       {activeView !== 'list' && (
         <div className="mb-4 flex shrink-0 justify-end gap-2 sm:mb-3">
           {/* 手机上由页头的「列表模式」返回，这里不再重复 */}
@@ -358,16 +328,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
             <ArrowLeft className="h-4 w-4" />
             返回表达
           </Button>
-          {activeView === 'quick' && (
-            <Button
-              variant="outline"
-              onClick={() => handleActiveViewChange('logs')}
-              className="h-10 justify-center gap-2 sm:h-9"
-            >
-              <FileClock className="h-4 w-4" />
-              AI审核记录
-            </Button>
-          )}
         </div>
       )}
 
@@ -510,20 +470,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
                     </Select>
                     <Button
                       variant="outline"
-                      size="sm"
-                      aria-pressed={reviewFilter === 'user_checked'}
-                      onClick={() =>
-                        list.setFilter(
-                          'reviewFilter',
-                          reviewFilter === 'user_checked' ? 'all' : 'user_checked'
-                        )
-                      }
-                    >
-                      <Star className="h-4 w-4" />
-                      仅精选
-                    </Button>
-                    <Button
-                      variant="outline"
                       size="icon-sm"
                       onClick={exportSelectedExpressionsToFile}
                       disabled={!currentChat || list.selectedCount === 0}
@@ -567,29 +513,12 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="expression-actions-menu-content">
-                        <DropdownMenuItem
-                          onSelect={() =>
-                            list.setFilter(
-                              'reviewFilter',
-                              reviewFilter === 'unchecked' ? 'all' : 'unchecked'
-                            )
-                          }
-                        >
-                          <StarOff className="mr-2 h-4 w-4" />
-                          {reviewFilter === 'unchecked' ? '显示全部' : '仅显示未精选'}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => handleActiveViewChange('quick')}>
-                          <Zap className="mr-2 h-4 w-4" />
-                          精选
-                          {uncheckedCount > 0 && (
-                            <span className="ml-auto rounded-full bg-orange-500 px-1.5 py-0.5 text-xs leading-none text-white">
-                              {uncheckedCount > 99 ? '99+' : uncheckedCount}
-                            </span>
-                          )}
-                        </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => handleActiveViewChange('clusters')}>
                           <Network className="mr-2 h-4 w-4" />
                           聚类
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => handleActiveViewChange('quality')}>
+                          表达质检记录
                         </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => setIsLegacyImportOpen(true)}>
                           <Upload className="mr-2 h-4 w-4" />
@@ -632,22 +561,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
                       取消选择
                     </Button>
                     <Button
-                      variant="outline"
-                      size="xs"
-                      onClick={() => batchReviewStatus(Array.from(list.selectedIds), true)}
-                    >
-                      <Star className="h-3 w-3" />
-                      批量精选
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      onClick={() => batchReviewStatus(Array.from(list.selectedIds), false)}
-                    >
-                      <StarOff className="h-3 w-3" />
-                      取消精选
-                    </Button>
-                    <Button
                       variant="destructive"
                       size="xs"
                       onClick={() => setIsBatchDeleteDialogOpen(true)}
@@ -670,11 +583,8 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
               (browseMode === 'chat' && selectedChatId !== '') ||
               (browseMode === 'group' && selectedGroupIndex !== null)
             }
-            reviewFilter={reviewFilter}
-            onReviewFilterChange={(filter) => list.setFilter('reviewFilter', filter)}
             onEdit={handleEdit}
             onDelete={(expression) => setDeleteConfirmExpression(expression)}
-            onToggleReviewStatus={toggleReviewStatus}
             onToggleSelect={list.toggle}
             onToggleSelectAll={list.toggleAll}
             onPageChange={list.goToPage}
@@ -683,39 +593,21 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
         </DataBrowserLayout>
       </div>
 
-      {activeView === 'logs' && (
-        <div className="min-h-[38rem] flex-1 pr-4">
-          <ExpressionReviewLogPanel onRescued={refreshAll} />
-        </div>
-      )}
-
-      {activeView === 'quick' && (
-        <div className="min-h-0 flex-1 pr-4 pb-2">
-          <ExpressionReviewer
-            embedded
-            open
-            mode="quick"
-            className="h-full"
-            onReviewed={refreshAll}
-          />
-        </div>
-      )}
-
-      {/* 手机页头右上角：在卡片审核与列表之间切换 */}
-      <MobileHeaderActions>
+      {activeView !== 'list' && <MobileHeaderActions>
         <button
           type="button"
-          onClick={() => handleActiveViewChange(activeView === 'quick' ? 'list' : 'quick')}
+          onClick={() => handleActiveViewChange('list')}
           data-mobile-header-text-button="true"
           className={cn('h-11 rounded-full px-4 text-[15px]', MOBILE_GLASS_CLASS)}
         >
-          {activeView === 'quick' ? '列表模式' : '卡片审核'}
+          返回表达
         </button>
-      </MobileHeaderActions>
+      </MobileHeaderActions>}
 
       {activeView === 'clusters' && (
         <ExpressionClusterBrowser onOpenExpression={handleOpenExpressionById} />
       )}
+      {activeView === 'quality' && <ExpressionQualityPanel />}
 
       {/* 创建对话框 */}
       <LearningCreateDialog

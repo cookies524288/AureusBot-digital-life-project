@@ -5,11 +5,8 @@
  * 本文件只声明 endpoint、业务错误文案与响应体 success 标记的解包规则。
  * 公开函数遵循 throw 契约：成功返回数据，失败抛 ApiError。
  */
-import { ApiError, backendApi, requireSuccess } from '@/lib/http'
-import type { VectorSpaceList } from '@/types/vector-space'
+import { backendApi, requireSuccess } from '@/lib/http'
 import type {
-  BatchReviewItem,
-  BatchReviewResponse,
   ChatInfo,
   ChatListResponse,
   Expression,
@@ -25,17 +22,14 @@ import type {
   ExpressionImportResponse,
   ExpressionGroupListResponse,
   ExpressionListResponse,
-  ExpressionReviewLogApproveResponse,
-  ExpressionReviewLogListResponse,
   ExpressionStats,
   ExpressionStatsResponse,
   ExpressionUpdateRequest,
   ExpressionUpdateResponse,
   LegacyExpressionImportPreviewResponse,
   LegacyExpressionImportResponse,
-  ReviewListResponse,
-  ReviewStats,
 } from '@/types/expression'
+import type { VectorSpaceList } from '@/types/vector-space'
 
 const API_BASE = '/api/webui/expression'
 
@@ -114,7 +108,6 @@ export async function getExpressionList(params: {
   chat_id?: string
   chat_ids?: string[]
   include_legacy?: boolean
-  review_filter?: 'all' | 'user_checked' | 'unchecked'
   sort_by?: 'time' | 'time_asc' | 'created' | 'created_asc'
 }): Promise<ExpressionListResponse> {
   const data = await backendApi.get<ExpressionListResponse>(`${API_BASE}/list`, {
@@ -124,7 +117,6 @@ export async function getExpressionList(params: {
       search: params.search || undefined,
       chat_id: params.chat_id || undefined,
       include_legacy: params.include_legacy ? true : undefined,
-      review_filter: params.review_filter,
       sort_by: params.sort_by,
       chat_ids: params.chat_ids,
     },
@@ -260,27 +252,6 @@ export async function updateExpression(
 }
 
 /**
- * 更新表达方式审核状态
- */
-export async function updateExpressionReviewStatus(
-  expressionId: number,
-  approved: boolean
-): Promise<Expression> {
-  const responseData = await backendApi.patch<ExpressionUpdateResponse>(
-    `${API_BASE}/${expressionId}/review-status`,
-    {
-      body: { approved },
-      errorMessage: '更新表达方式审核状态失败',
-    }
-  )
-  const checked = requireSuccess(responseData, '更新表达方式审核状态失败')
-  if (!checked.data) {
-    throw new ApiError(checked.message || '更新表达方式审核状态失败', { detail: checked })
-  }
-  return checked.data
-}
-
-/**
  * 删除表达方式
  */
 export async function deleteExpression(expressionId: number): Promise<Record<string, never>> {
@@ -329,103 +300,20 @@ export async function getExpressionClusters(): Promise<ExpressionClusterListResp
 }
 
 /**
- * 获取指定表达聚类的完整成员。
+ * 获取指定表达聚类的成员。
  */
 export async function getExpressionClusterMembers(params: {
   cluster_id: number
-  profile_marker?: string
+  profile_marker: string
+  offset: number
+  limit: number
 }): Promise<ExpressionClusterMemberListResponse> {
   const data = await backendApi.get<ExpressionClusterMemberListResponse>(
     `${API_BASE}/clusters/${params.cluster_id}/members`,
     {
-      query: { profile_marker: params.profile_marker || undefined },
+      query: { profile_marker: params.profile_marker, offset: params.offset, limit: params.limit },
       errorMessage: '获取表达聚类成员失败',
     }
   )
   return requireSuccess(data, '获取表达聚类成员失败')
-}
-
-// ============ 审核相关 API ============
-
-/**
- * 获取审核统计数据
- */
-export async function getReviewStats(): Promise<ReviewStats> {
-  return backendApi.get<ReviewStats>(`${API_BASE}/review/stats`, {
-    errorMessage: '获取审核统计失败',
-  })
-}
-
-/**
- * 获取审核列表
- */
-export async function getReviewList(params: {
-  page?: number
-  page_size?: number
-  filter_type?: 'unchecked' | 'passed' | 'all'
-  order?: 'latest' | 'random'
-  search?: string
-  chat_id?: string
-  exclude_ids?: number[]
-}): Promise<ReviewListResponse> {
-  const data = await backendApi.get<ReviewListResponse>(`${API_BASE}/review/list`, {
-    query: {
-      page: params.page || undefined,
-      page_size: params.page_size || undefined,
-      filter_type: params.filter_type,
-      order: params.order,
-      search: params.search || undefined,
-      chat_id: params.chat_id || undefined,
-      exclude_ids: params.exclude_ids,
-    },
-    errorMessage: '获取审核列表失败',
-  })
-  return requireSuccess(data, '获取审核列表失败')
-}
-
-/**
- * 批量审核表达方式
- */
-export async function batchReviewExpressions(
-  items: BatchReviewItem[]
-): Promise<BatchReviewResponse> {
-  const data = await backendApi.post<BatchReviewResponse>(`${API_BASE}/review/batch`, {
-    body: { items },
-    errorMessage: '批量审核失败',
-  })
-  return requireSuccess(data, '批量审核失败')
-}
-
-/**
- * 获取 AI 审核记录
- */
-export async function getExpressionReviewLogs(
-  params: {
-    limit?: number
-    passed?: boolean
-    chat_id?: string
-  } = {}
-): Promise<ExpressionReviewLogListResponse> {
-  return backendApi.get<ExpressionReviewLogListResponse>(`${API_BASE}/review/logs`, {
-    query: {
-      limit: params.limit || undefined,
-      passed: params.passed,
-      chat_id: params.chat_id || undefined,
-    },
-    errorMessage: '获取 AI 审核记录失败',
-  })
-}
-
-/**
- * 恢复被 AI 审核拒绝的表达方式
- */
-export async function approveExpressionReviewLog(
-  reviewLogId: string
-): Promise<ExpressionReviewLogApproveResponse> {
-  return backendApi.post<ExpressionReviewLogApproveResponse>(
-    `${API_BASE}/review/logs/${reviewLogId}/approve`,
-    {
-      errorMessage: '恢复表达方式失败',
-    }
-  )
 }

@@ -10,8 +10,8 @@ import { JargonManagementPage } from '../jargon'
 
 export function LearningPage() {
   const { t } = useTranslation()
-  const { tab } = useSearch({ from: '/protected/resource/learning' })
-  const navigate = useNavigate()
+  const { tab } = useSearch({ from: '/protected/' })
+  const navigate = useNavigate({ from: '/' })
   const isMobile = useMediaQuery('(max-width: 1023.98px)')
   const browserHeader = (
     <TabsList aria-label={t('sidebar.menu.learning')} className="w-auto shrink-0">
@@ -34,14 +34,11 @@ export function LearningPage() {
         if (value !== 'expression' && value !== 'jargon' && value !== 'emoji') {
           throw new Error(`未知的学习页签: ${value}`)
         }
-        void navigate({
-          to: '/resource/learning',
-          search: { tab: value },
-        })
+        void navigate({ to: '/', search: () => ({ tab: value }) })
       }}
       className="flex h-full min-h-0 flex-col overflow-hidden"
     >
-      {/* 手机页签独立于各业务页头，审核子视图和表情包网格中也能切换。 */}
+      {/* 手机页签独立于各业务页头。 */}
       {isMobile && (
         <div className="shrink-0 overflow-x-auto px-3 pt-3 sm:px-4">{browserHeader}</div>
       )}

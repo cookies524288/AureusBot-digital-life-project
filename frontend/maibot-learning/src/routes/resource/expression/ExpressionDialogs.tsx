@@ -1,8 +1,7 @@
-import { Database, Info } from 'lucide-react'
+import { Database } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -576,7 +575,6 @@ export function ExpressionEditDialog({
   const createdAt = expression.create_date
     ? new Date(expression.create_date * 1000).toLocaleString('zh-CN')
     : '-'
-  const isCurated = expression.checked && expression.modified_by?.toLowerCase() === 'user'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -644,35 +642,6 @@ export function ExpressionEditDialog({
               </div>
             </div>
 
-            {/* 状态标记 */}
-            <Alert>
-              <Info className="h-4 w-4" />
-              <AlertDescription className="text-xs">
-                <div className="space-y-1">
-                  <p>
-                    <strong>精选状态说明：</strong>
-                  </p>
-                  <p>• 已人工精选：表示该表达方式已由人工确认可使用</p>
-                  <p className="text-muted-foreground mt-2">
-                    根据配置中“仅使用精选表达”设置：
-                    <br />
-                    • 开启时：只有人工精选的项目会被使用
-                    <br />• 关闭时：未精选的项目也会被使用
-                  </p>
-                </div>
-              </AlertDescription>
-            </Alert>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex items-center justify-between space-x-2 rounded-lg border p-4">
-                <div className="space-y-0.5">
-                  <Label className="text-sm font-medium">精选状态</Label>
-                  <p className="text-muted-foreground text-xs">
-                    {isCurated ? '已人工精选' : '未人工精选'}
-                  </p>
-                </div>
-              </div>
-            </div>
           </div>
         </DialogBody>
 

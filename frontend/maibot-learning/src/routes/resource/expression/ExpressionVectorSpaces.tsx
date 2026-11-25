@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/hooks/use-toast'
-import { deleteExpressionVectorSpace, getExpressionVectorSpaces } from '@/lib/expression-api'
+import { deleteExpressionVectorSpace, getExpressionVectorBuildProgress, getExpressionVectorSpaces } from '@/lib/expression-api'
 
 const SPACE_STATES = { active: '使用中', syncing: '同步中', saved: '未使用' }
 const SYNC_STATES = {
@@ -14,6 +14,10 @@ const SYNC_STATES = {
   failed: '同步失败',
   ready: '当前补建任务已结束',
   empty: '尚未建立向量索引',
+}
+const BUILD_STATES = {
+  disabled: '构建已停用', unconfigured: '未配置向量模型', waiting_profile: '等待本机向量配置',
+  pending: '等待补建', running: '正在补建', completed: '补建已完成',
 }
 
 export function ExpressionVectorSpaces() {
@@ -23,6 +27,12 @@ export function ExpressionVectorSpaces() {
   const spaces = useQuery({
     queryKey: ['expression', 'vector-spaces'],
     queryFn: getExpressionVectorSpaces,
+    enabled: open,
+    refetchInterval: open ? 5000 : false,
+  })
+  const progress = useQuery({
+    queryKey: ['expression', 'vector-build-progress'],
+    queryFn: getExpressionVectorBuildProgress,
     enabled: open,
     refetchInterval: open ? 5000 : false,
   })
@@ -52,6 +62,12 @@ export function ExpressionVectorSpaces() {
           {spaces.data?.state && (
             <p className="text-sm text-muted-foreground">{SYNC_STATES[spaces.data.state]}</p>
           )}
+          {progress.data && (
+            <p className="text-sm text-muted-foreground">
+              {BUILD_STATES[progress.data.status]} · {progress.data.completed}/{progress.data.total} · {progress.data.percent}%
+            </p>
+          )}
+          {progress.error && <p role="alert" className="text-sm text-destructive">{progress.error.message}</p>}
           {(spaces.error || spaces.data?.last_error) && (
             <p className="break-words text-sm text-destructive">
               {spaces.error?.message || spaces.data?.last_error}
@@ -94,6 +110,7 @@ export function ExpressionVectorSpaces() {
                         variant="ghost"
                         size="icon"
                         aria-label="删除未使用的向量库"
+                        title={space.can_delete ? undefined : '当前向量空间不可删除'}
                         disabled={!space.can_delete || deletion.isPending}
                         onClick={() => deletion.mutate(space.space_id)}
                       >

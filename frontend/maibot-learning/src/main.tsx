@@ -1,5 +1,5 @@
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router'
+import { createBrowserHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router'
 import i18next from 'i18next'
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -31,7 +31,7 @@ const rootRoute = createRootRoute({ component: Outlet })
 const protectedRoute = createRoute({ getParentRoute: () => rootRoute, id: 'protected', component: Outlet })
 const learningRoute = createRoute({
   getParentRoute: () => protectedRoute,
-  path: '/resource/learning',
+  path: '/',
   validateSearch: (search: Record<string, unknown>) => ({
     tab: search.tab === 'jargon' || search.tab === 'emoji' ? search.tab : 'expression',
   } as { tab: 'expression' | 'jargon' | 'emoji' }),
@@ -53,21 +53,15 @@ function LearningHost() {
     </MobileNavContext.Provider>
   )
 }
-const tab = new URLSearchParams(location.search).get('tab')
 const router = createRouter({
   routeTree: rootRoute.addChildren([protectedRoute.addChildren([learningRoute])]),
-  history: createMemoryHistory({ initialEntries: [`/resource/learning${tab ? `?tab=${encodeURIComponent(tab)}` : ''}`] }),
+  basepath: '/learning-workbench',
+  history: createBrowserHistory(),
 })
 
 declare module '@tanstack/react-router' {
   interface Register { router: typeof router }
 }
-
-router.subscribe('onResolved', ({ toLocation }) => {
-  const current = new URL(location.href)
-  current.searchParams.set('tab', new URLSearchParams(toLocation.searchStr).get('tab') ?? 'expression')
-  history.replaceState(null, '', current)
-})
 
 const setTheme = (theme: unknown) => document.documentElement.classList.toggle('dark', theme === 'dark')
 setTheme(localStorage.getItem('aureus-theme'))

@@ -52,7 +52,6 @@ interface EmojiBrowserProps extends ComponentProps<typeof EmojiList> {
   onPageChange: (page: number) => void
   onPageSizeChange: (size: number) => void
   onUpload: () => void
-  onOpenCache: () => void
   batchActions?: ReactNode
   error?: string
   onRetry: () => void
@@ -75,7 +74,6 @@ export function EmojiBrowser({
   onPageChange,
   onPageSizeChange,
   onUpload,
-  onOpenCache,
   batchActions,
   error,
   onRetry,
@@ -254,7 +252,6 @@ export function EmojiBrowser({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={onOpenCache}>缓存维护</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </>

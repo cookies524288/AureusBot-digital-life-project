@@ -42,6 +42,4 @@ export interface PageState {
   jumpToPage: string
   stats: StatsData
   chatNameMap: Map<string, string>
-  isReviewerOpen: boolean
-  uncheckedCount: number
 }

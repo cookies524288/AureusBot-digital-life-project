@@ -1,11 +1,12 @@
 import { Eye, Hash, RefreshCw, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
-import { useQuery } from '@tanstack/react-query'
+import { skipToken, useQuery } from '@tanstack/react-query'
 
 import { AccentPanel } from '@/components/ui/accent-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DataPagination } from '@/components/ui/data-pagination'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,6 +19,8 @@ import { ExpressionVectorSpaces } from './ExpressionVectorSpaces'
 interface ExpressionClusterBrowserProps {
   onOpenExpression: (expressionId: number) => void
 }
+
+const MEMBER_PAGE_SIZE = 100
 
 function getClusterKey(cluster: ExpressionClusterSummary): string {
   return `${cluster.embedding_profile_marker}:${cluster.cluster_id}`
@@ -101,6 +104,7 @@ function ClusterMemberRow({
 export function ExpressionClusterBrowser({ onOpenExpression }: ExpressionClusterBrowserProps) {
   const [search, setSearch] = useState('')
   const [selectedClusterKey, setSelectedClusterKey] = useState('')
+  const [memberPage, setMemberPage] = useState({ key: '', page: 1 })
 
   const clusterQuery = useQuery({
     queryKey: ['expression', 'clusters'],
@@ -116,6 +120,8 @@ export function ExpressionClusterBrowser({ onOpenExpression }: ExpressionCluster
     filteredClusters.find((cluster) => getClusterKey(cluster) === selectedClusterKey) ??
     filteredClusters[0] ??
     null
+  const activeKey = activeCluster ? getClusterKey(activeCluster) : ''
+  const page = memberPage.key === activeKey ? memberPage.page : 1
 
   const memberQuery = useQuery({
     queryKey: [
@@ -124,13 +130,16 @@ export function ExpressionClusterBrowser({ onOpenExpression }: ExpressionCluster
       'members',
       activeCluster?.embedding_profile_marker,
       activeCluster?.cluster_id,
+      page,
     ],
-    queryFn: () =>
-      getExpressionClusterMembers({
-        cluster_id: activeCluster?.cluster_id ?? 0,
-        profile_marker: activeCluster?.embedding_profile_marker,
-      }),
-    enabled: !!activeCluster,
+    queryFn: activeCluster
+      ? () => getExpressionClusterMembers({
+          cluster_id: activeCluster.cluster_id,
+          profile_marker: activeCluster.embedding_profile_marker,
+          offset: (page - 1) * MEMBER_PAGE_SIZE,
+          limit: MEMBER_PAGE_SIZE,
+        })
+      : skipToken,
   })
 
   const members = memberQuery.data?.data ?? []
@@ -194,6 +203,8 @@ export function ExpressionClusterBrowser({ onOpenExpression }: ExpressionCluster
             <div className="space-y-1 p-2">
               {clusterQuery.isPending ? (
                 <ClusterSkeleton />
+              ) : clusterQuery.isError ? (
+                <p role="alert" className="p-3 text-sm text-destructive">{clusterQuery.error.message}</p>
               ) : !indexExists ? (
                 <div className="px-3 py-8 text-center text-sm text-muted-foreground">暂无向量索引</div>
               ) : filteredClusters.length === 0 ? (
@@ -255,17 +266,19 @@ export function ExpressionClusterBrowser({ onOpenExpression }: ExpressionCluster
                 </div>
               )}
             </div>
-            <div className="text-sm text-muted-foreground tabular-nums">{members.length} 个成员</div>
+            {activeCluster && <div className="text-sm text-muted-foreground tabular-nums">本页 {members.length} 个成员</div>}
           </div>
           <ScrollArea className="min-h-0 flex-1">
-            {memberQuery.isPending ? (
+            {!activeCluster ? (
+              <div className="px-4 py-12 text-center text-sm text-muted-foreground">暂无聚类</div>
+            ) : memberQuery.isError ? (
+              <p role="alert" className="p-4 text-sm text-destructive">{memberQuery.error.message}</p>
+            ) : memberQuery.isPending ? (
               <div className="space-y-2 p-3">
                 {Array.from({ length: 8 }).map((_, index) => (
                   <Skeleton key={index} className="h-14 w-full" />
                 ))}
               </div>
-            ) : !activeCluster ? (
-              <div className="px-4 py-12 text-center text-sm text-muted-foreground">暂无聚类</div>
             ) : members.length === 0 ? (
               <div className="px-4 py-12 text-center text-sm text-muted-foreground">暂无成员</div>
             ) : (
@@ -287,6 +300,8 @@ export function ExpressionClusterBrowser({ onOpenExpression }: ExpressionCluster
               </div>
             )}
           </ScrollArea>
+          {activeCluster && <DataPagination total={activeCluster.size} page={page} pageSize={MEMBER_PAGE_SIZE}
+            onPageChange={nextPage => setMemberPage({ key: activeKey, page: nextPage })} />}
         </div>
       </div>
     </div>
