@@ -1,5 +1,6 @@
 """账本的测试：只追加、按月统计、读写失败的边界（D39，06 号文档 12.2、12.4 节）。"""
 
+import logging
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
@@ -196,6 +197,72 @@ def test_record_is_all_or_nothing(ledger: Ledger) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         ledger.record("replyer", [good, bad])
     assert ledger.entries() == []
+
+
+# ---------- 遇锁重试（D126） ----------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["database is locked", "database is busy"])
+async def test_ledger_write_retries_transient_lock(
+    ledger: Ledger,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    message: str,
+) -> None:
+    monkeypatch.setattr("aureus.safety.ledger.LEDGER_WRITE_RETRY_DELAY_SECONDS", 0.01)
+    real_write = ledger._write_rows
+    calls = 0
+
+    def flaky_write(rows: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise sqlite3.OperationalError(message)
+        real_write(rows)
+
+    monkeypatch.setattr(ledger, "_write_rows", flaky_write)
+    with caplog.at_level(logging.WARNING, logger="aureus.safety.ledger"):
+        await ledger.record_with_retry("replyer", [make_attempt(10, 5)])
+    assert calls == 3
+    assert [entry.prompt_tokens for entry in ledger.entries()] == [10]
+    assert "重试 2 次" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_ledger_write_gives_up_after_two_retries(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("aureus.safety.ledger.LEDGER_WRITE_RETRY_DELAY_SECONDS", 0.01)
+    calls = 0
+
+    def locked_write(rows: Any) -> None:
+        nonlocal calls
+        calls += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ledger, "_write_rows", locked_write)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        await ledger.record_with_retry("replyer", [make_attempt()])
+    assert calls == 3  # 第一次写入 + 最多 2 次重试
+    assert ledger.entries() == []
+
+
+@pytest.mark.asyncio
+async def test_non_lock_errors_do_not_retry(
+    ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    def broken_write(rows: Any) -> None:
+        nonlocal calls
+        calls += 1
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(ledger, "_write_rows", broken_write)
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
+        await ledger.record_with_retry("replyer", [make_attempt()])
+    assert calls == 1
 
 
 # ---------- 按月统计 ----------

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,8 +19,27 @@ from aureus.common.clock import ensure_aware
 from aureus.common.sqlite import open_connection
 from aureus.organs import LOCAL_EXPRESSION_EMBEDDING, CallAttempt
 
+logger = logging.getLogger(__name__)
+
 # 时间固定写成带微秒的 UTC，格式等宽，这样 SQLite 里按字符串比较大小就等于按时间比较。
 _TIMESTAMP_PRECISION = "microseconds"
+
+# 账本写入用独立连接，等锁上限比默认的 1 秒长：后台建索引持续写库，短暂撞车不该
+# 让网关永久锁死（D126）。5 秒是「一次正常写入愿意等多久」，不是无限等。
+LEDGER_WRITE_BUSY_TIMEOUT_SECONDS = 5.0
+# 遇到 database is locked 最多重试 2 次，间隔约 0.5 秒；仍写不进去才按 D40 锁死网关（D126）。
+LEDGER_WRITE_MAX_RETRIES = 2
+LEDGER_WRITE_RETRY_DELAY_SECONDS = 0.5
+
+# 账本一行的列顺序；同步和异步写入共用。
+type _LedgerRow = tuple[str, str, str, str, int, int, int, int, int, str | None, float | None]
+
+_INSERT_LEDGER_SQL = """
+    INSERT INTO ledger
+    (timestamp, organ_id, model, provider, prompt_tokens, completion_tokens,
+     cached_tokens, estimated, succeeded, failure_reason, cost)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
 
 
 @dataclass(frozen=True)
@@ -47,6 +68,12 @@ class LedgerEntry:
 
 def _format_timestamp(moment: datetime) -> str:
     return ensure_aware(moment).isoformat(timespec=_TIMESTAMP_PRECISION)
+
+
+def _is_lock_error(error: sqlite3.OperationalError) -> bool:
+    """SQLite 的等锁超时和锁冲突都是 OperationalError，消息里带 locked 或 busy（D126）。"""
+    message = str(error).lower()
+    return "locked" in message or "busy" in message
 
 
 class Ledger:
@@ -142,6 +169,7 @@ class Ledger:
         """把一次器官调用里的所有模型请求记进账本。
 
         同一次调用的请求在一个事务里写入：要么全记上，要么全不记。
+        网关改用 `record_with_retry`（D126）；这个同步入口留给测试和同步场景。
 
         Args:
             organ_id: 发起请求的器官。
@@ -154,8 +182,51 @@ class Ledger:
         conn = self._require_open()
         if not attempts:
             return
+        rows = self._rows(organ_id, attempts)
+        # `with conn` 在成功时提交、出错时回滚。
+        with conn:
+            conn.executemany(_INSERT_LEDGER_SQL, rows)
+
+    async def record_with_retry(self, organ_id: str, attempts: Sequence[CallAttempt]) -> None:
+        """在工作线程里用独立连接写入，遇到短暂锁等待先重试（D126）。
+
+        和 `record` 的区别：不占用读取连接，等锁上限更长，并且只在 SQLite 报
+        `locked`/`busy` 时最多重试 2 次；磁盘满、只读等错误立即抛出。调用方异步
+        等待结果，事件循环不会被等锁卡住。
+
+        Args:
+            organ_id: 发起请求的器官。
+            attempts: 这次调用里真正发出去的每一次模型请求。空列表什么也不写。
+
+        Raises:
+            RuntimeError: 账本没有打开。
+            sqlite3.Error: 重试后仍写不进去，这次的记录一条都没有写进去。
+        """
+        if not attempts:
+            return
+        # 与 record 一样：没打开就不写，避免关闭后还在后台落盘。
+        self._require_open()
+        rows = self._rows(organ_id, attempts)
+        for retries in range(LEDGER_WRITE_MAX_RETRIES + 1):
+            try:
+                await asyncio.to_thread(self._write_rows, rows)
+            except sqlite3.OperationalError as error:
+                if not _is_lock_error(error) or retries == LEDGER_WRITE_MAX_RETRIES:
+                    raise
+                await asyncio.sleep(LEDGER_WRITE_RETRY_DELAY_SECONDS)
+                continue
+            if retries:
+                logger.warning(
+                    "账本写入遇到 database is locked，重试 %s 次后成功（器官 %s）",
+                    retries,
+                    organ_id,
+                )
+            return
+
+    def _rows(self, organ_id: str, attempts: Sequence[CallAttempt]) -> list[_LedgerRow]:
+        """把尝试列表整理成账本的行；时间在重试之前取一次，重试不改变记录时刻。"""
         timestamp = _format_timestamp(self._clock.now())
-        rows = [
+        return [
             (
                 timestamp,
                 organ_id,
@@ -171,17 +242,18 @@ class Ledger:
             )
             for attempt in attempts
         ]
-        # `with conn` 在成功时提交、出错时回滚。
-        with conn:
-            conn.executemany(
-                """
-                INSERT INTO ledger
-                (timestamp, organ_id, model, provider, prompt_tokens, completion_tokens,
-                 cached_tokens, estimated, succeeded, failure_reason, cost)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+
+    def _write_rows(self, rows: Sequence[_LedgerRow]) -> None:
+        """用独立连接在一个事务里写入；在调用方的工作线程中执行。"""
+        connection = open_connection(
+            self._db_path, busy_timeout=LEDGER_WRITE_BUSY_TIMEOUT_SECONDS
+        )
+        try:
+            # `with connection` 在成功时提交、出错时回滚。
+            with connection:
+                connection.executemany(_INSERT_LEDGER_SQL, rows)
+        finally:
+            connection.close()
 
     def tokens_used_in_month(self, moment: datetime) -> int:
         """查某个时刻所在的月份已经用了多少预算 token（输入加输出）。
