@@ -185,7 +185,7 @@ class EmojiSelector:
         self._vectors = {
             text: vector for text, vector in self._vectors.items() if text in candidates
         }
-        return len(missing) > len(batch), True
+        return len(self._vectors.keys() & candidates.keys()) < len(candidates), True
 
     def _visual_images(self) -> Iterator[tuple[str, bytes]]:
         for entry in self._store.candidates()[:VISUAL_CANDIDATE_LIMIT]:
