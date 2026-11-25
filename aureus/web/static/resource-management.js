@@ -187,7 +187,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     attachment_archived:'归档附件', media_type:'媒体类型', source_key:'原记录编号', reference:'引用',
     evidence:'证据', name:'名称', id:'编号', kind:'类别', status:'状态', profile:'人物画像',
     person_profile_snapshots:'人物画像', person_profile_overrides:'画像正文覆盖',
-    person_profile_alias_overrides:'画像别名覆盖'};
+    person_profile_alias_overrides:'画像别名覆盖', affinity:'好感度', mood:'心情',
+    ignore:'忽略', thread:'话题'};
   const term = key => terms[key] ?? key;
   const instanceLabels = {aureus:'Aureus', 'a-memorix-bundle':'记忆包'};
   const instanceLabel = value => instanceLabels[value] ?? value;
@@ -726,7 +727,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       name && '称呼：' + readable(name),
       nickname && '昵称：' + readable(nickname),
       groupCard != null && groupCard !== '' && '群名片：' + readable(groupCard),
-      account && '账号：' + readable(account),
+      account && '账号：' + (Array.isArray(account) ? account.join(':') : readable(account)),
     ].filter(Boolean).join('\n');
   }
   function profileRaw(profile, ...keys) {
