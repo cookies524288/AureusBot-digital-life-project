@@ -37,7 +37,12 @@ from aureus.organs import (
     OrganRequest,
     OrganResponse,
 )
-from aureus.safety import CallRejectedError, EmergencyStop, PermissionChecker
+from aureus.safety import (
+    BudgetExceededError,
+    EmergencyStop,
+    EnergyDepletedError,
+    PermissionChecker,
+)
 from aureus.timeline import TimelineDatabase
 
 START = datetime(2026, 11, 25, tzinfo=UTC)
@@ -418,10 +423,19 @@ async def test_auto_builder_stops_on_halt_and_model_removal(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_auto_builder_respects_budget_and_energy(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        BudgetExceededError(LOCAL_EXPRESSION_EMBEDDING, "本月额度用完"),
+        EnergyDepletedError(LOCAL_EXPRESSION_EMBEDDING, "今天可选额度用完"),
+    ],
+)
+async def test_auto_builder_respects_budget_and_energy(
+    tmp_path: Path, rejection: Exception
+) -> None:
     """网关拒绝时暂停；条件恢复后从原处继续（验收 4）。"""
     harness = Harness(tmp_path, expressions=3)
-    harness.call.reject = CallRejectedError(LOCAL_EXPRESSION_EMBEDDING, "合成拒绝")
+    harness.call.reject = rejection
     harness.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
     await harness.beat_and_wait()
     assert harness.coverage() == (0, 3)
