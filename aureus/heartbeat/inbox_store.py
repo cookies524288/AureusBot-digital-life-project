@@ -522,11 +522,26 @@ class InboxStore:
             return [_message(row) for row in rows]
 
     def get_visible_message(
-        self, conversation: ConversationKey, identifier: int
+        self,
+        conversation: ConversationKey,
+        identifier: int,
     ) -> InboxMessage | None:
         """用会话完整路由和原件序号读取可见消息；不推进未读进度。"""
         with closing(open_connection(self._path, read_only=True)) as database:
             row = _find_visible_message(database, conversation, identifier)
+        return _message(row) if row is not None else None
+
+    def get_learning_original(
+        self, conversation: ConversationKey, identifier: int, connection: Connection | None = None
+    ) -> InboxMessage | None:
+        """供学习来源复核读取入站原件，包括不对网页公开的私聊。"""
+        if connection is None:
+            with closing(open_connection(self._path, read_only=True)) as database:
+                return self.get_learning_original(conversation, identifier, database)
+        row = connection.execute(
+            f"{_MESSAGES} WHERE {_KEY} AND m.id = ? AND m.direction = 'incoming'",
+            (*conversation.parameters(), identifier),
+        ).fetchone()
         return _message(row) if row is not None else None
 
     def get_visible_image(

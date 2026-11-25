@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from aureus.common import ManualClock
 from aureus.memory.language import LanguageContent, LanguageKind, LanguagePackageRow, LanguageStore
+from aureus.memory.language_matching import ExpressionReviewStatus, JargonStatus
 from aureus.web.language_package_api import register_language_package_routes
 from aureus.web.resource_api import register_resource_routes
 
@@ -33,14 +34,13 @@ def _client(store: LanguageStore) -> TestClient:
     return TestClient(app)
 
 
-def test_expression_reviews_are_append_only_and_gate_reply_candidates(tmp_path: Path) -> None:
+def test_legacy_expression_reviews_do_not_gate_candidates_or_export(tmp_path: Path) -> None:
     path = tmp_path / "language.db"
     store = LanguageStore(path)
     store.open()
     kind = LanguageKind.EXPRESSION
     target = store.add_entry(kind, LanguageContent("月兔收到", "月兔问候", "合成原件"))
     disabled = store.add_entry(kind, LanguageContent("月兔停用", "月兔问候"))
-    jargon = store.add_entry(LanguageKind.JARGON, LanguageContent("月兔黑话", "月兔问候"))
     assert store.update_entry(kind, disabled, None, False)
     package = LanguagePackageRow(LanguageContent("月兔未映射", "月兔问候"), 2, "合成群", "{}")
     assert store.save_package(kind, [package]) == 1
@@ -55,53 +55,37 @@ def test_expression_reviews_are_append_only_and_gate_reply_candidates(tmp_path: 
             response = client.get(LEARNING, params={"kind": kind, **params})
             return {item["entry_key"]: item for item in response.json()["items"]}
 
-        def review(keys: list[str], status: str, reason: str = "") -> tuple[int, object]:
-            response = client.patch(
-                endpoint,
-                headers=ORIGIN,
-                json={
-                    "entry_keys": keys,
-                    "status": status,
-                    "reason": reason,
-                },
-            )
-            return response.status_code, response.json()
-
         def reference(language: LanguageStore = store) -> str:
             return language.expression_reference("月兔问候", "打招呼", (), "合成人物", 1000)
 
-        assert set(entries(review="pending")) == {target, disabled, unmapped}
-        assert not entries(review="approved")
+        assert set(entries()) == {target, disabled, unmapped}
         assert "月兔收到" in reference()
         blocked = client.patch(endpoint, json={"entry_keys": [target], "status": "approved"})
-        assert blocked.status_code == 403
-        assert review([target], "rejected", "  ")[0] == 422
-        for invalid in ("missing", jargon):
-            assert review([target, invalid], "rejected", "合成拒绝理由")[0] == 404
-        assert client.get(endpoint, params={"entry_key": target}).json() == {"items": []}
-        assert review([target, target], "rejected", " 合成拒绝理由 ") == (200, {"changed": 1})
-        [rejected] = entries(review="rejected").values()
+        assert blocked.status_code == 404
+        assert client.get(endpoint, params={"entry_key": target}).status_code == 404
+        assert (
+            store.review_expressions([target], ExpressionReviewStatus.REJECTED, "合成拒绝理由", NOW)
+            == 1
+        )
+        rejected = entries()[target]
         assert rejected["is_enabled"] and not rejected["is_removed"]
         assert rejected["example"] == "合成原件"
         reopened = LanguageStore(path)
         reopened.open()
-        assert not reference(reopened)
+        assert "月兔收到" in reference(reopened)
+        exported = client.get(f"{LEARNING}/package/expression").content.decode()
+        assert "月兔收到" in exported
         assert store.set_removed(kind, [target], True)
-        assert set(entries(review="rejected", removed="true")) == {target}
-        assert store.set_removed(kind, [target], False)
+        assert set(entries(removed="true")) == {target}
         assert not reference()
-        assert review([target, disabled, unmapped], "approved", "复核通过") == (200, {"changed": 3})
-        assert set(entries(review="approved")) == {target, disabled, unmapped}
+        assert "月兔收到" not in client.get(f"{LEARNING}/package/expression").content.decode()
+        assert store.set_removed(kind, [target], False)
         assert "月兔收到" in reference()
         assert "月兔停用" not in reference() and "月兔未映射" not in reference()
-        assert review([target], "pending", "退回待审") == (200, {"changed": 1})
-        assert set(entries(review="pending")) == {target}
-        history = client.get(endpoint, params={"entry_key": target}).json()["items"]
-        assert [(item["status"], item["reason"], item["recorded_at"]) for item in history] == [
-            ("pending", "退回待审", NOW.isoformat()),
-            ("approved", "复核通过", NOW.isoformat()),
-            ("rejected", "合成拒绝理由", NOW.isoformat()),
-        ]
+        with closing(connect(path)) as connection:
+            assert connection.execute(
+                "SELECT status, reason FROM language_expression_reviews"
+            ).fetchall() == [("rejected", "合成拒绝理由")]
 
 
 @pytest.mark.parametrize("kind", list(LanguageKind))
@@ -201,7 +185,9 @@ def test_language_package_preview_round_trip_and_deduplication(
         assert not destination.entries(kind)
 
 
-def test_jargon_classification_is_atomic_and_survives_package_round_trip(tmp_path: Path) -> None:
+def test_legacy_jargon_classification_survives_package_without_gating_meaning(
+    tmp_path: Path,
+) -> None:
     store = LanguageStore(tmp_path / "language.db")
     store.open()
     candidate = store.add_entry(LanguageKind.JARGON, LanguageContent("月兔", ""))
@@ -218,12 +204,17 @@ def test_jargon_classification_is_atomic_and_survives_package_round_trip(tmp_pat
         assert client.patch(endpoint, json=body, headers=ORIGIN).status_code == 404
         assert client.get(LEARNING, params=params).json()["total"] == 2
         body["entry_keys"] = [candidate, denied, candidate]
-        assert client.patch(endpoint, json=body, headers=ORIGIN).json()["changed"] == 2
-        assert client.patch(endpoint, json=body, headers=ORIGIN).json()["changed"] == 0
+        assert client.patch(endpoint, json=body, headers=ORIGIN).json() == {
+            "changed": 2,
+            "status": "non_jargon",
+        }
         assert (
             client.get(LEARNING, params=params).json()["items"][0]["entry_key"] == second_candidate
         )
-        assert not store.jargon_reference(("月兔",), 500)
+        reference = store.jargon_reference(("月兔",), 500)
+        assert "月兔：不作为黑话" in reference and "隐藏释义" not in reference
+        assert store.classify_jargons([denied], JargonStatus.CONFIRMED, NOW) == 1
+        assert "月兔：不作为黑话" in store.jargon_reference(("月兔",), 500)
         payload = client.get(f"{LEARNING}/package/jargon").content
     destination = LanguageStore(tmp_path / "destination.db")
     destination.open()
@@ -243,7 +234,7 @@ def test_jargon_classification_is_atomic_and_survives_package_round_trip(tmp_pat
         assert all(item["pending_scope"] for item in listed)
         assert sorted(item["jargon_status"] for item in listed) == [
             "candidate",
-            "non_jargon",
+            "confirmed",
             "non_jargon",
         ]
 

@@ -635,15 +635,13 @@ def create_app(
 
     def learning_targets() -> dict[str, dict[str, Any]]:
         language_config = learning_language_config
-        enabled = {
-            "enable_learning": resource_language is not None and language_config is not None
-            and language_config.learning_enabled,
-            "use_expression": resource_language is not None and language_config is not None
-            and language_config.recall_enabled and language_config.reference_chars > 0,
-        }
+        recall = (
+            resource_language is not None and language_config is not None
+            and language_config.recall_enabled and language_config.reference_chars > 0
+        )
         targets = {
             json.dumps((platform, "local"), separators=(",", ":")): {
-                "chat_name": name, "platform": platform, "is_group": False, **enabled,
+                "chat_name": name, "platform": platform, "is_group": False,
             }
             for platform, name in (("web", "网页私聊"), ("terminal", "本机终端"))
         }
@@ -654,8 +652,13 @@ def create_app(
                     targets[key.language_scope_key()] = {
                         "chat_name": conversation.name, "platform": key.platform,
                         "is_group": key.kind == "group", "account_id": key.account_id,
-                        "target_id": key.recipient_id, **enabled,
+                        "target_id": key.recipient_id,
                     }
+        for scope, target in targets.items():
+            target["enable_learning"] = (
+                resource_language is not None and resource_language.learning_source_allowed(scope)
+            )
+            target["use_expression"] = recall
         return targets
 
     def learning_scopes() -> dict[str, str]:

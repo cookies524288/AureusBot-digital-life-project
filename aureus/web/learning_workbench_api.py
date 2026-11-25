@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aureus.common import Clock
 from aureus.memory import LanguageKind
+from aureus.memory.emoji import MAX_EMOJI_BYTES
 from aureus.memory.language_package import read_package
 from aureus.web.learning_workbench_service import LearningWorkbench
 
@@ -538,9 +539,9 @@ def register_learning_workbench_routes(
         description: Annotated[str, Form(...)],
     ) -> dict[str, Any]:
         try:
-            data = await file.read(5 * 1024 * 1024 + 1)
-            if len(data) > 5 * 1024 * 1024:
-                raise HTTPException(413, "图片不能超过5 MiB。")
+            data = await file.read(MAX_EMOJI_BYTES + 1)
+            if len(data) > MAX_EMOJI_BYTES:
+                raise HTTPException(413, f"图片不能超过 {MAX_EMOJI_BYTES // (1024 * 1024)} MiB。")
         except HTTPException:
             raise
         except (OSError, ValueError):

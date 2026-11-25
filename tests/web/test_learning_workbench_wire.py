@@ -76,7 +76,9 @@ def test_query_classification_rechecks_source_and_updates_same_store(
         rows = service.language.entries(LanguageKind.JARGON, include_disabled=True)
         assert rows[0].jargon_status == (JargonStatus.CONFIRMED if revoke else JargonStatus.NON_JARGON)
         if not revoke:
-            assert service.language.entries(LanguageKind.JARGON) == []
+            [candidate] = service.language.entries(LanguageKind.JARGON)
+            assert candidate.jargon_status == JargonStatus.NON_JARGON
+            assert candidate.detail == "表示完成" and candidate.can_reference_jargon()
 
 
 def test_single_emoji_delete_is_same_store_reversible_removal(tmp_path: Path) -> None:
@@ -98,11 +100,11 @@ def test_single_emoji_delete_is_same_store_reversible_removal(tmp_path: Path) ->
         assert service.emojis.read_sendable(uploaded.json()["digest"]) == original
 
 
-@pytest.mark.parametrize(("learning_enabled", "recall_enabled", "reference_chars"), [
-    (True, True, 700), (False, True, 0), (True, False, 700),
+@pytest.mark.parametrize(("legacy_learning_enabled", "recall_enabled", "reference_chars"), [
+    (None, True, 700), (False, True, 700), (True, True, 0), (False, False, 700),
 ])
 def test_chat_targets_use_runtime_language_settings_and_current_scope(
-    tmp_path: Path, learning_enabled: bool, recall_enabled: bool, reference_chars: int,
+    tmp_path: Path, legacy_learning_enabled: bool | None, recall_enabled: bool, reference_chars: int,
 ) -> None:
     rig = VectorRig(tmp_path)
     try:
@@ -115,26 +117,28 @@ def test_chat_targets_use_runtime_language_settings_and_current_scope(
                 kind, LanguageContent("合成资料", "合成义项"), origin_scope=key,
                 recorded_at=rig.web.clock.now(),
             )
+        configuration = {"recall_enabled": recall_enabled, "reference_chars": reference_chars}
+        if legacy_learning_enabled is not None:
+            configuration["learning_enabled"] = legacy_learning_enabled
         app = create_app(
             config=rig.web.config, auth=rig.web.auth, sessions=rig.web.sessions,
             channel=WebChannel(FakeHeartbeat()), timeline=rig.web.timeline,
             resource_language=rig.language, inbox_store=rig.inbox,
             allows_inbox_conversation=rig.allowed.__contains__,
-            learning_language_config=LanguageConfig(learning_enabled=learning_enabled,
-                recall_enabled=recall_enabled, reference_chars=reference_chars),
+            learning_language_config=LanguageConfig.model_validate(configuration),
         )
         with TestClient(app) as client:
             client.cookies.set(SESSION_COOKIE, rig.web.sessions.create())
             chats = client.get("/api/webui/expression/chats").raise_for_status().json()["data"]
             assert chats == client.get("/api/webui/expression/chat-targets").json()["data"]
             assert {row["platform"] for row in chats} == {"web", "terminal", "qq"}
-            assert all(row["enable_learning"] == learning_enabled for row in chats)
+            assert all(row["enable_learning"] is True for row in chats)
             assert all(row["use_expression"] == (recall_enabled and reference_chars > 0) for row in chats)
             group, = [row for row in chats if row["platform"] == "qq"]
             assert group == {
                 "chat_id": key, "session_id": key, "chat_name": "合成群 allowed",
                 "platform": "qq", "account_id": "bot", "target_id": "allowed", "is_group": True,
-                "enable_learning": learning_enabled,
+                "enable_learning": True,
                 "use_expression": recall_enabled and reference_chars > 0,
                 "expression_count": 1, "jargon_count": 0,
             }

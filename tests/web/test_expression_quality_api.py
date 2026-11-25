@@ -59,7 +59,16 @@ def test_rescue_preserves_rejection_and_cannot_expand_scope(tmp_path: Path) -> N
             ActorType.PERSON,
             "sender",
             VisibilityScope.GROUP,
-            {"channel": "qq", "inbox_message_id": message.id if valid else 9999},
+            {
+                "channel": "qq",
+                "inbox_message_id": message.id if valid else 9999,
+                "message_id": phrase,
+                "account_id": "bot",
+                "message_type": "group",
+                "recipient_id": recipient,
+                "trust": perception.trust.value,
+                "source_message_id": perception.source_message_id,
+            },
         )
         scope = key.language_scope_key()
         sample = language_sample(record, perception.source_message_id, scope)
@@ -152,8 +161,6 @@ def test_rescue_preserves_rejection_and_cannot_expand_scope(tmp_path: Path) -> N
             assert response.status_code == 200
             assert client.post(target, headers=headers, json=confirmation).status_code == 409
             entry_key = response.json()["entry_key"]
-            assert not store.expression_candidates(scope)
-            store.review_expressions([entry_key], ExpressionReviewStatus.APPROVED, "", NOW)
             assert [entry.entry_key for entry in store.expression_candidates(scope)] == [entry_key]
             assert not store.expression_candidates(other_scope)
             index = ExpressionVectorIndex(path)

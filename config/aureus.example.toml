@@ -395,8 +395,7 @@ config_version = 1
 expression_quality_enabled = false  # 用 judge 每批另检查最多 10 条表达，按可选模型预算计费。
 # 有未标价的本机回环 OpenAI 兼容 text_embedding 路线时，表达自动使用本地向量（D101、D107）。
 recall_enabled = true
-# 可选调用，启用后须配置 summarizer。
-learning_enabled = false
+# 合格来源可自动学习；无可用学习模型时跳过，仍受安全与预算限制。
 reference_chars = 700
 
 [diary]

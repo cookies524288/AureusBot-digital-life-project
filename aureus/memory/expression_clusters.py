@@ -180,10 +180,7 @@ class ExpressionClusterStore:
         current = {
             entry.entry_key: entry
             for entry in language.entries(LanguageKind.EXPRESSION)
-            if entry.entry_key in allowed
-            and not entry.is_removed
-            and not entry.pending_scope
-            and entry.can_reference_expression()
+            if entry.entry_key in allowed and not entry.is_removed and not entry.pending_scope
         }
         visible: dict[tuple[str, int], list[ExpressionClusterMember]] = {}
         for row in rows:

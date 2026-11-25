@@ -206,15 +206,16 @@ def test_learning_browse_combines_explicit_conversation_and_filters(
         assert all(targets[key].startswith("同名群") for key in keys[:2])
         assert targets[first_group] != targets[second_group]
         params = {"kind": kind, "q": "合成场景", "recall": "enabled", "limit": 1}
-        if kind == LanguageKind.EXPRESSION:
-            params["review"] = "approved"
         first = client.get(endpoint, params={**params, "conversation_key": first_group}).json()
-        assert first["total"] == 2 and first["next_offset"] == 1
+        expected = {"群内", "共享"}
+        if kind == LanguageKind.EXPRESSION:
+            expected.add("待审")
+        assert first["total"] == len(expected) and first["next_offset"] == 1
         second = client.get(
-            endpoint, params={**params, "conversation_key": first_group, "offset": 1}
+            endpoint, params={**params, "conversation_key": first_group, "offset": 1, "limit": 2}
         ).json()
-        assert second["total"] == 2 and second["next_offset"] is None
-        assert {item["text"] for item in first["items"] + second["items"]} == {"群内", "共享"}
+        assert second["total"] == len(expected) and second["next_offset"] is None
+        assert {item["text"] for item in first["items"] + second["items"]} == expected
         for key, text in ((second_group, "另一群"), (private, "共享")):
             result = client.get(endpoint, params={**params, "conversation_key": key}).json()
             assert result["total"] == 1 and result["next_offset"] is None

@@ -89,7 +89,7 @@ async def test_expression_cluster_embedding_inputs_require_live_scope_and_permis
     allowed = store.add_entry(EXPRESSION, LanguageContent("明示许可", "允许材料"))
     disabled = store.add_entry(EXPRESSION, LanguageContent("停用", "不得发送"))
     removed = store.add_entry(EXPRESSION, LanguageContent("移除", "不得发送"))
-    rejected = store.add_entry(EXPRESSION, LanguageContent("拒绝", "不得发送"))
+    rejected = store.add_entry(EXPRESSION, LanguageContent("旧审核拒绝", "旧审核不影响授权"))
     store.add_entry(EXPRESSION, LanguageContent("未许可", "不得发送"))
     assert store.update_entry(EXPRESSION, disabled, None, False)
     assert store.set_removed(EXPRESSION, [removed], True)
@@ -102,7 +102,10 @@ async def test_expression_cluster_embedding_inputs_require_live_scope_and_permis
     package_key = f"package:{package.digest}"
     allowed_input = _embedding_text("允许材料", "明示许可")
     package_input = _embedding_text("包内情景", "包材料")
-    fake = FakeExpressionOrgan({allowed_input: (1, 0), package_input: (1, 1)})
+    rejected_input = _embedding_text("旧审核不影响授权", "旧审核拒绝")
+    fake = FakeExpressionOrgan(
+        {allowed_input: (1, 0), rejected_input: (1, 0), package_input: (1, 1)}
+    )
     authorized = (allowed, disabled, removed, rejected, package_key)
 
     async def build(conversation_key: str | None) -> None:
@@ -122,12 +125,12 @@ async def test_expression_cluster_embedding_inputs_require_live_scope_and_permis
     await build(GROUP)
     assert store.package_scope(EXPRESSION, package_key, [], confirm=True) == (GROUP,)
     await build(GROUP)
-    assert [request.embedding_inputs for request in fake.requests] == [
-        (allowed_input,),
-        (allowed_input,),
-        (allowed_input,),
-        (allowed_input, package_input),
-        (allowed_input,),
+    assert [set(request.embedding_inputs) for request in fake.requests] == [
+        {allowed_input, rejected_input},
+        {allowed_input, rejected_input},
+        {allowed_input, rejected_input},
+        {allowed_input, rejected_input, package_input},
+        {allowed_input, rejected_input},
     ]
 
 
@@ -198,8 +201,7 @@ async def test_expression_cluster_recall_rechecks_state_and_content(store: Langu
 
     stamp = datetime(2026, 11, 24, tzinfo=UTC)
     assert store.review_expressions([key], ExpressionReviewStatus.REJECTED, "不采用", stamp) == 1
-    assert not clusters.recall_members(store, GROUP)
-    assert await build() is None
+    assert _member_keys(clusters, store) == {frozenset((key,))}
     assert store.review_expressions([key], ExpressionReviewStatus.APPROVED, "改为采用", stamp) == 1
     assert _member_keys(clusters, store) == {frozenset((key,))}
     assert store.update_entry(EXPRESSION, key, LanguageContent("同名", "新场景"), None)

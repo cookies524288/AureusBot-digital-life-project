@@ -23,7 +23,7 @@ from aureus.memory.learning_workbench_ids import initialize as initialize_workbe
 from aureus.memory.learning_workbench_ids import resolve as resolve_workbench_ids
 
 _DIGEST = re.compile(r"[a-f0-9]{64}")
-MAX_EMOJI_BYTES = 5 * 1024 * 1024
+MAX_EMOJI_BYTES = 6 * 1024 * 1024
 MAX_EMOJI_DESCRIPTION = 500
 MAX_EMOJI_RECOGNITION_TAGS = 5
 MAX_EMOJI_TAGS = 20

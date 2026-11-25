@@ -1,5 +1,17 @@
 # Aureus 交接 · 2026-11-24
 
+## D111 续接现场 · 2026-11-25
+
+管理 API 已合入基础同源工作台契约 `b640aad`、导入导出 `3894c8a`、导入和撤权复验 `70c7faa`、表情维护 `842a959`，以及原页面统计、黑话 query 定性、表情单张移除 `145c51b`。后者在主线用两份工作台 API 专项复跑，15 项通过。真实浏览器接合成库首次核实原表达页可渲染；已授权来源被错误显示为关闭，仍需修复。**前端产物和完整学习运行时尚未合入；不以 API 通过代表整体交付。**
+
+下一步按 `docs/tasks/3.15-modular-learning.md` 的前端操作矩阵继续：
+
+- 前端工作树 `E:/Temp/aureus-d111-learning-web`：表达人工精选/审核资格控件已移除，独立表达质检面板已接宿主质检 API，分页跳页/跨页选择/迟到响应/黑话与表情页签/表情右下审批浏览器专项通过；尚未提交。提交前复跑 `npm run build` 与 `tests/web/test_learning_workbench_browser.py`，复审质量面板分页、来源撤权和撤回挽回，确认不误删独立质检。
+- 管理 API 工作树 `E:/Temp/aureus-315-modular-learning-api`：后续正在接原页面的表达质检、向量空间/补建和簇路由；现有宿主对应接口见 `aureus/web/expression_quality_api.py`、`expression_vector_api.py`、`expression_cluster_api.py`，复用同一资料库和授权，不造第二库。不要把未提交内容直接合入；每个可运行小步专项全绿后串行 cherry-pick。
+- 运行时工作树 `E:/Temp/aureus-d111-learning-runtime`：`f9b4233` 增加每来源 30 秒学习间隔、频率合并、状态和取消保留；未合入。当前未提交返工让器官失败/无效 JSON 的批次保留并可重试，先跑语言运行时专项，再复审异常任务是否读取 `task.exception()`。
+
+不要清理各树已有 `.pytest-*` 临时目录、Prompt 原稿或恢复现场；不自动重启、不启动第二实例。主线 API 小步若有新代码可由维护者用根目录 `Aureus.exe` 重启验收，但 D111 整体尚不能提醒为已完成。公开文档不要写本机 MaiBot 私有路径、账户或聊天内容。
+
 ## 暂停现场 · 交给 Codex（2026-11-24）
 
 维护者要求现在暂停，由 Codex 继续。已停止本轮四个后台任务，不要按旧 D106 自动续开 Claude 工作流。交接核对时 `main` 为 `57144da`；D107 在主线只有决定，没有实现。先运行 `git worktree list` 用下表分支名找回原工作树，再在**各自的树**检查 `git status --short` 和 `git diff`。不要新开空树覆盖现场：三个工作树有未提交内容，含一个未跟踪的测试文件。
