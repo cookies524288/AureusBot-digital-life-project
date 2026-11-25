@@ -47,15 +47,15 @@ config_version = 1
 # inbox_debounce_seconds = 4.0
 # inbox_debounce_max_restarts = 4
 # QQ 表情收集与回复选择。配置 [organs.emoji] 可使用专门的文字模型。
-# qq_emoji_collection_enabled = true
+# qq_emoji_collection_enabled = false
 # qq_emoji_selection_enabled = true
 # 每 10 分钟核对原件，只影响发送候选；不修改登记或原件。
 # qq_emoji_maintenance_enabled = true
-# qq_emoji_registration_limit = 64
+# qq_emoji_registration_limit = 500
 # 手动请求替换建议才调用表情器官，该调用可能收费；默认关闭。
 # qq_emoji_replacement_suggestion_enabled = false
 # 可选视觉选择改用 vlm 查看候选拼图；关闭时，有 text_embedding 就优先语义匹配，否则按文字选择。
-# qq_emoji_visual_enabled = false
+# qq_emoji_visual_enabled = true
 # qq_emoji_semantic_refresh_seconds = 300.0
 # qq_emoji_semantic_threshold = 0.3
 # 节省档时带上最近多少条对话；低电量和透支保护时带多少条。都不会超过 recent_message_limit。
@@ -392,7 +392,7 @@ config_version = 1
 
 # 每日日记（D80）：失败当天不再试，不补写；与记忆开关相互独立。
 [language]
-expression_quality_enabled = false  # 用 judge 每批另检查最多 10 条表达，按可选模型预算计费。
+expression_quality_enabled = true  # 用 judge 每批另检查最多 10 条表达，按可选模型预算计费。
 # 有未标价的本机回环 OpenAI 兼容 text_embedding 路线时，表达自动使用本地向量（D101、D107）。
 recall_enabled = true
 # 合格来源可自动学习；无可用学习模型时跳过，仍受安全与预算限制。

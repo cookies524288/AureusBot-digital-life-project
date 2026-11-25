@@ -24,7 +24,7 @@ CONFIG_FORMAT_VERSION = 1
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 DEFAULT_WEB_PORT = 28976
-DEFAULT_EMOJI_REGISTRATION_LIMIT = 64
+DEFAULT_EMOJI_REGISTRATION_LIMIT = 500
 
 
 class ConfigError(Exception):
@@ -85,12 +85,12 @@ class HeartbeatConfig(BaseModel):
     inbox_debounce_seconds: float = Field(default=4.0, gt=0, le=60, allow_inf_nan=False)
     inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
     plan_organ: ClassVar[str] = "planner"
-    qq_emoji_collection_enabled: bool = True
+    qq_emoji_collection_enabled: bool = False
     qq_emoji_selection_enabled: bool = True
     qq_emoji_maintenance_enabled: bool = True
     qq_emoji_registration_limit: int = Field(default=DEFAULT_EMOJI_REGISTRATION_LIMIT, ge=1)
     qq_emoji_replacement_suggestion_enabled: bool = False
-    qq_emoji_visual_enabled: bool = False
+    qq_emoji_visual_enabled: bool = True
     qq_emoji_semantic_refresh_seconds: float = Field(default=300.0, gt=0, allow_inf_nan=False)
     qq_emoji_semantic_threshold: float = Field(default=0.3, ge=0, le=1, allow_inf_nan=False)
     # 节省档、低电量（含透支保护）时带上最近多少条对话；都不会超过 recent_message_limit。
@@ -643,7 +643,7 @@ class LanguageConfig(BaseModel):
     recall_enabled: bool = True
     # 器官绑定固定（D107）；向量索引随嵌入模型自动启用，不再有开关。
     organ: ClassVar[str] = "summarizer"
-    expression_quality_enabled: bool = False
+    expression_quality_enabled: bool = True
     # 质检固定走 judge：原默认为空时，开启质检会拒收全部新表达。
     expression_quality_organ: ClassVar[str] = "judge"
     reference_chars: int = Field(default=700, ge=0, le=2000)

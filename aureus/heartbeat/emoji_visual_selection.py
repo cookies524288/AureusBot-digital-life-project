@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 from aureus.memory import MAX_EMOJI_BYTES
 from aureus.organs import CallPurpose, ModelPreference, OrganRequest
 
-VISUAL_CANDIDATE_LIMIT = 25
+VISUAL_CANDIDATE_LIMIT = 30
 _TILE_SIZE = 256
 _TILE_GAP = 12
 _BADGE_OFFSET = 14

@@ -28,6 +28,28 @@ def rig(tmp_path: Path) -> Iterator[ConfigRig]:
         made.close()
 
 
+def test_learning_defaults_preserve_explicit_values_until_restored(rig: ConfigRig) -> None:
+    fields = {
+        "language.expression_quality_enabled": (False, True),
+        "heartbeat.qq_emoji_visual_enabled": (False, True),
+        "heartbeat.qq_emoji_collection_enabled": (True, False),
+        "heartbeat.qq_emoji_registration_limit": (64, 500),
+    }
+    overrides: dict[str, dict[str, bool | int]] = {}
+    fresh = rig.client.get("/api/config").json()["config"]
+    for path, (old, default) in fields.items():
+        section, name = path.split(".")
+        assert fresh[section][name] == default
+        overrides.setdefault(section, {})[name] = old
+    assert rig.client.put("/api/config", json={"changes": overrides}).status_code == 200
+    for path, (old, default) in fields.items():
+        section, name = path.split(".")
+        assert load_runtime_config(rig.paths).model_dump()[section][name] == old
+        restored = rig.client.post(RUNTIME_RESTORE, json={"field": path})
+        assert restored.json()["value"] == default
+        assert load_runtime_config(rig.paths).model_dump()[section][name] == default
+
+
 def test_runtime_restore_removes_only_that_override_and_restart_reads_new_defaults(
     rig: ConfigRig, monkeypatch: pytest.MonkeyPatch
 ) -> None:

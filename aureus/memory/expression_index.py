@@ -27,7 +27,7 @@ from aureus.memory.language_matching import LanguageEntry, format_language, norm
 
 MIN_INDEXED_EXPRESSIONS = 10
 EXPRESSION_BACKFILL_BATCH = 200
-MAX_VECTOR_CANDIDATES = 50
+MAX_VECTOR_CANDIDATES = 40
 _CLUSTER_POOL_SIZE = 16
 _MAX_CLUSTERS = 80
 _ITEM_WEIGHT = 0.875

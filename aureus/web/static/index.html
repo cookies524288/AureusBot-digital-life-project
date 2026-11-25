@@ -3855,7 +3855,7 @@ const CFG_FIELDS = {
   'memory.consolidation_half_life_days': ['记忆权重半衰期（天）', '整理记忆时，按这个时长计算时间衰减：经过一个半衰期，记忆的时间权重减半。'],
   'memory.consolidation_extract_enabled': ['整理时提取记忆要点', '开启后台记忆整理后，是否再用总结器官提取事实或关系。'],
   'language.recall_enabled': ['回复参考习得语言', '回复前检索可用的表达方式和黑话。配好本机嵌入模型后，自动使用表达向量；没有向量结果时使用普通候选。'],
-  'language.expression_quality_enabled': ['独立质检表达', '默认关闭。开启后，判断器官每批最多额外检查 10 个表达，按可选模型预算计费。不合适、检查失败或预算拒绝的条目不入库；质检通过的条目无需人工批准。'],
+  'language.expression_quality_enabled': ['独立质检表达', '默认开启。判断器官每批最多额外检查 10 个表达，按可选模型预算计费。不合适、检查失败或预算拒绝的条目不入库；质检通过的条目无需人工批准。'],
   'language.reference_chars': ['语言参考字数上限', '每种语言参考块最多可带多少字符；设为零时不带入参考。'],
   'diary.enabled': ['日记', '是否根据当天的经历写日记。'],
   'diary.write_after_hour': ['日记起写时间', '每天几点以后可以开始写日记。'],
