@@ -584,11 +584,15 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
     resources = tmp_path / "resource-management.js"
     memory_graph = tmp_path / "memory-graph.js"
     memory_flow = tmp_path / "memory-flow-transfer.js"
+    inbox_retention = tmp_path / "inbox-retention.js"
+    memory_bundles = tmp_path / "memory-bundles.js"
     tile = tmp_path / "organ-tile.png"
     graph.write_text("first()", encoding="utf-8")
     resources.write_text("loadFirst()", encoding="utf-8")
     memory_graph.write_text("graphFirst()", encoding="utf-8")
     memory_flow.write_text("transferFirst()", encoding="utf-8")
+    inbox_retention.write_text("retentionFirst()", encoding="utf-8")
+    memory_bundles.write_text("bundlesFirst()", encoding="utf-8")
     tile.write_bytes(b"first tile")
     monkeypatch.setattr("aureus.web.server.INDEX_PAGE", page)
     running = Rig(tmp_path)
@@ -598,6 +602,8 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         resources.write_text("loadSecond()", encoding="utf-8")
         memory_graph.write_text("graphSecond()", encoding="utf-8")
         memory_flow.write_text("transferSecond()", encoding="utf-8")
+        inbox_retention.write_text("retentionSecond()", encoding="utf-8")
+        memory_bundles.write_text("bundlesSecond()", encoding="utf-8")
         tile.write_bytes(b"second tile")
         client = running.client()
         assert client.get("/").text == "<p>first</p>"
@@ -605,6 +611,8 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         assert client.get("/assets/resource-management.js").text == "loadFirst()"
         assert client.get("/assets/memory-graph.js").text == "graphFirst()"
         assert client.get("/assets/memory-flow-transfer.js").text == "transferFirst()"
+        assert client.get("/assets/inbox-retention.js").text == "retentionFirst()"
+        assert client.get("/assets/memory-bundles.js").text == "bundlesFirst()"
         assert client.get("/assets/organ-tile.png").content == b"first tile"
     finally:
         running.close()
@@ -619,11 +627,26 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         assert client.get("/assets/resource-management.js").text == "loadSecond()"
         assert client.get("/assets/memory-graph.js").text == "graphSecond()"
         assert client.get("/assets/memory-flow-transfer.js").text == "transferSecond()"
+        assert client.get("/assets/inbox-retention.js").text == "retentionSecond()"
+        assert client.get("/assets/memory-bundles.js").text == "bundlesSecond()"
         image = client.get("/assets/organ-tile.png")
         assert image.headers["Content-Type"] == "image/png"
         assert image.content == b"second tile"
     finally:
         restarted.close()
+
+
+def test_every_asset_referenced_by_the_page_is_served(rig: Rig) -> None:
+    """页面引用的每个 /assets 地址都要有路由；脚本以 JavaScript 返回。"""
+    page = Path(__file__).resolve().parents[2] / "aureus/web/static/index.html"
+    assets = sorted(set(re.findall(r"/assets/[A-Za-z0-9._/-]+", page.read_text(encoding="utf-8"))))
+    assert assets
+    with rig.client() as client:
+        for asset in assets:
+            response = client.get(asset)
+            assert response.status_code == 200, asset
+            if asset.endswith(".js"):
+                assert response.headers["content-type"].startswith("text/javascript"), asset
 
 
 def test_the_project_logo_is_embedded_and_used_without_a_new_route(rig: Rig) -> None:

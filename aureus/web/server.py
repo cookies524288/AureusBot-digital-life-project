@@ -821,6 +821,8 @@ def create_app(
     resources_ui = INDEX_PAGE.with_name("resource-management.js").read_bytes()
     memory_graph_ui = INDEX_PAGE.with_name("memory-graph.js").read_bytes()
     memory_flow_ui = INDEX_PAGE.with_name("memory-flow-transfer.js").read_bytes()
+    inbox_retention_ui = INDEX_PAGE.with_name("inbox-retention.js").read_bytes()
+    memory_bundles_ui = INDEX_PAGE.with_name("memory-bundles.js").read_bytes()
     organ_tile = INDEX_PAGE.with_name("organ-tile.png").read_bytes()
 
     @app.get("/", include_in_schema=False)
@@ -854,6 +856,18 @@ def create_app(
     async def memory_flow_asset() -> Response:
         return Response(
             memory_flow_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/assets/inbox-retention.js", include_in_schema=False)
+    async def inbox_retention_asset() -> Response:
+        return Response(
+            inbox_retention_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/assets/memory-bundles.js", include_in_schema=False)
+    async def memory_bundles_asset() -> Response:
+        return Response(
+            memory_bundles_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
         )
 
     @app.get("/assets/ark-pixel.woff2", include_in_schema=False)
