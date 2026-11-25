@@ -168,7 +168,7 @@ export async function batchSetJargonStatus(
   isJargon: boolean
 ): Promise<JargonUpdateResponse> {
   return backendApi.post<JargonUpdateResponse>(`${API_BASE}/batch/set-jargon`, {
-    query: { ids: jargonIds, is_jargon: isJargon },
+    body: { ids: jargonIds, is_jargon: isJargon },
     errorMessage: '批量设置黑话状态失败',
   })
 }
