@@ -2508,7 +2508,7 @@ function renderInboxView() {
     if (!items.length) continue;
     list.append(el('h4', {text:label}), ...items.map(item => el('button', {
       type:'button', class:'btn inbox-conversation', 'aria-pressed':String(inbox.selected && inboxKey(inbox.selected) === inboxKey(item) || false),
-      'data-conversation':inboxKey(item), onclick:() => { showInboxThreadPane(); selectInboxConversation(item); },
+      'data-conversation':inboxKey(item), onclick:() => { showInboxThreadPane(); return selectInboxConversation(item); },
     }, el('span', {text:item.name}), item.unread_count ? el('span', {
       class:'inbox-unread', text:item.unread_count > 99 ? '99+' : String(item.unread_count),
       'aria-label':item.unread_count + ' 条未读消息',
@@ -2843,7 +2843,7 @@ $('inbox-open-qq').addEventListener('pointercancel', cancelQQLongPress);
 $('inbox-open-qq').addEventListener('pointerleave', cancelQQLongPress);
 $('inbox-open-qq').addEventListener('click', () => {
   if (qqLongPressFired) { qqLongPressFired = false; return; }
-  openInboxView('qq');
+  return openInboxView('qq');
 });
 $('inbox-open-qq').addEventListener('contextmenu', event => {
   event.preventDefault();
