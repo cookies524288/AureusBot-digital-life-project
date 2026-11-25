@@ -47,6 +47,7 @@ import {
   getEmojiStats,
   registerEmoji,
 } from '@/lib/emoji-api'
+import { usePortalContainer } from '@/lib/portal-container'
 import { cn } from '@/lib/utils'
 import type { Emoji, EmojiStats } from '@/types/emoji'
 
@@ -69,6 +70,8 @@ function alignEmojiPageSize(preferredSize: number, columns: number): number {
 }
 
 export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNode }) {
+  // 内联到主页面时，手机批量操作栏挂进影子树，否则会丢掉工作台样式。
+  const portalContainer = usePortalContainer() ?? document.body
   const [selectedEmoji, setSelectedEmoji] = useState<Emoji | null>(null)
   const [detailDialogOpen, setDetailDialogOpen] = useState(false)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
@@ -581,7 +584,7 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
               </button>
             ))}
           </div>,
-          document.body
+          portalContainer
         )}
 
       {/* 手机筛选弹层：排序、格式与每页数量 */}

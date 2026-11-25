@@ -2,6 +2,7 @@ import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 
 import { cn } from '@/lib/utils'
+import { usePortalContainer } from '@/lib/portal-container'
 import { X } from 'lucide-react'
 
 import { isEditableTarget, matchesShortcut } from '@/lib/keyboard'
@@ -71,8 +72,10 @@ const DialogContent = React.forwardRef<
       ...props
     },
     ref
-  ) => (
-    <DialogPortal>
+  ) => {
+    const container = usePortalContainer()
+    return (
+    <DialogPortal container={container}>
       {!hideOverlay && <DialogOverlay className={overlayClassName} />}
       <DialogPrimitive.Content
         ref={ref}
@@ -131,7 +134,8 @@ const DialogContent = React.forwardRef<
         )}
       </DialogPrimitive.Content>
     </DialogPortal>
-  )
+    )
+  }
 )
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
