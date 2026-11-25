@@ -185,7 +185,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     retracted:'已撤回', deleted:'已删除', missing:'缺失', image_assets:'图片资产', images:'图片', message:'消息',
     summary_facts:'会话总结事实', platform_message:'平台消息定位', platform_image:'图片组件定位',
     attachment_archived:'归档附件', media_type:'媒体类型', source_key:'原记录编号', reference:'引用',
-    evidence:'证据', name:'名称', id:'编号', kind:'类别', status:'状态', profile:'人物画像'};
+    evidence:'证据', name:'名称', id:'编号', kind:'类别', status:'状态', profile:'人物画像',
+    person_profile_snapshots:'人物画像', person_profile_overrides:'画像正文覆盖',
+    person_profile_alias_overrides:'画像别名覆盖'};
   const term = key => terms[key] ?? key;
   const instanceLabels = {aureus:'Aureus', 'a-memorix-bundle':'记忆包'};
   const instanceLabel = value => instanceLabels[value] ?? value;
@@ -214,8 +216,33 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     return [instanceLabel(source.instance), term(source.table ?? source.kind)]
       .filter(value => value != null && value !== '').join(' · ') || readable(source);
   }
+  // 长期记忆卡片：类型、来源和时间的展示口径与查询接口返回的字段一致（D122）。
+  function memoryCategory(item) {
+    return item.labels?.[0] ?? item.source?.table ?? 'live';
+  }
+  function memoryType(item) {
+    return labels[memoryCategory(item)] ?? item.source?.table ?? '经历';
+  }
+  function memorySource(item) {
+    return (item.source && sourceText(item.source)) || '本地经历';
+  }
+  // 画像的 occurred_at/expires_at 是秒级时间戳；文字记录的时间是 ISO 字符串，两者都兼容。
+  function fmtStamp(value) {
+    if (value == null || value === '') return '';
+    const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
+    return isNaN(date) ? String(value) : fmtTime(date.toISOString(), true);
+  }
+  function typeBadge(type, category) {
+    return el('span', {class:'memory-type-badge memory-type-' + category, text:type});
+  }
+  function section(title, value) {
+    const text = value == null || value === '' ? '暂无'
+      : typeof value === 'string' ? value : readable(value);
+    return el('section', {class:'memory-detail-section'},
+      el('h4', {text:title}), el('p', {class:text === '暂无' ? 'muted' : undefined, text}));
+  }
   function detail(title, ...content) {
-    openEditor(title, el('div', {class:'stack resource-detail'}, ...content));
+    openEditor(title, el('div', {class:'stack resource-detail'}, ...content), true);
   }
   // 列表行：主文本在上，状态、来源等辅助信息另起一行，长文本最多折两行（批次 3）。
   function record(title, open, box) {
@@ -283,7 +310,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   const selectedCount = $('memory-selected-count');
   let removedView = false;
   function syncSelection() {
-    const boxes = [...memory.list.querySelectorAll('input[type=checkbox]')];
+    const boxes = [...memory.list.querySelectorAll('input[type=checkbox]:not(:disabled)')];
     selection.disabled = !boxes.length;
     selection.checked = boxes.length > 0 && boxes.every(box => box.checked);
     selection.indeterminate = selected.size > 0 && !selection.checked;
@@ -300,12 +327,13 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function locationKey({instance, role, table, key}) {
     return JSON.stringify([instance, role, table, key]);
   }
-  function lifecycleActions(item) {
+  function lifecycleActions(item, omitted = []) {
     const relation = item.source.table === 'relations';
-    const operations = item.status !== 'active' ? [] : item.is_removed ? ['restore'] : relation ? [
+    const operations = (item.status !== 'active' ? [] : item.is_removed ? ['restore'] : relation ? [
       item.is_frozen ? 'unfreeze' : 'freeze', item.is_protected ? 'unprotect' : 'protect',
       ...(!item.is_frozen && !item.is_protected ? [item.is_enabled ? 'disable' : 'enable', 'remove'] : []),
-    ] : ['correct', item.is_enabled ? 'disable' : 'enable', 'remove'];
+    ] : ['correct', item.is_enabled ? 'disable' : 'enable', 'remove'])
+      .filter(operation => !omitted.includes(operation));
     return actions('记忆检修', ...operations.map(operation =>
       action(maintenanceLabels[operation], () => lifecycleForm(item, operation))),
     action('纠错历史', () => lifecycleHistory(item)));
@@ -427,37 +455,94 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         : '恢复仅撤销移除，不会启用原已停用、过期或受限的记录。'}),
       el('div', {class:'row'}, action('取消', () => $('editor-dialog').close()), button)));
   }
-  function renderMemory(item) {
-    const type = labels[item.labels?.[0] ?? item.source?.table ?? 'live'] || item.source?.table;
-    if (item.kind === 'summary') return renderSummaryFact(item);
-    const relation = item.source?.table === 'relations';
-    const guided = ['fact_claims', 'relations', 'episodes'].includes(item.source?.table);
-    const box = guided ? null : el('input', {type:'checkbox', 'aria-label':'选择' + type});
-    box?.addEventListener('change', () => {
-      if (box.checked) selected.set(box, item); else selected.delete(box);
-      syncSelection();
-    });
+  function memoryRelated(item) {
+    const lines = [];
+    if (item.actor_label) lines.push('人物：' + item.actor_label);
+    if (item.person_key) lines.push('人物键：' + item.person_key);
+    for (const entry of item.evidence ?? []) {
+      lines.push([term(entry.kind), sourceText(entry.source), term(entry.status)]
+        .filter(Boolean).join(' · '));
+    }
+    return lines.join('\n');
+  }
+  function openGraphFor(item) {
+    const text = (item.actor_label || item.person_key || item.text || '').trim().split(/\s+/)[0] || '';
+    $('editor-dialog').close();
+    showQuery('graph');
+    graph.search(text.slice(0, 60));
+  }
+  // 详情操作沿用现有能力：图谱跳到关系图；修正和删除按记录类型走既有接口或检修预览。
+  function memoryActions(item, {guided, relation}) {
+    const buttons = [action('图谱', () => openGraphFor(item))];
+    if (item.is_removed) {
+      if (!guided) buttons.push(action('恢复', () => confirmRemoval([item], false)));
+    } else {
+      if (!relation) buttons.push(action('修正', () => guided ? lifecycleForm(item, 'correct') : editMemories([item])));
+      if (!relation || (!item.is_frozen && !item.is_protected)) {
+        buttons.push(action('删除', () => guided ? lifecycleForm(item, 'remove') : confirmRemoval([item], true)));
+      }
+    }
+    return actions('记忆操作', ...buttons);
+  }
+  function memoryCard(item, open, box, titleOverride) {
+    const category = memoryCategory(item);
+    const type = memoryType(item);
     const status = item.is_removed ? '已移除' : item.is_recallable ? '' : '未参与召回';
-    const meta = [type, item.recorded_at && fmtTime(item.recorded_at, true), status].filter(Boolean).join(' · ');
-    return record({text:item.text.slice(0, 100) || '空文本', meta},
-      () => detail(type || '文字记忆', field('正文', item.text), field('原件', item.original_text),
-        field('人物', item.actor_label), field('时间', item.recorded_at && fmtTime(item.recorded_at, true)),
-        field('召回状态', item.is_recallable ? '参与召回' : '不参与召回'),
-        relation && field('关系状态', item.is_frozen ? '已冻结' : item.is_protected ? '受保护' : '正常'),
-        field('来源', sourceText(item.source)),
-        field('证据', item.evidence?.map(entry => [term(entry.kind),
-          sourceText(entry.source), term(entry.status)].filter(Boolean).join(' · ')).join('\n')),
-        guided ? lifecycleActions(item) : !item.is_removed && el('div', {class:'row'}, action('修正', () => editMemories([item])),
-          action(item.is_enabled ? '停用召回' : '恢复召回', async event => {
+    const title = titleOverride || item.actor_label || type;
+    return el('article', {class:'memory-card' + (item.is_removed ? ' is-removed' : '')},
+      box,
+      el('div', {class:'memory-card-main'},
+        el('div', {class:'memory-card-head'},
+          typeBadge(type, category),
+          el('button', {class:'memory-card-title', type:'button', text:title, onclick:open}),
+          status && el('span', {class:'memory-card-status', text:status})),
+        el('p', {class:'memory-card-summary', text:item.text || '空文本'}),
+        el('div', {class:'memory-card-meta'},
+          el('span', {class:'memory-source-tag', text:memorySource(item)}),
+          item.recorded_at && el('time', {datetime:item.recorded_at, text:fmtTime(item.recorded_at, true)}))));
+  }
+  function memoryDetail(item, {guided, relation}) {
+    const type = memoryType(item);
+    const source = memorySource(item);
+    const body = el('div', {class:'stack resource-detail memory-detail'},
+      el('div', {class:'memory-detail-meta'}, typeBadge(type, memoryCategory(item)),
+        el('span', {class:'muted', text:source})),
+      field('类型与来源', type + ' · ' + source),
+      field('时间', item.recorded_at ? fmtTime(item.recorded_at, true) : '暂无'),
+      field('全文', item.text || '暂无'),
+      field('来源', source),
+      field('关联条目', memoryRelated(item) || '暂无'),
+      field('原件', item.original_text),
+      field('召回状态', item.is_recallable ? '参与召回' : '不参与召回'),
+      relation && field('关系状态', item.is_frozen ? '已冻结' : item.is_protected ? '受保护' : '正常'),
+      memoryActions(item, {guided, relation}),
+      guided ? lifecycleActions(item, ['correct', 'remove'])
+        : !item.is_removed && el('div', {class:'row resource-actions'}, action(item.is_enabled ? '停用召回' : '恢复召回',
+          async event => {
             const button = event.currentTarget;
             if (await change('/api/resources/memory', 'PATCH', {...memoryTarget(item), is_enabled:!item.is_enabled},
               memory.read, button) && button.isConnected) $('editor-dialog').close();
-          }))), box);
+          })),
+      el('div', {class:'row resource-actions'}, action('关闭', () => $('editor-dialog').close())));
+    detail(type || '文字记忆', body);
+  }
+  function renderMemory(item) {
+    if (item.kind === 'summary') return renderSummaryFact(item);
+    const type = memoryType(item);
+    const relation = item.source?.table === 'relations';
+    const guided = ['fact_claims', 'relations', 'episodes'].includes(item.source?.table);
+    const box = el('input', {type:'checkbox', 'aria-label':'选择' + type, disabled:guided,
+      title:guided ? '此类型在详情中修正或移除' : null});
+    if (!guided) box.addEventListener('change', () => {
+      if (box.checked) selected.set(box, item); else selected.delete(box);
+      syncSelection();
+    });
+    return memoryCard(item, () => memoryDetail(item, {guided, relation}), box);
   }
   function renderSummaryFact(item) {
-    const title = item.text || (item.status === 'superseded' ? '已更正的事实' : '没有证据的事实');
-    const meta = ['会话总结事实', item.status === 'superseded' ? '已更正' : term(item.status)].filter(Boolean).join(' · ');
-    return record({text:title, meta}, async () => {
+    const box = el('input', {type:'checkbox', 'aria-label':'选择会话总结事实', disabled:true,
+      title:'会话总结事实在详情中维护'});
+    return memoryCard(item, async () => {
       const state = el('p', {class:'muted', role:'status', text:'正在复核事实来源…'});
       detail('会话总结事实', state);
       const params = new URLSearchParams({source:locationKey(item.source)});
@@ -469,12 +554,23 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         return;
       }
       const fact = response.data;
-      detail('会话总结事实', field('事实', fact.text), field('事实来源', sourceText(fact.source)),
+      const merged = {...item, ...fact};
+      const source = memorySource(merged);
+      const body = el('div', {class:'stack resource-detail memory-detail'},
+        el('div', {class:'memory-detail-meta'}, typeBadge('事实', 'fact_claims'),
+          el('span', {class:'muted', text:source})),
+        field('类型与来源', '会话总结事实 · ' + source),
+        field('时间', merged.recorded_at ? fmtTime(merged.recorded_at, true) : '暂无'),
+        field('全文', fact.text || '暂无'),
+        field('来源', source),
+        field('关联条目', memoryRelated(merged) || '暂无'),
         field('状态', fact.status === 'superseded' ? '已更正' : term(fact.status)),
-        field('证据', fact.evidence.map(entry => [term(entry.kind),
-          sourceText(entry.source)].filter(Boolean).join(' · ')).join('\n') || '没有可用证据'),
-        lifecycleActions({...item, ...fact}));
-    });
+        field('召回状态', merged.is_recallable ? '参与召回' : '不参与召回'),
+        memoryActions(merged, {guided:true, relation:false}),
+        lifecycleActions(merged, ['correct', 'remove']),
+        el('div', {class:'row resource-actions'}, action('关闭', () => $('editor-dialog').close())));
+      detail('会话总结事实', body);
+    }, box, '会话总结事实');
   }
   const counts = $('memory-counts');
   const memory = searchable({panel:$('memory-query-text'), id:'memory', render:renderMemory, prepare:() => {
@@ -501,7 +597,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   toggleRemoved.addEventListener('click', () => confirmRemoval([...selected.values()], !removedView));
   selection.addEventListener('change', () => {
     const checked = selection.checked;
-    for (const box of memory.list.querySelectorAll('input[type=checkbox]')) {
+    for (const box of memory.list.querySelectorAll('input[type=checkbox]:not(:disabled)')) {
       box.checked = checked;
       box.dispatchEvent(new Event('change'));
     }
