@@ -303,6 +303,66 @@ def test_emoji_review_is_independent_and_persistent(tmp_path: Path) -> None:
         assert client.get(f"/api/webui/emoji/{identifier}/thumbnail").content == data
 
 
+def test_emoji_upload_register_ban_remove_stats_and_cache_contract(tmp_path: Path) -> None:
+    client, service, _scopes = _client(tmp_path)
+    with Image.new("RGB", (8, 8), "blue") as image, BytesIO() as buffer:
+        image.save(buffer, format="PNG")
+        data = buffer.getvalue()
+    with client:
+        uploaded = client.post(
+            "/api/webui/emoji/upload",
+            files={"file": ("fixture.png", data, "image/png")},
+            data={"description": "庆祝,蓝色"},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        digest = uploaded.json()["digest"]
+        rows = client.get("/api/webui/emoji/list").json()["data"]
+        [row] = [item for item in rows if item["emoji_hash"] == digest]
+        identifier = row["id"]
+        assert row["is_registered"] is True
+        assert client.patch(f"/api/webui/emoji/{identifier}/review", json={
+            "verdict": "rejected",
+        }).is_success
+        assert client.post(f"/api/webui/emoji/{identifier}/ban").is_success
+        assert service.emojis is not None and service.emojis.read_sendable(digest) is None
+        assert client.post(f"/api/webui/emoji/{identifier}/register").status_code == 422
+        assert client.post(
+            "/api/webui/emoji/batch/delete", json={"emoji_ids": [identifier]}
+        ).is_success
+        assert client.get(f"/api/webui/emoji/{identifier}").status_code == 404
+        removed = client.get("/api/webui/emoji/list", params={"removed": True}).json()
+        assert any(item["id"] == identifier for item in removed["data"])
+        stats = client.get("/api/webui/emoji/stats/summary")
+        assert stats.status_code == 200 and stats.json()["data"]["discarded"] == 1
+        assert client.get("/api/webui/emoji/thumbnail-cache/stats").json()["enabled"] is False
+        assert client.post("/api/webui/emoji/thumbnail-cache/cleanup").status_code == 409
+        assert client.post("/api/webui/emoji/batch/upload", content=b"unused").status_code == 409
+
+
+def test_emoji_upload_accepts_exact_dashboard_form_data_contract(tmp_path: Path) -> None:
+    client, service, _scopes = _client(tmp_path)
+    with Image.new("RGB", (8, 8), "green") as image, BytesIO() as buffer:
+        image.save(buffer, format="PNG")
+        data = buffer.getvalue()
+    with client:
+        uploaded = client.post(
+            "/api/webui/emoji/upload",
+            files={"file": ("fixture.png", data, "image/png")},
+            data={"description": "轻松,庆祝"},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        body = uploaded.json()
+        assert body["created"] and body["registered"]
+        assert service.emojis is not None
+        [entry] = [
+            entry for entry in service.emojis.browse_page("", 0, 10)[0]
+            if entry.digest == body["digest"]
+        ]
+        assert entry.description == "轻松,庆祝"
+        assert entry.tags == ("轻松", "庆祝")
+        assert service.emojis.read_catalog_media(body["digest"]) == data
+
+
 def test_auth_cross_origin_and_text_extraction_have_no_implicit_write(tmp_path: Path) -> None:
     client, service, _scopes = _client(tmp_path)
     with client:

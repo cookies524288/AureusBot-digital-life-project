@@ -9,7 +9,17 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -114,6 +124,14 @@ class EmojiBatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     emoji_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class EmojiUpload(BaseModel):
+    """JSON-less媒体上传的头部字段；原件通过请求流读取。"""
+
+    description: str = Field(default="", max_length=500)
+    emotion: str = Field(default="", max_length=1000)
+    is_registered: bool = True
 
 
 def register_learning_workbench_routes(
@@ -477,6 +495,91 @@ def register_learning_workbench_routes(
         await run(service.emoji_target, identifier)
         rows = await run(service.emoji_payloads)
         return {"success": True, "data": next(row for row in rows if row["id"] == identifier)}
+
+    @router.get("/emoji/stats/summary")
+    async def emoji_stats() -> dict[str, Any]:
+        counts = await run(service.emoji_counts)
+        return {"success": True, "data": {
+            "total": counts["total"],
+            "registered": counts["registered"],
+            "banned": counts["banned"],
+            "unregistered": counts["unregistered"],
+            "known": counts["registered"] + counts["banned"],
+            "unknown": counts["unregistered"],
+            "adopted": counts["registered"],
+            "discarded": counts["removed"],
+            "formats": {}, "top_used": [],
+        }}
+
+    @router.post("/emoji/{identifier}/register")
+    async def register_emoji(identifier: int) -> dict[str, Any]:
+        entry = await run(service.find_emoji, identifier)
+        assert service.emojis is not None and entry.digest is not None
+        if entry.is_removed:
+            raise HTTPException(409, "已移除的表情不能登记。")
+        await run(service.emojis.update_catalog, entry.digest,
+                  is_registered=True, is_banned=False)
+        return {**await emoji(identifier), "message": "表情包已登记。"}
+
+    @router.post("/emoji/{identifier}/ban")
+    async def ban_emoji(identifier: int) -> dict[str, Any]:
+        entry = await run(service.find_emoji, identifier)
+        assert service.emojis is not None and entry.digest is not None
+        await run(service.emojis.update_catalog, entry.digest,
+                  is_registered=False, is_banned=True)
+        return {**await emoji(identifier), "message": "表情包已封禁。"}
+
+    @router.post("/emoji/batch/delete")
+    async def batch_delete_emoji(body: EmojiBatch) -> dict[str, Any]:
+        if not await run(service.set_emoji_removed, body.emoji_ids, True):
+            raise HTTPException(409, "所选表情已变化，没有修改。")
+        return {"success": True, "message": "已可逆移除。",
+                "deleted_count": len(body.emoji_ids), "failed_count": 0, "failed_ids": []}
+
+    @router.post("/emoji/upload")
+    async def upload_emoji(
+        file: Annotated[UploadFile, File(...)],
+        description: Annotated[str, Form(...)],
+    ) -> dict[str, Any]:
+        try:
+            data = await file.read(5 * 1024 * 1024 + 1)
+            if len(data) > 5 * 1024 * 1024:
+                raise HTTPException(413, "图片不能超过5 MiB。")
+        except HTTPException:
+            raise
+        except (OSError, ValueError):
+            raise HTTPException(422, "无法读取表情上传文件。") from None
+        if not file.filename or not description.strip():
+            raise HTTPException(422, "请选择有效图片并填写情感标签。")
+        tags = tuple(tag.strip() for tag in description.split(",") if tag.strip())
+        assert service.emojis is not None
+        digest, created = await run(service.emojis.upload, bytes(data),
+                                    registration_description=description, tags=tags,
+                                    is_registered=True)
+        return {"success": True, "digest": digest, "created": created,
+                "registered": await run(service.emojis.is_registered, digest)}
+
+    @router.post("/emoji/batch/upload")
+    async def batch_upload_emoji(request: Request) -> dict[str, Any]:
+        raise HTTPException(409, "批量上传需要逐份媒体和描述；当前宿主只启用单份上传。")
+
+    @router.get("/emoji/thumbnail-cache/stats")
+    async def thumbnail_cache_stats() -> dict[str, Any]:
+        return {"success": True, "enabled": False, "message": "当前没有持久缩略图缓存。",
+                "cache_dir": "", "total_count": 0, "total_size_mb": 0,
+                "emoji_count": 0, "coverage_percent": 0}
+
+    @router.post("/emoji/thumbnail-cache/cleanup")
+    async def thumbnail_cache_cleanup() -> dict[str, Any]:
+        raise HTTPException(409, "当前没有持久缩略图缓存可清理。")
+
+    @router.post("/emoji/thumbnail-cache/preheat")
+    async def thumbnail_cache_preheat() -> dict[str, Any]:
+        raise HTTPException(409, "当前没有持久缩略图缓存可预热。")
+
+    @router.delete("/emoji/thumbnail-cache/clear")
+    async def thumbnail_cache_clear() -> dict[str, Any]:
+        raise HTTPException(409, "当前没有持久缩略图缓存可清理。")
 
     @router.patch("/emoji/{identifier}")
     async def update_emoji(identifier: int, body: EmojiFields) -> dict[str, Any]:

@@ -132,6 +132,8 @@ class EmojiRecord:
     is_removed: bool = False
     media_type: str | None = None
     review: EmojiReview = "unreviewed"
+    collected_at: float | None = None
+    last_used_at: float | None = None
 
     @property
     def entry_key(self) -> str:
@@ -364,11 +366,23 @@ class EmojiStore:
         return source_count, asset_count
 
     def upload(
-        self, data: bytes, *, registration_description: str | None = None
+        self,
+        data: bytes,
+        *,
+        registration_description: str | None = None,
+        tags: tuple[str, ...] = (),
+        is_registered: bool | None = None,
     ) -> tuple[str, bool]:
         """存入经过检查的媒体，返回内容地址和是否新建；重复上传不改元数据。"""
         description = _clean_description(registration_description or "")
-        registered = registration_description is not None
+        tags = tuple(dict.fromkeys(tag.strip() for tag in tags if tag.strip()))
+        if len(tags) > MAX_EMOJI_TAGS or any(len(tag) > MAX_EMOJI_TAG for tag in tags):
+            raise ValueError("最多填写 20 个标签，每个不超过 40 字。")
+        registered = (
+            registration_description is not None
+            if is_registered is None
+            else is_registered
+        )
         if registered and not description:
             raise ValueError(_REGISTRATION_DESCRIPTION_REQUIRED)
         _validate_image(data)
@@ -378,9 +392,15 @@ class EmojiStore:
             connection.execute("BEGIN IMMEDIATE")
             registered = registered and self._has_slot(connection)
             created = connection.execute(
-                """INSERT INTO emoji_assets VALUES (?, ?, '[]', ?, 0, 0, 0, ?, NULL)
+                """INSERT INTO emoji_assets VALUES (?, ?, ?, ?, 0, 0, 0, ?, NULL)
                    ON CONFLICT(digest) DO NOTHING""",
-                (digest, description, registered, self._clock.now().timestamp()),
+                (
+                    digest,
+                    description,
+                    json.dumps(tags, ensure_ascii=False),
+                    registered,
+                    self._clock.now().timestamp(),
+                ),
             ).rowcount
         return digest, bool(created)
 
@@ -750,6 +770,21 @@ class EmojiStore:
             ).fetchall()
         return [self._catalog_record(row, removed) for row in rows], total
 
+    def catalog_entry(self, entry_key: str, *, removed: bool = False) -> EmojiRecord | None:
+        """按稳定目录键读取一条表情；不接收文件路径。"""
+        with closing(open_connection(self._database_file)) as connection:
+            connection.execute("BEGIN")
+            rows = connection.execute(
+                f"""{_CATALOG}
+                    SELECT * FROM catalog
+                    WHERE coalesce('asset:' || digest, 'source:' || source) = ?
+                      AND is_removed = ?""",
+                (entry_key, removed),
+            ).fetchall()
+        if not rows:
+            return None
+        return self._catalog_record(rows[0], removed)
+
     def catalog_counts(self) -> dict[str, int]:
         """统计整个表情库，移除、禁用、登记和未登记互不重叠。"""
         with closing(open_connection(self._database_file)) as connection:
@@ -869,6 +904,8 @@ class EmojiStore:
             path is not None and path.is_file(),
             row["source"],
             review=row["review"],
+            collected_at=row["first_collected_at"],
+            last_used_at=row["last_used_at"],
         )
 
     def _attachment(self, digest: str | None) -> Path | None:
