@@ -641,7 +641,6 @@ def create_app(
             resource_language is not None
             and language_config is not None
             and language_config.recall_enabled
-            and language_config.reference_chars > 0
         )
         targets = {
             json.dumps((platform, "local"), separators=(",", ":")): {

@@ -81,7 +81,7 @@ def test_expression_crud_ids_paging_restart_and_source_revocation(tmp_path: Path
         assert entry["checked"] is False
         assert service.language is not None
         assert "月兔冲线" in service.language.expression_reference(
-            "庆祝", "庆祝", (), "fixture", 2000, conversation_key="source-b"
+            "庆祝", "庆祝", (), "fixture", conversation_key="source-b"
         )
         client.post(prefix + "/", json={"situation": "庆祝", "style": "第二条"})
         page = client.get(prefix + "/list", params={"page_size": 1}).json()
@@ -114,23 +114,23 @@ def test_jargon_classification_is_atomic_and_used_by_runtime(tmp_path: Path) -> 
         assert result.is_success, result.text
         identifier = result.json()["data"]["id"]
         assert service.language is not None
-        assert "月兔" in service.language.jargon_reference(["月兔"], 2000)
+        assert "月兔" in service.language.jargon_reference(["月兔"])
         response = client.post(
             "/api/webui/jargon/batch/set-jargon",
             json={"ids": [identifier, identifier + 999], "is_jargon": False},
         )
         assert response.status_code == 404
-        assert "月兔" in service.language.jargon_reference(["月兔"], 2000)
+        assert "月兔" in service.language.jargon_reference(["月兔"])
         assert client.post(
             "/api/webui/jargon/batch/set-jargon",
             json={"ids": [identifier], "is_jargon": False},
         ).is_success
-        assert "月兔：合成队伍" in service.language.jargon_reference(["月兔"], 2000)
+        assert "月兔：合成队伍" in service.language.jargon_reference(["月兔"])
         assert client.post(
             "/api/webui/jargon/batch/set-jargon",
             json={"ids": [identifier], "is_jargon": True},
         ).is_success
-        assert "月兔" in service.language.jargon_reference(["月兔"], 2000)
+        assert "月兔" in service.language.jargon_reference(["月兔"])
 
 
 def test_workbench_import_export_skip_conflicts_and_preserve_selected_scope(tmp_path: Path) -> None:
@@ -219,7 +219,7 @@ def test_expression_import_reaches_reference_and_export_survives_reopen(tmp_path
         assert imported.status_code == 200, imported.text
         row = client.get(prefix + "/list", params={"chat_id": "source-a"}).json()["data"][0]
         assert "我们赢啦" in service.language.expression_reference(
-            "比赛庆祝", "庆祝", (), "speaker", 2000, conversation_key="source-a"
+            "比赛庆祝", "庆祝", (), "speaker", conversation_key="source-a"
         )
         exported = client.post(prefix + "/export", json={"chat_id": "source-a"})
         assert exported.status_code == 200
@@ -230,7 +230,7 @@ def test_expression_import_reaches_reference_and_export_survives_reopen(tmp_path
             row["id"]: row["entry_key"]
         }
         assert "我们赢啦" in reopened.expression_reference(
-            "比赛庆祝", "庆祝", (), "speaker", 2000, conversation_key="source-a"
+            "比赛庆祝", "庆祝", (), "speaker", conversation_key="source-a"
         )
 
 
@@ -259,7 +259,7 @@ def test_jargon_import_reaches_reference_and_export_survives_reopen(tmp_path: Pa
         assert imported.status_code == 200, imported.text
         [row] = client.get(prefix + "/list", params={"session_id": "source-b"}).json()["data"]
         assert "合成梗" in LanguageStore(tmp_path / "shared.db").jargon_reference(
-            ["合成梗"], 2000, conversation_key="source-b"
+            ["合成梗"], conversation_key="source-b"
         )
         exported = client.post(prefix + "/export", json={"ids": [row["id"]]})
         assert exported.status_code == 200
@@ -269,7 +269,7 @@ def test_jargon_import_reaches_reference_and_export_survives_reopen(tmp_path: Pa
         assert reopened.resolve_workbench_ids(LanguageKind.JARGON, [row["id"]]) == {
             row["id"]: row["entry_key"]
         }
-        assert "合成梗" in reopened.jargon_reference(["合成梗"], 2000, conversation_key="source-b")
+        assert "合成梗" in reopened.jargon_reference(["合成梗"], conversation_key="source-b")
 
 
 def test_revoked_scope_blocks_import_export_clear_and_delete_without_changes(

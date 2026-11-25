@@ -599,7 +599,7 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
     paths.runtime_config_file.write_text(
         "[heartbeat]\nplanning_enabled = true\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
-        "[language]\nlearning_enabled = false\nreference_chars = 1000\n",
+        "[language]\nlearning_enabled = false\n",
         encoding="utf-8",
     )
     requests: list[OrganRequest] = []
@@ -739,7 +739,7 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
         )
         assert removed.json()["after"] == []
     assert not store.expression_reference(
-        "跑步", "庆祝跑步成绩", (), "", 1000, conversation_key=keys[0]
+        "跑步", "庆祝跑步成绩", (), "", conversation_key=keys[0]
     )
 
 
@@ -752,7 +752,7 @@ async def test_same_language_in_reply_depends_on_explicit_package_grant(
     paths.runtime_config_file.write_text(
         "[heartbeat]\nplanning_enabled = true\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
-        "[language]\nlearning_enabled = false\nreference_chars = 1000\n",
+        "[language]\nlearning_enabled = false\n",
         encoding="utf-8",
     )
     clock = ManualClock(NOW)
@@ -906,9 +906,9 @@ async def test_same_language_in_reply_depends_on_explicit_package_grant(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("learning", "budget"), [(True, 700), (False, 700), (True, 0)])
+@pytest.mark.parametrize(("learning", "recall"), [(True, True), (False, True), (True, False)])
 async def test_language_normal_inbound_across_group_and_private_after_restart(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, learning: bool, budget: int
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, learning: bool, recall: bool
 ) -> None:
     paths = _paths(tmp_path)
     paths.runtime_config_file.write_text(
@@ -916,7 +916,8 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
         "working_memory_capacity = 12\nworking_memory_retain = 2\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
         "[language]\nexpression_quality_enabled = false\n"
-        f"learning_enabled = {str(learning).lower()}\nreference_chars = {budget}\n"
+        f"learning_enabled = {str(learning).lower()}\n"
+        f"recall_enabled = {str(recall).lower()}\n"
         '[qq]\nenabled = true\naccount_id = "42"\nendpoint = "ws://127.0.0.1:1"\n',
         encoding="utf-8",
     )
@@ -1030,10 +1031,10 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
                 await heart.wait_for_thought()
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
-            injected = budget > 0
+            injected = recall
             [reply_tool] = [tool for tool in plan.tools if tool.name == "reply"]
-            assert ("expression_intent" in reply_tool.parameters["properties"]) is (budget > 0)
-            assert ('"expression_intent"' in plan.prompt) is (budget > 0)
+            assert ("expression_intent" in reply_tool.parameters["properties"]) is recall
+            assert ('"expression_intent"' in plan.prompt) is recall
             assert ("GG：抵达终点" in plan.prompt) is injected
             assert ("GG：等候开局" in plan.prompt) is injected
             assert ("当「庆祝跑步成绩」时，可用「月兔冲线」" in dialogue_text(reply)) is (injected)
@@ -1055,7 +1056,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
                 await heart.wait_for_thought()
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
-            expected = budget > 0 and allowed and not removed
+            expected = recall and allowed and not removed
             assert ("GG：抵达终点" in plan.prompt) is expected
             assert ("GG：抵达终点" in dialogue_text(reply)) is expected
             assert ("月兔冲线" in dialogue_text(reply)) is expected
@@ -1067,7 +1068,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
         await heart.wait_for_thought()
         heart.beat()
         assert not any("习得表达（" in dialogue_text(request) for request in requests)
-        if budget > 0:
+        if recall:
             assert core.language is not None
             password = f"synthetic-{paths.home.name}-password"
             PasswordStore(paths.web_password_file).set_password(password)
@@ -1112,8 +1113,8 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             await assert_reply("109", available=False)
         await heart.shut_down()
 
-    if budget > 0:
+    if recall:
         with runtime.open_core(paths, clock=clock, to_console=False) as reopened:
             assert reopened.language is not None
             assert not reopened.language.entries(LanguageKind.EXPRESSION)
-            assert "抵达终点" not in reopened.language.jargon_reference(["GG"], 700)
+            assert "抵达终点" not in reopened.language.jargon_reference(["GG"])

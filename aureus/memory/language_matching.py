@@ -200,16 +200,11 @@ def select_expressions(
     return _deduplicate(entry for _, _, entry in ranked)[:MAX_EXPRESSION_MATCHES]
 
 
-def format_language(entries: Sequence[LanguageEntry], *, jargon: bool, budget: int) -> str:
-    """把候选放进内部参考块，超出字数预算的整条跳过。"""
+def format_language(entries: Sequence[LanguageEntry], *, jargon: bool) -> str:
+    """把候选放进内部参考块；条数由调用方限制，不再按字数裁剪（D120）。"""
     item = LANGUAGE_JARGON_ITEM if jargon else LANGUAGE_EXPRESSION_ITEM
-    lines: list[str] = []
-    remaining = budget - len(language_reference_block([], jargon=jargon))
-    for entry in entries:
-        text = " ".join(entry.text.split())
-        detail = " ".join(entry.detail.split())
-        line = item.fill(text=text, detail=detail)
-        if len(line) + 1 <= remaining:
-            lines.append(line)
-            remaining -= len(line) + 1
+    lines = [
+        item.fill(text=" ".join(entry.text.split()), detail=" ".join(entry.detail.split()))
+        for entry in entries
+    ]
     return language_reference_block(lines, jargon=jargon) if lines else ""

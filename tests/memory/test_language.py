@@ -3,7 +3,13 @@
 from dataclasses import replace
 from pathlib import Path
 
-from aureus.memory import LanguageKind, LanguageProposal, LanguageSample, LanguageStore
+from aureus.memory import (
+    LanguageContent,
+    LanguageKind,
+    LanguageProposal,
+    LanguageSample,
+    LanguageStore,
+)
 from aureus.memory.language_matching import (
     JargonStatus,
     LanguageEntry,
@@ -29,12 +35,11 @@ def test_jargon_match_keeps_senses_and_uses_frequency_and_position() -> None:
     )
     assert [match.evidence_ids for match in matches] == [(32, 34), (33,), (35,), (31,)]
     assert match_jargons(["<message tag='XP'> 空白"], entries, {}) == []
-    assert format_language(matches, jargon=True, budget=10) == ""
-    first_only = format_language([entries[0]], jargon=True, budget=700)
-    block = format_language([entries[0], entries[1]], jargon=True, budget=len(first_only))
-    assert block == first_only
-    assert block.endswith("XP：本局胜负")
-    assert "GO" not in block
+    assert format_language([], jargon=True) == ""
+    block = format_language(matches, jargon=True)
+    assert "- XP：本局胜负" in block
+    assert "- GO：向前走" in block
+    assert "- now：此刻" in block
 
 
 def test_expression_topic_speaker_avoid_and_limit() -> None:
@@ -45,6 +50,55 @@ def test_expression_topic_speaker_avoid_and_limit() -> None:
     hits = select_expressions(entries, "刚跑步回来", "庆祝", ("说法4",), "0")
     assert [entry.text for entry in hits] == ["说法0", "说法3", "说法2"]
     assert select_expressions(entries, "问候", "", (), "0") == []
+
+
+def test_expression_block_has_no_char_budget() -> None:
+    """选中的长表达完整进入参考块，不再按字数裁剪（D120）。"""
+    entries = [
+        LanguageEntry(
+            f"说法{index}" + "长" * 300,
+            f"场景{index}" + "景" * 300,
+            "",
+            1,
+            (index,),
+            frozenset(),
+        )
+        for index in range(5)
+    ]
+    block = format_language(entries, jargon=False)
+    assert len(block) > 3000
+    for entry in entries:
+        assert f"可用「{entry.text}」" in block
+
+
+def test_jargon_block_has_no_char_budget(tmp_path: Path) -> None:
+    """超长黑话完整注入，只受 10 条上限约束（D120）。"""
+    store = LanguageStore(tmp_path / "language.sqlite")
+    store.open()
+    details = [f"释义{index:02}" + "义" * 150 for index in range(11)]
+    for index, detail in enumerate(details):
+        store.add_entry(LanguageKind.JARGON, LanguageContent(f"黑话{index:02}", detail))
+    block = store.jargon_reference([f"黑话{index:02}" for index in range(11)])
+    assert len([line for line in block.splitlines() if line.startswith("- ")]) == 10
+    assert len(block) > 700
+    assert all(detail in block for detail in details[:10])
+    assert details[10] not in block
+
+
+def test_keyword_fallback_has_no_char_budget(tmp_path: Path) -> None:
+    """关键词回退路径最多 3 条，长条目完整注入（D120）。"""
+    store = LanguageStore(tmp_path / "language.sqlite")
+    store.open()
+    details = [f"庆祝跑步{index}" + "景" * 150 for index in range(3)]
+    for index, detail in enumerate(details):
+        store.add_entry(
+            LanguageKind.EXPRESSION,
+            LanguageContent(f"说法{index}" + "说" * 70, detail),
+        )
+    block = store.expression_reference("跑步", "庆祝", (), "合成人物")
+    assert len([line for line in block.splitlines() if line.startswith("- 当「")]) == 3
+    assert len(block) > 700
+    assert all(detail in block for detail in details)
 
 
 def test_observing_existing_expression_keeps_example_and_counts_unique_messages(
@@ -87,7 +141,7 @@ def test_jargon_stays_out_of_retrieval_until_evidence_exists(tmp_path: Path) -> 
         store.observe(
             [sample], [LanguageProposal(LanguageKind.JARGON, "Go", "集合完成", (number,))]
         )
-        assert not store.jargon_reference(["GO"], 700)
+        assert not store.jargon_reference(["GO"])
     sample = LanguageSample("timeline:4", 4, "person:1", "集合，go")
     store.observe([sample], [LanguageProposal(LanguageKind.JARGON, "go", "集合完成", (4,))])
-    assert "Go：集合完成" in store.jargon_reference(["GO"], 700)
+    assert "Go：集合完成" in store.jargon_reference(["GO"])

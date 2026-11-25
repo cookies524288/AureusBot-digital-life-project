@@ -118,7 +118,7 @@ async def test_independent_expression_quality_consumption_and_reply(
     assert len(entries) == (mode in {"off", "passed"})
 
     def reference() -> str:
-        return store.expression_reference("轻松庆祝", "庆祝", (), "", 700)
+        return store.expression_reference("轻松庆祝", "庆祝", (), "")
 
     assert ("乐一个" in reference()) == (mode in {"off", "passed"})
     if mode == "passed":

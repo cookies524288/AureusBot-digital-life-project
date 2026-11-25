@@ -158,7 +158,7 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
                 "main",
                 "mai_messages",
             ]
-    block = store.jargon_reference(["go gg"], 700)
+    block = store.jargon_reference(["go gg"])
     assert block.index("等候开局") < block.index("普通提醒")
 
     with closing(sqlite3.connect(paths.database_file)) as connection:

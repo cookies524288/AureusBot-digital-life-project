@@ -29,7 +29,7 @@ async def test_local_expression_vectors_reach_actual_reply(
     config = (
         "[heartbeat]\nplanning_enabled = true\ninbox_debounce_enabled = false\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
-        "[language]\nreference_chars = 180\n"
+        "[language]\n"
     )
     paths.runtime_config_file.write_text(config + legacy_switch, encoding="utf-8")
     store = LanguageStore(paths.database_file)

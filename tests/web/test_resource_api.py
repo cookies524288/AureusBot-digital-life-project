@@ -180,12 +180,10 @@ def test_learning_browse_combines_explicit_conversation_and_filters(
 
     def references() -> list[str]:
         return [
-            language.jargon_reference(
-                ["群内 共享 另一群 未映射 旧资料"], 2000, conversation_key=key
-            )
+            language.jargon_reference(["群内 共享 另一群 未映射 旧资料"], conversation_key=key)
             if kind == LanguageKind.JARGON
             else language.expression_reference(
-                "合成场景", "合成场景", (), "fixture", 2000, conversation_key=key
+                "合成场景", "合成场景", (), "fixture", conversation_key=key
             )
             for key in keys
         ]
@@ -306,7 +304,7 @@ def test_learning_origin_and_authorization_are_independent(
         if kind == LanguageKind.JARGON:
             return [
                 language.jargon_reference(
-                    ["在线甲 迁入词 包内有授权 包内待授权"], 2000, conversation_key=key
+                    ["在线甲 迁入词 包内有授权 包内待授权"], conversation_key=key
                 )
                 for key in keys
             ]

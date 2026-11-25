@@ -1426,9 +1426,9 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             ):
                 preview = next(scene["messages"] for scene in previews if scene["id"] == scene_id)
                 assert actual == _expanded_messages(preview, substitutions)
-            assert "会话暗号" in language.jargon_reference(["CC"], 700, conversation_key=scope)
-            assert "会话暗号" in language.jargon_reference(["CC"], 700, conversation_key="其他会话")
-            assert not language.jargon_reference(["伪造词"], 700, conversation_key="其他会话")
+            assert "会话暗号" in language.jargon_reference(["CC"], conversation_key=scope)
+            assert "会话暗号" in language.jargon_reference(["CC"], conversation_key="其他会话")
+            assert not language.jargon_reference(["伪造词"], conversation_key="其他会话")
             window = SummaryWindow(
                 ("模拟会话", "user_only"),
                 0,

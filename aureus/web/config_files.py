@@ -79,6 +79,7 @@ HIDDEN_CONFIG = frozenset(
         "language.organ",
         "language.expression_quality_organ",
         "language.expression_selector_organ",
+        "language.reference_chars",
         "language.use_vector_expression",
         "diary.organ",
         "persona_growth.organ",

@@ -340,6 +340,6 @@ def _select_by_mmr(
     return [item.entry for _, item in sorted(selected, key=lambda match: match[0], reverse=True)]
 
 
-def format_vector_expressions(entries: Sequence[LanguageEntry], budget: int) -> str:
-    """用原回复参考块和预算格式渲染向量路径的已选候选。"""
-    return format_language(entries, jargon=False, budget=budget)
+def format_vector_expressions(entries: Sequence[LanguageEntry]) -> str:
+    """用原回复参考块渲染向量路径的已选候选，不按字数裁剪（D120）。"""
+    return format_language(entries, jargon=False)

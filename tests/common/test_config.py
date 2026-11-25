@@ -821,6 +821,14 @@ def test_expression_vector_candidates_default_and_bounds(tmp_path: Path) -> None
         assert "expression_vector_candidates" in error_message_of(paths)
 
 
+def test_legacy_reference_chars_is_ignored(tmp_path: Path) -> None:
+    """旧配置写了 reference_chars 时照常启动并忽略该键（D120）。"""
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[language]\nreference_chars = 1500\n")
+    config = load_runtime_config(paths)
+    assert "reference_chars" not in config.language.model_dump()
+
+
 def test_hormones_defaults_follow_d69(tmp_path: Path) -> None:
     hormones = load_runtime_config(AureusPaths(tmp_path)).hormones
     assert hormones == HormonesConfig()

@@ -56,7 +56,7 @@ def test_legacy_expression_reviews_do_not_gate_candidates_or_export(tmp_path: Pa
             return {item["entry_key"]: item for item in response.json()["items"]}
 
         def reference(language: LanguageStore = store) -> str:
-            return language.expression_reference("月兔问候", "打招呼", (), "合成人物", 1000)
+            return language.expression_reference("月兔问候", "打招呼", (), "合成人物")
 
         assert set(entries()) == {target, disabled, unmapped}
         assert "月兔收到" in reference()
@@ -211,10 +211,10 @@ def test_legacy_jargon_classification_survives_package_without_gating_meaning(
         assert (
             client.get(LEARNING, params=params).json()["items"][0]["entry_key"] == second_candidate
         )
-        reference = store.jargon_reference(("月兔",), 500)
+        reference = store.jargon_reference(("月兔",))
         assert "月兔：不作为黑话" in reference and "隐藏释义" not in reference
         assert store.classify_jargons([denied], JargonStatus.CONFIRMED, NOW) == 1
-        assert "月兔：不作为黑话" in store.jargon_reference(("月兔",), 500)
+        assert "月兔：不作为黑话" in store.jargon_reference(("月兔",))
         payload = client.get(f"{LEARNING}/package/jargon").content
     destination = LanguageStore(tmp_path / "destination.db")
     destination.open()
@@ -249,8 +249,8 @@ def test_language_batch_restores_prior_recall_state(tmp_path: Path, kind: Langua
 
     def recalled() -> str:
         if kind == LanguageKind.JARGON:
-            return store.jargon_reference(("庆祝和祝福",), 500)
-        return store.expression_reference("比赛", "庆祝", (), "测试者", 500)
+            return store.jargon_reference(("庆祝和祝福",))
+        return store.expression_reference("比赛", "庆祝", (), "测试者")
 
     assert "庆祝" in recalled() and "祝福" not in recalled()
     with _client(store) as client:

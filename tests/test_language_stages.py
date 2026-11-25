@@ -61,9 +61,9 @@ async def test_distinct_extractions_promote_only_compared_jargon(tmp_path: Path)
     ]
     [entry] = store.entries(LanguageKind.JARGON)
     assert entry.text == "GG" and entry.evidence_ids == (1, 2, 5, 6)
-    assert "抵达终点" in store.jargon_reference(["GG"], 700, conversation_key="甲群")
-    assert "抵达终点" in store.jargon_reference(["GG"], 700, conversation_key="乙群")
-    assert "抵达终点" in store.jargon_reference(["GG"], 700)
+    assert "抵达终点" in store.jargon_reference(["GG"], conversation_key="甲群")
+    assert "抵达终点" in store.jargon_reference(["GG"], conversation_key="乙群")
+    assert "抵达终点" in store.jargon_reference(["GG"])
     expressions = store.entries(LanguageKind.EXPRESSION)
     assert {item.text for item in expressions} == {"月兔冲个XX"}
     assert {item.evidence_ids for item in expressions} == {(1, 5), (3,)}
@@ -168,4 +168,4 @@ async def test_extraction_failure_is_independent_and_jargon_retries_at_new_evide
     comparison = True
     await learn(samples[8:])
     assert contextual_counts == [4, 8, 9]
-    assert not store.jargon_reference(["GG"], 700, conversation_key="甲群")
+    assert not store.jargon_reference(["GG"], conversation_key="甲群")

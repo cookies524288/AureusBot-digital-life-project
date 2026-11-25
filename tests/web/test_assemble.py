@@ -295,7 +295,7 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
             assert package.status_code == 200 and b'"records":1' in package.content
             [jargon] = client.get(learning, params={"kind": "jargon"}).json()["items"]
             assert jargon["source_refs"] == ["[7]", "[55]"]
-            assert "合成释义" in core.language.jargon_reference(["灶台月"], 500)
+            assert "合成释义" in core.language.jargon_reference(["灶台月"])
             target = {"kind": "jargon", "entry_key": jargon["entry_key"]}
             assert (
                 client.patch(
@@ -308,14 +308,14 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
                 ).status_code
                 == 200
             )
-            assert not core.language.jargon_reference(["灶台月"], 500)
+            assert not core.language.jargon_reference(["灶台月"])
             [hidden] = client.get(learning, params={"kind": "jargon", "recall": "disabled"}).json()[
                 "items"
             ]
             assert hidden["original"][:2] == ["灶台月", "合成释义"]
             assert hidden["source_refs"] == jargon["source_refs"]
             assert client.patch(learning, json={**target, "is_enabled": True}).status_code == 200
-            assert "新释义" in core.language.jargon_reference(["灶台月"], 500)
+            assert "新释义" in core.language.jargon_reference(["灶台月"])
             assert (
                 client.post(
                     learning,
@@ -326,7 +326,7 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
                 ).status_code
                 == 201
             )
-            assert "平稳着陆" in core.language.expression_reference("跑步", "", (), "", 500)
+            assert "平稳着陆" in core.language.expression_reference("跑步", "", (), "")
 
             payload = client.get(
                 memory, params={"kind": "history", "source_table": "text", "recall": "enabled"}
@@ -377,7 +377,7 @@ def test_normal_web_start_reads_imports_and_manages_recall(paths: AureusPaths) -
         assert core.memory and core.language
         assert core.memory.search(["土卫六"], (), 10)[0].source == source
         assert core.memory.search(["风筝架"], (), 10)[0].record_id == live.id
-        assert "新释义" in core.language.jargon_reference(["灶台月"], 500)
+        assert "新释义" in core.language.jargon_reference(["灶台月"])
 
 
 @pytest.mark.asyncio

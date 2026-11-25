@@ -315,11 +315,7 @@ def open_core(
             language = None
             logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         expression_index = None
-        expression_enabled = (
-            not roleplay
-            and runtime.language.recall_enabled
-            and bool(runtime.language.reference_chars)
-        )
+        expression_enabled = not roleplay and runtime.language.recall_enabled
         if expression_enabled and language is not None:
             try:
                 expression_index = ExpressionVectorIndex(paths.database_file)

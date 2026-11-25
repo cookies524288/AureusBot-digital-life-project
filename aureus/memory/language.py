@@ -1430,7 +1430,7 @@ class LanguageStore:
         return entries
 
     def jargon_reference(
-        self, texts: Sequence[str], budget: int, *, conversation_key: str | None = None
+        self, texts: Sequence[str], *, conversation_key: str | None = None
     ) -> str:
         """生成规划与回复的黑话参考，按统一库的高频词加权。"""
         with closing(open_connection(self._path)) as connection:
@@ -1455,7 +1455,7 @@ class LanguageStore:
                         frequencies[key] = current
         entries = self._visible_entries(LanguageKind.JARGON, conversation_key)
         matches = match_jargons(texts, entries, frequencies)
-        return format_language(matches, jargon=True, budget=budget)
+        return format_language(matches, jargon=True)
 
     def expression_reference(
         self,
@@ -1463,14 +1463,13 @@ class LanguageStore:
         intent: str,
         avoid: tuple[str, ...],
         speaker: str,
-        budget: int,
         *,
         conversation_key: str | None = None,
     ) -> str:
         """生成 Replyer 的情景表达参考。"""
         entries = self.expression_candidates(conversation_key)
         matches = select_expressions(entries, topic, intent, avoid, speaker)
-        return format_language(matches, jargon=False, budget=budget)
+        return format_language(matches, jargon=False)
 
     def expression_candidates(self, conversation_key: str | None) -> list[LanguageEntry]:
         """返回某一会话可用的表达；来源不限制在线记录的召回。"""

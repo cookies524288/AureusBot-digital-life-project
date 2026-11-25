@@ -146,7 +146,7 @@ class ExpressionRecall:
                 entry for entry in chosen if current.get(entry.entry_key) == fingerprint(entry)
             ]
             # 选择为空时返回空字符串，本轮不注入表达块；None 只表示向量路线不可用。
-            return format_vector_expressions(valid, self._config.reference_chars)
+            return format_vector_expressions(valid)
         except (CallRejectedError, OrganCallError, ValueError, sqlite3.Error) as error:
             logger.warning("表达向量查询未采用（%s），使用普通候选", type(error).__name__)
             return None

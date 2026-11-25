@@ -144,19 +144,18 @@ def test_single_emoji_delete_is_same_store_reversible_removal(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
-    ("legacy_learning_enabled", "recall_enabled", "reference_chars"),
+    ("legacy_learning_enabled", "recall_enabled"),
     [
-        (None, True, 700),
-        (False, True, 700),
-        (True, True, 0),
-        (False, False, 700),
+        (None, True),
+        (False, True),
+        (True, True),
+        (False, False),
     ],
 )
 def test_chat_targets_use_runtime_language_settings_and_current_scope(
     tmp_path: Path,
     legacy_learning_enabled: bool | None,
     recall_enabled: bool,
-    reference_chars: int,
 ) -> None:
     rig = VectorRig(tmp_path)
     try:
@@ -171,7 +170,7 @@ def test_chat_targets_use_runtime_language_settings_and_current_scope(
                 origin_scope=key,
                 recorded_at=rig.web.clock.now(),
             )
-        configuration = {"recall_enabled": recall_enabled, "reference_chars": reference_chars}
+        configuration = {"recall_enabled": recall_enabled}
         if legacy_learning_enabled is not None:
             configuration["learning_enabled"] = legacy_learning_enabled
         app = create_app(
@@ -194,9 +193,7 @@ def test_chat_targets_use_runtime_language_settings_and_current_scope(
             assert chats == client.get("/api/webui/expression/chat-targets").json()["data"]
             assert {row["platform"] for row in chats} == {"web", "terminal", "qq"}
             assert all(row["enable_learning"] is True for row in chats)
-            assert all(
-                row["use_expression"] == (recall_enabled and reference_chars > 0) for row in chats
-            )
+            assert all(row["use_expression"] == recall_enabled for row in chats)
             (group,) = [row for row in chats if row["platform"] == "qq"]
             assert group == {
                 "chat_id": key,
@@ -207,7 +204,7 @@ def test_chat_targets_use_runtime_language_settings_and_current_scope(
                 "target_id": "allowed",
                 "is_group": True,
                 "enable_learning": True,
-                "use_expression": recall_enabled and reference_chars > 0,
+                "use_expression": recall_enabled,
                 "expression_count": 1,
                 "jargon_count": 0,
             }

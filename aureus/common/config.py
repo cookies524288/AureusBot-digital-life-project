@@ -647,7 +647,7 @@ class MemoryConfig(BaseModel):
 
 
 class LanguageConfig(BaseModel):
-    """习得语言的召回、增量学习与单个参考块的字数预算（D89）。"""
+    """习得语言的召回、增量学习与表达向量候选上限（D89、D119）。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -659,14 +659,13 @@ class LanguageConfig(BaseModel):
     expression_quality_organ: ClassVar[str] = "judge"
     # 表达向量召回最多取多少条候选，范围 1–50（D119）。
     expression_vector_candidates: int = Field(default=50, ge=1, le=50)
-    reference_chars: int = Field(default=700, ge=0, le=2000)
     # 表达选择固定走 fast_model（D119）；没有配置时退回向量前 5，不整池注入。
     expression_selector_organ: ClassVar[str] = "fast_model"
 
     @model_validator(mode="before")
     @classmethod
     def ignore_legacy_keys(cls, value: object) -> object:
-        """旧配置里已删除或已固定的键照常读取、忽略（D107、D109）。"""
+        """旧配置里已删除或已固定的键照常读取、忽略（D107、D109、D120）。"""
         return drop_legacy_keys(
             value,
             (
@@ -675,6 +674,7 @@ class LanguageConfig(BaseModel):
                 "expression_selector_organ",
                 "use_vector_expression",
                 "learning_enabled",
+                "reference_chars",
             ),
         )
 

@@ -160,7 +160,6 @@ def test_inbox_read_limit_saves_and_restores_for_restart(rig: ConfigRig) -> None
         "memory.consolidation_batch",
         "memory.consolidation_half_life_days",
         "language.recall_enabled",
-        "language.reference_chars",
     ],
 )
 def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, field: str) -> None:
@@ -180,7 +179,6 @@ def test_language_and_memory_restore_preserves_other_overrides(rig: ConfigRig, f
         },
         "language": {
             "recall_enabled": False,
-            "reference_chars": 1500,
         },
     }
     client = rig.client
@@ -219,6 +217,24 @@ def test_legacy_language_learning_setting_is_not_visible_or_restorable(rig: Conf
         == 403
     )
     assert client.post(RUNTIME_RESTORE, json={"field": setting}).status_code == 403
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_settings_page_has_no_reference_chars(rig: ConfigRig) -> None:
+    """设置页字段表不再有语言参考字数上限，旧文件照常读取（D120）。"""
+    path = rig.paths.runtime_config_file
+    original = "[language]\nreference_chars = 1500\n"
+    path.write_text(original, encoding="utf-8")
+    view = rig.client.get("/api/config").json()
+    assert "reference_chars" not in view["config"]["language"]
+    assert "reference_chars" not in view["schema"]["$defs"]["LanguageConfig"]["properties"]
+    for changes in (
+        {"language": {"reference_chars": 900}},
+        {"language.reference_chars": 900},
+    ):
+        assert rig.client.put("/api/config", json={"changes": changes}).status_code == 403
+    restored = rig.client.post(RUNTIME_RESTORE, json={"field": "language.reference_chars"})
+    assert restored.status_code == 403
     assert path.read_text(encoding="utf-8") == original
 
 

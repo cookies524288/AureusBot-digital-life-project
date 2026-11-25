@@ -1290,11 +1290,7 @@ class ConversationFlow:
         )
 
     def _can_recall_language(self) -> bool:
-        return (
-            self._language is not None
-            and self._language_config.recall_enabled
-            and self._language_config.reference_chars > 0
-        )
+        return self._language is not None and self._language_config.recall_enabled
 
     async def _jargon_reference(self, job: _ReplyJob) -> str:
         if self._language is None or not self._can_recall_language():
@@ -1308,7 +1304,6 @@ class ConversationFlow:
             return await asyncio.to_thread(
                 self._language.jargon_reference,
                 texts,
-                self._language_config.reference_chars,
                 conversation_key=job.language_scope_key,
             )
         except sqlite3.Error:
@@ -1335,7 +1330,6 @@ class ConversationFlow:
                 intent,
                 plan.expression_avoid,
                 speaker_key(job.messages[-1]),
-                self._language_config.reference_chars,
                 conversation_key=job.language_scope_key,
             )
         except sqlite3.Error:
