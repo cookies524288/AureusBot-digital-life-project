@@ -543,7 +543,6 @@ export function ExpressionEditDialog({
       setFormData({
         situation: expression.situation,
         style: expression.style,
-        chat_id: expression.chat_id,
       })
     }
   }, [expression])
@@ -608,27 +607,11 @@ export function ExpressionEditDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="edit_chat_id">聊天</Label>
-              <Select
-                value={formData.chat_id || ''}
-                onValueChange={(value) => setFormData({ ...formData, chat_id: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="选择关联的聊天" />
-                </SelectTrigger>
-                <SelectContent>
-                  {chatList.map((chat) => (
-                    <SelectItem key={chat.chat_id} value={chat.chat_id}>
-                      <span className="truncate" style={{ wordBreak: 'keep-all' }}>
-                        {formatChatDisplayName(chat.chat_name, chat.account_id)}
-                        {chat.is_group && (
-                          <span className="text-muted-foreground ml-1">(群聊)</span>
-                        )}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="edit_chat_id">原来源</Label>
+              <Input id="edit_chat_id" readOnly value={
+                chatList.find(chat => chat.chat_id === expression.chat_id)?.chat_name
+                  ?? (expression.chat_id ? '来源不可见' : '共享资料')
+              } />
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-sm">

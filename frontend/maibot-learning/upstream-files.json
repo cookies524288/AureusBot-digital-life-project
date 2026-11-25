@@ -13,6 +13,10 @@
       "source": "dashboard/package.json",
       "sha256": "b8c26a60286294d8cd504052c14e66e3bfe3e817f9d98df13a8a26d6eff52922"
     },
+    "public/fonts/ArkPixel-OFL.txt": {
+      "source": "dashboard/public/fonts/ArkPixel-OFL.txt",
+      "sha256": "4a00d01d435e17171b2f28a2691058046abd3583f6db29bd78d4679621fb966d"
+    },
     "public/fonts/ArkPixel12-ZhHans.woff2": {
       "source": "dashboard/public/fonts/ArkPixel12-ZhHans.woff2",
       "sha256": "e2278ca5220855c1d0fd198ef24e573a8396a5db907b3172774951d6a8fd57b9"
@@ -32,10 +36,6 @@
     "public/fonts/Jersey20-Regular.ttf": {
       "source": "dashboard/public/fonts/Jersey20-Regular.ttf",
       "sha256": "76670d7e8826860e3d2f2846b88bc1652135b8d54b6adfa5a87649b9fa4bd3b4"
-    },
-    "public/fonts/JetBrainsMono-Medium.ttf": {
-      "source": "dashboard/public/fonts/JetBrainsMono-Medium.ttf",
-      "sha256": "31c92d01a8a08528b718a43addf0ad3df0af2ca4b7b3290a452f70f358e14d3d"
     },
     "src/components/chat-scope-filter-panel.tsx": {
       "source": "dashboard/src/components/chat-scope-filter-panel.tsx",
