@@ -81,6 +81,8 @@ def organ_tasks(runtime: RuntimeConfig, available: Collection[str] = ()) -> dict
         "diary": runtime.diary.organ,
         "persona_review": runtime.persona_growth.organ,
         "language_learning": runtime.language.organ,
+        # 向量召回后由快速模型从候选里挑 0–5 条表达（D119）。
+        "expression_selection": "fast_model",
         "memory_consolidation": "summarizer",
         "working_memory_summary": "utils",
         "image_description": "vlm",

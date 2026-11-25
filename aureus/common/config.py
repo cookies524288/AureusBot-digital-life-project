@@ -660,8 +660,8 @@ class LanguageConfig(BaseModel):
     # 表达向量召回最多取多少条候选，范围 1–50（D119）。
     expression_vector_candidates: int = Field(default=50, ge=1, le=50)
     reference_chars: int = Field(default=700, ge=0, le=2000)
-    # 表达筛选不使用单独器官，直接用排好的候选。
-    expression_selector_organ: ClassVar[str | None] = None
+    # 表达选择固定走 fast_model（D119）；没有配置时退回向量前 5，不整池注入。
+    expression_selector_organ: ClassVar[str] = "fast_model"
 
     @model_validator(mode="before")
     @classmethod

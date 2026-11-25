@@ -789,7 +789,7 @@ def test_legacy_removed_switches_ignored_d107(tmp_path: Path, switch: str) -> No
         f"use_vector_expression = {switch}\n"
         'organ = "custom_organ"\n'  # 已固定为 summarizer，应被忽略
         'expression_quality_organ = "custom_judge"\n'  # 已固定为 judge，应被忽略
-        'expression_selector_organ = "selector"\n'  # 已固定为 None，应被忽略
+        'expression_selector_organ = "selector"\n'  # 已固定为 fast_model，应被忽略
         "[judge]\n"
         'organ = "custom_judge"\n'  # 已固定为 judge，应被忽略
         "[exploration]\n"
@@ -805,7 +805,7 @@ def test_legacy_removed_switches_ignored_d107(tmp_path: Path, switch: str) -> No
     # 所有被删/被固定的字段都取默认值，不受 TOML 中的值影响
     assert config.language.organ == "summarizer"
     assert config.language.expression_quality_organ == "judge"
-    assert config.language.expression_selector_organ is None
+    assert config.language.expression_selector_organ == "fast_model"
     assert config.judge.organ == "judge"
     assert config.exploration.organ == "summarizer"
     assert config.diary.organ == "summarizer"

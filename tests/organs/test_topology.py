@@ -53,6 +53,7 @@ def test_working_memory_summary_is_a_utils_job() -> None:
         tasks = organ_tasks(runtime, available)
         assert tasks["working_memory_summary"] == "utils"
         assert tasks["memory_consolidation"] == "summarizer"
+        assert tasks["expression_selection"] == "fast_model"
     links = organ_connections([], runtime, {"summarizer", "utils"})
     assert [
         edge["target"]

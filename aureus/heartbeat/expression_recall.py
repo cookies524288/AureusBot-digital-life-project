@@ -139,14 +139,14 @@ class ExpressionRecall:
             if recheck is not None:
                 await recheck()
             chosen = await self._select(query, eligible)
-            if self._config.expression_selector_organ:
-                current = await self._current_fingerprints(scope, avoid)
+            current = await self._current_fingerprints(scope, avoid)
             if self.space != space:
                 return None
             valid = [
                 entry for entry in chosen if current.get(entry.entry_key) == fingerprint(entry)
             ]
-            return format_vector_expressions(valid, self._config.reference_chars) or None
+            # 选择为空时返回空字符串，本轮不注入表达块；None 只表示向量路线不可用。
+            return format_vector_expressions(valid, self._config.reference_chars)
         except (CallRejectedError, OrganCallError, ValueError, sqlite3.Error) as error:
             logger.warning("表达向量查询未采用（%s），使用普通候选", type(error).__name__)
             return None
@@ -278,9 +278,12 @@ class ExpressionRecall:
         return response.embeddings
 
     async def _select(self, query: str, ordered: Sequence[LanguageEntry]) -> list[LanguageEntry]:
+        """按 MaiBot 协议让快速模型挑 0–5 条。
+
+        没有配置 fast_model、安全网关拒绝或调用失败时退回向量前 5 条；
+        与 MaiBot 的整池注入有意不同，避免把 40–50 条候选塞进提示词（D119）。
+        """
         organ = self._config.expression_selector_organ
-        if not organ or organ == LOCAL_EXPRESSION_EMBEDDING:
-            return list(ordered[:_MAX_SELECTED_EXPRESSIONS])
         candidates = "\n".join(
             f"{number}: 情景={entry.detail} | 风格={entry.text}"
             for number, entry in enumerate(ordered, 1)
