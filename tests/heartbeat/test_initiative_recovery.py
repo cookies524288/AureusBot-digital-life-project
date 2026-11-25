@@ -58,10 +58,12 @@ async def test_missing_considered_record_does_not_bypass_daily_limit(
     await rig.exchange("你好")
     original = rig.timeline.append
 
-    def broken(**kwargs: Any) -> TimelineRecord:
-        if kwargs.get("event_type") == EVENT_INITIATIVE_CONSIDERED:
+    def broken(*args: Any, **kwargs: Any) -> TimelineRecord:
+        # 投递确认等调用方用位置参数传事件类型，两种写法都要认。
+        event_type = args[0] if args else kwargs.get("event_type")
+        if event_type == EVENT_INITIATIVE_CONSIDERED:
             raise sqlite3.OperationalError("测试考虑记录写不进去")
-        return original(**kwargs)
+        return original(*args, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(rig.timeline, "append", broken)
@@ -92,10 +94,11 @@ async def test_answer_settlement_survives_restart(
     [considered] = rig.records(EVENT_INITIATIVE_CONSIDERED)
     original = rig.timeline.append
 
-    def broken(**kwargs: Any) -> TimelineRecord:
-        if kwargs.get("event_type") == EVENT_INITIATIVE_RESULT:
+    def broken(*args: Any, **kwargs: Any) -> TimelineRecord:
+        event_type = args[0] if args else kwargs.get("event_type")
+        if event_type == EVENT_INITIATIVE_RESULT:
             raise sqlite3.OperationalError("测试回应结果写不进去")
-        return original(**kwargs)
+        return original(*args, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(rig.timeline, "append", broken)
@@ -146,10 +149,11 @@ async def test_message_record_failure_prevents_delivery(
     rig.sent.clear()
     original = rig.timeline.append
 
-    def broken(**kwargs: Any) -> TimelineRecord:
-        if kwargs.get("event_type") == "message":
+    def broken(*args: Any, **kwargs: Any) -> TimelineRecord:
+        event_type = args[0] if args else kwargs.get("event_type")
+        if event_type == "message":
             raise sqlite3.OperationalError("测试消息写不进去")
-        return original(**kwargs)
+        return original(*args, **kwargs)
 
     with monkeypatch.context() as patch:
         patch.setattr(rig.timeline, "append", broken)

@@ -237,18 +237,24 @@ async def test_a_message_is_recorded_and_answered(harness: Harness) -> None:
     [reference] = harness.records(EVENT_REPLY_REFERENCE)
     assert reference.content == "建议回复：回应"
     assert reference.visibility is user.visibility
-    assert reference.metadata == {"channel": CHANNEL, "in_reply_to": [user.id]}
-    assert harness.sent == [
-        OutgoingMessage(
-            CHANNEL,
-            USER_ID,
-            "早呀。",
-            MessageKind.REPLY,
-            sender_name="小绿",
-            timeline_id=reply.id,
-            timestamp=reply.timestamp,
-        )
-    ]
+    assert (reference.metadata["channel"], reference.metadata["in_reply_to"]) == (
+        CHANNEL,
+        [user.id],
+    )
+    [sent] = harness.sent
+    # 投递确认回调、分段号等是 3.15 新增的投递细节；这里只核对发出去的内容和来源。
+    assert (sent.channel, sent.recipient_id, sent.content, sent.kind) == (
+        CHANNEL,
+        USER_ID,
+        "早呀。",
+        MessageKind.REPLY,
+    )
+    assert (sent.sender_name, sent.timeline_id, sent.timestamp) == (
+        "小绿",
+        reply.id,
+        reply.timestamp,
+    )
+    assert sent.visibility is reply.visibility
 
 
 async def test_the_request_carries_persona_wakeup_history_and_new_message(
@@ -577,7 +583,8 @@ async def test_shutdown_waits_for_a_thought_that_finishes_in_time(harness: Harne
 
     assert harness.sent[-1].content == "晚安。"
     *_, reply, shut = harness.all_records()
-    assert (reply.event_type, reply.content) == (EVENT_MESSAGE, "晚安。")
+    # 投递结果是独立的 reply_delivered 事件，回复正文记录在它之前。
+    assert (reply.event_type, reply.content) == ("reply_delivered", "晚安。")
     assert shut.event_type == EVENT_SHUT_DOWN
 
 

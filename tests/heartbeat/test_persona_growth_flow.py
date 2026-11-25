@@ -56,6 +56,7 @@ class GrowthEnv(DiaryEnv):
     def __init__(self, path: Path) -> None:
         super().__init__(path)
         self.summary = GrowthOrgans()
+        self.summary.keywords = None  # 本夹具没开召回工具：规划器直接回复，不先查记忆
         self.organs = self.summary
         self.history = IdentityHistory(path / "aureus.db", self.clock)
         self.history.open()

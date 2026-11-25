@@ -64,9 +64,11 @@ def rig(tmp_path: Path) -> Iterator[ConfigRig]:
 
 
 def test_emoji_preview_routes_follow_active_selection_mode() -> None:
-    default = RuntimeConfig()
-    assert organ_tasks(default)["emoji"] == default.heartbeat.reply_organ
-    assert organ_tasks(default, {"emoji", default.heartbeat.reply_organ})["emoji"] == "emoji"
+    semantic = RuntimeConfig(heartbeat=HeartbeatConfig(qq_emoji_visual_enabled=False))
+    assert organ_tasks(semantic)["emoji"] == semantic.heartbeat.reply_organ
+    assert organ_tasks(semantic, {"emoji", semantic.heartbeat.reply_organ})["emoji"] == "emoji"
+    default = RuntimeConfig()  # 默认启用视觉选择（fa88456），不再走文本语义路由
+    assert "emoji" not in organ_tasks(default, {"emoji"})
     visual = RuntimeConfig(heartbeat=HeartbeatConfig(qq_emoji_visual_enabled=True))
     assert "emoji" not in organ_tasks(visual, {"emoji"})
     assert organ_tasks(visual)["emoji_visual_selection"] == "vlm"
@@ -119,7 +121,11 @@ def test_prompt_access_and_catalog(rig: ConfigRig, tmp_path: Path) -> None:
     assert set().union(*map(set, listing["organs"].values())) | {"expression_quality"} == {
         template["key"] for template in listing["templates"]
     }
-    assert all("expression_quality" not in keys for keys in listing["organs"].values())
+    # 表达质检默认开启（fa88456），固定走 judge 器官。
+    quality_organs = {
+        name for name, keys in listing["organs"].items() if "expression_quality" in keys
+    }
+    assert quality_organs == {"judge"}
     assert rig.client.get("/api/organs/missing/prompt-preview").status_code == 404
     assert rig.client.delete("/api/prompts/missing").status_code == 404
     assert rig.client.put("/api/prompts/plan_format", json={"source": "改格式"}).status_code == 422

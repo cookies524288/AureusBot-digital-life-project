@@ -35,15 +35,24 @@ class FixedOrgan:
         self.requests = requests
 
     async def process(self, request: OrganRequest) -> OrganResponse:
+        from tests.planner_fixtures import plan_response
+
         self.requests.append(request)
-        text = REACH if request.context.get("task") == "initiative_plan" else PLAN
+        task = request.context.get("task")
+        text = REACH if task == "initiative_plan" else PLAN
         if self.organ_id == "replyer":
             text = "好的。"
-        return OrganResponse(
-            organ_id=self.organ_id,
-            suggestion=text,
-            attempts=[CallAttempt("fake", "fake", prompt_tokens=2, completion_tokens=1)],
-        )
+        attempts = [CallAttempt("fake", "fake", prompt_tokens=2, completion_tokens=1)]
+        if task == "plan":
+            # 现行规划器只认工具调用，旧的纯文本计划要先编成 reply 工具响应。
+            planned = plan_response(request, text)
+            return OrganResponse(
+                organ_id=self.organ_id,
+                suggestion=planned.suggestion,
+                tool_calls=planned.tool_calls,
+                attempts=attempts,
+            )
+        return OrganResponse(organ_id=self.organ_id, suggestion=text, attempts=attempts)
 
 
 @pytest.mark.parametrize("roleplay", [False, True])

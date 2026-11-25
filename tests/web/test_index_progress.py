@@ -245,7 +245,9 @@ async def test_emoji_progress_only_counts_valid_cached_descriptions_in_the_same_
             embeddings=((1.0, 0.0),) * len(request.embedding_inputs),
         )
 
-    selector = EmojiSelector(store, embed, clock, HeartbeatConfig(), None)
+    # 默认已启用视觉选择（fa88456）；本用例只测文本嵌入的缓存，所以显式关掉。
+    config = HeartbeatConfig(qq_emoji_visual_enabled=False)
+    selector = EmojiSelector(store, embed, clock, config, None)
     spaces = ((1, "new-space"), (2, "test-space"))
     assert await selector.cache_coverage(spaces) == [(1, 0, 1), (2, 0, 1)]
     assert not calls

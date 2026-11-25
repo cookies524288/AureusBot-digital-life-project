@@ -119,6 +119,13 @@ def _planner_prompts(rig: Rig) -> list[str]:
     return [r.prompt for r in rig.organs.requests if r.organ_id == "planner"]
 
 
+def _reply_tool_properties(rig: Rig) -> set[str]:
+    """规划器 reply 工具声明的参数名；commit 只在日程开启时才出现。"""
+    request = [r for r in rig.organs.requests if r.organ_id == "planner"][0]
+    [reply] = [tool for tool in request.tools if tool.name == "reply"]
+    return set(reply.parameters["properties"])
+
+
 def _replyer_context(rig: Rig) -> str:
     return [r for r in rig.organs.requests if r.organ_id == "replyer"][-1].system_context
 
@@ -128,7 +135,7 @@ async def test_a_promise_is_recorded_with_feedback_expectation(env: Env) -> None
     assert agenda is not None
     await rig.exchange("下午两点有个会，到时候提醒我")
 
-    assert '"commit"' in _planner_prompts(rig)[0]  # 规划器知道可以提出答应的事
+    assert "commit" in _reply_tool_properties(rig)  # 规划器知道可以提出答应的事
     [item] = agenda.open_items()
     assert item.content == "下午两点提醒他开会"
     assert item.due_at == NOW + timedelta(hours=2)
@@ -234,9 +241,10 @@ async def test_bad_due_time_keeps_the_item_without_a_time(env: Env) -> None:
 
 
 async def test_agenda_switched_off_records_and_shows_nothing(env: Env) -> None:
-    rig, agenda, _ = env.build([COMMIT], agenda_enabled=False)
+    # 关掉日程后工具参数里没有 commit，参数模型禁止多余字段，所以这里用不带 commit 的计划。
+    rig, agenda, _ = env.build([_plan()], agenda_enabled=False)
     assert agenda is None
     await rig.exchange("到时候提醒我")
-    assert '"commit"' not in _planner_prompts(rig)[0]
+    assert "commit" not in _reply_tool_properties(rig)
     assert rig.records("agenda_added") == []
     assert "【日程】" not in _replyer_context(rig)
