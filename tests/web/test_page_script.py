@@ -377,7 +377,7 @@ def test_inbox_avatars_deduplicated_by_sender() -> None:
         const settle = async () => {
           for (let i = 0; i < 8; i++) await new Promise(setImmediate);
         };
-        await loadInboxMessages(1);
+        await loadInboxMessages();
         await settle();
         assert.equal(avatarRequests.length, 3);
         assert.deepEqual(avatarRequests.map(path =>
