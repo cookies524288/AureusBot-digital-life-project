@@ -63,7 +63,7 @@ h1,h2,h3,h4,p{margin:0}
 /* ---------- 布局：窄图标栏（鼠标放上去整条展开，叠在页面上方，不挤内容）+ 圆角主面板；参考 VS Code 浅色 ---------- */
 body{background:var(--frame)}
 #app{position:relative;display:grid;grid-template-columns:var(--nav-w) 1fr;height:100%;min-height:0}
-nav.side{position:absolute;z-index:30;top:0;bottom:0;left:0;width:var(--nav-w);display:flex;flex-direction:column;gap:2px;padding:10px 8px;background:var(--frame);border-right:1px solid transparent;overflow-x:hidden;overflow-y:auto;transition:width var(--dur) var(--ease),border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
+nav.side{position:absolute;z-index:30;top:0;bottom:0;left:0;width:var(--nav-w);display:flex;flex-direction:column;gap:2px;padding:10px 8px;background:var(--frame);border-right:1px solid transparent;overflow:hidden;transition:width var(--dur) var(--ease),border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
 /* 用 :has(:focus-visible) 而不是 :focus-within：鼠标点过按钮后按钮一直有焦点，用后者栏会卡在展开状态 */
 nav.side:hover,nav.side:has(:focus-visible){width:var(--nav-open);border-right-color:var(--border);box-shadow:8px 0 28px rgba(88,110,117,.14)}
 .brand{position:relative;flex:none;height:40px;margin-bottom:8px;font-weight:700;font-size:16px;letter-spacing:.3px;white-space:nowrap}
@@ -91,7 +91,9 @@ nav.side:hover .nav-group::after,nav.side:has(:focus-visible) .nav-group::after{
 nav.side .nav-item{position:relative;flex:none;gap:12px;height:40px;padding:0 10px;white-space:nowrap}
 nav.side .nav-item::before{content:'';position:absolute;left:-8px;top:50%;width:3px;height:18px;margin-top:-9px;border-radius:0 3px 3px 0;background:var(--accent);transform:scaleY(0);transition:transform var(--dur) var(--ease)}
 nav.side .nav-item.active::before{transform:scaleY(1)}
-.nav-spacer{flex:1}
+/* 品牌和底部按钮固定在两端，只有中间导航项滚动；窄栏里隐藏滚动条，避免挤窄图标列。 */
+.nav-scroll{flex:1;min-height:0;display:flex;flex-direction:column;gap:2px;overflow-x:hidden;overflow-y:auto;scrollbar-width:none}
+.nav-scroll::-webkit-scrollbar{display:none}
 .nav-foot{display:flex;flex-direction:column;gap:2px;padding-top:8px;border-top:1px dashed var(--stitch)}
 #pages{position:relative;grid-column:2;min-width:0;min-height:0;overflow:hidden;margin:8px 8px 8px 0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 /* 两排错开的亮线模拟纱线交叠。纹理直接画在底面，随内容滚动时保持静止。 */
@@ -127,7 +129,8 @@ linear-gradient(90deg,var(--border),transparent 85%) left bottom/100% 1px no-rep
 #app{grid-template-columns:1fr;grid-template-rows:1fr auto}
 #pages{grid-column:1;grid-row:1;margin:0;border:0;border-radius:0;box-shadow:none}
 nav.side,nav.side:hover,nav.side:has(:focus-visible){position:static;grid-row:2;width:auto;flex-direction:row;gap:0;padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:var(--surface);border-right:0;border-top:1px solid var(--border);box-shadow:none;overflow-x:auto;overflow-y:hidden}
-.brand,.nav-group,.nav-spacer,.nav-foot #terminal-btn{display:none}
+.brand,.nav-group,.nav-foot #terminal-btn{display:none}
+.nav-scroll{display:contents}
 .nav-foot{display:contents}
 nav.side .nav-item{flex:1 0 auto;min-inline-size:44px;width:auto;flex-direction:column;justify-content:center;gap:2px;height:auto;padding:6px;font-size:11px;text-align:center}
 nav.side .nav-item::before{display:none}
@@ -754,6 +757,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="nav-trigger" aria-hidden="true"></div>
 <nav class="side" aria-label="主导航">
 <div class="brand"><div class="brand-content"><svg class="brand-mark" aria-hidden="true"><use href="#aureus-logo"/></svg><span class="nav-label" style="--i:0">AureusBot</span></div></div>
+<div class="nav-scroll">
 <button class="nav-item" data-page="overview" aria-label="总览"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-home"/></svg><span class="nav-label" style="--i:1">总览</span></button>
 <button class="nav-item" data-page="chat" aria-label="私聊"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-chat"/></svg><span class="nav-label" style="--i:2">私聊</span></button>
 <button class="nav-item" data-page="monitor" aria-label="观察"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-pulse"/></svg><span class="nav-label" style="--i:3">观察</span></button>
@@ -770,7 +774,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="nav-group"><span class="nav-label" style="--i:8">高级管理</span></div>
 <button class="nav-item" data-page="prompts" aria-label="Prompt 管理"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-prompt"/></svg><span class="nav-label" style="--i:9">Prompt 管理</span></button>
 <button class="nav-item" data-page="config" aria-label="设置"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-sliders"/></svg><span class="nav-label" style="--i:9">设置</span></button>
-<div class="nav-spacer"></div>
+</div>
 <div class="nav-foot">
 <button id="restart-btn" class="nav-item hidden" aria-label="重启程序" title="重启程序"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-refresh"/></svg><span class="nav-label" style="--i:10">重启</span></button>
 <button id="shutdown-btn" class="nav-item" aria-label="退出程序" title="退出程序"><svg class="ico nav-icon" aria-hidden="true"><use href="#i-logout"/></svg><span class="nav-label" style="--i:10">退出</span></button>
