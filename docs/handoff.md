@@ -13,16 +13,21 @@
 - 聊天链路：程序正常启动、组装核心、优雅关闭，退出码 0；用户消息 → 规划器 → 回复器 → 投递全部写入时间线（`message` / `reply_reference` / `reply_delivered`），中文按 UTF-8 正确存储。
 - Web 接口：临时端口 18765 启动，首页 200，受保护接口未登录返回 401；逐个探测学习与资源接口（`/api/resources/learning*`、`/api/resources/media`、`/api/resources/memory*`、`/api/resources/emoji*`、`/api/webui/expression*`、`/api/settings`、`/api/overview`、器官预览/进度）均已挂载且受鉴权保护，无 404。
 
-这是隔离验收，不等于维护者在正式实例上的接管验收。全量 `scripts/check.py` 尚未重跑；若跑，会带上 12 个 QQ 通道用例的既有失败（测试内 WebSocket 超时/连接关闭，与主程序功能无关）。
+这是隔离验收，不等于维护者在正式实例上的接管验收。收尾后的隔离全量 pytest（2026-11-25）为 **11 失败、3107 通过、5 跳过**；11 项都是 QQ 通道与启动器相关的既有基线：`test_qq_behavior_replay` 6 项、`test_qq_people_history` 1 项、`test_qq_persistent_scope` 1 项、`test_qq_runtime::test_qq_chat_entry_reconnect_routing_and_account_link` 1 项、`test_qq_test_group` 1 项、`test_maibot_memory::test_cli_import_publish_restart_and_rebuild` 1 项。
 
 **D104 重启验收**：本地 `main` 在 `daed8c5` 之后有这些改动，可用根目录 `Aureus.exe` 重启。观察点：
 - 表情选择文字和语义路径正常工作
 - 增量学习提示和功能同时出现
 - 人设成长禁用不报错
 - 兴趣修改在权限限制下不生效
+- 兴趣建议结构不合格（超长、多余子字段、联系人会话多传 `interest`）时回复照常、兴趣不变（D115）
 - 长期记忆关系维护（禁用、移除、恢复）生效
 
-12 个 QQ 通道失败属于长期稳定性问题，不在本轮改动范围。第 16 项隔离全量检查尚需维护者确认能重启，然后运行 `scripts/check.py`。
+上述 11 个 QQ/启动器失败属于长期稳定性问题，不在本轮改动范围。
+
+## 环境修复 · 2026-11-25（`.venv`）
+
+项目 `.venv` 原先指向已删除的基础 Python 3.13.7（`D:\Users\cooki\AppData\Local\Programs\Python\Python313`），导致 `Aureus.exe` 无法启动。已重建：旧目录改名保留为 `.venv.broken-20261125`，用 `uv python install 3.13 --install-dir E:/Tools/uv-python` 装持久解释器，再 `uv sync --python E:/Tools/uv-python/cpython-3.13.18-windows-x86_64-none/python.exe`。新 `.venv` 基础为 3.13.18，pytest 17 项通过，`python -m aureus --help` 正常。注意：本机 shell 里 `AppData` 被容器重定向，uv 默认安装目录会跨盘改名失败，装 Python 必须显式 `--install-dir`。旧目录里有一个文件名疑似含 API 密钥，还有 `Aureus-*.exe` 备份，确认后由维护者删除。
 
 ## D111 续接现场 · 2026-11-25
 
@@ -30,7 +35,7 @@
 
 - `2836d7e` 已接入完整原前端 `83e2269`。接续 `codex/d111-learning-web` 的实际操作、许可及换行调整；先前组合快照 `81a9f33` 的 17 项专项证据保留，不另跑同一套。
 - `c981b7c` 已接入与 D109 合流的会话学习／召回状态（`8cddd17`）。`codex/315-modular-learning-api` 继续移入剩余管理服务，不为每个按钮另写一套。
-- `bcb0537` 合入跨会话读写与原件撤回，`fa88456` 合入核定学习默认值。原学习器及历史裁切已接入，管理接口缺口（缩略图缓存、批量上传、旧版导入、覆盖导入）已补齐（`bd6f671` 至 `63ee540`），过时夹具已更新（`f0716fa`、`06ad02c`）。[D114](10-decisions.md) 定下收尾边界：`/groups` 有意返回空、`aureus/learners/` 不并入、全量基线为 3069 通过 / 49 失败（39 项是移植前就失败的 D109 既有基线，10 项为过时用例）。[收尾任务](tasks/3.15-modular-learning-finish.md)已完成并通过复审（`86d391d` 至 `0ab05a7`）：ruff 与 lint-imports 清零，pyright 只剩 `lab`、`monitor` 两个可选依赖未装造成的 4 个导入错误，第三方登记补齐，过时用例处理完毕。隔离 `--home --fake` 端到端验收已通过（见上文）。待维护者拍板：兴趣参数结构不合格时 D79 与 D103 的取舍。未推送、未重启。项目 `.venv` 缺 Python313 基础安装已损坏，检查改用 `E:/Temp/aureus-315-ept-env`。
+- `bcb0537` 合入跨会话读写与原件撤回，`fa88456` 合入核定学习默认值。原学习器及历史裁切已接入，管理接口缺口（缩略图缓存、批量上传、旧版导入、覆盖导入）已补齐（`bd6f671` 至 `63ee540`），过时夹具已更新（`f0716fa`、`06ad02c`）。[D114](10-decisions.md) 定下收尾边界：`/groups` 有意返回空、`aureus/learners/` 不并入、全量基线为 3069 通过 / 49 失败（39 项是移植前就失败的 D109 既有基线，10 项为过时用例）。[收尾任务](tasks/3.15-modular-learning-finish.md)已完成并通过复审（`86d391d` 至 `0ab05a7`）：ruff 与 lint-imports 清零，pyright 只剩 `lab`、`monitor` 两个可选依赖未装造成的 4 个导入错误，第三方登记补齐，过时用例处理完毕。隔离 `--home --fake` 端到端验收已通过（见上文）。兴趣参数结构不合格的处理已由 [D115](10-decisions.md) 定为丢弃该字段、回复照常，实现与复审见[任务](tasks/3.15-interest-fallback.md)。项目 `.venv` 已重建（见上文「环境修复」），后续检查可直接用 `.venv`。未推送、未重启。
 
 不要清理各树已有 `.pytest-*` 临时目录、Prompt 原稿或恢复现场；不自动重启、不启动第二实例。主线 API 小步若有新代码可由维护者用根目录 `Aureus.exe` 重启验收，但 D111 整体尚不能提醒为已完成。公开文档不要写本机 MaiBot 私有路径、账户或聊天内容。
 
