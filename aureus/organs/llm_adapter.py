@@ -411,6 +411,12 @@ async def probe_model(
     latency = None
     failure = None
     attempts: list[CallAttempt] = []
+
+    def mark_latency() -> None:
+        nonlocal latency
+        if latency is None:
+            latency = loop.time() - started
+
     usage = _probe_usage(
         inputs, 0 if embedding or transcription else _MODEL_TEST_MAX_TOKENS
     )
@@ -460,12 +466,6 @@ async def probe_model(
                 ):
                     failure = "工具调用名称或参数与测试要求不符。"
             else:
-
-                def mark_latency() -> None:
-                    nonlocal latency
-                    if latency is None:
-                        latency = loop.time() - started
-
                 stream = await library.acompletion(
                     **inputs,
                     stream=True,
@@ -1103,14 +1103,41 @@ class LLMOrgan:
         extra_bytes: int,
         tool_names: set[str],
     ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
-        """真正发出一次请求。失败的这一次先记进 attempts，再抛出。"""
+        """真正发出一次请求；流式没有正文时再发一次非流式重试（D127）。
+
+        失败的请求先记进 attempts，再抛出。
+        """
         tools = ToolCallCollector(tool_names) if tool_names else None
+        reasoning_only = False
         try:
             completion = self._completion
             assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
             response = await completion(**kwargs)
             if kwargs.get("stream"):
-                text, usage, _ = await _read_stream(response, tools)
+                text, usage, reasoning_only = await _read_stream(response, tools)
+                if text is None and (tools is None or tools.finish() == ()):
+                    # 流式没有正文、也没有工具调用：同一请求去掉 stream 再试一次（D127）。
+                    # 流式那一次照样记账；重试的用量以非流式响应为准。
+                    if not usage.known:
+                        usage = self._estimate_usage(route, messages, 1, extra_bytes)
+                    attempts.append(
+                        self._attempt(
+                            route,
+                            usage,
+                            REASONING_ONLY_REASON if reasoning_only else EMPTY_REPLY_REASON,
+                        )
+                    )
+                    retry_kwargs = {
+                        key: value
+                        for key, value in kwargs.items()
+                        if key not in ("stream", "stream_options")
+                    }
+                    response = await completion(**retry_kwargs)
+                    usage = extract_usage(response)
+                    text = _read_text(response)
+                    reasoning_only = reasoning_only or _read_reasoning(response)
+                    if tools is not None and (choices := getattr(response, "choices", None)):
+                        tools.read_choice(choices[0], stream=False)
             else:
                 usage = extract_usage(response)
                 if self.organ_id == "voice":
@@ -1118,6 +1145,7 @@ class LLMOrgan:
                     text = value.strip() if isinstance(value, str) and value.strip() else None
                 else:
                     text = _read_text(response)
+                    reasoning_only = _read_reasoning(response)
                     if tools is not None and (choices := getattr(response, "choices", None)):
                         tools.read_choice(choices[0], stream=False)
         except asyncio.CancelledError:
@@ -1144,8 +1172,9 @@ class LLMOrgan:
         if text is None and tool_calls == ():
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
             # 思考上），这次请求照样要记账。重试只会再花一次钱，所以不重试。
-            attempts.append(self._attempt(route, usage, EMPTY_REPLY_REASON))
-            raise _RouteFailureError(EMPTY_REPLY_REASON)
+            reason = REASONING_ONLY_REASON if reasoning_only else EMPTY_REPLY_REASON
+            attempts.append(self._attempt(route, usage, reason))
+            raise _RouteFailureError(reason)
         suggestion = (text or "") if tool_calls is not None else ""
         return suggestion, tool_calls, self._attempt(route, usage)
 

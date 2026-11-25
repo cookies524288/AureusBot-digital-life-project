@@ -980,6 +980,150 @@ def test_call_attempt_rejects_bad_token_counts(field_name: str, bad: object) -> 
         CallAttempt(model="m", provider="p", **counts)
 
 
+@pytest.mark.asyncio
+async def test_normal_call_falls_back_to_non_streaming(keys: KeyResolver) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        yield make_stream_chunk(content=None)
+        yield SimpleNamespace(choices=[], usage=make_response(None, 7, 1).usage)
+
+    completion = FakeCompletion(chunks(), make_response("备用", prompt=10, completion=5))
+    response = await make_unpriced_organ(completion, keys).process(
+        OrganRequest("replyer", "规划材料", stream=True)
+    )
+
+    assert response.suggestion == "备用"
+    assert len(completion.calls) == 2
+    assert completion.calls[0]["stream"] is True
+    assert completion.calls[0]["stream_options"] == {"include_usage": True}
+    assert "stream" not in completion.calls[1]
+    assert "stream_options" not in completion.calls[1]
+    assert completion.calls[1]["model"] == completion.calls[0]["model"]
+    assert completion.calls[1]["messages"] == completion.calls[0]["messages"]
+    assert response.attempts[0].succeeded is False
+    assert response.attempts[0].failure_reason == EMPTY_REPLY_REASON
+    assert response.attempts[0].budget_tokens == 8
+    assert response.attempts[1].succeeded is True
+    assert response.attempts[1].budget_tokens == 15  # 用量以非流式响应为准
+    assert response.metadata["prompt_tokens"] == 10
+    assert response.metadata["completion_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_tools_and_reads_tool_calls(keys: KeyResolver) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        yield make_stream_chunk(content=None)
+
+    tool_reply = make_response(None, 10, 5)
+    tool_reply.choices[0].message.tool_calls = [
+        make_tool_fragment('{"query": "资料"}', call_id="call_read", name="read")
+    ]
+    completion = FakeCompletion(chunks(), tool_reply)
+    response = await make_planner(completion, keys).process(
+        OrganRequest("planner", "规划材料", tools=(READ_TOOL,), stream=True)
+    )
+
+    assert response.suggestion == ""
+    assert response.tool_calls == (ToolCall("read", "call_read", {"query": "资料"}),)
+    assert len(completion.calls) == 2
+    assert "stream" not in completion.calls[1]
+    assert completion.calls[1]["tools"] == completion.calls[0]["tools"]
+    assert completion.calls[1]["messages"] == completion.calls[0]["messages"]
+    assert response.attempts[0].failure_reason == EMPTY_REPLY_REASON
+    assert response.attempts[1].succeeded is True
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_reasoning_only_reply_is_not_sent_as_content(
+    keys: KeyResolver, field: str, stream: bool
+) -> None:
+    def reasoning_reply() -> Any:
+        reply = make_response(None, 100, 20)
+        setattr(reply.choices[0].message, field, "内心推理")
+        return reply
+
+    outcomes: list[Any] = [reasoning_reply()]
+    if stream:
+
+        async def chunks() -> AsyncIterator[Any]:
+            delta = SimpleNamespace(content=None)
+            setattr(delta, field, "内心推理")
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+        outcomes.insert(0, chunks())
+    completion = FakeCompletion(*outcomes)
+    with pytest.raises(OrganCallError, match=REASONING_ONLY_REASON) as error:
+        await make_unpriced_organ(completion, keys).process(
+            OrganRequest("replyer", "规划材料", stream=stream)
+        )
+
+    assert "内心推理" not in str(error.value)
+    assert len(completion.calls) == (2 if stream else 1)
+    if stream:
+        assert completion.calls[0]["stream"] is True
+        assert "stream" not in completion.calls[1]
+    else:
+        assert "stream" not in completion.calls[0]
+    assert all(not attempt.succeeded for attempt in error.value.attempts)
+    assert error.value.attempts[-1].failure_reason == REASONING_ONLY_REASON
+
+
+@pytest.mark.asyncio
+async def test_empty_after_fallback_keeps_empty_reason(keys: KeyResolver) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        yield make_stream_chunk(content=None)
+
+    completion = FakeCompletion(chunks(), make_response(None))
+    with pytest.raises(OrganCallError, match=EMPTY_REPLY_REASON) as error:
+        await make_unpriced_organ(completion, keys).process(
+            OrganRequest("replyer", "规划材料", stream=True)
+        )
+
+    assert len(completion.calls) == 2
+    assert "stream" not in completion.calls[1]
+    assert [attempt.failure_reason for attempt in error.value.attempts] == [
+        EMPTY_REPLY_REASON,
+        EMPTY_REPLY_REASON,
+    ]
+    assert REASONING_ONLY_REASON not in str(error.value)
+
+
+@pytest.mark.parametrize("error_name", ["Timeout", "RateLimitError", "AuthenticationError"])
+@pytest.mark.parametrize("during_stream", [False, True])
+@pytest.mark.asyncio
+async def test_errors_do_not_trigger_fallback(
+    keys: KeyResolver, error_name: str, during_stream: bool
+) -> None:
+    error_type = type(error_name, (Exception,), {})
+    calls = 3 if error_name in ("Timeout", "RateLimitError") else 1
+
+    def outcome() -> Any:
+        if not during_stream:
+            return error_type("x")
+
+        async def chunks() -> AsyncIterator[Any]:
+            yield make_stream_chunk(content=None)
+            raise error_type("x")
+
+        return chunks()
+
+    completion = FakeCompletion(*[outcome() for _ in range(calls)])
+    with pytest.raises(OrganCallError) as error:
+        await make_unpriced_organ(completion, keys).process(
+            OrganRequest("replyer", "规划材料", stream=True)
+        )
+
+    assert len(completion.calls) == calls
+    assert all(call.get("stream") is True for call in completion.calls)  # 没有非流式回退
+    expected = {
+        "Timeout": "超时",
+        "RateLimitError": "被限流",
+        "AuthenticationError": "认证失败（密钥无效？）",
+    }[error_name]
+    assert error.value.attempts[-1].failure_reason == expected
+
+
 def test_litellm_console_handlers_are_removed_but_logs_still_propagate() -> None:
     import logging
 
