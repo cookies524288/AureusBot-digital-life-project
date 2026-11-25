@@ -9,6 +9,8 @@ from aureus.timeline import TimelineRecord
 from aureus.timeline.platform_history import LegacyPlatformHistory
 
 LEGACY_SCAN_SIZE = 100
+# 一次请求最多扫这么多批旧记录；超出时返回继续游标，避免超大历史把请求拖住（D121）。
+LEGACY_SCAN_BATCHES = 20
 
 
 def inbox_message(message: InboxMessage, *, include_attachment_ids: bool = True) -> dict[str, Any]:
@@ -93,11 +95,15 @@ def timeline_page(
     before_id: int | None,
     limit: int,
     skip: int = 0,
-) -> list[TimelineRecord]:
-    """跨过已有规范原件的旧记录，再对剩余记录翻页。"""
+) -> tuple[list[TimelineRecord], int | None]:
+    """跨过已有规范原件的旧记录，再对剩余记录翻页。
+
+    返回这一页读到的记录和继续游标。游标只在扫满 LEGACY_SCAN_BATCHES 批、
+    还没凑够 limit 时给出：调用方可以从这个时间线 id 之前接着读（D121）。
+    """
     rows: list[TimelineRecord] = []
     scope = (key.platform, key.account_id, key.kind, key.recipient_id, key.temporary_group_id)
-    while len(rows) < limit:
+    for _ in range(LEGACY_SCAN_BATCHES):
         remaining = limit - len(rows)
         batch_size = max(remaining, min(skip + remaining, LEGACY_SCAN_SIZE))
         page = history.page(scope, before_id=before_id, limit=batch_size)
@@ -114,6 +120,8 @@ def timeline_page(
         rows.extend(unique[skip : skip + remaining])
         skip = max(0, skip - len(unique))
         if len(page) < batch_size:
-            break
+            return rows, None
         before_id = page[-1].id
-    return rows
+        if len(rows) >= limit:
+            return rows, None
+    return rows, before_id

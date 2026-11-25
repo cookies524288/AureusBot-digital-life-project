@@ -1,10 +1,12 @@
 """平台收件箱网页接口使用临时库，不消耗心跳未读。"""
 
 import json
+from collections.abc import Iterable
 from contextlib import closing
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from typing import cast
 
 import pytest
 from PIL import Image
@@ -14,7 +16,9 @@ from aureus.common.sqlite import open_connection
 from aureus.heartbeat import MediaReference, MessageRoute, Perception, TrustLevel
 from aureus.heartbeat.inbox_store import ConversationKey, InboxImageNote, InboxStore
 from aureus.memory import EmojiStore, HistoricalMemory, MemoryIndex, MemorySource
-from aureus.timeline import ActorType, VisibilityScope
+from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
+from aureus.timeline.platform_history import LegacyPlatformHistory, LegacyRoute
+from aureus.web.inbox_history import LEGACY_SCAN_BATCHES, LEGACY_SCAN_SIZE, timeline_page
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import NOW
 
@@ -109,7 +113,7 @@ def test_inbox_conversations_uses_cached_routes(
         calls: list[int] = []
         original = rig.timeline.platform_history.routes
 
-        def counting_routes() -> list[tuple[object, int, datetime]]:
+        def counting_routes() -> list[tuple[LegacyRoute, int, datetime]]:
             calls.append(1)
             return original()
 
@@ -166,7 +170,7 @@ def test_inbox_conversations_scans_are_bounded(
         calls = {"routes": 0, "page": 0}
         original = rig.timeline.platform_history.routes
 
-        def counting_routes() -> list[tuple[object, int, datetime]]:
+        def counting_routes() -> list[tuple[LegacyRoute, int, datetime]]:
             calls["routes"] += 1
             return original()
 
@@ -182,6 +186,124 @@ def test_inbox_conversations_scans_are_bounded(
         assert [row["key"]["recipient_id"] for row in first["conversations"]] == ["2"]
         assert first["archives"][0]["archive"] == "timeline"
         assert calls == {"routes": 1, "page": 0}
+    finally:
+        rig.close()
+
+
+class _CappedHistory:
+    """每次返回整批旧记录，用来核实扫描批数上限。"""
+
+    def __init__(self, highest: int) -> None:
+        self.highest = highest
+        self.calls: list[tuple[int | None, int]] = []
+
+    def page(self, _route: object, *, before_id: int | None, limit: int) -> list[TimelineRecord]:
+        self.calls.append((before_id, limit))
+        end = before_id if before_id is not None else self.highest + 1
+        return [
+            TimelineRecord(
+                id=identifier,
+                timestamp=NOW,
+                actor_type=ActorType.PERSON,
+                actor_id="3",
+                event_type="message",
+                content="旧消息",
+                visibility=VisibilityScope.GROUP,
+                metadata={"message_id": f"m{identifier}"},
+            )
+            for identifier in range(end - 1, end - 1 - limit, -1)
+        ]
+
+
+class _CanonicalStore:
+    """把所有旧记录都当作已有规范原件，逼 timeline_page 扫到上限。"""
+
+    def existing_message_ids(self, _key: object, ids: Iterable[str]) -> set[str]:
+        return set(ids)
+
+    def excluded_timeline_ids(self, _key: object, ids: Iterable[int]) -> set[int]:
+        return set()
+
+
+def test_timeline_page_caps_scan_batches_and_returns_cursor() -> None:
+    key = ConversationKey(**GROUP)
+    history = _CappedHistory(highest=10_000)
+    store = cast(InboxStore, _CanonicalStore())
+    rows, cursor = timeline_page(
+        store, cast(LegacyPlatformHistory, history), key, before_id=None, limit=LEGACY_SCAN_SIZE
+    )
+    assert rows == []
+    assert len(history.calls) == LEGACY_SCAN_BATCHES
+    assert history.calls[0] == (None, LEGACY_SCAN_SIZE)
+    assert history.calls[1] == (10_000 - LEGACY_SCAN_SIZE + 1, LEGACY_SCAN_SIZE)
+    assert cursor == 10_000 - LEGACY_SCAN_BATCHES * LEGACY_SCAN_SIZE + 1
+    following, next_cursor = timeline_page(
+        store,
+        cast(LegacyPlatformHistory, history),
+        key,
+        before_id=cursor,
+        limit=LEGACY_SCAN_SIZE,
+    )
+    assert following == []
+    assert len(history.calls) == 2 * LEGACY_SCAN_BATCHES
+    assert history.calls[LEGACY_SCAN_BATCHES] == (cursor, LEGACY_SCAN_SIZE)
+    assert next_cursor == cursor - LEGACY_SCAN_BATCHES * LEGACY_SCAN_SIZE
+
+
+def test_first_inbox_page_returns_cursor_when_legacy_scan_is_capped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    rig = ConfigRig(tmp_path, inbox_store=store, allows_inbox_conversation=lambda key: True)
+    try:
+        with closing(open_connection(rig.paths.database_file)) as database, database:
+            database.executemany(
+                "INSERT INTO timeline (timestamp, actor_type, actor_id, event_type, content, "
+                "visibility, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    (
+                        NOW.isoformat(),
+                        "person",
+                        "3",
+                        "message",
+                        "合成旧消息",
+                        "group",
+                        json.dumps(
+                            {
+                                "channel": "qq",
+                                "account_id": "1",
+                                "message_type": "group",
+                                "recipient_id": "2",
+                                "message_id": f"legacy-{number}",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                    for number in range(5_000)
+                ),
+            )
+        rig.log_in()
+
+        def all_canonical(_key: ConversationKey, ids: Iterable[str]) -> set[str]:
+            return set(ids)
+
+        monkeypatch.setattr(store, "existing_message_ids", all_canonical)
+        first = rig.client.get(MESSAGES, params={**GROUP, "limit": 50}).json()
+        assert first["messages"] == []
+        assert first["next_before_source"] == "timeline"
+        assert first["next_before_id"] is not None
+        second = rig.client.get(
+            MESSAGES,
+            params={
+                **GROUP,
+                "limit": 50,
+                "before_id": first["next_before_id"],
+                "before_source": "timeline",
+            },
+        ).json()
+        assert second["messages"] == []
+        assert second["next_before_source"] == "timeline"
+        assert second["next_before_id"] < first["next_before_id"]
     finally:
         rig.close()
 

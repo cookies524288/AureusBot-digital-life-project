@@ -150,7 +150,7 @@ def register_inbox_routes(
             if offset and not messages:
                 size = await asyncio.to_thread(store.count_visible_messages, key)
                 skip = max(0, offset - size)
-            old = await asyncio.to_thread(
+            old, next_before = await asyncio.to_thread(
                 timeline_page,
                 store,
                 history,
@@ -160,7 +160,14 @@ def register_inbox_routes(
                 skip=skip,
             )
             messages.extend(map(timeline_message, old))
-        return _response(messages if allows_conversation(key) else [], limit)
+        else:
+            next_before = None
+        allowed = allows_conversation(key)
+        response = _response(messages if allowed else [], limit)
+        if allowed and response["next_before_id"] is None and next_before is not None:
+            response["next_before_id"] = next_before
+            response["next_before_source"] = "timeline"
+        return response
 
     @app.get("/api/inbox/messages/{identifier}/images/{position}")
     async def read_image(
