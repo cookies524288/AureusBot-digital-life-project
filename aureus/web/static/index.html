@@ -606,7 +606,15 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .resource-pagination [role=status]{font-size:13px}
 .resource-detail{overflow-wrap:anywhere;gap:12px}
 /* 学习页本身是完整工作台：Shadow DOM 宿主铺满页面，样式和浮层都留在影子树内。 */
-#page-learning{--workbench-border:var(--border);--workbench-accent:var(--accent);--workbench-accent-soft:var(--accent-soft);--workbench-radius:var(--radius);--workbench-radius-sm:var(--radius-sm);padding:0;overflow:hidden;position:relative}
+#page-learning{--workbench-border:var(--border);--workbench-accent:var(--accent);--workbench-accent-soft:var(--accent-soft);--workbench-radius:var(--radius);--workbench-radius-sm:var(--radius-sm);padding:0 0 0 var(--nav-w);transition:padding-left var(--dur) var(--ease);overflow:hidden;position:relative}
+/* 学习页铺满工作台，左侧要给导航让位：收起时留收起宽度，悬停或键盘聚焦展开时内容平滑右移（3.23）。
+   只限桌面宽度：窄屏导航在底部，悬停或点按不该再加左内边距。 */
+@media (min-width:821px){
+#app:has(nav.side:hover) #page-learning,
+#app:has(nav.side :focus-visible) #page-learning,
+#app:has(.nav-trigger:hover) #page-learning{padding-left:var(--nav-open)}
+}
+@media (max-width:820px){#page-learning{padding:0}}
 #learning-workbench-host{position:relative;flex:1;min-height:0;width:100%;border-radius:var(--radius);overflow:hidden}
 #learning-workbench-status,#learning-workbench-error{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:var(--bg);color:var(--text-2)}
 #learning-workbench-error{color:var(--text)}
