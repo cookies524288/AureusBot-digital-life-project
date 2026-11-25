@@ -231,22 +231,8 @@ def register_learning_workbench_routes(
         @router.get(path + "/chats")
         @router.get(path + "/chat-targets")
         async def chats() -> dict[str, Any]:
-            scopes = await run(service.scopes)
-            rows = await run(service.language_payloads, kind)
-            return {
-                "success": True,
-                "total": len(scopes),
-                "data": [
-                    {
-                        "chat_id": key,
-                        "session_id": key,
-                        "chat_name": label,
-                        "expression_count": sum(row.get("chat_id") == key for row in rows),
-                        "jargon_count": sum(key in row.get("session_ids", []) for row in rows),
-                    }
-                    for key, label in scopes.items()
-                ],
-            }
+            targets = await run(service.language_chats, kind)
+            return {"success": True, "total": len(targets), "data": targets}
 
         @router.get(path + "/groups")
         async def groups() -> dict[str, Any]:
