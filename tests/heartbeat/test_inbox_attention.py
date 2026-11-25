@@ -31,6 +31,7 @@ from aureus.people import PeopleDirectory
 from aureus.safety import EmergencyStop, Ledger, PermissionChecker
 from aureus.timeline import TimelineDatabase, TimelineQuery, VisibilityScope
 from tests.planner_fixtures import plan_response
+from tests.prompt_assertions import dialogue_text
 
 
 class Organs:
@@ -276,7 +277,9 @@ def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_active_conversation_keeps_each_batch_separate(tmp_path: Path) -> None:
+async def test_active_conversation_merges_during_planning_and_handles_priority(
+    tmp_path: Path,
+) -> None:
     clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     timeline = TimelineDatabase(database, clock)
@@ -377,12 +380,17 @@ async def test_active_conversation_keeps_each_batch_separate(tmp_path: Path) -> 
         await advance_to_planner()
         receive("next-batch-first")
         receive("next-batch-second")
-        assert cancellations == []
+        # D116：活跃会话规划期间的新消息取消当前规划并合入同一批，旧回复不投递。
+        await heart.wait_for_thought()
+        assert cancellations == [2]
         assert "next-batch-first" not in plans[-1].prompt
-        assert store.list_unread_conversations()[0].unread_count == 2
+        assert store.list_unread(selected) == []
         await finish_plan()
         await advance_to_planner()
-        assert all(text in plans[-1].prompt for text in ("next-batch-first", "next-batch-second"))
+        assert all(
+            text in plans[-1].prompt
+            for text in ("ongoing-message", "next-batch-first", "next-batch-second")
+        )
         await finish_plan()
 
         receive("priority-elsewhere", sender="owner", group="priority-group")
@@ -394,11 +402,280 @@ async def test_active_conversation_keeps_each_batch_separate(tmp_path: Path) -> 
         receive("离开当前群", group="priority-group")
         await advance_to_planner()
         await finish_plan()
-        assert len(replies) == 4
+        assert len(replies) == 3
         assert all(item.route is not None for item in sent if item.kind is MessageKind.REPLY)
         receive("ordinary-after-leaving", group="priority-group")
         assert not heart.is_thinking
         assert store.list_unread_conversations()[0].unread_count == 1
+    finally:
+        await heart.shut_down()
+        timeline.close()
+
+
+@pytest.mark.asyncio
+async def test_active_conversation_merges_messages_arriving_during_debounce(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    plans: list[OrganRequest] = []
+    replies: list[OrganRequest] = []
+    received: list[int] = []
+
+    class StreamingOrgans:
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            task = request.context.get("task")
+            if task == "inbox_select":
+                return OrganResponse(request.organ_id, '{"conversation":1,"count":1}')
+            if task == "plan":
+                assert request.stream
+                plans.append(request)
+                started.set()
+                await release.wait()
+                return plan_response(
+                    request, {"reply": True, "intent": "回应", "stay_in_conversation": True}
+                )
+            assert task == "reply" and not request.stream
+            replies.append(request)
+            return OrganResponse("replyer", "收到。")
+
+    identity = Identity.model_validate(
+        {
+            "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+            "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
+            "persona": {"immutable": "温和。"},
+        }
+    )
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=StreamingOrgans(),
+        identity=identity,
+        config=HeartbeatConfig(inbox_debounce_enabled=True, split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    sent: list[OutgoingMessage] = []
+    heart.attach_channel("qq", sent.append)
+    heart.wake_up()
+
+    def receive(text: str, *, sender: str = "visitor") -> None:
+        result = store.add(
+            Perception(
+                "qq",
+                sender,
+                text,
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_USER if sender == "owner" else TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", "ongoing", text),
+            )
+        )
+        assert result is not None
+        received.append(result.id)
+        heart.on_inbox_message(result)
+        heart.beat()
+
+    async def advance_to_planner() -> None:
+        clock.advance(timedelta(seconds=4))
+        heart.beat()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        started.clear()
+
+    async def finish_plan() -> None:
+        release.set()
+        await heart.wait_for_thought()
+        heart.beat()
+        release.clear()
+
+    try:
+        receive("暖场", sender="owner")
+        await advance_to_planner()
+        await finish_plan()
+        assert len(replies) == 1 and len(sent) == 1
+
+        receive("第一条")
+        assert len(plans) == 1
+        assert heart.seconds_until_next_beat() == 4
+        clock.advance(timedelta(seconds=2))
+        receive("第二条")
+        assert len(plans) == 1
+        assert heart.seconds_until_next_beat() == 4
+        clock.advance(timedelta(seconds=2))
+        heart.beat()
+        assert len(plans) == 1
+        clock.advance(timedelta(seconds=2))
+        heart.beat()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        started.clear()
+
+        assert len(plans) == 2
+        assert all(text in plans[-1].prompt for text in ("第一条", "第二条"))
+        assert len(plans[-1].context["in_reply_to"]) == 2
+        await finish_plan()
+        assert len(sent) == 2
+        assert all(text in dialogue_text(replies[-1]) for text in ("第一条", "第二条"))
+        assert len(replies[-1].context["in_reply_to"]) == 2
+
+        inbound = [
+            record.metadata["inbox_message_id"]
+            for record in timeline.query(TimelineQuery(event_type="message", limit=100))
+            if "inbox_message_id" in record.metadata
+        ]
+        assert inbound == received
+    finally:
+        await heart.shut_down()
+        timeline.close()
+
+
+@pytest.mark.asyncio
+async def test_active_conversation_interrupts_planning_and_merges_batch(
+    tmp_path: Path,
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+    plans: list[OrganRequest] = []
+    replies: list[OrganRequest] = []
+    received: list[int] = []
+
+    class InterruptibleOrgans:
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            task = request.context.get("task")
+            if task == "inbox_select":
+                return OrganResponse(request.organ_id, '{"conversation":1,"count":1}')
+            if task == "plan":
+                assert request.stream
+                plans.append(request)
+                started.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                return plan_response(
+                    request, {"reply": True, "intent": "回应", "stay_in_conversation": True}
+                )
+            assert task == "reply" and not request.stream
+            replies.append(request)
+            return OrganResponse("replyer", "收到。")
+
+    identity = Identity.model_validate(
+        {
+            "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+            "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
+            "persona": {"immutable": "温和。"},
+        }
+    )
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=InterruptibleOrgans(),
+        identity=identity,
+        config=HeartbeatConfig(inbox_debounce_enabled=True, split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    sent: list[OutgoingMessage] = []
+    heart.attach_channel("qq", sent.append)
+    heart.wake_up()
+
+    def receive(text: str, *, sender: str = "visitor") -> None:
+        result = store.add(
+            Perception(
+                "qq",
+                sender,
+                text,
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_USER if sender == "owner" else TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", "ongoing", text),
+            )
+        )
+        assert result is not None
+        received.append(result.id)
+        heart.on_inbox_message(result)
+        heart.beat()
+
+    async def advance_to_planner() -> None:
+        clock.advance(timedelta(seconds=4))
+        heart.beat()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        started.clear()
+
+    async def finish_plan() -> None:
+        release.set()
+        await heart.wait_for_thought()
+        heart.beat()
+        release.clear()
+
+    try:
+        receive("暖场", sender="owner")
+        await advance_to_planner()
+        await finish_plan()
+        assert len(sent) == 1
+
+        receive("m1")
+        await advance_to_planner()
+        for number in range(2, 6):
+            receive(f"m{number}")
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+            cancelled.clear()
+            await heart.wait_for_thought()
+            heart.beat()
+            assert len(sent) == 1
+            await advance_to_planner()
+            assert len(plans[-1].context["in_reply_to"]) == number
+        assert all(f"m{number}" in plans[-1].prompt for number in range(1, 6))
+
+        receive("m6")
+        await asyncio.sleep(0.05)
+        assert not cancelled.is_set()
+        assert heart.is_thinking
+        assert len(sent) == 1
+
+        release.set()
+        await heart.wait_for_thought()
+        heart.beat()
+        release.clear()
+        assert len(sent) == 2
+        assert len(replies[-1].context["in_reply_to"]) == 5
+
+        await advance_to_planner()
+        assert "m6" in plans[-1].prompt
+        assert len(plans[-1].context["in_reply_to"]) == 1
+        await finish_plan()
+        assert len(sent) == 3
+
+        assert [len(request.context["in_reply_to"]) for request in plans] == [
+            1,
+            1,
+            2,
+            3,
+            4,
+            5,
+            1,
+        ]
+        assert [len(request.context["in_reply_to"]) for request in replies] == [1, 5, 1]
+        assert len(timeline.query(TimelineQuery(event_type=EVENT_PLANNING_INTERRUPTED))) == 4
+        inbound = [
+            record.metadata["inbox_message_id"]
+            for record in timeline.query(TimelineQuery(event_type="message", limit=100))
+            if "inbox_message_id" in record.metadata
+        ]
+        assert inbound == received
     finally:
         await heart.shut_down()
         timeline.close()

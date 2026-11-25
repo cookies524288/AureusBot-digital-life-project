@@ -1750,10 +1750,14 @@ class Heartbeat:
         conversation = self._inbox_followup_key()
         arrivals, self._inbox_followups = self._inbox_followups, set()
         if inbox.active_conversation is not None:
-            return
-        if conversation is not None and conversation in arrivals:
-            self._submit_inbox(inbox.debounce_messages(conversation))
-        self._take_in_perceptions(browsing=True)
+            # D116：活跃会话不再提前返回，防抖窗口和规划期间的新未读并入当前批次。
+            if conversation is not None and conversation in arrivals:
+                self._submit_inbox(inbox.active_messages())
+            self._take_in_perceptions(browsing=True, residence=inbox.residence)
+        else:
+            if conversation is not None and conversation in arrivals:
+                self._submit_inbox(inbox.debounce_messages(conversation))
+            self._take_in_perceptions(browsing=True)
         if (
             not self._config.inbox_debounce_enabled
             or conversation is None
@@ -1774,11 +1778,10 @@ class Heartbeat:
         if (
             conversation is not None
             and conversation.platform in self._sinks
-            and self._thought is None
-            and not self._unanswered.peek_batch((None, conversation))
             and not self._stop_requested
             and self._permissions.check(ACTION_CALL_ORGAN).allowed
         ):
+            # D116：思考或待回复批次进行中同样补读新到未读，交给 _maybe_start_thought 合入下一批。
             self._submit_inbox(inbox.active_messages())
             self._take_in_perceptions(browsing=True, residence=inbox.residence)
 
@@ -1976,11 +1979,7 @@ class Heartbeat:
         job = replace(self._reply_job(batch), round_trace=trace)
         self._unanswered.remove(batch)
         run = None
-        if (
-            residence is None
-            and self._config.inbox_debounce_enabled
-            and _platform_key(batch[-1]) is not None
-        ):
+        if self._config.inbox_debounce_enabled and _platform_key(batch[-1]) is not None:
             run = _PlannerRun()
             job = replace(job, planner_run=run)
         task = asyncio.create_task(self._conversation._think(job), name="aureus-thought")
