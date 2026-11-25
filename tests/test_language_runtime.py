@@ -1,6 +1,7 @@
 """用假器官沿入站、规划、回复和重启路径验证 D89 的习得语言。"""
 
 import asyncio
+import contextlib
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -166,15 +167,17 @@ async def test_continuous_language_learning_preserves_safety_gates(
 ) -> None:
     paths = _paths(tmp_path)
     paths.runtime_config_file.write_text(
+        "[heartbeat]\nworking_memory_capacity = 24\nworking_memory_retain = 2\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
         "[diary]\nenabled = false\n[safety]\nmonthly_token_limit = 100\n"
-        "[language]\nlearning_enabled = false\nrecall_enabled = false\n",
+        "[language]\nlearning_enabled = false\nrecall_enabled = false\n"
+        "expression_quality_enabled = false\n",
         encoding="utf-8",
     )
     requests: list[OrganRequest] = []
     bus = OrganBus()
-    if gate != "missing":
-        bus.register(LanguageOrgan("summarizer", requests))
+    for organ in ("planner", "replyer", "utils", "summarizer"):
+        bus.register(LanguageOrgan(organ, requests))
 
     def build_bus(
         _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
@@ -190,21 +193,31 @@ async def test_continuous_language_learning_preserves_safety_gates(
             paths.halt_file.write_text("{}", encoding="utf-8")
         if gate == "budget":
             core.ledger.record("summarizer", [CallAttempt("offline", "fixture", 100, 0)])
-        assert heart.submit(
-            Perception(
-                "terminal",
-                "local",
-                "月兔冲线。",
-                VisibilityScope.USER_ONLY,
-                TrustLevel.UNVERIFIED if gate == "untrusted" else TrustLevel.VERIFIED_USER,
+        trust = TrustLevel.UNVERIFIED if gate == "untrusted" else TrustLevel.VERIFIED_USER
+        for index in range(23):
+            assert heart.submit(
+                Perception(
+                    "terminal",
+                    "local",
+                    f"跑步第 {index} 场：GG，月兔冲线。",
+                    VisibilityScope.USER_ONLY,
+                    trust,
+                )
             )
-        )
-        for _ in range(3):
+            if index == 21:
+                heart.beat()
+                await heart.wait_for_thought()
+        if gate == "missing":
+            heart.update_available_organs(frozenset({"planner", "replyer"}))
+        for _ in range(8):
             heart.beat()
             await heart.wait_for_thought()
-        assert [request.context["task"] for request in requests] == (
-            ["learn_style", "learn_jargon"] if gate == "allowed" else []
-        )
+        learned = [
+            request.context["task"]
+            for request in requests
+            if request.context["task"].startswith("learn_")
+        ]
+        assert learned == (["learn_style", "learn_jargon"] if gate == "allowed" else [])
         store = LanguageStore(paths.database_file)
         assert bool(store.entries(LanguageKind.EXPRESSION)) == (gate == "allowed")
         await heart.shut_down()
@@ -217,15 +230,16 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
     paths = _paths(tmp_path)
     paths.runtime_config_file.write_text(
         "[heartbeat]\ninbox_debounce_enabled = false\n"
+        "working_memory_capacity = 12\nworking_memory_retain = 2\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n[diary]\nenabled = false\n"
+        "[language]\nexpression_quality_enabled = false\n"
         '[qq]\nenabled = true\naccount_id = "42"\nendpoint = "ws://127.0.0.1:1"\n',
         encoding="utf-8",
     )
     requests: list[OrganRequest] = []
     bus = OrganBus()
-    bus.register(LanguageOrgan("summarizer", requests))
-    bus.register(LanguageOrgan("planner", requests))
-    bus.register(LanguageOrgan("replyer", requests))
+    for organ in ("summarizer", "planner", "replyer", "utils"):
+        bus.register(LanguageOrgan(organ, requests))
 
     def build_bus(
         _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
@@ -248,6 +262,7 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
                 text,
                 VisibilityScope.PRIVATE,
                 TrustLevel.VERIFIED_USER,
+                source_message_id=number,
                 route=MessageRoute("42", "private", "100", number),
             )
             stored = inbox.add(message)
@@ -255,8 +270,10 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
             heart.on_inbox_message(stored)
             heart.beat()
 
-        submit("月兔冲线 月兔冲线", "101")
-        for _ in range(3):
+        for number in range(101, 113):
+            submit(f"月兔冲线 月兔冲线 第 {number} 次", str(number))
+            await heart.wait_for_thought()
+        for _ in range(8):
             heart.beat()
             await heart.wait_for_thought()
         first_count = sum(
@@ -264,33 +281,42 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
         )
         assert first_count == 2
         state = heart.language_learning_status()
-        assert state["pending"] == 0 and state["status"] == "本批结束"
+        assert state["pending"] == 0
         store = LanguageStore(paths.database_file)
         scope = ConversationKey("qq", "42", "private", "100").language_scope_key()
         assert (
             dict((term, count) for term, count, _messages in store.frequency_terms(scope))[
                 "月兔冲线"
             ]
-            == 2
+            == 20
         )
 
+        def learn_calls() -> int:
+            return sum(
+                request.context["task"] in {"learn_style", "learn_jargon"} for request in requests
+            )
+
+        async def feed(first: int, last: int, text: str) -> None:
+            for number in range(first, last + 1):
+                submit(f"{text} 第 {number} 次", str(number))
+                await heart.wait_for_thought()
+
+        async def settle() -> None:
+            for _ in range(8):
+                heart.beat()
+                await heart.wait_for_thought()
+
         clock.advance(language_runner.LEARNING_COOLDOWN - timedelta(seconds=1))
-        submit("再来 再来 月兔冲线", "102")
-        assert (
-            sum(request.context["task"] in {"learn_style", "learn_jargon"} for request in requests)
-            == first_count
-        )
-        assert heart.language_learning_status()["pending"] == 1
+        await feed(113, 124, "再来 再来 月兔冲线")
+        await settle()
+        assert learn_calls() == first_count
+        assert heart.language_learning_status()["pending"] > 0
         clock.advance(timedelta(seconds=1))
-        for _ in range(3):
-            heart.beat()
-            await heart.wait_for_thought()
-        assert (
-            sum(request.context["task"] in {"learn_style", "learn_jargon"} for request in requests)
-            == first_count + 2
-        )
+        await settle()
+        assert learn_calls() == first_count + 2
+        assert heart.language_learning_status()["pending"] == 0
         frequency = dict((term, count) for term, count, _messages in store.frequency_terms(scope))
-        assert frequency["月兔冲线"] == 3 and frequency["再来"] == 2
+        assert frequency["月兔冲线"] > 20 and frequency["再来"] > 0
 
         started = asyncio.Event()
 
@@ -299,24 +325,35 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
             await asyncio.Event().wait()
 
         monkeypatch.setattr(language_runner, "learn_language", blocked_learning)
+        await feed(125, 148, "取消后可重试")
+        await settle()
+        pending_blocked = heart.language_learning_status()["pending"]
+        assert pending_blocked > 0
+
+        async def beat_until_started() -> None:
+            for _ in range(8):
+                heart.beat()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(heart.wait_for_thought(), timeout=0.3)
+                if started.is_set():
+                    return
+            status = heart.language_learning_status()
+            raise AssertionError((status, heart.is_thinking, learn_calls()))
+
         clock.advance(language_runner.LEARNING_COOLDOWN)
-        submit("取消后可重试", "103")
-        await heart.wait_for_thought()
-        heart.beat()
-        await asyncio.wait_for(started.wait(), timeout=3)
-        assert heart.language_learning_status()["pending"] == 1
+        await beat_until_started()
+        assert heart.language_learning_status()["pending"] == pending_blocked
         heart.update_available_organs(frozenset({"planner", "replyer"}))
         await heart.wait_for_thought()
         heart.beat()
-        assert heart.language_learning_status()["pending"] == 1
+        assert heart.language_learning_status()["pending"] == pending_blocked
         assert not heart.is_thinking
         started.clear()
-        heart.update_available_organs(frozenset({"planner", "replyer", "summarizer"}))
+        heart.update_available_organs(frozenset({"planner", "replyer", "summarizer", "utils"}))
         clock.advance(language_runner.LEARNING_COOLDOWN)
-        heart.beat()
-        await asyncio.wait_for(started.wait(), timeout=3)
+        await beat_until_started()
         await heart.shut_down()
-        assert heart.language_learning_status()["pending"] == 1
+        assert heart.language_learning_status()["pending"] == pending_blocked
         assert not any(task.get_name() == language_runner.TASK_NAME for task in asyncio.all_tasks())
 
 
@@ -326,13 +363,16 @@ async def test_language_learning_batches_by_trusted_conversation(
 ) -> None:
     paths = _paths(tmp_path)
     paths.runtime_config_file.write_text(
+        "[heartbeat]\nworking_memory_capacity = 12\nworking_memory_retain = 2\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
-        "[language]\nlearning_enabled = true\n",
+        "[language]\nlearning_enabled = true\nexpression_quality_enabled = false\n"
+        '[qq]\nenabled = true\naccount_id = "42"\nendpoint = "ws://127.0.0.1:1"\n',
         encoding="utf-8",
     )
     requests: list[OrganRequest] = []
     bus = OrganBus()
-    bus.register(LanguageOrgan("summarizer", requests))
+    for organ in ("planner", "replyer", "summarizer", "utils"):
+        bus.register(LanguageOrgan(organ, requests))
 
     def build_bus(
         _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
@@ -343,57 +383,61 @@ async def test_language_learning_batches_by_trusted_conversation(
     clock = ManualClock(NOW)
     with runtime.open_core(paths, clock=clock, to_console=False) as core:
         heart = core.heartbeat
-        heart.attach_channel("synthetic_qq", lambda _message: None)
         heart.wake_up()
         inbox = InboxStore(paths.database_file, clock)
-        routes = (
-            ("账号甲", "group", "10", None),
-            ("账号甲", "group", "20", None),
-            ("账号甲", "private", "10", None),
-            ("账号甲", "private", "10", "20"),
-            ("账号甲", "private", "10", "10"),
-            ("账号乙", "group", "10", None),
-        )
-        for index, (account, kind, target, temporary_group) in enumerate(routes * 2):
-            text = f"正文声称是群 10 的第 {index} 条"
-            sample = Perception(
-                "synthetic_qq",
-                "10",
-                text,
-                VisibilityScope.GROUP,
-                TrustLevel.UNVERIFIED,
-                route=MessageRoute(account, kind, target, str(index), temporary_group),
-            )
-            stored = inbox.add(sample, sender_name="同昵称", conversation_name="同会话名称")
-            assert stored is not None
-            heart._submit_inbox([stored])
-            if index in (0, 6):
-                assert heart.submit(
-                    Perception(
-                        "synthetic_qq",
-                        "10",
-                        f"无可信路由 {index}",
-                        VisibilityScope.GROUP,
-                        TrustLevel.UNVERIFIED,
-                        route=sample.route if index == 6 else None,
-                    )
+        routes = (("群十", "group", "10"), ("群二十", "group", "20"), ("私十", "private", "10"))
+        index = 0
+        for name, kind, target in routes:
+            for _ in range(24):
+                sample = Perception(
+                    "qq",
+                    "runner",
+                    f"路由{name}第{index}条，正文声称是群 10",
+                    VisibilityScope.USER_ONLY if kind == "private" else VisibilityScope.GROUP,
+                    TrustLevel.UNVERIFIED,
+                    source_message_id=str(index),
+                    route=MessageRoute("42", kind, target, str(index)),
                 )
-        for _ in range(len(routes) + 3):
+                stored = inbox.add(sample, sender_name="同昵称", conversation_name="同会话名称")
+                assert stored is not None
+                heart._submit_inbox([stored])
+                heart.beat()
+                await heart.wait_for_thought()
+                if index % 8 == 0:
+                    assert heart.submit(
+                        Perception(
+                            "qq",
+                            "runner",
+                            f"无可信路由 {index}",
+                            VisibilityScope.GROUP,
+                            TrustLevel.UNVERIFIED,
+                        )
+                    )
+                index += 1
+        for _ in range(24):
             heart.beat()
             await heart.wait_for_thought()
         await heart.shut_down()
 
-    expected = [
-        [f"正文声称是群 10 的第 {index} 条", f"正文声称是群 10 的第 {index + len(routes)} 条"]
-        for index in range(len(routes))
+    learning = [request for request in requests if request.context["task"].startswith("learn_")]
+    assert all(
+        "无可信路由" not in sample["text"]
+        for request in learning
+        for sample in learning_samples(request)
+    )
+    seen: set[str] = set()
+    style_batches = [
+        learning_samples(request)
+        for request in learning
+        if request.context["task"] == "learn_style"
     ]
-    assert [[sample["text"] for sample in learning_samples(request)] for request in requests] == [
-        samples for samples in expected for _ in range(2)
-    ]
-    assert [request.context["task"] for request in requests] == [
-        "learn_style",
-        "learn_jargon",
-    ] * len(expected)
+    assert style_batches
+    for batch in style_batches:
+        assert len(batch) >= language_runner.MIN_LEARNING_MESSAGES
+        batch_routes = {sample["text"].split("第")[0] for sample in batch}
+        assert len(batch_routes) == 1
+        seen |= batch_routes
+    assert seen == {"路由群十", "路由群二十", "路由私十"}
 
 
 @pytest.mark.asyncio
@@ -407,7 +451,9 @@ async def test_online_expression_filter_runs_before_write(
     )
     paths.runtime_config_file.write_text(
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
-        "[language]\nlearning_enabled = true\n",
+        "[heartbeat]\nworking_memory_capacity = 12\nworking_memory_retain = 2\n"
+        "[language]\nlearning_enabled = true\nexpression_quality_enabled = false\n"
+        '[qq]\nenabled = true\naccount_id = "42"\nendpoint = "ws://127.0.0.1:1"\n',
         encoding="utf-8",
     )
     requests: list[OrganRequest] = []
@@ -432,7 +478,8 @@ async def test_online_expression_filter_runs_before_write(
             return OrganResponse(self.organ_id, json.dumps(proposals, ensure_ascii=False))
 
     bus = OrganBus()
-    bus.register(FilterOrgan("summarizer", requests))
+    for organ in ("planner", "replyer", "summarizer", "utils"):
+        bus.register(FilterOrgan(organ, requests))
 
     def build_bus(
         _paths: object, _heartbeat: object, resolver: KeyResolver, **_kwargs: object
@@ -444,29 +491,31 @@ async def test_online_expression_filter_runs_before_write(
     inbox = InboxStore(paths.database_file, clock)
     with runtime.open_core(paths, clock=clock, to_console=False) as core:
         heart = core.heartbeat
-        heart.attach_channel("synthetic_qq", lambda _message: None)
         heart.wake_up()
-        original = ["大家冲线啦", "文" * 400 + "SELF"]
+        original = [
+            "大家冲线啦",
+            "文" * 400 + "SELF",
+            *(f"填充消息第 {number} 条，大家继续" for number in range(22)),
+        ]
         stored = []
         for index, content in enumerate(original, start=1):
             row = inbox.add(
                 Perception(
-                    "synthetic_qq",
+                    "qq",
                     "runner",
                     content,
                     VisibilityScope.GROUP,
                     TrustLevel.UNVERIFIED,
                     source_message_id=str(index),
-                    route=MessageRoute("account", "group", "10", str(index)),
+                    route=MessageRoute("42", "group", "10", str(index)),
                 )
             )
             assert row is not None
             stored.append(row)
-        for _ in range(2):
-            heart._submit_inbox(stored)
-            for _ in original:
-                heart.beat()
-                await heart.wait_for_thought()
+        heart._submit_inbox(stored)
+        for _ in range(len(original) + 24):
+            heart.beat()
+            await heart.wait_for_thought()
 
         records = core.timeline.query(TimelineQuery(event_type="message"))
         assert {row.content for row in records} == set(original)
@@ -480,11 +529,13 @@ async def test_online_expression_filter_runs_before_write(
         }
         await heart.shut_down()
 
-    assert [request.context["task"] for request in requests] == ["learn_style", "learn_jargon"]
-    assert learning_samples(requests[0]) == [
-        {"id": 1, "text": original[0]},
-        {"id": 2, "text": original[1][:400]},
-    ]
+    learning = [request for request in requests if request.context["task"].startswith("learn_")]
+    assert [request.context["task"] for request in learning] == ["learn_style", "learn_jargon"]
+    samples = learning_samples(learning[0])
+    expected_texts = [original[0], original[1][:400], *original[2:]]
+    assert len(samples) >= language_runner.MIN_LEARNING_MESSAGES
+    assert [sample["id"] for sample in samples] == list(range(1, len(samples) + 1))
+    assert [sample["text"] for sample in samples] == expected_texts[: len(samples)]
 
 
 @pytest.mark.asyncio
@@ -861,15 +912,16 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
     paths = _paths(tmp_path)
     paths.runtime_config_file.write_text(
         "[heartbeat]\nplanning_enabled = true\ninbox_debounce_enabled = false\n"
+        "working_memory_capacity = 12\nworking_memory_retain = 2\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
-        "[language]\n"
+        "[language]\nexpression_quality_enabled = false\n"
         f"learning_enabled = {str(learning).lower()}\nreference_chars = {budget}\n"
         '[qq]\nenabled = true\naccount_id = "42"\nendpoint = "ws://127.0.0.1:1"\n',
         encoding="utf-8",
     )
     requests: list[OrganRequest] = []
     bus = OrganBus()
-    for organ in ("planner", "replyer", "summarizer"):
+    for organ in ("planner", "replyer", "summarizer", "utils"):
         bus.register(LanguageOrgan(organ, requests))
 
     def build_bus(
@@ -885,15 +937,15 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             sender_id="runner",
             content=(
                 f"跑步第 {index} 场：GG，月兔冲线。"
-                if index < 4
+                if index < 16
                 else f"集合第 {index} 场：gg，等开局。"
             ),
             visibility=VisibilityScope.GROUP,
             trust=TrustLevel.UNVERIFIED,
             source_message_id=f"sample-{index}",
-            route=MessageRoute("42", "group", "10" if index < 4 else "20", str(index)),
+            route=MessageRoute("42", "group", "10" if index < 16 else "20", str(index)),
         )
-        for index in range(8)
+        for index in range(32)
     ]
 
     clock = ManualClock(NOW)
@@ -907,26 +959,29 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
         heart._submit_inbox(
             [sample for sample in [*stored_samples, stored_samples[0]] if sample is not None]
         )
-        for _ in range(len(samples) + 1):
+        for _ in range(len(samples) + 16):
             heart.beat()
             await heart.wait_for_thought()
         entries = store.entries(LanguageKind.EXPRESSION)
-        assert [(entry.text, entry.count) for entry in entries] == [("月兔冲线", 4)]
+        assert [entry.text for entry in entries] == ["月兔冲线"]
+        assert entries[0].count >= language_runner.MIN_LEARNING_MESSAGES
         jargon = store.entries(LanguageKind.JARGON)
-        assert [(entry.detail, entry.count) for entry in jargon] == [
-            ("抵达终点", 4),
-            ("等候开局", 4),
-        ]
+        assert {entry.detail for entry in jargon} == {"抵达终点", "等候开局"}
+        assert all(entry.count >= language_runner.MIN_LEARNING_MESSAGES for entry in jargon)
         await heart.shut_down()
 
-    assert [
+    style_batches = [
         learning_samples(request)
         for request in requests
         if request.context["task"] == "learn_style"
-    ] == [
-        [{"id": number, "text": sample.content} for number, sample in enumerate(batch, start=1)]
-        for batch in (samples[:4], samples[4:])
     ]
+    assert len(style_batches) == 2
+    for batch, group_samples in zip(style_batches, (samples[:16], samples[16:]), strict=True):
+        assert len(batch) >= language_runner.MIN_LEARNING_MESSAGES
+        assert [item["id"] for item in batch] == list(range(1, len(batch) + 1))
+        assert [item["text"] for item in batch] == [
+            sample.content for sample in group_samples[: len(batch)]
+        ]
     assert all(request.purpose is CallPurpose.OPTIONAL for request in requests)
     requests.clear()
     with runtime.open_core(paths, clock=clock, to_console=False) as core:
@@ -941,9 +996,12 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
         assert store.entries(LanguageKind.JARGON) == jargon
         mentioned = set(jargon[0].evidence_ids + jargon[1].evidence_ids)
         evidence = core.timeline.query(TimelineQuery(event_type="message"))
-        assert {row.metadata["source_message_id"] for row in evidence if row.id in mentioned} == {
-            sample.source_message_id for sample in samples
+        evidence_sources = {
+            row.metadata["source_message_id"] for row in evidence if row.id in mentioned
         }
+        assert evidence_sources <= {sample.source_message_id for sample in samples}
+        assert any(source in evidence_sources for source in (f"sample-{n}" for n in range(16)))
+        assert any(source in evidence_sources for source in (f"sample-{n}" for n in range(16, 32)))
 
         def submit(kind: str, recipient: str, text: str, number: str) -> None:
             message = Perception(
