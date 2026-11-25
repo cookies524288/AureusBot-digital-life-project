@@ -25,6 +25,8 @@
 
 上述 11 个 QQ/启动器失败属于长期稳定性问题，不在本轮改动范围。
 
+2026-11-25 维护者确认：重建 `.venv` 后双击 `Aureus.exe` 能正常启动，实机接管验收以此为准；上面的观察点尚未逐项反馈。同日按 `ruff format` 统一了 14 个学习模块相关文件的排版（`3efde98`，不改行为）。
+
 ## 环境修复 · 2026-11-25（`.venv`）
 
 项目 `.venv` 原先指向已删除的基础 Python 3.13.7（`D:\Users\cooki\AppData\Local\Programs\Python\Python313`），导致 `Aureus.exe` 无法启动。已重建：旧目录改名保留为 `.venv.broken-20261125`，用 `uv python install 3.13 --install-dir E:/Tools/uv-python` 装持久解释器，再 `uv sync --python E:/Tools/uv-python/cpython-3.13.18-windows-x86_64-none/python.exe`。新 `.venv` 基础为 3.13.18，pytest 17 项通过，`python -m aureus --help` 正常。注意：本机 shell 里 `AppData` 被容器重定向，uv 默认安装目录会跨盘改名失败，装 Python 必须显式 `--install-dir`。旧目录里有一个文件名疑似含 API 密钥，还有 `Aureus-*.exe` 备份，确认后由维护者删除。
@@ -68,6 +70,6 @@
 
 ## 正式实例与回退
 
-最近有接管证据的是 `133d0c7`，不是当前主线。其后的本地合入和专项结果不代表已实机验收。第 17、18 项分别是两处提示独立显示五秒 `9b3e3e9`、仅观察页统一为「仅用户可见」标签 `9c29811`。按 D104，只提醒维护者可用根目录 `Aureus.exe` 重启；智能体不代操作，不另启实例，也不因等待反馈而停止开发。重启入口的[只读调查](tasks/3.15-parity.md)已完成。
+最近有接管证据的是 2026-11-25 重建 `.venv` 后的 `main`（维护者确认 `Aureus.exe` 能正常启动）；更早的证据是 `133d0c7`。中间的小步合入和专项结果不代表已逐项实机验收。第 17、18 项分别是两处提示独立显示五秒 `9b3e3e9`、仅观察页统一为「仅用户可见」标签 `9c29811`。按 D104，只提醒维护者可用根目录 `Aureus.exe` 重启；智能体不代操作，不另启实例，也不因等待反馈而停止开发。重启入口的[只读调查](tasks/3.15-parity.md)已完成。
 
 正式数据在项目默认 `aureus_home/`，迁移时校验过 5752 个文件。停机源、切换前的原默认目录、旧指针和七份中断工作树均属恢复资料，不是临时文件。原检出可用 `git rev-parse --git-path info/aureus-recovery-locations.md` 定位不随仓库分发的本机索引；中断工作树也可用 `git worktree list` 定位。切换之后的新增经历只在当前数据根，回退请按[不丢数据的步骤](default-home-cutover.md#5-回退不丢数据)，不要直接覆盖或恢复旧指针。
