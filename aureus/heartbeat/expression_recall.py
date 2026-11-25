@@ -121,7 +121,9 @@ class ExpressionRecall:
             if any(len(item.vector) != len(vector) for item in indexed):
                 await asyncio.to_thread(self._index.discard_incompatible, space, len(vector))
                 return None
-            ordered = await asyncio.to_thread(rank_expressions, indexed, vector)
+            ordered = await asyncio.to_thread(
+                rank_expressions, indexed, vector, self._config.expression_vector_candidates
+            )
             current = await self._current_fingerprints(scope, avoid)
             if (
                 self.space != space

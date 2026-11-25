@@ -27,7 +27,8 @@ from aureus.memory.language_matching import LanguageEntry, format_language, norm
 
 MIN_INDEXED_EXPRESSIONS = 10
 EXPRESSION_BACKFILL_BATCH = 200
-MAX_VECTOR_CANDIDATES = 40
+# 硬上限（D119）；实际候选数由 [language] expression_vector_candidates 给出。
+MAX_VECTOR_CANDIDATES = 50
 _CLUSTER_POOL_SIZE = 16
 _MAX_CLUSTERS = 80
 _ITEM_WEIGHT = 0.875
@@ -279,12 +280,16 @@ def distinct_expressions(
 
 
 def rank_expressions(
-    indexed: Sequence[IndexedExpression], raw_query: Vector
+    indexed: Sequence[IndexedExpression], raw_query: Vector, candidate_limit: int
 ) -> list[LanguageEntry]:
-    """近簇召回、成员与簇中心加权，再用 MMR 避免候选集中。"""
+    """近簇召回、成员与簇中心加权，再用 MMR 避免候选集中。
+
+    candidate_limit 是本次候选上限（D119），不会超过硬上限 MAX_VECTOR_CANDIDATES。
+    """
     query = _unit(raw_query, label="表达查询向量")
     if any(len(item.vector) != len(query) for item in indexed):
         raise ValueError("表达查询与索引向量维度不一致。")
+    limit = min(candidate_limit, MAX_VECTOR_CANDIDATES)
     groups: dict[int, list[IndexedExpression]] = defaultdict(list)
     for item in indexed:
         groups[item.cluster].append(item)
@@ -308,16 +313,18 @@ def rank_expressions(
             )
             for item in groups[cluster]
         )
-        if number >= _CLUSTER_POOL_SIZE and len(pool) >= MAX_VECTOR_CANDIDATES:
+        if number >= _CLUSTER_POOL_SIZE and len(pool) >= limit:
             break
-    return _select_by_mmr(pool)
+    return _select_by_mmr(pool, limit)
 
 
-def _select_by_mmr(pool: list[tuple[float, IndexedExpression]]) -> list[LanguageEntry]:
+def _select_by_mmr(
+    pool: list[tuple[float, IndexedExpression]], limit: int
+) -> list[LanguageEntry]:
     remaining = dict(enumerate(pool))
     penalties: dict[int, float] = {}
     selected: list[tuple[float, IndexedExpression]] = []
-    for _ in range(min(MAX_VECTOR_CANDIDATES, len(pool))):
+    for _ in range(min(limit, len(pool))):
         best = max(
             remaining,
             key=lambda key: (

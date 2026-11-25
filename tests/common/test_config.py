@@ -20,6 +20,7 @@ from aureus.common import (
     InitiativeConfig,
     InterestsConfig,
     JudgeConfig,
+    LanguageConfig,
     MemoryConfig,
     MoodConfig,
     PeopleConfig,
@@ -809,6 +810,15 @@ def test_legacy_removed_switches_ignored_d107(tmp_path: Path, switch: str) -> No
     assert config.exploration.organ == "summarizer"
     assert config.diary.organ == "summarizer"
     assert config.persona_growth.organ == "summarizer"
+
+
+def test_expression_vector_candidates_default_and_bounds(tmp_path: Path) -> None:
+    """表达向量候选默认 50，范围 1–50（D119）。"""
+    assert LanguageConfig().expression_vector_candidates == 50
+    paths = AureusPaths(tmp_path)
+    for value in ("0", "51"):
+        write_runtime_config(paths, f"[language]\nexpression_vector_candidates = {value}\n")
+        assert "expression_vector_candidates" in error_message_of(paths)
 
 
 def test_hormones_defaults_follow_d69(tmp_path: Path) -> None:

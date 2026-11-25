@@ -657,6 +657,8 @@ class LanguageConfig(BaseModel):
     expression_quality_enabled: bool = True
     # 质检固定走 judge：原默认为空时，开启质检会拒收全部新表达。
     expression_quality_organ: ClassVar[str] = "judge"
+    # 表达向量召回最多取多少条候选，范围 1–50（D119）。
+    expression_vector_candidates: int = Field(default=50, ge=1, le=50)
     reference_chars: int = Field(default=700, ge=0, le=2000)
     # 表达筛选不使用单独器官，直接用排好的候选。
     expression_selector_organ: ClassVar[str | None] = None
