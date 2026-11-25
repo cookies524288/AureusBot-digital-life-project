@@ -1,6 +1,7 @@
 """从主循环搬来的对话流程；拍里准备材料，后台只调用器官（D80）。"""
 
 import asyncio
+import contextlib
 import json
 import logging
 import sqlite3
@@ -268,6 +269,8 @@ class _ThoughtOutcome:
     review_reason: str | None = None
     reply_segments: tuple[str, ...] = ()
     emoji: EmojiReplyPart | None = None
+    # 和回复器同时启动的表情选择（D117）；正文整理完后由 _finish_reply 收取或取消。
+    emoji_task: asyncio.Task[EmojiReplyPart | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -822,43 +825,89 @@ class ConversationFlow:
         self, job: _ReplyJob, outcome: _ThoughtOutcome, response: OrganResponse
     ) -> _ThoughtOutcome:
         """再审通过后才整理实际发言；快速模型只看到要分段的文字。"""
-        draft = prepare_reply(response.suggestion)
-        if not draft.sections:
-            return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
-        text = draft.text.strip()
-        if self._config.split_reply_enabled:
-            suggestion = (
-                await self._suggest_reply_splits(job, draft) if self.has_fast_model else None
+        emoji_task = outcome.emoji_task
+        try:
+            draft = prepare_reply(response.suggestion)
+            if not draft.sections:
+                return replace(
+                    outcome, response=None, notice="模型返回了空回复，这次没有回复。"
+                )
+            text = draft.text.strip()
+            if self._config.split_reply_enabled:
+                suggestion = (
+                    await self._suggest_reply_splits(job, draft) if self.has_fast_model else None
+                )
+                sections = draft.segments(
+                    suggestion,
+                    max_messages=self._config.max_reply_messages,
+                    min_chars=self._config.min_message_chars,
+                )
+            else:
+                sections = (text,)
+            if not sections:
+                return replace(
+                    outcome, response=None, notice="模型返回了空回复，这次没有回复。"
+                )
+            emoji = await self._await_emoji_selection(emoji_task)
+            return replace(
+                outcome,
+                response=replace(response, suggestion=text),
+                reply_segments=sections,
+                emoji=emoji,
+                emoji_task=None,
             )
-            sections = draft.segments(
-                suggestion,
-                max_messages=self._config.max_reply_messages,
-                min_chars=self._config.min_message_chars,
-            )
-        else:
-            sections = (text,)
-        if not sections:
-            return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
-        emoji = None
-        if (
-            self.emoji_selector is not None
-            and job.emoji_history is not None
-            and outcome.plan is not None
-            and outcome.plan.emoji is not None
-        ):
-            emoji = await self.emoji_selector.select(
-                outcome.plan.emoji,
+        finally:
+            await self._stop_emoji_selection(emoji_task)
+
+    def _start_emoji_selection(
+        self, job: _ReplyJob, plan: Plan
+    ) -> asyncio.Task[EmojiReplyPart | None] | None:
+        """在回复器出发前启动表情选择，和回复器同时跑（D117，修订 D48 第 2 条）。"""
+        if self.emoji_selector is None or job.emoji_history is None or plan.emoji is None:
+            return None
+        return asyncio.create_task(
+            self.emoji_selector.select(
+                plan.emoji,
                 [*job.emoji_history, *job.messages][-EMOJI_CONTEXT_LIMIT:],
                 job.user_name,
                 job.strategy.model_preference,
                 has_embedding=self.has_text_embedding,
-            )
-        return replace(
-            outcome,
-            response=replace(response, suggestion=text),
-            reply_segments=sections,
-            emoji=emoji,
+            ),
+            name="aureus-emoji-selection",
         )
+
+    async def _await_emoji_selection(
+        self, task: asyncio.Task[EmojiReplyPart | None] | None
+    ) -> EmojiReplyPart | None:
+        """正文就绪后最多再等一个宽限时间；超时就取消表情任务，只发文字（D117）。"""
+        if task is None:
+            return None
+        done, _ = await asyncio.wait(
+            {task}, timeout=self._config.emoji_selection_grace_seconds
+        )
+        if task in done:
+            try:
+                return task.result()
+            except Exception:
+                logger.exception("选择表情时出错，这次只发文字")
+                return None
+        await self._stop_emoji_selection(task)
+        return None
+
+    @staticmethod
+    async def _stop_emoji_selection(
+        task: asyncio.Task[EmojiReplyPart | None] | None,
+    ) -> None:
+        """取消表情任务并等它真正结束，避免残留任务在返回后写状态（D117）。"""
+        if task is None:
+            return
+        if task.done():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                task.result()
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     async def _suggest_reply_splits(self, job: _ReplyJob, draft: ReplyDraft) -> str | None:
         try:
@@ -1394,51 +1443,61 @@ class ConversationFlow:
             model_preference=job.strategy.model_preference,
         )
         await self._require_current_recall(job, recall)
+        emoji_task = self._start_emoji_selection(job, plan)
+        handed_off = False
         try:
-            response = await self._call(request)
-        except CallRejectedError as rejection:
-            _trace_action(job, PlannerAction("replyer", "rejected", "安全网关拒绝生成回复"))
-            return _ThoughtOutcome(notice=f"没能调用模型，这次没有回复：{rejection.reason}")
-        except OrganCallError as failure:
-            _trace_action(job, PlannerAction("replyer", "failed", "回复器调用失败"))
-            return _ThoughtOutcome(notice=f"模型调用失败，这次没有回复。{failure}")
-        except Exception as error:
-            _trace_action(job, PlannerAction("replyer", "failed", "回复器调用失败"))
-            # 为什么捕获所有异常：后台任务里的异常没人接住，用户只会看到它一直不说话。
-            logger.exception("调用器官 %s 时出错", request.organ_id)
-            return _ThoughtOutcome(
-                notice=f"调用模型时出错（{type(error).__name__}），这次没有回复，详情见日志。"
-            )
-        await self._require_current_recall(job, recall)
-        if self.expression_recall is not None:
-            self.expression_recall.backfill(job.language_scope_key)
-        text = response.suggestion.strip()
-        if not text:
-            _trace_action(job, PlannerAction("replyer", "failed", "没有可发送的正文"))
-            return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
-        if _REVIEW_SENTINEL_PREFIX in text or "{sentinel}" in text:
-            opening, closing = f"<{sentinel}>", f"</{sentinel}>"
-            reason = ""
-            if text.startswith(opening) and text.endswith(closing):
-                body = text[len(opening) : -len(closing)].removesuffix("\\")
-                if _REVIEW_SENTINEL_PREFIX not in body and "{sentinel}" not in body:
-                    reason = clean_text(body, _MAX_REVIEW_REASON_CHARS)
-            return _ThoughtOutcome(review_reason=reason)
-        return _ThoughtOutcome(
-            response=response,
-            plan=plan,
-            recall_keywords=keywords,
-            recall_record_ids=tuple(hit.record_id for hit in hits if hit.record_id is not None),
-            recall_source_keys=tuple(hit.source.encode() for hit in hits if hit.source is not None),
-            recall_feedback_refs=(
-                tuple(
-                    f"source:{hit.source.encode()}"
-                    if hit.source is not None
-                    else f"timeline:{hit.record_id}"
-                    for hit in hits
-                    if hit.source is not None or hit.record_id is not None
+            try:
+                response = await self._call(request)
+            except CallRejectedError as rejection:
+                _trace_action(job, PlannerAction("replyer", "rejected", "安全网关拒绝生成回复"))
+                return _ThoughtOutcome(notice=f"没能调用模型，这次没有回复：{rejection.reason}")
+            except OrganCallError as failure:
+                _trace_action(job, PlannerAction("replyer", "failed", "回复器调用失败"))
+                return _ThoughtOutcome(notice=f"模型调用失败，这次没有回复。{failure}")
+            except Exception as error:
+                _trace_action(job, PlannerAction("replyer", "failed", "回复器调用失败"))
+                # 为什么捕获所有异常：后台任务里的异常没人接住，用户只会看到它一直不说话。
+                logger.exception("调用器官 %s 时出错", request.organ_id)
+                return _ThoughtOutcome(
+                    notice=f"调用模型时出错（{type(error).__name__}），这次没有回复，详情见日志。"
                 )
-                if self._memory_config.recall_feedback_enabled
-                else ()
-            ),
-        )
+            await self._require_current_recall(job, recall)
+            if self.expression_recall is not None:
+                self.expression_recall.backfill(job.language_scope_key)
+            text = response.suggestion.strip()
+            if not text:
+                _trace_action(job, PlannerAction("replyer", "failed", "没有可发送的正文"))
+                return _ThoughtOutcome(notice="模型返回了空回复，这次没有回复。")
+            if _REVIEW_SENTINEL_PREFIX in text or "{sentinel}" in text:
+                opening, closing = f"<{sentinel}>", f"</{sentinel}>"
+                reason = ""
+                if text.startswith(opening) and text.endswith(closing):
+                    body = text[len(opening) : -len(closing)].removesuffix("\\")
+                    if _REVIEW_SENTINEL_PREFIX not in body and "{sentinel}" not in body:
+                        reason = clean_text(body, _MAX_REVIEW_REASON_CHARS)
+                return _ThoughtOutcome(review_reason=reason)
+            handed_off = True
+            return _ThoughtOutcome(
+                response=response,
+                plan=plan,
+                recall_keywords=keywords,
+                recall_record_ids=tuple(hit.record_id for hit in hits if hit.record_id is not None),
+                recall_source_keys=tuple(
+                    hit.source.encode() for hit in hits if hit.source is not None
+                ),
+                recall_feedback_refs=(
+                    tuple(
+                        f"source:{hit.source.encode()}"
+                        if hit.source is not None
+                        else f"timeline:{hit.record_id}"
+                        for hit in hits
+                        if hit.source is not None or hit.record_id is not None
+                    )
+                    if self._memory_config.recall_feedback_enabled
+                    else ()
+                ),
+                emoji_task=emoji_task,
+            )
+        finally:
+            if not handed_off:
+                await self._stop_emoji_selection(emoji_task)

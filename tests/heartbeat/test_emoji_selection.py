@@ -1,20 +1,33 @@
 """用手动时钟和假器官检查 QQ 表情的文字与语义选择。"""
 
+import asyncio
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image, ImageChops
 
 from aureus.common import HeartbeatConfig, ManualClock
+from aureus.heartbeat import (
+    Heartbeat,
+    MessageKind,
+    MessageRoute,
+    OutgoingMessage,
+    Perception,
+    TrustLevel,
+)
 from aureus.heartbeat.emoji_selection import EmojiSelector
 from aureus.heartbeat.planning import EmojiIntent, parse_plan
 from aureus.heartbeat.reply_outbox import EmojiReplyPart
+from aureus.identity import Identity
 from aureus.memory import EmojiStore
 from aureus.organs import CallPurpose, ModelPreference, OrganRequest, OrganResponse
-from aureus.safety import CallRejectedError
+from aureus.safety import CallRejectedError, EmergencyStop, PermissionChecker
+from aureus.timeline import TimelineDatabase, VisibilityScope
 
 PNG = b"\x89PNG\r\n\x1a\n"
 
@@ -265,3 +278,146 @@ async def test_no_embedding_uses_text_and_skips_missing_or_invalid_selection(
     assert await select() is None
     selection = await select()
     assert selection is not None and selection.before_text is False
+
+
+class GatedHeartbeatOrgans:
+    """规划器直接给出表情意图；回复器和表情选择各有一道闸门，控制完成顺序。"""
+
+    def __init__(self) -> None:
+        self.reply_started = asyncio.Event()
+        self.emoji_started = asyncio.Event()
+        self.emoji_done = asyncio.Event()
+        self.reply_gate = asyncio.Event()
+        self.emoji_gate = asyncio.Event()
+        self.emoji_cancelled = asyncio.Event()
+
+    async def call(self, request: OrganRequest) -> OrganResponse:
+        task = request.context.get("task")
+        if task == "plan":
+            from tests.planner_fixtures import plan_response
+
+            return plan_response(
+                request,
+                {"reply": True, "intent": "回应", "select_emoji": {"emotion": "高兴"}},
+            )
+        if task == "emoji":
+            self.emoji_started.set()
+            try:
+                await self.emoji_gate.wait()
+            except asyncio.CancelledError:
+                self.emoji_cancelled.set()
+                raise
+            self.emoji_done.set()
+            return OrganResponse(request.organ_id, '{"selected": 1}')
+        self.reply_started.set()
+        await self.reply_gate.wait()
+        return OrganResponse(request.organ_id, "好的。")
+
+
+def make_qq_heartbeat(
+    tmp_path: Path, organs: GatedHeartbeatOrgans, **config: Any
+) -> tuple[Heartbeat, list[OutgoingMessage], str, TimelineDatabase]:
+    """让 QQ 群消息直接进心跳，省掉真的 QQ 连接。"""
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
+    timeline.open()
+    store = EmojiStore(tmp_path / "emoji.db", tmp_path / "memory", clock)
+    store.open()
+    entry = store.collect(synthetic_emoji("red"), description="高兴", register=True)
+    assert entry.digest is not None
+    emergency_stop = EmergencyStop(tmp_path / "halt.json", clock)
+    beating = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=organs,
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "小绿", "birthday": "2008-01-01"},
+                "user": {"name": "阿明"},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
+        config=HeartbeatConfig(
+            qq_emoji_visual_enabled=False, typing_delay_enabled=False, **config
+        ),
+        permissions=PermissionChecker(emergency_stop),
+        emergency_stop=emergency_stop,
+        timezone=UTC,
+        emoji_store=store,
+    )
+    sent: list[OutgoingMessage] = []
+    beating.attach_channel("qq", sent.append)
+    beating.wake_up()
+    return beating, sent, entry.digest, timeline
+
+
+def submit_group_message(beating: Heartbeat, content: str = "你好") -> None:
+    assert beating.submit(
+        Perception(
+            channel="qq",
+            sender_id="member",
+            content=content,
+            visibility=VisibilityScope.GROUP,
+            trust=TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "group-1", "message-1"),
+        )
+    )
+
+
+@pytest.fixture
+def made(tmp_path: Path) -> Iterator[list[TimelineDatabase]]:
+    timelines: list[TimelineDatabase] = []
+    yield timelines
+    for timeline in timelines:
+        timeline.close()
+
+
+@pytest.mark.asyncio
+async def test_emoji_selection_runs_parallel_with_replyer(
+    made: list[TimelineDatabase], tmp_path: Path
+) -> None:
+    """D117：回复器还在等模型时，表情选择已经在途；表情先完成就随正文一起发。"""
+    organs = GatedHeartbeatOrgans()
+    beating, sent, digest, timeline = make_qq_heartbeat(tmp_path, organs)
+    made.append(timeline)
+    submit_group_message(beating)
+    beating.beat()
+    await asyncio.wait_for(
+        asyncio.gather(organs.reply_started.wait(), organs.emoji_started.wait()), timeout=5
+    )
+
+    organs.emoji_gate.set()
+    await asyncio.wait_for(organs.emoji_done.wait(), timeout=5)
+    organs.reply_gate.set()
+    await beating.wait_for_thought()
+    beating.beat()
+
+    assert any(
+        message.kind is MessageKind.REPLY and message.content == "好的。" for message in sent
+    )
+    assert any(message.emoji_digest == digest for message in sent)
+
+
+@pytest.mark.asyncio
+async def test_emoji_selection_past_grace_is_skipped(
+    made: list[TimelineDatabase], tmp_path: Path
+) -> None:
+    """D117：过了宽限时间表情还没回来，就取消它，只发正文。"""
+    organs = GatedHeartbeatOrgans()
+    beating, sent, _, timeline = make_qq_heartbeat(
+        tmp_path, organs, emoji_selection_grace_seconds=0.01
+    )
+    made.append(timeline)
+    submit_group_message(beating)
+    beating.beat()
+    await asyncio.wait_for(
+        asyncio.gather(organs.reply_started.wait(), organs.emoji_started.wait()), timeout=5
+    )
+
+    organs.reply_gate.set()
+    await beating.wait_for_thought()
+    beating.beat()
+
+    assert organs.emoji_cancelled.is_set()
+    assert [message.content for message in sent if message.kind is MessageKind.REPLY] == ["好的。"]
+    assert not any(message.emoji_digest for message in sent)
