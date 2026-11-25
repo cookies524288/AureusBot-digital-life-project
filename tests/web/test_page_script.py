@@ -109,7 +109,12 @@ const reply = (status, data) => ({
   json: async () => data, headers: { get: () => null },
 });
 const context = vm.createContext({
-  assert, timers, sockets, reply, URLSearchParams, AbortController,
+  assert, timers, sockets, reply, URLSearchParams, AbortController, setImmediate,
+  URL: {
+    count: 0,
+    createObjectURL() { return 'blob:inbox-avatar-' + (++this.count); },
+    revokeObjectURL() {},
+  },
   document: {
     getElementById(id) {
       if (!nodes.has(id)) nodes.set(id, element());
@@ -252,6 +257,111 @@ def test_platform_desktop_turns_pages_during_load_and_isolates_image_switches() 
         await click('inbox-open-archive');
         assert.equal($('inbox-heading').textContent, '未归类历史');
         assert.equal(list.children[0].className, 'inbox-message unknown');
+        """
+    )
+
+
+def test_page_script_api_timeout_and_abort_on_leave() -> None:
+    run_page_script(
+        r"""
+        state.loggedIn = false;
+        let signal = null, calls = 0;
+        fetch = (path, options) => {
+          calls++;
+          signal = options.signal;
+          return new Promise((resolve, reject) => {
+            options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+          });
+        };
+        const before = timers.length;
+        const slow = api('/api/slow');
+        assert.equal(timers.length, before + 1);
+        assert.equal(signal.aborted, false);
+        timers.pop()();   // 默认 10 秒的超时
+        const timedOut = await slow;
+        assert.equal(timedOut.ok, false);
+        assert.equal(timedOut.timeout, true);
+        assert.equal(timedOut.aborted, false);
+        assert.equal(signal.aborted, true);
+        const toasts = $('toasts');
+        assert.equal(toasts.children.length, 1);
+        assert.equal(toasts.children[0].textContent, '请求超时，请稍后再试。');
+
+        state.loggedIn = true;
+        state.page = 'chat';
+        PAGES.overview = {load: async () => {}};
+        const obsolete = api('/api/history');
+        const leaving = showPage('overview');
+        assert.equal(signal.aborted, true);
+        const cancelled = await obsolete;
+        assert.equal(cancelled.aborted, true);
+        assert.equal(cancelled.timeout, false);
+        assert.equal(errorText(cancelled), '');
+        await leaving;
+        assert.equal(toasts.children.length, 1);
+        assert.equal(calls, 2);
+        """
+    )
+
+
+def test_inbox_avatars_deduplicated_by_sender() -> None:
+    run_page_script(
+        r"""
+        const route = {
+          platform:'qq', account_id:'14', kind:'group', recipient_id:'62', temporary_group_id:null,
+        };
+        const senders = ['7','7','8','8','9','9','10','10','11','11'];
+        const messages = senders.map((sender, index) => ({
+          source:'inbox', id:100 + index, conversation:route, sender_id:sender,
+          sender_name:'访客' + sender, direction:'incoming', content:'消息 ' + index,
+          event_type:'message', attachments:[],
+        }));
+        const pending = [], avatarRequests = [];
+        let inFlight = 0, peak = 0;
+        state.loggedIn = true;
+        inbox.selected = {key:route, name:'测试群'};
+        fetch = (path, options) => {
+          if (path.startsWith('/api/inbox/messages?')) {
+            return Promise.resolve(reply(200, {messages, next_before_id:null}));
+          }
+          assert.match(path, /^\/api\/inbox\/messages\/\d+\/avatar\?/);
+          avatarRequests.push(path);
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          return new Promise(resolve => {
+            pending.push(() => {
+              inFlight -= 1;
+              resolve({ok:true, status:200, blob: async () => ({type:'image/png'})});
+            });
+          });
+        };
+        const settle = async () => {
+          for (let i = 0; i < 8; i++) await new Promise(setImmediate);
+        };
+        await loadInboxMessages(1);
+        await settle();
+        assert.equal(avatarRequests.length, 3);
+        assert.deepEqual(avatarRequests.map(path =>
+          new URLSearchParams(path.split('?')[1]).get('account_id')), ['14','14','14']);
+        assert.equal(peak, 3);
+        pending.shift()();
+        await settle();
+        assert.equal(avatarRequests.length, 4);
+        assert.equal(peak, 3);
+        while (pending.length) {
+          pending.shift()();
+          await settle();
+        }
+        await settle();
+        assert.equal(avatarRequests.length, 5);
+        assert.equal(peak, 3);
+        assert.equal(URL.count, 5);
+        const avatars = $('inbox-messages').children.map(node => node.children[0]);
+        const sources = avatars.map(avatar => avatar.children[1]?.src);
+        assert.equal(sources[0], sources[1]);
+        assert.equal(sources[2], sources[3]);
+        assert.equal(sources[4], sources[5]);
+        assert.equal(new Set(sources).size, 5);
         """
     )
 

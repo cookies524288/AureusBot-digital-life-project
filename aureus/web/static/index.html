@@ -1111,10 +1111,33 @@ function el(tag, props, ...kids) {
   return node;
 }
 
-// 所有接口都走这里。返回 {ok, status, data, retryAfter}；网络断了 status 是 0。
+// 请求默认最多等这么久。切页时下面这个控制器整页取消，晚到的响应不再影响新页面（D121）。
+const API_TIMEOUT_MS = 10000;
+const API_TIMEOUT_TEXT = '请求超时，请稍后再试。';
+let pageAbort = new AbortController();
+function abortPageRequests() {
+  pageAbort.abort();
+  pageAbort = new AbortController();
+}
+
+// 所有接口都走这里。返回 {ok, status, data, retryAfter, aborted, timeout}；网络断了 status 是 0。
 async function api(path, method, body, headers = {}, signal) {
   const session = state.loaded;
-  const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin', signal };
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, API_TIMEOUT_MS);
+  const cancel = () => controller.abort();
+  const pageSignal = pageAbort.signal;
+  if (signal?.aborted || pageSignal.aborted) controller.abort();
+  signal?.addEventListener?.('abort', cancel);
+  pageSignal.addEventListener('abort', cancel);
+  const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin',
+    signal: controller.signal };
+  function settle() {
+    clearTimeout(timer);
+    signal?.removeEventListener?.('abort', cancel);
+    pageSignal.removeEventListener('abort', cancel);
+  }
   if (path.startsWith('/api/inbox/operations/file?') && method === 'POST' && body instanceof Blob) {
     opt.body = body;
   } else if (path === '/api/resources/emoji' && method === 'POST' && body instanceof Blob) {
@@ -1127,20 +1150,30 @@ async function api(path, method, body, headers = {}, signal) {
     opt.headers['Content-Type'] = 'application/zip'; opt.body = body;
   } else if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   let r;
-  try { r = await fetch(path, opt); } catch (e) { return { ok: false, status: 0, data: null }; }
+  try {
+    r = await fetch(path, opt);
+  } catch (e) {
+    settle();
+    const aborted = !timedOut && controller.signal.aborted;
+    if (timedOut) toast(API_TIMEOUT_TEXT, 'error');
+    return { ok: false, status: 0, data: null, aborted, timeout: timedOut };
+  }
+  settle();
   let data = null;
   try { data = await r.json(); } catch (e) { /* 没有正文也可以 */ }
-  if (r.status === 401 && !signal?.aborted && state.loggedIn && session === state.loaded) {
+  if (r.status === 401 && !controller.signal.aborted && state.loggedIn && session === state.loaded) {
     // 改密码时旧密码不对也会返回 401，先确认会话是否真的失效。
     if (path === '/api/status') showAuth('login', '登录已失效，请重新登录。');
     else await api('/api/status');
   }
   return { ok: r.ok, status: r.status, data, retryAfter: r.headers.get('Retry-After'),
-    graphRevision:r.headers.get('X-Aureus-Graph-Revision') };
+    graphRevision:r.headers.get('X-Aureus-Graph-Revision'), aborted: false, timeout: false };
 }
 
 // 后端的 detail 已经是中文、不含密码，原样显示；429 补上要等多久。
+// 被切页或调用方取消的请求没有提示（D121）。
 function errorText(res) {
+  if (res.aborted) return '';
   if (res.status === 0) return '连不上服务，请检查网络后再试。';
   const d = res.data && res.data.detail;
   let text = typeof d === 'string' ? d : '请求没有成功（' + res.status + '）。';
@@ -1152,6 +1185,7 @@ const NOT_BUILT_TEXT = '这项功能的后端还没做好（路线图 2.12b）�
 
 const NOTICE_DURATION_MS = 5000;
 function toast(text, kind) {
+  if (!text) return;
   const host = $('toasts');
   // 提示也要在原生编辑对话框之上；manual popover 不抢焦点，不阻挡操作。
   if (host.showPopover) { host.hidePopover(); host.showPopover(); }
@@ -1340,6 +1374,7 @@ async function showPage(name, onShown) {
     }
     return;
   }
+  abortPageRequests();
   pendingLiveUpdates.clear();
   PAGES[state.page]?.leave?.();
   state.page = name;
@@ -2116,6 +2151,70 @@ const inbox = {view:null, enabled:false, conversations:[], archives:[], selected
 const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
 const inboxScope = key => new URLSearchParams(Object.entries(key).filter(([, value]) => value !== null));
 
+// 头像和消息图片共用 3 个并发槽，避免占满浏览器同源连接；头像再按发送者去重，
+// 同一次渲染里一个发送者只取一次（D121）。图片在取得槽位后才设 src，加载完释放。
+const INBOX_MEDIA_CONCURRENCY = 3;
+let inboxMediaActive = 0;
+const inboxMediaQueue = [];
+let inboxAvatarGeneration = 0;
+const inboxAvatarCache = new Map();
+const inboxAvatarURLs = new Set();
+
+function resetInboxMedia() {
+  ++inboxAvatarGeneration;
+  inboxAvatarCache.clear();
+  for (const url of inboxAvatarURLs) URL.revokeObjectURL(url);
+  inboxAvatarURLs.clear();
+}
+
+function releaseInboxMedia() {
+  inboxMediaActive = Math.max(0, inboxMediaActive - 1);
+  while (inboxMediaActive < INBOX_MEDIA_CONCURRENCY && inboxMediaQueue.length) {
+    inboxMediaQueue.shift()();
+  }
+}
+
+function scheduleInboxMedia(start) {
+  const run = () => { ++inboxMediaActive; start(releaseInboxMedia); };
+  if (inboxMediaActive < INBOX_MEDIA_CONCURRENCY) run();
+  else inboxMediaQueue.push(run);
+}
+
+function loadInboxAvatar(message) {
+  const key = message.conversation.platform + '|' + message.sender_id;
+  const cached = inboxAvatarCache.get(key);
+  if (cached) return cached;
+  const generation = inboxAvatarGeneration;
+  const promise = new Promise(resolve => {
+    scheduleInboxMedia(release => {
+      if (generation !== inboxAvatarGeneration || pageAbort.signal.aborted) { resolve(null); release(); return; }
+      const url = `/api/inbox/messages/${message.id}/avatar?${inboxScope(message.conversation)}`;
+      fetch(url, {credentials:'same-origin', signal: pageAbort.signal})
+        .then(response => response.ok ? response.blob() : null)
+        .then(blob => {
+          if (!blob || generation !== inboxAvatarGeneration) { resolve(null); return; }
+          const objectURL = URL.createObjectURL(blob);
+          inboxAvatarURLs.add(objectURL);
+          resolve(objectURL);
+        })
+        .catch(() => resolve(null))
+        .finally(release);
+    });
+  });
+  inboxAvatarCache.set(key, promise);
+  return promise;
+}
+
+function loadInboxImage(picture, url) {
+  scheduleInboxMedia(release => {
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; release(); } };
+    picture.addEventListener('load', finish);
+    picture.addEventListener('error', finish);
+    picture.setAttribute('src', url);
+  });
+}
+
 const TYPING_REFRESH_MS = 750;
 let typingSession = null;
 function clearTyping() {
@@ -2171,6 +2270,7 @@ function renderInboxPager() {
 function clearInboxThread() {
   if (state.page === 'inbox') clearTyping();
   ++inbox.messageRequest;
+  resetInboxMedia();
   clearInboxRetention();
   clearInboxOperations();
   inbox.selected = null;
@@ -2367,7 +2467,7 @@ function renderInboxImage(message, position) {
   if (message.source === 'inbox' && message.conversation && Number.isSafeInteger(message.id)) {
     const query = inboxScope(message.conversation);
     sourceURL = `/api/inbox/messages/${message.id}/images/${position}?${query}`;
-    picture.setAttribute('src', sourceURL);
+    loadInboxImage(picture, sourceURL);
   } else {
     picture.classList.add('hidden');
     unavailable.classList.remove('hidden');
@@ -2456,7 +2556,10 @@ function renderInboxMessage(message) {
       onload:() => { icon.classList.add('hidden'); picture.classList.add('loaded'); },
       onerror:() => picture.remove(),
     });
-    picture.src = `/api/inbox/messages/${message.id}/avatar?${inboxScope(message.conversation)}`;
+    loadInboxAvatar(message).then(url => {
+      if (url) picture.src = url;
+      else picture.remove();
+    });
     avatar.append(picture);
   }
   return el('article', {class:'inbox-message ' + direction}, avatar,
@@ -2493,6 +2596,7 @@ function renderInboxMessageActions(message) {
 async function loadInboxMessages(page) {
   if (!inbox.selected || !Number.isInteger(page) || page < 1 || page > INBOX_MAX_PAGE) return;
   const request = ++inbox.messageRequest, session = state.loaded;
+  resetInboxMedia();
   const list = $('inbox-messages');
   const archive = inbox.selected.archive;
   const query = archive ? new URLSearchParams({source:archive}) : inboxScope(inbox.selected.key);
