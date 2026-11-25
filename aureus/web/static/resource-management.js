@@ -459,7 +459,6 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function memoryRelated(item) {
     const lines = [];
     if (item.actor_label) lines.push('人物：' + item.actor_label);
-    if (item.person_key) lines.push('人物键：' + item.person_key);
     for (const entry of item.evidence ?? []) {
       lines.push([term(entry.kind), sourceText(entry.source), term(entry.status)]
         .filter(Boolean).join(' · '));
@@ -477,7 +476,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const buttons = [action('图谱', () => openGraphFor(item))];
     if (item.is_removed) {
       if (!guided) buttons.push(action('恢复', () => confirmRemoval([item], false)));
-    } else {
+    } else if (!guided || item.status === 'active') {
       if (!relation) buttons.push(action('修正', () => guided ? lifecycleForm(item, 'correct') : editMemories([item])));
       if (!relation || (!item.is_frozen && !item.is_protected)) {
         buttons.push(action('删除', () => guided ? lifecycleForm(item, 'remove') : confirmRemoval([item], true)));
@@ -490,6 +489,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const type = memoryType(item);
     const status = item.is_removed ? '已移除' : item.is_recallable ? '' : '未参与召回';
     const title = titleOverride || item.actor_label || type;
+    const summary = item.text || (item.kind === 'summary'
+      ? (item.status === 'superseded' ? '已更正的事实' : '没有证据的事实') : '空文本');
     return el('article', {class:'memory-card' + (item.is_removed ? ' is-removed' : '')},
       box,
       el('div', {class:'memory-card-main'},
@@ -497,7 +498,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           typeBadge(type, category),
           el('button', {class:'memory-card-title', type:'button', text:title, onclick:open}),
           status && el('span', {class:'memory-card-status', text:status})),
-        el('p', {class:'memory-card-summary', text:item.text || '空文本'}),
+        el('p', {class:'memory-card-summary', text:summary}),
         el('div', {class:'memory-card-meta'},
           el('span', {class:'memory-source-tag', text:memorySource(item)}),
           item.recorded_at && el('time', {datetime:item.recorded_at, text:fmtTime(item.recorded_at, true)}))));
