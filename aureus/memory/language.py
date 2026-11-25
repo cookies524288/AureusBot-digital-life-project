@@ -859,23 +859,66 @@ class LanguageStore:
         scopes: tuple[str, ...],
         recorded_at: datetime,
         allowed: Callable[[], bool],
+        *,
+        overwrite: bool = False,
+        groups: Sequence[tuple[Sequence[LanguagePackageRow], tuple[str, ...]]] | None = None,
     ) -> int | None:
-        """按明确选择导入，保留已有覆盖和包授权；空范围表示手工共享。"""
+        """按明确选择原子导入；覆盖只写现有条目的内容层。"""
         with closing(open_connection(self._path)) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             if not allowed():
                 return None
+            return sum(
+                self._apply_workbench_group(
+                    connection, kind, items, targets, recorded_at, overwrite
+                )
+                for items, targets in (((rows, scopes),) if groups is None else groups)
+            )
+
+    def _apply_workbench_group(
+        self, connection: Connection, kind: LanguageKind, rows: Sequence[LanguagePackageRow],
+        scopes: tuple[str, ...], recorded_at: datetime, overwrite: bool,
+    ) -> int:
+        if rows:
+            manual_keys = {
+                _local_key("manual", row[0])
+                for row in connection.execute(
+                    "SELECT id FROM language_manual WHERE kind = ?", (kind,)
+                )
+            }
             existing = {
-                (normalize(entry.text), normalize(entry.detail))
+                (normalize(entry.text), normalize(entry.detail)): entry
                 for entry in self._catalog_entries(connection, kind, include_disabled=True)
-                if (not scopes and entry.package_source is None and entry.learning_source is None)
-                or (scopes and set(scopes) <= set(entry.scope_keys))
+                if (
+                    not scopes
+                    and entry.package_source is None
+                    and entry.learning_source is None
+                    and entry.restricted_scope is None
+                )
+                or (
+                    scopes
+                    and set(scopes) == set(entry.scope_keys)
+                    and entry.learning_source is None
+                )
+                or (entry.entry_key in manual_keys and scopes == (entry.learning_source,))
             }
             added = 0
+            seen = set()
             for row in rows:
                 content = row.content.validated(allow_empty_detail=kind == LanguageKind.JARGON)
                 pair = (normalize(content.text), normalize(content.detail))
-                if pair in existing:
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                if (entry := existing.get(pair)) is not None:
+                    if overwrite and not entry.is_removed:
+                        connection.execute(
+                            """INSERT INTO language_edits VALUES (?, ?, ?, ?, NULL)
+                               ON CONFLICT(entry_key) DO UPDATE SET text = excluded.text,
+                               detail = excluded.detail, example = excluded.example""",
+                            (entry.entry_key, content.text, content.detail, content.example),
+                        )
+                        added += 1
                     continue
                 identifier = (
                     connection.execute(
@@ -887,10 +930,11 @@ class LanguageStore:
                     else None
                 )
                 if scopes:
+                    digest = sha256(json.dumps((row.digest, sorted(scopes))).encode()).hexdigest()
                     connection.execute(
                         "INSERT INTO language_package_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
-                            row.digest,
+                            digest,
                             kind,
                             content.text,
                             content.detail,
@@ -902,9 +946,9 @@ class LanguageStore:
                     )
                     connection.executemany(
                         "INSERT INTO language_package_scopes VALUES (?, ?)",
-                        ((row.digest, scope) for scope in scopes),
+                        ((digest, scope) for scope in scopes),
                     )
-                    key = f"package:{row.digest}"
+                    key = f"package:{digest}"
                 else:
                     assert identifier is not None
                     key = _local_key("manual", identifier)
@@ -912,9 +956,9 @@ class LanguageStore:
                         "INSERT INTO learning_workbench_metadata VALUES (?, ?, NULL, ?)",
                         (kind, key, recorded_at.timestamp()),
                     )
-                existing.add(pair)
                 added += 1
             return added
+        return 0
 
     def package_originals(self, kind: LanguageKind) -> dict[str, tuple[str, str]]:
         """供导出查找待映射条目的原始作用域标签和资源包字段。"""
