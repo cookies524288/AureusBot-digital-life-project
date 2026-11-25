@@ -146,11 +146,17 @@ class PlannerToolOptions:
     platform_cleanup: bool = False
 
 
+def _interest_only_errors(error: ValidationError) -> bool:
+    """所有校验错误都落在 interest 字段内时返回 True（D115）。"""
+    errors = error.errors()
+    return bool(errors) and all(item["loc"][:1] == ("interest",) for item in errors)
+
+
 def _reply(arguments: _Arguments) -> Plan | None:
     data = arguments.model_dump(exclude_none=True)
     data.setdefault("intent", data["reply_reference"])
     plan = parse_plan_data({"reply": True, **data})
-    if plan is None or ("interest" in data and plan.interest is None):
+    if plan is None:
         return None
     if len(data.get("resolve", ())) != len(plan.resolutions):
         return None
@@ -386,9 +392,18 @@ async def dispatch_planner_tools[Recall](
             break
         try:
             arguments = tool.arguments.model_validate(call.arguments)
-        except ValidationError:
-            evidence.append(PlannerAction(name, "rejected", "工具参数无效"))
-            break
+        except ValidationError as error:
+            # 兴趣只是顺带的建议：只是它不合格时去掉这一项重新校验，回复照常（D115）。
+            if not isinstance(call.arguments, dict) or not _interest_only_errors(error):
+                evidence.append(PlannerAction(name, "rejected", "工具参数无效"))
+                break
+            try:
+                arguments = tool.arguments.model_validate(
+                    {key: value for key, value in call.arguments.items() if key != "interest"}
+                )
+            except ValidationError:
+                evidence.append(PlannerAction(name, "rejected", "工具参数无效"))
+                break
         result = tool.handle(arguments)
         if isinstance(result, Plan):
             reason = (
