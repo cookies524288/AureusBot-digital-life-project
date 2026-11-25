@@ -121,7 +121,7 @@ def _planner_prompts(rig: Rig) -> list[str]:
 
 def _reply_tool_properties(rig: Rig) -> set[str]:
     """规划器 reply 工具声明的参数名；commit 只在日程开启时才出现。"""
-    request = [r for r in rig.organs.requests if r.organ_id == "planner"][0]
+    request = next(r for r in rig.organs.requests if r.organ_id == "planner")
     [reply] = [tool for tool in request.tools if tool.name == "reply"]
     return set(reply.parameters["properties"])
 

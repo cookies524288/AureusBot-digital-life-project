@@ -15,7 +15,13 @@ from aureus.web import create_app
 from aureus.web.expression_cluster_grants import ExpressionClusterDisplay
 from aureus.web.server import SESSION_COOKIE
 from tests.web.test_expression_vector_api import (
-    ACTIVE, EXPRESSION, ORIGIN, PREVIOUS, SPACES, VectorRig, _finished,
+    ACTIVE,
+    EXPRESSION,
+    ORIGIN,
+    PREVIOUS,
+    SPACES,
+    VectorRig,
+    _finished,
 )
 from tests.web.test_server import FakeHeartbeat
 
@@ -104,7 +110,9 @@ def test_workbench_clusters_map_granted_original_not_matching_text(workbench) ->
 
 
 @pytest.mark.parametrize("change", ["grant", "session"])
-def test_workbench_cluster_rejects_in_flight_visibility_change(workbench, monkeypatch, change) -> None:
+def test_workbench_cluster_rejects_in_flight_visibility_change(
+    workbench, monkeypatch, change,
+) -> None:
     rig, display, client = workbench
     key = rig.add(1)
     rig.index.publish(ACTIVE, rig.language.entries(EXPRESSION), ((1.0, 2.0),))
@@ -148,15 +156,20 @@ def test_workbench_vector_progress_reads_live_coverage_and_actual_build(workbenc
         "embedding_fingerprint": {"hash": PREVIOUS, "dimension": 2},
         "vector_count": 1, "size_bytes": len(b"[1.0, 0.0]"), "last_used_at": None,
     }
-    assert client.get(PROGRESS).json() == {"status": "pending", "completed": 0, "total": 2, "percent": 0}
+    assert client.get(PROGRESS).json() == {
+        "status": "pending", "completed": 0, "total": 2, "percent": 0,
+    }
     rig.wait = True
     try:
-        assert client.post(SPACES + "/backfill", headers=ORIGIN, json={"space": ACTIVE}).status_code == 202
+        backfill = client.post(SPACES + "/backfill", headers=ORIGIN, json={"space": ACTIVE})
+        assert backfill.status_code == 202
         assert rig.started.wait(2)
         assert client.get(PROGRESS).json()["status"] == "running"
         assert client.get(VECTORS).json()["items"][0]["state"] == "syncing"
     finally:
         rig.release.set()
     assert _finished(client, "written")["written"] == 2
-    assert client.get(PROGRESS).json() == {"status": "completed", "completed": 2, "total": 2, "percent": 100}
+    assert client.get(PROGRESS).json() == {
+        "status": "completed", "completed": 2, "total": 2, "percent": 100,
+    }
     assert client.get(VECTORS).json()["items"][0]["vector_count"] == 2

@@ -37,6 +37,8 @@ type DisplayScopes = Callable[[], Awaitable[frozenset[str]]]
 
 
 class WorkbenchMember(TypedDict):
+    """原工作台簇成员的响应字段。"""
+
     id: int
     situation: str
     style: str
@@ -48,6 +50,8 @@ class WorkbenchMember(TypedDict):
 
 
 class WorkbenchCluster(TypedDict):
+    """原工作台簇及其成员的响应字段。"""
+
     embedding_profile_marker: str
     cluster_id: int
     size: int
@@ -239,7 +243,11 @@ def register_expression_cluster_routes(
         limit: Annotated[int | None, Query(ge=1, le=MAX_SIZE)] = None,
     ) -> JSONResponse:
         for cluster in await workbench_clusters(request, token, detail=True):
-            if cluster["cluster_id"] == cluster_id and cluster["embedding_profile_marker"] == profile_marker:
+            matched = (
+                cluster["cluster_id"] == cluster_id
+                and cluster["embedding_profile_marker"] == profile_marker
+            )
+            if matched:
                 members = cluster["members"][offset:None if limit is None else offset + limit]
                 return JSONResponse({
                     "success": True, "cluster": {**cluster, "members": members}, "data": members,

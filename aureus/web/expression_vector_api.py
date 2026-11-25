@@ -97,7 +97,10 @@ def register_expression_vector_routes(
         active, rows = await workbench_spaces(request, token)
         building = recall is not None and recall.build_busy
         run = recall.maintenance_run if recall is not None else None
-        failed = run is not None and run.space == active and run.owner == token and run.state == "failed"
+        failed = (
+            run is not None and run.space == active and run.owner == token
+            and run.state == "failed"
+        )
         result = {
             "success": True,
             "state": "syncing" if building else "failed" if failed else
@@ -109,7 +112,9 @@ def register_expression_vector_routes(
                         "hash": row.space,
                         **({"dimension": row.dimension} if row.dimension is not None else {}),
                     },
-                    "state": ("syncing" if building else "active") if row.space == active else "saved",
+                    "state": (
+                        ("syncing" if building else "active") if row.space == active else "saved"
+                    ),
                     "can_delete": False,
                     "vector_count": row.established,
                     "size_bytes": row.size_bytes,

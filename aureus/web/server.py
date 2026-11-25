@@ -79,6 +79,7 @@ from .inbox_api import register_inbox_routes
 from .inbox_operations import register_inbox_operations
 from .inbox_retention_api import register_inbox_retention_routes
 from .language_package_api import register_language_package_routes
+from .learning_assets import register_learning_assets
 from .learning_workbench_api import register_learning_workbench_routes
 from .learning_workbench_service import LearningWorkbench
 from .memory_graph_api import (
@@ -86,7 +87,6 @@ from .memory_graph_api import (
     register_memory_graph_grant_routes,
     register_memory_graph_routes,
 )
-from .learning_assets import register_learning_assets
 from .memory_inspection_api import register_memory_inspection_routes
 from .memory_lifecycle_api import (
     register_memory_lifecycle_routes,
@@ -666,7 +666,8 @@ def create_app(
         return {key: target["chat_name"] for key, target in learning_targets().items()}
 
     workbench = LearningWorkbench(
-        resource_language, resource_emojis, clock or SystemClock(), learning_scopes, learning_targets
+        resource_language, resource_emojis, clock or SystemClock(),
+        learning_scopes, learning_targets,
     )
     register_expression_cluster_routes(
         app,
