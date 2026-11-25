@@ -135,6 +135,8 @@ FAILURE_REASON_BY_ERROR_NAME = {
 }
 
 EMPTY_REPLY_REASON = "返回内容为空或格式异常"
+# 只收到推理内容、没有可见正文时的说明（D127）：测速算模型可用，普通回复按空回复处理。
+REASONING_ONLY_REASON = "只返回了推理内容，没有可见正文"
 
 # 服务商明确拒绝、没有处理这个请求的错误：这种失败记 0 token（06 号文档 12.3 节）。
 # 其余错误（超时、连接中断、服务商内部错误、不认识的错误）可能已经用掉了 token，按估算记。
@@ -269,6 +271,15 @@ def _read_text(response: Any) -> str | None:
     return text.strip() if isinstance(text, str) and text.strip() else None
 
 
+def _read_reasoning(response: Any) -> bool:
+    """非流式响应里有没有推理内容；只用来判断可用性和写失败说明，不当正文（D127）。"""
+    try:
+        message = response.choices[0].message
+    except (AttributeError, IndexError, TypeError):
+        return False
+    return _has_reasoning(message)
+
+
 def _load_litellm_completion() -> CompletionFunction:
     # 创建真实器官发生在启动阶段，不在心跳循环里，导入慢一点不要紧。
     return _import_litellm().acompletion
@@ -330,13 +341,40 @@ def model_probe_inputs(model: ModelConfig) -> dict[str, dict[str, Any]]:
     return probes
 
 
+def _probe_usage(inputs: dict[str, Any], completion_tokens: int) -> TokenUsage:
+    """测速拿不到可信用量时，按一次请求往多里估（06 号文档 12.3 节）。"""
+    return TokenUsage(
+        prompt_tokens=len(json.dumps(inputs).encode()),
+        completion_tokens=completion_tokens,
+        known=False,
+    )
+
+
+def _probe_attempt(
+    model: ModelConfig, provider: ProviderConfig, usage: TokenUsage, failure: str | None
+) -> CallAttempt:
+    return CallAttempt(
+        model=model.name,
+        provider=provider.name,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cached_tokens=usage.cached_tokens,
+        estimated=not usage.known,
+        succeeded=failure is None,
+        failure_reason=failure,
+        cost=0.0
+        if usage.known and not (usage.prompt_tokens or usage.completion_tokens)
+        else compute_cost(model, usage),
+    )
+
+
 async def probe_model(
     model: ModelConfig,
     provider: ProviderConfig,
     resolver: KeyResolver,
     capability: str | None = None,
 ) -> OrganResponse:
-    """测量首段可见文字或向量的返回时间，报告一次调用的用量。"""
+    """测量首段正文（或推理内容）或向量的返回时间，报告一次调用的用量。"""
     organ_id = "model_test"
     if model.kind == "image_embedding":
         loop = asyncio.get_running_loop()
@@ -372,10 +410,9 @@ async def probe_model(
     started = loop.time()
     latency = None
     failure = None
-    usage = TokenUsage(
-        prompt_tokens=len(json.dumps(inputs).encode()),
-        completion_tokens=0 if embedding or transcription else _MODEL_TEST_MAX_TOKENS,
-        known=False,
+    attempts: list[CallAttempt] = []
+    usage = _probe_usage(
+        inputs, 0 if embedding or transcription else _MODEL_TEST_MAX_TOKENS
     )
     try:
         async with asyncio.timeout(provider.timeout_seconds):
@@ -423,23 +460,48 @@ async def probe_model(
                 ):
                     failure = "工具调用名称或参数与测试要求不符。"
             else:
+
+                def mark_latency() -> None:
+                    nonlocal latency
+                    if latency is None:
+                        latency = loop.time() - started
+
                 stream = await library.acompletion(
                     **inputs,
                     stream=True,
                     max_tokens=_MODEL_TEST_MAX_TOKENS,
                     **params,
                 )
-                async with aclosing(stream):
-                    async for chunk in stream:
-                        if chunk.choices:
-                            content = getattr(chunk.choices[0].delta, "content", None)
-                            if isinstance(content, str):
-                                reply += content
-                                if latency is None and content.strip():
-                                    latency = loop.time() - started
-                        actual = extract_usage(chunk)
-                        if actual.known:
-                            usage = actual
+                text, usage, reasoning = await _read_stream(stream, on_first_output=mark_latency)
+                reply = text or ""
+                if text is None:
+                    # 流式没有正文：同一请求去掉 stream 再试一次（D127）。这次重试先按
+                    # 一次请求估算，拿到非流式响应的真实用量再覆盖（用量以非流式为准）。
+                    if not usage.known:
+                        usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
+                    attempts.append(
+                        _probe_attempt(
+                            model,
+                            provider,
+                            usage,
+                            REASONING_ONLY_REASON if reasoning else EMPTY_REPLY_REASON,
+                        )
+                    )
+                    usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
+                    result = await library.acompletion(
+                        **inputs, max_tokens=_MODEL_TEST_MAX_TOKENS, **params
+                    )
+                    actual = extract_usage(result)
+                    if actual.known:
+                        usage = actual
+                    text = _read_text(result)
+                    reasoning = reasoning or _read_reasoning(result)
+                    if text is not None:
+                        reply = text
+                        latency = loop.time() - started
+                    elif reasoning:
+                        reply = REASONING_ONLY_REASON
+                        latency = loop.time() - started
     except Exception as error:
         failure = _failure_reason(error)
         if _rejected_before_processing(error):
@@ -452,35 +514,23 @@ async def probe_model(
         and reply.strip().rstrip(".!").casefold() != "red"
     ):
         failure = failure or "未识别出测试图片的红色。"
-    attempt = CallAttempt(
-        model=model.name,
-        provider=provider.name,
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        cached_tokens=usage.cached_tokens,
-        estimated=not usage.known,
-        succeeded=failure is None,
-        failure_reason=failure,
-        cost=0.0
-        if usage.known and not (usage.prompt_tokens or usage.completion_tokens)
-        else compute_cost(model, usage),
-    )
+    attempts.append(_probe_attempt(model, provider, usage, failure))
     if failure is not None:
-        raise ModelProbeError(failure, attempt, reply)
+        raise ModelProbeError(failure, attempts, reply)
     assert latency is not None
     return OrganResponse(
         organ_id,
         reply,
         metadata={"latency_ms": round(latency * 1000), "kind": model.kind},
-        attempts=[attempt],
+        attempts=attempts,
     )
 
 
 class ModelProbeError(OrganCallError):
     """保留已收到的测试回复，网关仍按失败尝试记账。"""
 
-    def __init__(self, reason: str, attempt: CallAttempt, reply: str) -> None:
-        super().__init__("model_test", [reason], [attempt])
+    def __init__(self, reason: str, attempts: Sequence[CallAttempt], reply: str) -> None:
+        super().__init__("model_test", [reason], list(attempts))
         self.reply = reply
 
 

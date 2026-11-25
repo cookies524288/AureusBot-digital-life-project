@@ -28,6 +28,7 @@ from aureus.organs.llm_adapter import (
     EMPTY_REPLY_REASON,
     EMPTY_SYSTEM_MESSAGE,
     LITELLM_PREFIX_BY_PROTOCOL,
+    REASONING_ONLY_REASON,
     RETRY_BACKOFF_SECONDS,
     EmbeddingOrgan,
     LLMOrgan,
@@ -460,6 +461,70 @@ async def test_model_probe_closes_failed_stream_and_sanitizes_error(
     assert CLOUD_SECRET not in str(error.value)
     assert error.value.attempts[0].estimated
     assert closed
+
+
+def make_stream_chunk(*, content: str | None = None, usage: Any = None) -> SimpleNamespace:
+    chunk = SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=content))])
+    if usage is not None:
+        chunk.usage = usage
+    return chunk
+
+
+@pytest.mark.asyncio
+async def test_probe_falls_back_to_non_streaming_when_stream_has_no_content(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        yield make_stream_chunk(content=None)
+        yield SimpleNamespace(choices=[], usage=make_response(None, 7, 1).usage)
+
+    completion = FakeCompletion(chunks(), make_response("OK", 8, 2))
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    result = await probe_model(config.models[0], config.providers[0], keys)
+
+    assert result.suggestion == "OK"
+    assert len(completion.calls) == 2
+    assert completion.calls[0]["stream"] is True
+    assert "stream" not in completion.calls[1]
+    assert completion.calls[1]["messages"] == completion.calls[0]["messages"]
+    assert completion.calls[1]["max_tokens"] == completion.calls[0]["max_tokens"]
+    assert result.attempts[0].succeeded is False
+    assert result.attempts[0].failure_reason == EMPTY_REPLY_REASON
+    assert result.attempts[0].budget_tokens == 8
+    assert result.attempts[-1].succeeded is True
+    assert result.attempts[-1].budget_tokens == 10  # 用量以非流式响应为准
+    assert result.metadata["latency_ms"] >= 0
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+@pytest.mark.asyncio
+async def test_probe_accepts_reasoning_only_and_says_so(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        delta = SimpleNamespace(content=None)
+        setattr(delta, field, "先想一想")
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+        yield SimpleNamespace(choices=[])
+
+    fallback = make_response(None, 100, 20)
+    setattr(fallback.choices[0].message, field, "再想一想")
+    completion = FakeCompletion(chunks(), fallback)
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    result = await probe_model(config.models[0], config.providers[0], keys)
+
+    assert result.suggestion == REASONING_ONLY_REASON
+    assert len(completion.calls) == 2
+    assert result.attempts[0].failure_reason == REASONING_ONLY_REASON
+    assert result.attempts[-1].succeeded is True
+    assert result.attempts[-1].budget_tokens == 120
+    assert result.metadata["latency_ms"] >= 0
 
 
 @pytest.mark.asyncio
