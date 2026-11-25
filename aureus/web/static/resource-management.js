@@ -96,7 +96,20 @@ function createPagedResource({el, list, label = '分页', request, render, measu
   }
   return {
     list, navigation:controls.navigation, reset, read,
-    show() { active = true; const capacity = measure(); return capacity === limit ? read() : reset(capacity); },
+    show() {
+      active = true;
+      const capacity = measure();
+      const pending = capacity === limit ? read() : reset(capacity);
+      // 刚切到页面时列表可能还没完成布局；下一帧按实际高度再核对一次容量（批次 3）。
+      const recheck = () => {
+        if (!active || !list.isConnected) return;
+        const next = measure();
+        if (next !== limit) reset(next);
+      };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(recheck);
+      else setTimeout(recheck, 0);
+      return pending;
+    },
     hide() { active = false; pending?.abort(); pending = null; pages = null; sync(); prepare?.(); },
     resize() {
       if (!active || !list.clientWidth) return;
@@ -173,12 +186,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function field(label, value) {
     return value == null || value === '' ? null : el('p', {}, el('strong', {text:label + '：'}), String(readable(value)));
   }
-  const terms = {...labels, messages:'消息', mai_messages:'消息', active:'有效', inactive:'已停用', conflicted:'有冲突', superseded:'已替代',
-    retracted:'已撤回', deleted:'已删除', missing:'缺失', image_assets:'图片资产', message:'消息',
+  const terms = {...labels, entities:'实体', messages:'消息', mai_messages:'消息', active:'有效', inactive:'已停用', conflicted:'有冲突', superseded:'已替代',
+    retracted:'已撤回', deleted:'已删除', missing:'缺失', image_assets:'图片资产', images:'图片', message:'消息',
     summary_facts:'会话总结事实', platform_message:'平台消息定位', platform_image:'图片组件定位',
     attachment_archived:'归档附件', media_type:'媒体类型', source_key:'原记录编号', reference:'引用',
     evidence:'证据', name:'名称', id:'编号', kind:'类别', status:'状态', profile:'人物画像'};
   const term = key => terms[key] ?? key;
+  const instanceLabels = {aureus:'Aureus', 'a-memorix-bundle':'记忆包'};
+  const instanceLabel = value => instanceLabels[value] ?? value;
   function readable(value) {
     if (typeof value === 'boolean') return value ? '是' : '否';
     if (Array.isArray(value)) return value.map(readable).join('、');
@@ -186,24 +201,34 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       .filter(([, content]) => content != null && content !== '').map(([key, content]) => term(key) + '：' + readable(content)).join('\n');
     return value;
   }
+  // 来源只保留用户认得的实例名和资料类型；表名、库角色和原主键是内部定位，不展示（批次 3）。
   function sourceId(value) {
     if (typeof value === 'string' && value.startsWith('[')) {
-      try { return readable(JSON.parse(value)); } catch { return value; }
+      try {
+        const parts = JSON.parse(value);
+        if (Array.isArray(parts) && parts.length >= 3) {
+          return [instanceLabel(parts[0]), term(parts[2])].filter(Boolean).join(' · ');
+        }
+        return readable(parts);
+      } catch { return value; }
     }
     return readable(value);
   }
   function sourceText(source) {
     if (!source || typeof source !== 'object') return source;
-    return [['实例', source.instance], ['数据库', source.role], ['记录类型', term(source.table ?? source.kind)],
-      ['原记录编号', sourceId(source.source_key ?? source.key)]]
-      .filter(([, value]) => value != null && value !== '').map(([label, value]) => label + '：' + value).join('；') || readable(source);
+    return [instanceLabel(source.instance), term(source.table ?? source.kind)]
+      .filter(value => value != null && value !== '').join(' · ') || readable(source);
   }
   function detail(title, ...content) {
     openEditor(title, el('div', {class:'stack resource-detail'}, ...content));
   }
+  // 列表行：主文本在上，状态、来源等辅助信息另起一行，长文本最多折两行（批次 3）。
   function record(title, open, box) {
+    const label = el('span', {class:'resource-label'},
+      el('span', {class:'resource-title', text:typeof title === 'string' ? title : title.text}),
+      typeof title === 'object' && title.meta && el('span', {class:'resource-meta', text:title.meta}));
     return el('div', {class:'resource-record'}, box,
-      el('button', {class:'btn small', type:'button', onclick:open}, el('span', {text:title})));
+      el('button', {class:'btn small', type:'button', onclick:open}, label));
   }
   function searchForm(label, placeholder, ...controls) {
     return el('form', {class:'row resource-filters'},
@@ -317,7 +342,17 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     openEditor('导入' + learningLabels[kind], form);
   }
-  function batchControls(keys, endpoint, payload, refresh, selectionChanged) {
+  // 批量移除、恢复前先确认，并写明会影响多少条（批次 3）。
+  function confirmBatch(title, count, restoring, proceed) {
+    const label = restoring ? '恢复' : '移除';
+    const confirm = action('确认' + label, () => { $('editor-dialog').close(); proceed(); });
+    openEditor(label + title, el('div', {class:'stack'},
+      el('p', {text:`仅${label}本页选中的 ${count} 条记录，不影响其他记录。`}),
+      el('p', {text:restoring ? '恢复后这些记录重新参与召回。'
+        : '移除后这些记录不再参与召回，可在「显示已移除」中恢复；原件保留。'}),
+      el('div', {class:'row'}, action('取消', () => $('editor-dialog').close()), confirm)));
+  }
+  function batchControls(keys, endpoint, payload, refresh, selectionChanged, confirm) {
     const selected = new Map();
     let busy = false;
     const remove = action('移除所选', event => update(event.currentTarget, false));
@@ -330,10 +365,14 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     async function update(button, restoring) {
       const entries = [...selected].filter(([, removed]) => removed === restoring).map(([key]) => key);
       if (busy || !entries.length) return;
-      busy = true;
-      sync();
-      try { await change(endpoint, 'PATCH', payload(entries, !restoring), refresh, button); }
-      finally { busy = false; sync(); }
+      const apply = async () => {
+        busy = true;
+        sync();
+        try { await change(endpoint, 'PATCH', payload(entries, !restoring), refresh, button); }
+        finally { busy = false; sync(); }
+      };
+      if (confirm) confirm(entries.length, restoring, apply);
+      else await apply();
     }
     function checkbox(item) {
       const box = el('input', {type:'checkbox', 'aria-label':'选择 ' + (item.text || '未填写描述')});
@@ -458,28 +497,33 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       jargonFilter && el('label', {}, '黑话定性 ', jargonFilter), shared && el('label', {}, shared, ' 仅共享范围'),
       el('label', {}, '来自会话 ', origin), el('label', {}, '授权会话 ', authorized));
     const add = action('添加' + learningLabels[kind], () => editLearning(kind, pager.read));
+    add.classList.add('primary');
     const upload = action('导入', () => importLearning(kind, pager.read));
     const download = action('导出', () => {
       const link = el('a', {href:'/api/resources/learning/package/' + kind, download:''});
       document.body.append(link); link.click(); link.remove();
     });
+    const selectedCount = el('span', {class:'muted resource-selection-count', role:'status', 'aria-live':'polite'});
     const classifyBatch = jargonFilter && action('定性所选', () => classifyJargon(batch.keys(), pager.read));
     const batch = batchControls(item => item.entry_key, '/api/resources/learning/batch',
       (entry_keys, removed) => ({kind, entry_keys, removed}), () => pager.read(),
-      count => { if (classifyBatch) classifyBatch.disabled = !count || removed.firstChild.checked; });
-    const tools = [add, upload, download];
+      count => {
+        selectedCount.textContent = count ? `已选 ${count} 条` : '';
+        if (classifyBatch) classifyBatch.disabled = !count || removed.firstChild.checked;
+      }, (count, restoring, proceed) => confirmBatch('所选资料', count, restoring, proceed));
+    const tools = [upload, download, add];
     for (const tool of tools) tool.disabled = true;
     panel.append(toolbar, scopeHint, actions(kind === 'expression' ? '表达操作' : '黑话操作', ...tools),
-      actions('所选资料', classifyBatch, batch.remove, batch.restore));
+      actions('所选资料', selectedCount, classifyBatch, batch.remove, batch.restore));
     function render(item) {
-      const title = item.text + (item.is_removed ? ' · 已移除' : item.pending_scope ? ' · 待映射' : item.is_enabled ? '' : ' · 已停用')
-        + (item.jargon_status ? ' · ' + jargonLabels[item.jargon_status] : '');
-      const open = () => detail(title, field(kind === 'jargon' ? '释义' : '使用场景', item.detail),
-        field('例句', item.example), field('证据数', item.count), field('发言者', item.speakers.join('、')),
-        field('时间线证据', item.evidence_ids.join('、')), field('来源证据', item.source_refs.map(sourceId).join('；')),
-        field('来自会话', originLabels.get(item.learning_source) || (item.learning_source ? '已记录来源键' : '未确认')),
+      const state = item.is_removed ? '已移除' : item.pending_scope ? '待映射' : item.is_enabled ? '' : '已停用';
+      const status = [state || '已启用', item.jargon_status ? jargonLabels[item.jargon_status] : '']
+        .filter(Boolean).join(' · ');
+      const heading = item.text + (state ? ' · ' + state : '');
+      const open = () => detail(heading, field(kind === 'jargon' ? '释义' : '使用场景', item.detail),
+        field('例句', item.example), field('发言者', item.speakers.join('、')),
+        field('来自会话', originLabels.get(item.learning_source) || (item.learning_source ? '已记录的来源会话' : '未确认')),
         item.package_source != null && field('包内所载会话名称', item.package_source || '未提供名称'),
-        item.package_source != null && field('授权会话数', item.scope_keys.length),
         item.jargon_status && field('定性', jargonLabels[item.jargon_status]),
         item.jargon_status && !item.detail && field('释义状态', '尚未填写'),
         item.original && field('原件', item.original.filter(Boolean).join('\n')),
@@ -492,12 +536,19 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
             if (await change('/api/resources/learning', 'PATCH', {kind, entry_key:item.entry_key,
               is_enabled:!item.is_enabled}, pager.read, button) && button.isConnected) $('editor-dialog').close();
           })));
-      return record(title, open, batch.checkbox(item));
+      return record({text:item.text || '未填写内容', meta:status}, open, batch.checkbox(item));
     }
     const pager = searchable({panel, id:'learning-' + kind, render,
-      empty:() => origin.value || authorized.value ? '该会话没有符合条件的资料' : '没有符合条件的记录', prepare:() => {
-      batch.clear(); for (const tool of tools) tool.disabled = true;
-    }, loaded:data => { for (const tool of tools) tool.disabled = !data.enabled; }}, toolbar, '/api/resources/learning',
+      empty:() => {
+        const filtered = toolbar.elements.q.value.trim() || disabled.firstChild.checked || removed.firstChild.checked
+          || origin.value || authorized.value || jargonFilter?.value || shared?.checked;
+        return filtered
+          ? '没有符合条件的资料，试试清空搜索或筛选条件。'
+          : `还没有${learningLabels[kind]}。点击「添加${learningLabels[kind]}」录入一条，或点「导入」从语言包导入。`;
+      },
+      prepare:() => {
+        batch.clear(); for (const tool of tools) tool.disabled = true;
+      }, loaded:data => { for (const tool of tools) tool.disabled = !data.enabled; }}, toolbar, '/api/resources/learning',
     fields => ({kind, q:fields.q.value, recall:fields.disabled.checked || fields.removed.checked ? '' : 'enabled',
       removed:fields.removed.checked, origin_conversation_key:origin.value, authorized_conversation_key:authorized.value,
       ...(fields.jargon_status?.value ? {jargon_status:fields.jargon_status.value} : {}),
@@ -939,12 +990,15 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const removed = kind === 'emoji' ? el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除') : null;
     const form = searchForm(label, label, status, review, format, sort, removed);
     const counts = emoji ? el('div', {class:'muted', id:'emoji-library-counts'}) : null;
+    const selectedCount = emoji ? el('span', {class:'muted resource-selection-count', role:'status', 'aria-live':'polite'}) : null;
     const exportMaterials = emoji ? action('导出所选素材', () => emojiMaterialExport(batch.keys())) : null;
     const batch = kind === 'emoji' ? batchControls(item => item.entry_key, '/api/resources/emoji/batch',
       (entry_keys, removed) => ({entry_keys, removed}), () => pager.read(), count => {
+        selectedCount.textContent = count ? `已选 ${count} 张` : '';
         if (exportMaterials) exportMaterials.disabled = !count || count > 20 || removed.firstChild.checked;
-      }) : null;
+      }, (count, restoring, proceed) => confirmBatch('所选表情', count, restoring, proceed)) : null;
     const upload = kind === 'emoji' ? action('上传表情', () => emojiForm(pager.read)) : null;
+    upload?.classList.add('primary');
     const batchUpload = kind === 'emoji' ? action('批量上传', () => emojiBatchForm(pager.read)) : null;
     const importMaterials = emoji ? action('导入素材集', () => emojiMaterialImport(pager.read)) : null;
     const thumbnail = emoji ? action('缩略图缓存', emojiThumbnailStatus) : null;
@@ -969,11 +1023,12 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }
     syncEmojiActions(false);
     panel.append(form);
-    if (emoji) panel.append(actions('表情操作', upload, batchUpload, integrity, importMaterials, thumbnail));
-    if (batch) panel.append(actions('所选表情', batch.remove, batch.restore, exportMaterials));
+    if (emoji) panel.append(actions('表情操作', batchUpload, integrity, importMaterials, thumbnail, upload));
+    if (batch) panel.append(actions('所选表情', selectedCount, batch.remove, batch.restore, exportMaterials));
     if (counts) panel.append(counts);
     const pager = searchable({panel, grid:true, id:kind === 'emoji' ? 'learning-emoji' : 'archived-images',
       render:item => renderMedia(item, pager.read, batch, openReview),
+      empty:() => emoji ? '还没有符合条件的表情。点「上传表情」或「导入素材集」添加。' : '还没有迁入的图片。',
       prepare:() => {
         batch?.clear();
         syncEmojiActions(false);
@@ -1396,7 +1451,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         ...Object.entries(statuses).map(([value, text]) => el('option', {value, text}))),
       el('label', {}, '开始日期（UTC）', el('input', {type:'date', name:'start', 'aria-label':'开始日期（UTC）'})),
       el('label', {}, '结束日期（UTC）', el('input', {type:'date', name:'end', 'aria-label':'结束日期（UTC）'})),
-      el('button', {class:'btn small primary', text:'查询'}), action('刷新', () => pager.read()));
+      action('刷新', () => pager.read()), el('button', {class:'btn small primary', text:'查询'}));
     panel.append(el('p', {class:'muted', text:'挽回的条目仅限原会话，无需人工批准。查看记录不会调用模型。'}), form, counts);
     const dialog = $('editor-dialog');
     let revision = 0;
@@ -1447,6 +1502,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         for (const [name, value] of new FormData(form)) if (value) params.set(name, value);
         return api(endpoint + '?' + params, 'GET', undefined, {}, signal);
       },
+      empty:() => Object.values(form.elements).some(control => control.value)
+        ? '没有符合条件的质检记录，试试清空筛选条件。'
+        : '还没有质检记录。表达在回复时经过质检器官后才会出现在这里。',
       loaded:data => {
         const value = source.value;
         source.replaceChildren(el('option', {value:'', text:'全部获准来源'}),
@@ -1454,7 +1512,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         source.value = data.sources.some(entry => entry.key === value) ? value : '';
         counts.textContent = data.enabled ? `共 ${data.total} 条质检记录` : '';
       },
-      render:item => record(`${statuses[item.status]} · ${item.text} · ${item.source_label}`, () => show(item)),
+      render:item => record({text:item.text, meta:`${statuses[item.status]} · ${item.source_label}`}, () => show(item)),
     });
     form.addEventListener('submit', event => { event.preventDefault(); counts.textContent = ''; pager.reset(); });
     return {show:() => pager.show(), hide:() => { pager.hide(); source.replaceChildren(); pager.list.replaceChildren(); }};
@@ -1497,13 +1555,13 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       currentJob = job;
       cost.textContent = `仅使用当前免费的本地嵌入路线，每次最多补建 ${batch_limit} 条缺项；会占用本地算力，提交前可取消。`;
       offers.replaceChildren(...items.map((item, index) => el('div', {class:'resource-record'},
-        el('span', {text:`空间 ${index + 1} · ${item.space.slice(0, 12)} · ${item.available ? '可补建' : '已保存'}`}),
-        el('span', {class:'muted', text:`来源候选 ${item.eligible} 条 · 已写入 ${item.established} 条`}))));
+        el('span', {text:`空间 ${index + 1} · ${item.available ? '可补建' : '已保存'}`}),
+        el('span', {class:'muted', text:`待补建 ${item.eligible} 条 · 已写入 ${item.established} 条`}))));
       select.replaceChildren(el('option', {value:'', text:'请选择可用空间'}), ...items.flatMap((item, index) =>
-        item.available ? [el('option', {value:item.space, text:`空间 ${index + 1} · ${item.space.slice(0, 12)}`})] : []));
+        item.available ? [el('option', {value:item.space, text:`空间 ${index + 1}`})] : []));
       select.value = selection;
       status.textContent = job ? (job.state === 'written' ? `本次写入 ${job.written} 条` : states[job.state]) :
-        (items.length ? '' : '当前没有可用或已保存的空间。');
+        (items.length ? '' : '当前没有可用或已保存的空间。表达积累并启用向量后，这里会出现可补建的空间。');
       controls();
       if (['running', 'writing'].includes(job?.state)) timer = setTimeout(refresh, 1000);
     }
@@ -1577,9 +1635,9 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         if (response.ok) response.data.enabled = true;
         return response;
       },
-      empty:() => '当前没有可见的表达簇',
+      empty:() => '当前没有可见的表达簇。表达积累后会自动聚类。',
       loaded:data => { count.textContent = `共 ${data.total} 个可见表达簇`; },
-      render:item => record(`簇 ${item.number} · ${item.count} 条 · ${item.title}`, () => open(item)),
+      render:item => record({text:item.title || '未命名表达簇', meta:`${item.count} 条`}, () => open(item)),
     });
     return {
       show:() => pager.show(),

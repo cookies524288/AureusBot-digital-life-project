@@ -556,6 +556,34 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .resource-pagination input.resource-page-jump[type=text][inputmode=numeric]{width:4em;text-align:center;padding:4px;font-size:13px}
 .resource-pagination [role=status]{font-size:13px}
 .resource-detail{overflow-wrap:anywhere;gap:12px}
+/* 学习与长期记忆：标题、筛选、列表字段和空状态按主次分层（批次 3）。 */
+.resource-page .page-head .page-note{max-width:72ch;line-height:1.6}
+#page-learning .resource-filters,#page-memory .resource-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 12px}
+#page-learning .resource-filters input[type=search],#page-memory .resource-filters input[type=search]{flex:1 1 100%}
+#page-learning .resource-filters label,#page-memory .resource-filters label{display:grid;flex:0 1 140px;gap:4px;min-width:0;font-size:13px;color:var(--text-2)}
+#page-learning .resource-filters label:has(input[type=checkbox]),#page-memory .resource-filters label:has(input[type=checkbox]){display:flex;flex:0 1 auto;align-items:center;gap:6px;color:var(--text)}
+#page-learning .resource-filters label select,#page-memory .resource-filters label select{width:100%;min-width:0}
+#page-learning .resource-filters button,#page-memory .resource-filters button{margin-inline-start:0}
+#page-learning .resource-filters button:first-of-type,#page-memory .resource-filters button:first-of-type{margin-inline-start:auto}
+.resource-actions{justify-content:flex-end}
+#memory-selection,#memory-panel-inspection .resource-actions{justify-content:flex-start}
+.resource-selection-count{margin-inline-end:auto;font-size:13px;white-space:nowrap}
+#memory-selection .resource-selection-count{margin-inline-start:auto;margin-inline-end:0}
+.resource-selection-count:not(:empty){color:var(--text-2)}
+#page-learning .resource-list,#page-memory .resource-list{--resource-row:70px}
+#page-memory .memory-graph-list{--resource-row:42px}
+#page-learning .resource-list:not(.resource-grid),#page-memory .resource-list:not(.resource-grid):not(.memory-graph-list){flex:none;height:calc(var(--resource-row) * 6);min-height:0;max-height:60dvh}
+.resource-record{height:auto;min-height:var(--resource-row);align-items:stretch}
+.resource-record .btn{height:auto;min-height:calc(var(--resource-row) - 2px);padding:8px 12px;white-space:normal;text-align:left;align-items:center}
+.resource-record .btn .resource-label{display:block;flex:1;min-width:0;white-space:normal;overflow:visible;text-overflow:clip}
+.resource-record .btn .resource-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;white-space:normal;line-height:1.45;overflow-wrap:anywhere}
+.resource-record .btn .resource-meta{display:block;margin-top:3px;color:var(--text-2);font-size:12px;line-height:1.4;white-space:normal;overflow-wrap:anywhere}
+#learning-panel-vectors .resource-record{min-height:0;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;padding:8px 12px}
+#learning-panel-vectors .resource-record>span{line-height:1.5}
+#memory-operations-result .resource-record{min-height:0;height:auto;padding:8px 12px;align-items:center}
+.resource-counts{white-space:normal;overflow:visible;text-overflow:clip}
+.resource-empty{grid-column:1/-1;margin:0;padding:26px 16px;text-align:center;border:1px dashed var(--border);border-radius:var(--radius);line-height:1.7}
+.resource-list:has(> .resource-empty){align-content:center}
 .emoji-upload-items{overflow-wrap:anywhere}
 .emoji-batch-upload [hidden]{display:none}
 .emoji-batch-upload textarea{min-height:0}
@@ -800,7 +828,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="tl-list" class="tl-list"></div>
 </div></section>
 <section id="page-learning" class="page wide resource-page">
-  <div class="page-head"><h2>学习</h2><button id="learning-workbench-open" class="btn small" type="button">打开完整学习工作台</button></div>
+  <div class="page-head"><div><h2>学习</h2><p class="page-note">管理 Aureus 学到的表达方式、黑话和表情包。列表只显示摘要，点条目查看完整内容和来源。</p></div><button id="learning-workbench-open" class="btn small" type="button">打开完整学习工作台</button></div>
   <div id="learning-workbench-host" class="hidden" style="height:calc(100vh - 170px);min-height:360px">
     <button id="learning-workbench-close" class="btn small" type="button">返回原学习页面</button>
     <iframe id="learning-workbench-frame" title="完整学习工作台" style="width:100%;height:calc(100% - 38px);border:0;margin-top:8px" referrerpolicy="same-origin"></iframe>
