@@ -140,21 +140,21 @@ class SafetyGateway:
         try:
             response = await invoke()
         except OrganCallCancelled as cancelled:
-            self._record_usage(organ_id, cancelled.attempts)
+            await self._record_usage(organ_id, cancelled.attempts)
             raise
         except OrganCallError as failure:
-            self._finish(organ_id, failure.attempts, succeeded=False, detail=str(failure))
+            await self._finish(organ_id, failure.attempts, succeeded=False, detail=str(failure))
             raise
         except Exception as error:
             # 器官自己出了错（代码问题）：不知道有没有花 token，账本里没有这次的记录。
-            self._finish(
+            await self._finish(
                 organ_id,
                 [],
                 succeeded=False,
                 detail=f"器官内部出错：{type(error).__name__}",
             )
             raise
-        self._finish(organ_id, response.attempts, succeeded=True, detail="")
+        await self._finish(organ_id, response.attempts, succeeded=True, detail="")
         return response
 
     def _admit(self, request: OrganRequest) -> None:
@@ -208,7 +208,7 @@ class SafetyGateway:
         if reason is not None:
             raise EnergyDepletedError(request.organ_id, reason)
 
-    def _finish(
+    async def _finish(
         self, organ_id: str, attempts: Sequence[CallAttempt], *, succeeded: bool, detail: str
     ) -> None:
         """调用结束后的收尾：告诉失控拦截成败，失败记时间线，用量记账本。
@@ -219,11 +219,12 @@ class SafetyGateway:
         self._guard.report(organ_id, succeeded=succeeded)
         if not succeeded:
             self._note_to_timeline(EVENT_CALL_FAILED, detail, {"organ_id": organ_id})
-        self._record_usage(organ_id, attempts)
+        await self._record_usage(organ_id, attempts)
 
-    def _record_usage(self, organ_id: str, attempts: Sequence[CallAttempt]) -> None:
+    async def _record_usage(self, organ_id: str, attempts: Sequence[CallAttempt]) -> None:
+        """异步记账；短暂锁等待由账本在工作线程里重试，重试后仍失败才锁死网关（D126）。"""
         try:
-            self._ledger.record(organ_id, attempts)
+            await self._ledger.record_with_retry(organ_id, attempts)
         except Exception as error:
             self._ledger_write_failed = True
             logger.exception("账本写入失败，器官 %s 这次的用量没有记上，网关已锁定", organ_id)

@@ -570,6 +570,94 @@ async def test_failed_ledger_write_after_organ_failure_also_locks(harness: Harne
     assert len(harness.events(EVENT_CALL_FAILED)) == 1  # 器官失败这件事仍然记进了时间线
 
 
+async def test_ledger_write_retries_transient_lock(
+    harness: Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D126：短暂锁等待重试后成功，网关不锁死，下一次调用照常放行。"""
+    monkeypatch.setattr("aureus.safety.ledger.LEDGER_WRITE_RETRY_DELAY_SECONDS", 0.01)
+    organ = harness.add_organ([ok(make_attempt(10, 5))])
+    real_write = harness.ledger._write_rows
+    calls = 0
+
+    def flaky_write(rows: Any) -> None:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise sqlite3.OperationalError("database is locked")
+        real_write(rows)
+
+    monkeypatch.setattr(harness.ledger, "_write_rows", flaky_write)
+    gateway = harness.build()
+    with caplog.at_level(logging.WARNING, logger="aureus.safety.ledger"):
+        response = await gateway.call(harness.request())
+    assert response.suggestion == "好的"
+    assert calls == 3  # 第一次写入 + 2 次重试
+    assert [entry.prompt_tokens for entry in harness.ledger.entries()] == [10]
+    assert "重试 2 次" in caplog.text
+    await gateway.call(harness.request())  # 没有置位 _ledger_write_failed
+    assert organ.calls == 2
+
+
+async def test_ledger_write_failure_after_retries_locks_gateway(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D126：重试后仍写不进去才锁死；不补记缺失用量，时间线保留失败。"""
+    monkeypatch.setattr("aureus.safety.ledger.LEDGER_WRITE_RETRY_DELAY_SECONDS", 0.01)
+    organ = harness.add_organ([ok(make_attempt(10, 5))])
+    calls = 0
+
+    def locked_write(rows: Any) -> None:
+        nonlocal calls
+        calls += 1
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(harness.ledger, "_write_rows", locked_write)
+    gateway = harness.build()
+    with pytest.raises(LedgerUnavailableError, match="作废"):
+        await gateway.call(harness.request())
+    assert calls == 3
+    assert harness.ledger.entries() == []
+
+    with pytest.raises(LedgerUnavailableError, match="重启"):
+        await gateway.call(harness.request())
+    assert organ.calls == 1  # 锁死后不再调用器官
+    assert calls == 3  # 也不再尝试写账本
+    assert harness.ledger.entries() == []  # 不补记缺失用量
+    rejections = harness.events(EVENT_CALL_REJECTED)
+    assert [record.metadata["kind"] for record in rejections] == [
+        "LedgerUnavailableError",
+        "LedgerUnavailableError",
+    ]
+
+
+async def test_ledger_write_does_not_block_event_loop(harness: Harness) -> None:
+    """D126：账本在工作线程里等锁时，事件循环能推进其它协程。"""
+    harness.add_organ([ok(make_attempt(10, 5))])
+    gateway = harness.build()
+    blocker = sqlite3.connect(str(harness.db_path), timeout=5.0)
+    blocker.execute("BEGIN IMMEDIATE")  # 占住写锁，让账本写入只能等
+    progressed = asyncio.Event()
+
+    async def release_the_lock() -> None:
+        await asyncio.sleep(0.05)
+        progressed.set()
+        blocker.commit()
+
+    try:
+        call = asyncio.create_task(gateway.call(harness.request()))
+        await release_the_lock()
+        assert progressed.is_set()
+        # 写账本还在等锁，但事件循环已经跑了别的协程；同步写库会一直卡到锁放开之后。
+        assert not call.done()
+        response = await asyncio.wait_for(call, timeout=10)
+    finally:
+        blocker.close()
+    assert response.suggestion == "好的"
+    assert len(harness.ledger.entries()) == 1
+
+
 # ---------- 时间线 ----------
 
 

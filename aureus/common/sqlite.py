@@ -14,15 +14,15 @@ def open_connection(
     db_path: Path,
     *,
     read_only: bool = False,
-    busy_timeout: float = SQLITE_BUSY_TIMEOUT_SECONDS,
+    busy_timeout: float | None = None,
 ) -> sqlite3.Connection:
     """打开一个数据库连接，等锁的时间有上限。
 
     Args:
         db_path: 数据库文件。父目录要已经存在。
         read_only: 只读打开已有数据库，不创建数据库。
-        busy_timeout: 等锁上限（秒）。默认是心跳和器官调用用的短上限；账本写入在
-            工作线程里等得更久（D126），由调用方传入。
+        busy_timeout: 等锁上限（秒）。None 表示用当前的 SQLITE_BUSY_TIMEOUT_SECONDS；
+            账本写入在工作线程里等得更久（D126），由调用方传入。
 
     Returns:
         新的连接，行用 sqlite3.Row 表示。
@@ -32,7 +32,7 @@ def open_connection(
     """
     connection = sqlite3.connect(
         db_path.resolve().as_uri() + "?mode=ro" if read_only else str(db_path),
-        timeout=busy_timeout,
+        timeout=SQLITE_BUSY_TIMEOUT_SECONDS if busy_timeout is None else busy_timeout,
         check_same_thread=False,
         uri=read_only,
     )

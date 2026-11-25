@@ -183,10 +183,10 @@ def test_model_probe_distinguishes_ledger_write_failure_from_rejection(
         PermissionChecker(EmergencyStop(rig.paths.halt_file, rig.clock)),
     )
 
-    def fail_write(*_args: object) -> None:
+    async def fail_write(*_args: object) -> None:
         raise OSError("disk write failed")
 
-    monkeypatch.setattr(ledger, "record", fail_write)
+    monkeypatch.setattr(ledger, "record_with_retry", fail_write)
     app = create_app(
         config=WebConfig(),
         auth=rig.auth,
