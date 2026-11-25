@@ -24,8 +24,10 @@ class LearningWorkbench:
         emojis: EmojiStore | None,
         clock: Clock,
         scopes: Callable[[], dict[str, str]],
+        chat_targets: Callable[[], dict[str, dict[str, Any]]] | None = None,
     ) -> None:
         self.language, self.emojis, self.clock, self.scopes = language, emojis, clock, scopes
+        self.chat_targets = chat_targets
 
     def language_rows(
         self, kind: LanguageKind, *, removed: bool = False, scopes: dict[str, str] | None = None
@@ -159,6 +161,29 @@ class LearningWorkbench:
             "global_count": sum(row["is_global"] for row in rows),
             "complete_count": sum(row["is_complete"] for row in rows),
         }
+
+    def language_chats(self, kind: LanguageKind) -> list[dict[str, Any]]:
+        """仅列获准目标和角色实际采用的学习、召回状态。"""
+        targets = self.chat_targets() if self.chat_targets is not None else {
+            key: {"chat_name": name} for key, name in self.scopes().items()
+        }
+        rows = self.language_payloads(kind)
+        if not targets.keys() <= self.scopes().keys():
+            raise PermissionError("来源授权已变化，请刷新后重试。")
+        return [
+            {
+                "chat_id": key,
+                "session_id": key,
+                "platform": None,
+                "is_group": False,
+                "enable_learning": False,
+                "use_expression": False,
+                **target,
+                "expression_count": sum(row.get("chat_id") == key for row in rows),
+                "jargon_count": sum(key in row.get("session_ids", []) for row in rows),
+            }
+            for key, target in targets.items()
+        ]
 
     def language_targets_for_maintenance(
         self, kind: LanguageKind, identifiers: Sequence[int]

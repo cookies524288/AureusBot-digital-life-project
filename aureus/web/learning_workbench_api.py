@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aureus.common import Clock
 from aureus.memory import LanguageKind
+from aureus.memory.emoji import MAX_EMOJI_BYTES
 from aureus.memory.language_package import read_package
 from aureus.web.learning_workbench_service import LearningWorkbench
 
@@ -231,22 +232,8 @@ def register_learning_workbench_routes(
         @router.get(path + "/chats")
         @router.get(path + "/chat-targets")
         async def chats() -> dict[str, Any]:
-            scopes = await run(service.scopes)
-            rows = await run(service.language_payloads, kind)
-            return {
-                "success": True,
-                "total": len(scopes),
-                "data": [
-                    {
-                        "chat_id": key,
-                        "session_id": key,
-                        "chat_name": label,
-                        "expression_count": sum(row.get("chat_id") == key for row in rows),
-                        "jargon_count": sum(key in row.get("session_ids", []) for row in rows),
-                    }
-                    for key, label in scopes.items()
-                ],
-            }
+            targets = await run(service.language_chats, kind)
+            return {"success": True, "total": len(targets), "data": targets}
 
         @router.get(path + "/groups")
         async def groups() -> dict[str, Any]:
@@ -552,9 +539,9 @@ def register_learning_workbench_routes(
         description: Annotated[str, Form(...)],
     ) -> dict[str, Any]:
         try:
-            data = await file.read(5 * 1024 * 1024 + 1)
-            if len(data) > 5 * 1024 * 1024:
-                raise HTTPException(413, "图片不能超过5 MiB。")
+            data = await file.read(MAX_EMOJI_BYTES + 1)
+            if len(data) > MAX_EMOJI_BYTES:
+                raise HTTPException(413, f"图片不能超过 {MAX_EMOJI_BYTES // (1024 * 1024)} MiB。")
         except HTTPException:
             raise
         except (OSError, ValueError):

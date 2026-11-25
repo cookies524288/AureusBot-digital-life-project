@@ -114,6 +114,7 @@ def open_web(
             ),
             allows_qq_delivery=core.heartbeat.allows_emoji_delivery,
             resource_language=core.language,
+            learning_language_config=core.settings.runtime.language,
             resource_memory=core.memory,
             memory_graph_display=core.memory.graph_display if core.memory is not None else None,
             resource_images=core.inbox_images,

@@ -32,7 +32,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.channels import QQAvatars, QQDesktop, WebChannel
-from aureus.common import Clock, SystemClock, WebConfig
+from aureus.common import Clock, LanguageConfig, SystemClock, WebConfig
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
 from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
@@ -278,6 +278,7 @@ def create_app(
     qq_avatars: QQAvatars | None = None,
     allows_qq_delivery: Callable[[], bool] | None = None,
     resource_language: LanguageStore | None = None,
+    learning_language_config: LanguageConfig | None = None,
     resource_memory: MemoryIndex | None = None,
     resource_images: InboxImageIndex | None = None,
     resource_people: PeopleDirectory | None = None,
@@ -633,16 +634,39 @@ def create_app(
         app, require_ready, sessions.is_active, _same_http_origin, auth, memory_graph_display
     )
 
-    def learning_scopes() -> dict[str, str]:
-        scopes = {'["web","local"]': "网页私聊", '["terminal","local"]': "本机终端"}
+    def learning_targets() -> dict[str, dict[str, Any]]:
+        language_config = learning_language_config
+        recall = (
+            resource_language is not None and language_config is not None
+            and language_config.recall_enabled and language_config.reference_chars > 0
+        )
+        targets = {
+            json.dumps((platform, "local"), separators=(",", ":")): {
+                "chat_name": name, "platform": platform, "is_group": False,
+            }
+            for platform, name in (("web", "网页私聊"), ("terminal", "本机终端"))
+        }
         if inbox_store is not None and allows_inbox_conversation is not None:
             for conversation in inbox_store.list_conversations(visible_to_user=True):
-                if allows_inbox_conversation(conversation.key):
-                    scopes[conversation.key.language_scope_key()] = conversation.name
-        return scopes
+                key = conversation.key
+                if allows_inbox_conversation(key):
+                    targets[key.language_scope_key()] = {
+                        "chat_name": conversation.name, "platform": key.platform,
+                        "is_group": key.kind == "group", "account_id": key.account_id,
+                        "target_id": key.recipient_id,
+                    }
+        for scope, target in targets.items():
+            target["enable_learning"] = (
+                resource_language is not None and resource_language.learning_source_allowed(scope)
+            )
+            target["use_expression"] = recall
+        return targets
+
+    def learning_scopes() -> dict[str, str]:
+        return {key: target["chat_name"] for key, target in learning_targets().items()}
 
     workbench = LearningWorkbench(
-        resource_language, resource_emojis, clock or SystemClock(), learning_scopes
+        resource_language, resource_emojis, clock or SystemClock(), learning_scopes, learning_targets
     )
     register_expression_cluster_routes(
         app,
