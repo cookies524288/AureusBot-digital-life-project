@@ -4,7 +4,9 @@
 资料和修改由 Aureus 权威存储负责；稳定编号与当前来源范围由宿主核定。
 """
 
+from collections import Counter
 from collections.abc import Callable, Sequence
+from datetime import timedelta
 from typing import Any
 
 from aureus.common import Clock
@@ -25,32 +27,35 @@ class LearningWorkbench:
     ) -> None:
         self.language, self.emojis, self.clock, self.scopes = language, emojis, clock, scopes
 
-    def language_rows(self, kind: LanguageKind, *, removed: bool = False) -> list[LanguageEntry]:
+    def language_rows(
+        self, kind: LanguageKind, *, removed: bool = False, scopes: dict[str, str] | None = None
+    ) -> list[LanguageEntry]:
         """返回当前来源允许管理的条目，保留待映射包的管理语义。"""
         if self.language is None:
             raise ValueError("学习功能当前关闭。")
-        scopes = self.scopes()
+        current = self.scopes() if scopes is None else scopes
         return [
             entry
             for entry in self.language.entries(kind, include_disabled=True)
             if entry.is_removed == removed
-            and (entry.learning_source is None or entry.learning_source in scopes)
-            and (not entry.scope_keys or bool(set(entry.scope_keys) & scopes.keys()))
-            and (entry.restricted_scope is None or entry.restricted_scope in scopes)
+            and self._entry_in_scopes(entry, current)
         ]
 
     def language_payloads(
         self, kind: LanguageKind, *, removed: bool = False
     ) -> list[dict[str, Any]]:
         """投影原页面响应；审核字段只展示存量记录。"""
-        entries = self.language_rows(kind, removed=removed)
+        scopes = self.scopes()
+        entries = self.language_rows(kind, removed=removed, scopes=scopes)
         assert self.language is not None
         identifiers = self.language.workbench_ids(kind, (entry.entry_key for entry in entries))
-        metadata, scopes = self.language.workbench_metadata(kind), self.scopes()
+        metadata = self.language.workbench_metadata(kind)
         result = []
         for entry in entries:
             stamp = metadata.get(entry.entry_key, {}).get("created_at")
-            scope = entry.learning_source or next(iter(entry.scope_keys), "")
+            scope = entry.learning_source or entry.restricted_scope or next(
+                (key for key in entry.scope_keys if key in scopes), ""
+            )
             common = {
                 "id": identifiers[entry.entry_key],
                 "entry_key": entry.entry_key,
@@ -72,7 +77,7 @@ class LearningWorkbench:
                     }
                 )
             else:
-                sessions = list(dict.fromkeys(filter(None, (scope, *entry.scope_keys))))
+                sessions = list(dict.fromkeys(key for key in (scope, *entry.scope_keys) if key in scopes))
                 result.append(
                     {
                         **common,
@@ -94,6 +99,8 @@ class LearningWorkbench:
                         "updated_timestamp": None,
                     }
                 )
+        if scopes != self.scopes():
+            raise PermissionError("来源授权已变化，请刷新后重试。")
         return result
 
     def language_target(self, kind: LanguageKind, identifier: int) -> LanguageEntry:
@@ -120,6 +127,38 @@ class LearningWorkbench:
         if entry.is_removed:
             raise LookupError("这条学习记录已移除。")
         return entry
+
+    def language_statistics(self, kind: LanguageKind) -> dict[str, Any]:
+        """按当前可管理资料统计，不把未知时间当成最近发生。"""
+        rows = self.language_payloads(kind)
+        conversations: Counter[str] = Counter()
+        for row in rows:
+            targets = [row["chat_id"]] if kind == LanguageKind.EXPRESSION else row["session_ids"]
+            conversations.update(key for key in targets if key)
+        common = {
+            "total": len(rows), "chat_count": len(conversations),
+            "top_chats": dict(sorted(conversations.items(), key=lambda item: (-item[1], item[0]))[:5]),
+        }
+        if kind == LanguageKind.EXPRESSION:
+            now = self.clock.now()
+            earliest = (now - timedelta(days=7)).timestamp()
+            latest = now.timestamp()
+            return {
+                **common,
+                "recent_7days": sum(
+                    row["create_date"] is not None and earliest <= row["create_date"] <= latest
+                    for row in rows
+                ),
+            }
+        return {
+            **common,
+            "confirmed_jargon": sum(row["jargon_status"] == JargonStatus.CONFIRMED for row in rows),
+            "confirmed_not_jargon": sum(row["jargon_status"] == JargonStatus.NON_JARGON for row in rows),
+            "pending": sum(row["jargon_status"] == JargonStatus.CANDIDATE for row in rows),
+            "manual_jargon": sum(row["created_by"] == "MANUAL" for row in rows),
+            "global_count": sum(row["is_global"] for row in rows),
+            "complete_count": sum(row["is_complete"] for row in rows),
+        }
 
     def language_targets_for_maintenance(
         self, kind: LanguageKind, identifiers: Sequence[int]
@@ -241,12 +280,19 @@ class LearningWorkbench:
             raise LookupError("条目已变化。")
         return next(item for item in self.language_payloads(kind) if item["id"] == identifier)
 
-    def classify_jargons(self, identifiers: Sequence[int], verdict: bool) -> int:
+    def classify_jargons(
+        self, identifiers: Sequence[int], verdict: bool, session_active: Callable[[], bool]
+    ) -> int:
         """整批复验后写入黑话定性；义项仍来自已保存正文。"""
-        keys = [self.language_target(LanguageKind.JARGON, item).entry_key for item in identifiers]
+        keys = [
+            entry.entry_key for entry in self.language_targets_for_maintenance(LanguageKind.JARGON, identifiers)
+        ]
         assert self.language is not None
         status = JargonStatus.CONFIRMED if verdict else JargonStatus.NON_JARGON
-        changed = self.language.classify_jargons(keys, status, self.clock.now())
+        changed = self.language.classify_jargons(
+            keys, status, self.clock.now(),
+            allowed=lambda: session_active() and self.language_keys_allowed(LanguageKind.JARGON, keys),
+        )
         if changed is None:
             raise LookupError("所选黑话已变化。")
         return changed

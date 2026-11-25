@@ -254,14 +254,7 @@ def register_learning_workbench_routes(
 
         @router.get(path + "/stats/summary")
         async def stats() -> dict[str, Any]:
-            rows = await run(service.language_payloads, kind)
-            return {
-                "success": True,
-                "data": {
-                    "total": len(rows),
-                    "confirmed": sum(row.get("is_jargon", False) for row in rows),
-                },
-            }
+            return {"success": True, "data": await run(service.language_statistics, kind)}
 
         @router.post(path + "/batch/delete")
         async def remove(body: LanguageBatch) -> dict[str, Any]:
@@ -454,8 +447,19 @@ def register_learning_workbench_routes(
         return {"success": True, "message": "已保存黑话。", "data": row}
 
     @router.post("/jargon/batch/set-jargon")
-    async def classify(body: JargonBatch) -> dict[str, Any]:
-        changed = await run(service.classify_jargons, body.ids, body.is_jargon)
+    async def classify(
+        token: Annotated[str, Depends(authenticated)],
+        body: JargonBatch | None = None,
+        ids: Annotated[list[int] | None, Query()] = None,
+        is_jargon: bool | None = None,
+    ) -> dict[str, Any]:
+        if body is not None and (ids is not None or is_jargon is not None):
+            raise HTTPException(422, "请勿混用两种批量定性格式。")
+        targets = body.ids if body is not None else ids
+        verdict = body.is_jargon if body is not None else is_jargon
+        if not targets or verdict is None or any(identifier <= 0 for identifier in targets):
+            raise HTTPException(422, "请选择黑话编号并提供明确的定性。")
+        changed = await run(service.classify_jargons, targets, verdict, lambda: session_is_active(token))
         return {"success": True, "message": "已保存定性。", "changed": changed}
 
     @router.get("/emoji/list")
@@ -535,6 +539,12 @@ def register_learning_workbench_routes(
             raise HTTPException(409, "所选表情已变化，没有修改。")
         return {"success": True, "message": "已可逆移除。",
                 "deleted_count": len(body.emoji_ids), "failed_count": 0, "failed_ids": []}
+
+    @router.delete("/emoji/{identifier}")
+    async def delete_emoji(identifier: int) -> dict[str, Any]:
+        if identifier <= 0:
+            raise HTTPException(422, "请选择有效的表情编号。")
+        return await batch_delete_emoji(EmojiBatch(emoji_ids=[identifier]))
 
     @router.post("/emoji/upload")
     async def upload_emoji(
