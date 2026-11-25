@@ -107,7 +107,7 @@ function createPagedResource({el, list, label = '分页', request, render, measu
         if (next !== limit) reset(next);
       };
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(recheck);
-      else setTimeout(recheck, 0);
+      setTimeout(recheck, 50);
       return pending;
     },
     hide() { active = false; pending?.abort(); pending = null; pages = null; sync(); prepare?.(); },
