@@ -2486,6 +2486,13 @@ class Heartbeat:
         recall = self._conversation.expression_recall
         if recall is not None and recall.space is not None:
             builders.append((_INDEX_EXPRESSION, self._build_expression_batch))
+        selector = self._conversation.emoji_selector
+        if (
+            selector is not None
+            and self._conversation.has_text_embedding
+            and self._text_spaces
+        ):
+            builders.append((_INDEX_EMOJI, self._build_emoji_batch))
         return builders
 
     async def _build_expression_batch(self) -> tuple[bool, bool]:
@@ -2493,6 +2500,12 @@ class Heartbeat:
         if recall is None or recall.space is None:
             return False, False
         return await recall.build_authorized_batch(self._indexing.batch_size)
+
+    async def _build_emoji_batch(self) -> tuple[bool, bool]:
+        selector = self._conversation.emoji_selector
+        if selector is None or not self._conversation.has_text_embedding:
+            return False, False
+        return await selector.prebuild_cache(self._text_spaces, self._indexing.batch_size)
 
     async def _build_indexes(self) -> None:
         """按批轮转补齐各索引；每批之后让出，条件不满足或全部完成时退出。

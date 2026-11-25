@@ -140,6 +140,53 @@ class EmojiSelector:
             for number, space in spaces
         ]
 
+    async def prebuild_cache(
+        self, spaces: tuple[tuple[int, str], ...], limit: int
+    ) -> tuple[bool, bool]:
+        """心跳自动构建：按批补齐当前可发送表情的描述向量（D125）。
+
+        Args:
+            spaces: 当前文本嵌入路线；空表示没有可用模型。
+            limit: 本批最多嵌入多少条描述。
+
+        Returns:
+            （是否还有缺项，本批是否嵌入过）。
+        """
+        if not spaces:
+            return False, False
+        available = {space for _route, space in spaces}
+        if self._space is not None and self._space not in available:
+            # 模型换了路线：旧空间的向量不能再用，等新空间重新编码。
+            self._vectors.clear()
+            self._refresh_after = None
+            self._space = None
+        candidates = await asyncio.to_thread(self._candidates)
+        missing = tuple(text for text in candidates if text not in self._vectors)
+        if not missing:
+            return False, False
+        batch = missing[:limit]
+        response = await self._embed(batch)
+        if len(response.embeddings) != len(batch):
+            return True, False
+        space = response.metadata.get("embedding_space")
+        if not isinstance(space, str):
+            return True, False
+        if self._space is not None and self._space != space:
+            self._vectors.clear()
+            self._refresh_after = None
+        self._space = space
+        self._vectors.update(
+            {
+                text: normalized
+                for text, vector in zip(batch, response.embeddings, strict=True)
+                if (normalized := _normalized(vector))
+            }
+        )
+        self._vectors = {
+            text: vector for text, vector in self._vectors.items() if text in candidates
+        }
+        return len(missing) > len(batch), True
+
     def _visual_images(self) -> Iterator[tuple[str, bytes]]:
         for entry in self._store.candidates()[:VISUAL_CANDIDATE_LIMIT]:
             if entry.digest and (data := self._store.read_sendable(entry.digest)) is not None:

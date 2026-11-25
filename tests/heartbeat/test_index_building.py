@@ -12,6 +12,7 @@ from aureus.core.model_runtime import EmbeddingSpaces, ModelRuntime
 from aureus.heartbeat import Heartbeat
 from aureus.identity import Identity
 from aureus.memory import (
+    EmojiStore,
     ExpressionVectorIndex,
     LanguageContent,
     LanguageKind,
@@ -31,6 +32,7 @@ START = datetime(2026, 11, 25, tzinfo=UTC)
 SPACE = "synthetic-expression-space"
 TEXT_SPACE = "synthetic-text-space"
 IMAGE_SPACE = "synthetic-image-space"
+PNG = b"\x89PNG\r\n\x1a\n"
 
 
 def make_identity() -> Identity:
@@ -95,6 +97,7 @@ class Harness:
         tmp_path: Path,
         *,
         expressions: int = 0,
+        emoji: int = 0,
         indexing: IndexingConfig | None = None,
     ) -> None:
         self.clock = ManualClock(START)
@@ -113,6 +116,14 @@ class Harness:
                     LanguageContent(f"说法{number:02}", f"场景{number:02}"),
                 )
             self.expression_index = ExpressionVectorIndex(self.database)
+        self.emoji_store: EmojiStore | None = None
+        if emoji:
+            self.emoji_store = EmojiStore(self.database, tmp_path / "media", self.clock)
+            self.emoji_store.open()
+            for number in range(emoji):
+                self.emoji_store.collect(
+                    PNG + bytes([number]), description=f"表情{number:02}", register=True
+                )
         self.stop = EmergencyStop(tmp_path / "halt.json", self.clock)
         self.heartbeat = Heartbeat(
             clock=self.clock,
@@ -130,6 +141,7 @@ class Harness:
             language=self.language,
             language_config=LanguageConfig(),
             expression_index=self.expression_index,
+            emoji_store=self.emoji_store,
         )
         self.heartbeat.wake_up()
 
@@ -186,6 +198,20 @@ async def test_auto_builder_starts_when_embedding_available(tmp_path: Path) -> N
         5,
     )
     assert [len(request.embedding_inputs) for request in harness.call.requests] == [2, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_emoji_cache_prebuild_reaches_complete(tmp_path: Path) -> None:
+    """文本嵌入可用时按批预建表情描述缓存，直到覆盖全部可发送表情（验收 1）。"""
+    harness = Harness(tmp_path, emoji=3)
+    harness.heartbeat.update_available_organs(
+        frozenset({"text_embedding"}), text_spaces=((1, TEXT_SPACE),)
+    )
+    await harness.beat_and_wait()
+    selector = harness.heartbeat.emoji_selector
+    assert selector is not None
+    assert await selector.cache_coverage(((1, TEXT_SPACE),)) == [(1, 3, 3)]
+    assert [len(request.embedding_inputs) for request in harness.call.requests] == [2, 1]
 
 
 @pytest.mark.asyncio
