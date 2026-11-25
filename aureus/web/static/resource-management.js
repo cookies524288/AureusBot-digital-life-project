@@ -781,6 +781,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const refresh = action('刷新', () => pager.reset());
     const unanchor = action('返回全部图谱', () => browse(null));
     const form = searchForm('搜索关系图', '实体名或关系谓词', refresh, unanchor);
+    form.append(action('返回文字记录', () => showQuery('text')));
     const count = el('span', {class:'muted', role:'status', style:'min-height:1.5em'});
     const detailStatus = el('span', {class:'muted', role:'status'});
     const list = el('div', {id:'memory-graph-result', class:'resource-list memory-graph-list',
@@ -968,6 +969,11 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         list.replaceChildren();
         applyBrowse(null);
       },
+      search(text) {
+        form.elements.q.value = text;
+        query = text;
+        return pager.reset();
+      },
     };
   }
   const graph = graphView($('memory-panel-graph'));
@@ -1005,6 +1011,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     form.elements.q.focus();
   }
   bindTabs('data-memory-query', button => showQuery(button.dataset.memoryQuery));
+  $('memory-open-graph').addEventListener('click', () => showQuery('graph'));
   $('memory-inspect-text').addEventListener('click', () => jumpToQuery('text', $('memory-search')));
   $('memory-inspect-profiles').addEventListener('click', () => jumpToQuery('profiles', profileForm));
   $('memory-removal-query').addEventListener('click', () => jumpToQuery('text', $('memory-search')));

@@ -603,6 +603,14 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 #learning-panel-vectors .resource-record>span{line-height:1.5}
 #memory-operations-result .resource-record{min-height:0;height:auto;padding:8px 12px;align-items:center}
 .resource-counts{white-space:normal;overflow:visible;text-overflow:clip}
+/* 长期记忆：主标签、查询工具栏和统计按 MaiBot 知识库的信息层级重排（D122）。 */
+.memory-main-tabs{flex-wrap:wrap}
+.memory-maintenance{margin-inline-start:auto;padding-inline-start:8px;border-inline-start:1px solid var(--stitch)}
+.memory-query-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.memory-query-actions{justify-content:flex-end}
+.memory-query-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,auto);gap:6px 18px;align-items:start}
+.memory-stats{font-size:13px;line-height:1.6;text-align:right;padding-top:6px;min-height:1.6em}
+@media(max-width:820px){.memory-query-toolbar{grid-template-columns:minmax(0,1fr)}.memory-stats{text-align:left;padding-top:0}.memory-maintenance{margin-inline-start:0;padding-inline-start:0;border-inline-start:0;flex-basis:100%}}
 .resource-empty{grid-column:1/-1;margin:0;padding:26px 16px;text-align:center;border:1px dashed var(--border);border-radius:var(--radius);line-height:1.7}
 .resource-list:has(> .resource-empty){align-content:center}
 .emoji-upload-items{overflow-wrap:anywhere}
@@ -859,43 +867,47 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
   </div>
 </section>
 <section id="page-memory" class="page wide resource-page">
-  <div class="page-head"><div><h2>长期记忆</h2><p class="page-note">查询和管理长期记忆的文字记录、人物画像、关系图与图片；移除只停用派生记忆，不删除原始聊天。</p></div></div>
+  <div class="page-head"><div><h2>长期记忆</h2><p class="page-note">查询和管理长期记忆的文字记录、人物画像、图片与记忆流；不区分聊天范围，统一使用全局记忆。移除只停用派生记忆，不删除原始聊天。</p></div></div>
   <div class="page-body stack">
-    <div class="row resource-navigation" role="group" aria-label="长期记忆工作台">
-      <div class="row" role="group" aria-label="记忆浏览">
-        <button class="btn small primary" type="button" data-memory-tab="query" aria-pressed="true" aria-disabled="true" aria-controls="memory-panel-query">记忆查询</button>
-        <button class="btn small" type="button" data-memory-tab="images" aria-pressed="false" aria-controls="memory-panel-images">图片记忆</button>
-        <button class="btn small" type="button" data-memory-tab="flow" aria-pressed="false" aria-controls="memory-panel-flow">记忆流</button>
-      </div>
-      <div class="row" role="group" aria-label="记忆管理">
-        <button class="btn small" type="button" data-memory-tab="transfer" aria-pressed="false" aria-controls="memory-panel-transfer">导入导出</button>
+    <div class="row resource-navigation memory-main-tabs" role="group" aria-label="长期记忆工作台">
+      <button class="btn small primary" type="button" data-memory-tab="query" aria-pressed="true" aria-disabled="true" aria-controls="memory-panel-query">记忆查询</button>
+      <button class="btn small" type="button" data-memory-tab="images" aria-pressed="false" aria-controls="memory-panel-images">图片记忆</button>
+      <button class="btn small" type="button" data-memory-tab="flow" aria-pressed="false" aria-controls="memory-panel-flow">记忆流</button>
+      <button class="btn small" type="button" data-memory-tab="transfer" aria-pressed="false" aria-controls="memory-panel-transfer">导入导出</button>
+      <div class="row memory-maintenance" role="group" aria-label="记忆维护">
         <button class="btn small" type="button" data-memory-tab="inspection" aria-pressed="false" aria-controls="memory-panel-inspection">记忆检修</button>
         <button class="btn small" type="button" data-memory-tab="operations" aria-pressed="false" aria-controls="memory-panel-operations">记忆移除</button>
       </div>
     </div>
     <div id="memory-panel-query" class="stack resource-panel">
-      <div class="row resource-navigation" role="group" aria-label="查询内容">
-        <button class="btn small primary" type="button" data-memory-query="text" aria-pressed="true" aria-disabled="true" aria-controls="memory-query-text">文字记录</button>
-        <button class="btn small" type="button" data-memory-query="profiles" aria-pressed="false" aria-controls="memory-query-profiles">人物画像</button>
-        <button class="btn small" type="button" data-memory-query="graph" aria-pressed="false" aria-controls="memory-panel-graph">关系图</button>
+      <div class="memory-query-head">
+        <div class="row resource-navigation memory-subtabs" role="group" aria-label="查询内容">
+          <button class="btn small primary" type="button" data-memory-query="text" aria-pressed="true" aria-disabled="true" aria-controls="memory-query-text">文字记录</button>
+          <button class="btn small" type="button" data-memory-query="profiles" aria-pressed="false" aria-controls="memory-query-profiles">人物画像</button>
+        </div>
+        <div class="row memory-query-actions">
+          <button id="memory-open-graph" class="btn small" type="button">关系图</button>
+        </div>
       </div>
       <div id="memory-query-text" class="stack resource-panel">
-        <form id="memory-search" class="row resource-filters">
-          <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索正文、人物或来源" maxlength="200">
-          <select name="type" aria-label="记忆类型">
-            <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="experiences">其他经历</option>
-          </select>
-          <label id="memory-show-disabled"><input name="disabled" type="checkbox"> 显示停用</label>
-          <label><input name="removed" type="checkbox"> 查看已移除</label>
-          <button id="memory-refresh" type="button" class="btn small">刷新</button><button class="btn small primary">查询</button>
-        </form>
+        <div class="memory-query-toolbar">
+          <form id="memory-search" class="row resource-filters">
+            <input type="search" name="q" aria-label="搜索文字记忆" placeholder="搜索内容、名称、关系、事实、情节或 ID" maxlength="200">
+            <select name="type" aria-label="记忆类型">
+              <option value="">全部类型</option><option value="paragraphs">段落</option><option value="relations">关系</option><option value="fact_claims">事实</option><option value="episodes">情景记忆</option><option value="experiences">其他经历</option>
+            </select>
+            <label id="memory-show-disabled"><input name="disabled" type="checkbox"> 显示停用</label>
+            <label><input name="removed" type="checkbox"> 查看已移除</label>
+            <button id="memory-refresh" type="button" class="btn small">刷新</button><button class="btn small primary">查询</button>
+          </form>
+          <p id="memory-counts" class="muted memory-stats" aria-live="polite"></p>
+        </div>
         <div id="memory-selection" class="row resource-actions" role="group" aria-label="所选文字记忆">
           <label><input id="memory-select-all" type="checkbox" disabled> 全选本页</label>
           <button id="memory-correct" class="btn small" disabled>修正所选</button>
           <button id="memory-toggle-removed" type="button" class="btn small" disabled>移除所选</button>
           <span id="memory-selected-count" class="muted resource-selection-count" role="status" aria-live="polite"></span>
         </div>
-        <p id="memory-counts" class="muted resource-counts" aria-live="polite"></p>
       </div>
       <div id="memory-query-profiles" class="stack resource-panel hidden"></div>
       <div id="memory-panel-graph" class="stack resource-panel hidden"></div>
