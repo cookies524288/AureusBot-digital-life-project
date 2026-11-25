@@ -11,7 +11,7 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from aureus.common import Clock
@@ -24,6 +24,7 @@ from aureus.heartbeat.language_requests import (
     build_extraction,
     build_with_context,
 )
+from aureus.heartbeat.pending_learning_buffer import PendingLearningBuffer
 from aureus.heartbeat.perception import Perception, TrustLevel
 from aureus.memory import (
     MAX_DETAIL,
@@ -44,6 +45,8 @@ from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord, Visibil
 logger = logging.getLogger(__name__)
 TASK_NAME = "aureus-language-learning"
 LEARNING_COOLDOWN = timedelta(seconds=30)
+MIN_LEARNING_MESSAGES = 10
+MAX_EXPRESSION_MESSAGES = 20
 _MAX_PROPOSALS = {LanguageKind.EXPRESSION: 10, LanguageKind.JARGON: 30}
 _MAX_SAMPLE_CHARS = 400
 _MAX_RESPONSE_CHARS = 6000
@@ -108,6 +111,23 @@ class QueuedLanguageSample:
     conversation: str | None
 
 
+@dataclass
+class TrimmedLearner:
+    """一个来源的一类学习器：先收素材，再等待批次门槛与运行名额。"""
+
+    kind: LanguageKind
+    scope: str
+    pending: PendingLearningBuffer[LanguageSample]
+    next_at: datetime | None = None
+
+    def batch(self) -> list[LanguageSample]:
+        """表达每批最多二十条，黑话取当前累积的全部材料。"""
+        pending = self.pending.snapshot()
+        return (
+            pending[:MAX_EXPRESSION_MESSAGES] if self.kind == LanguageKind.EXPRESSION else pending
+        )
+
+
 def queue_language_sample(
     record: TimelineRecord, perception: Perception, inbox_message: InboxMessage | None
 ) -> QueuedLanguageSample:
@@ -131,6 +151,23 @@ def local_language_scope(perception: Perception) -> str | None:
     ):
         return json.dumps((perception.channel, perception.sender_id), separators=(",", ":"))
     return None
+
+
+def trimmed_learning_sample(record: TimelineRecord) -> QueuedLanguageSample | None:
+    """只把实际裁切的真实会话原件交给学习器。"""
+    if record.event_type != EVENT_MESSAGE:
+        return None
+    metadata = record.metadata
+    source = metadata.get("source_message_id")
+    if metadata.get("channel") in ("web", "terminal") and record.actor_type is ActorType.USER:
+        scope = json.dumps((metadata["channel"], record.actor_id), separators=(",", ":"))
+    elif isinstance(source, str):
+        scope = _record_language_scope(record)
+    else:
+        return None
+    if scope is None:
+        return None
+    return QueuedLanguageSample(language_sample(record, source, scope), scope)
 
 
 def allows_learning_scope(scope: str, allows: Callable[[ConversationKey], bool]) -> bool:
@@ -244,15 +281,23 @@ def previous_language_scope(
 ) -> str | None:
     """从旧观察的不可变时间线原件核对平台地址，不用当前重投地址猜。"""
     record = timeline.get(record_id)
-    if record is None or record.event_type != EVENT_MESSAGE:
+    if (
+        record is None
+        or language_sample(record, record.metadata.get("source_message_id")).previous_source_key
+        != previous_key
+    ):
+        return None
+    return _record_language_scope(record)
+
+
+def _record_language_scope(record: TimelineRecord) -> str | None:
+    if record.event_type != EVENT_MESSAGE:
         return None
     if record.actor_type not in (ActorType.USER, ActorType.PERSON):
         return None
     metadata = record.metadata
     source_message = metadata.get("source_message_id")
     if not isinstance(source_message, str) or not source_message:
-        return None
-    if language_sample(record, source_message).previous_source_key != previous_key:
         return None
     channel, trust = metadata.get("channel"), metadata.get("trust")
     if channel in ("web", "terminal") and trust == TrustLevel.VERIFIED_USER:
@@ -330,11 +375,19 @@ async def learn_language(
     conversation_key: str | None = None,
     bot_names: Sequence[str] = (),
     expression_quality: ExpressionQuality | None = None,
+    kinds: Sequence[LanguageKind] = tuple(LanguageKind),
+    minimum: int | None = None,
 ) -> bool:
     """独立抽取表达和候选黑话，并只对同会话的有效来源推断。"""
     try:
         if conversation_key is not None and not store.learning_source_allowed(conversation_key):
             return False
+        if conversation_key is not None and minimum is not None:
+            samples = await asyncio.to_thread(
+                store.available_learning_samples, conversation_key, samples
+            )
+            if len(samples) < minimum:
+                return False
         await asyncio.to_thread(store.observe, samples, ())
         if conversation_key is None:
             return True
@@ -346,7 +399,7 @@ async def learn_language(
 
         banned_names = {name.strip().casefold() for name in bot_names if name.strip()}
         successful = True
-        for kind in LanguageKind:
+        for kind in kinds:
             attempts, extracted = await _extract(
                 store,
                 organ,
