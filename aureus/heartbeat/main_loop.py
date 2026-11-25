@@ -1996,7 +1996,9 @@ class Heartbeat:
                         inbox.store.mark_read([inbox_message.id])
                     self._pending.popleft()
                     continue
-            person = self._identify(perception)
+            person = self._identify(
+                perception, "" if inbox_message is None else inbox_message.sender_name
+            )
             metadata: dict[str, Any] = {
                 "channel": perception.channel,
                 "trust": perception.trust.value,
@@ -2072,16 +2074,17 @@ class Heartbeat:
             heard, priority, _reply_address(heard.perception, browsed=group_by_route)
         )
 
-    def _identify(self, perception: Perception) -> Person | None:
+    def _identify(self, perception: Perception, sender_name: str = "") -> Person | None:
         """按（通道, 账号）认人；没有人物档案时返回 None。
 
+        sender_name 是来信显示的名字，只用来称呼，不参与认人（D130）。
         用户的账号只查不建：没登记的话，宁可认不出，也不把用户建成一个陌生的联系人。
         """
         if self._people is None:
             return None
         if perception.trust is TrustLevel.VERIFIED_USER:
             return self._people.find(perception.channel, perception.sender_id)
-        return self._people.meet(perception.channel, perception.sender_id)
+        return self._people.meet(perception.channel, perception.sender_id, sender_name)
 
     def _maybe_start_thought(self) -> None:
         """定焦点、想一想：有没回复的消息、又没在想别的，就在后台调用器官。"""

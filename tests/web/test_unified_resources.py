@@ -243,6 +243,13 @@ def test_people_catalog_preserves_exact_accounts_and_pending_profiles(tmp_path: 
             assert all(
                 item["entry_type"] == "person" and "record" not in item for item in first["items"]
             )
+            accounts = {
+                item["person_id"]: item["accounts"]
+                for item in first["items"]
+                if item["entry_type"] == "person"
+            }
+            assert accounts[first_person.id] == [["qq", "synthetic-a"]]
+            assert accounts[second_person.id] == [["qq", "synthetic-b"]]
             profiles = {item["record"]["source_key"]: item for item in second["items"]}
             assert profiles["[3]"]["person_id"] == first_person.id
             assert profiles["[3]"]["record"]["evidence"] == [71]

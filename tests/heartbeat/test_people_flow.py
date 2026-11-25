@@ -22,6 +22,7 @@ from aureus.heartbeat import (
     Perception,
     TrustLevel,
 )
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, OrganResponse
 from aureus.people import HistoricalKind, HistoricalRecord, PeopleDirectory
@@ -137,6 +138,30 @@ def make_rig(made: list[Rig], tmp_path: Path, *, with_people: bool = True) -> Ri
     rig = Rig(timeline, people, organs, heartbeat)
     made.append(rig)
     return rig
+
+
+async def test_an_incoming_display_name_names_a_new_contact(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    rig = make_rig(made, tmp_path)
+    perception = Perception(
+        CHANNEL, STRANGER, "你好", VisibilityScope.GROUP, TrustLevel.UNVERIFIED
+    )
+    message = InboxMessage(
+        id=1,
+        conversation=ConversationKey(CHANNEL, "bot", "private", STRANGER),
+        perception=perception,
+        sender_name="群友小甲",
+        conversation_name="",
+        timestamp=NOW,
+        status="unread",
+    )
+    rig.heartbeat._pending.append((perception, message))
+
+    rig.heartbeat._take_in_perceptions()
+
+    person = rig.people.find(CHANNEL, STRANGER)
+    assert person is not None and person.name == "群友小甲"
 
 
 async def test_local_profile_aliases_reach_only_the_exact_accounts_reply(

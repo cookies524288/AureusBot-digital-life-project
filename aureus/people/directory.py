@@ -1,6 +1,7 @@
 """人际 people：人物档案，按账号建（路线图 1.8，05 号文档第 3 节、第 8 节）。
 
 只认平台账号 ID，不认昵称：没见过的账号就是新的人，不靠名字合并（跨平台关联留到 Phase 3）。
+显示名只用来称呼，不参与认人；没有显示名时用「平台 + 账号」作临时称呼（D130）。
 用户的账号来自 identity.toml，由 ensure_user 登记。表 people 和 accounts 只属于这个子系统，
 放在 aureus.db 里。
 """
@@ -29,6 +30,12 @@ from aureus.people.profile_maintenance import ProfileEdit, ProfileSource
 _TIMESTAMP_PRECISION = "microseconds"
 
 
+def _temporary_name(platform: str, account_id: str) -> str:
+    """没有显示名时的临时称呼：平台名加账号，如「QQ 12345」；平台未知时只用账号（D130）。"""
+    label = platform.strip()
+    return f"{label.upper()} {account_id}" if label else account_id
+
+
 class PersonKind(StrEnum):
     """这个人是谁。"""
 
@@ -42,7 +49,7 @@ class Person:
 
     id: int
     kind: PersonKind
-    # 用户是身份配置里的称呼；其他人认识之前是空的，不去猜。
+    # 用户是身份配置里的称呼；其他人优先用来信显示名，没有时是临时称呼（D130）。
     name: str
     first_seen: datetime
 
@@ -247,25 +254,63 @@ class PeopleDirectory:
         row = conn.execute("SELECT id FROM people WHERE id = ?", (person_id,)).fetchone()
         return self._load(conn, person_id) if row is not None else None
 
-    def meet(self, platform: str, account_id: str) -> Person:
-        """按账号找人；没见过的账号建一份新的联系人档案（新账号就是新的人）。"""
+    def meet(self, platform: str, account_id: str, display_name: str | None = None) -> Person:
+        """按账号找人；没见过的账号建一份新的联系人档案（新账号就是新的人）。
+
+        Args:
+            platform: 平台或通道名。
+            account_id: 账号在这个平台上的 ID。
+            display_name: 来信显示的名字；没有时用「平台 + 账号」作临时称呼（D130）。
+        """
         conn = self._require_open()
         with conn:
-            return self._load(conn, self._meet_id(conn, platform, account_id))
+            return self._load(conn, self._meet_id(conn, platform, account_id, display_name))
 
-    def _meet_id(self, conn: sqlite3.Connection, platform: str, account_id: str) -> int:
+    def _meet_id(
+        self,
+        conn: sqlite3.Connection,
+        platform: str,
+        account_id: str,
+        display_name: str | None = None,
+    ) -> int:
+        display = "" if display_name is None else display_name.strip()
         row = conn.execute(
             "SELECT person_id FROM accounts WHERE platform = ? AND account_id = ?",
             (platform, account_id),
         ).fetchone()
         if row is not None:
-            return int(row["person_id"])
-        person_id = self._new_person(conn, PersonKind.CONTACT, "")
+            person_id = int(row["person_id"])
+            if display:
+                self._fill_display_name(conn, person_id, display)
+            return person_id
+        name = display or _temporary_name(platform, account_id)
+        person_id = self._new_person(conn, PersonKind.CONTACT, name)
         conn.execute(
             "INSERT INTO accounts (platform, account_id, person_id) VALUES (?, ?, ?)",
             (platform, account_id, person_id),
         )
         return person_id
+
+    def _fill_display_name(
+        self, conn: sqlite3.Connection, person_id: int, display_name: str
+    ) -> None:
+        """只补空名字或临时称呼，不覆盖用户或资料包设过的名字（D130）。"""
+        row = conn.execute("SELECT name FROM people WHERE id = ?", (person_id,)).fetchone()
+        current = "" if row is None else str(row["name"])
+        if current == display_name:
+            return
+        if current and not self._is_temporary_name(conn, person_id, current):
+            return
+        conn.execute("UPDATE people SET name = ? WHERE id = ?", (display_name, person_id))
+
+    @staticmethod
+    def _is_temporary_name(conn: sqlite3.Connection, person_id: int, name: str) -> bool:
+        rows = conn.execute(
+            "SELECT platform, account_id FROM accounts WHERE person_id = ?", (person_id,)
+        ).fetchall()
+        return any(
+            name == _temporary_name(str(row["platform"]), str(row["account_id"])) for row in rows
+        )
 
     def publish_history(self, records: Sequence[HistoricalRecord]) -> list[HistoricalPublication]:
         """发布历史资料，按来源键对账，已有账号保持原有身份。"""
@@ -323,9 +368,23 @@ class PeopleDirectory:
     def browse_profile_resources(
         self, query: str, offset: int, limit: int
     ) -> tuple[list[dict[str, object]], int]:
-        """在同一个目录中浏览人物和画像，不合并同名档案。"""
+        """在同一个目录中浏览人物和画像，不合并同名档案。
+
+        人物条目附带账号，网页在旧档案没有名字时按账号显示（D130）。
+        """
         with closing(open_connection(self._db_path)) as conn:
-            return history.browse_profile_resources(conn, query, offset, limit)
+            items, total = history.browse_profile_resources(conn, query, offset, limit)
+            for item in items:
+                if item.get("entry_type") == "person":
+                    item["accounts"] = [
+                        [str(row["platform"]), str(row["account_id"])]
+                        for row in conn.execute(
+                            "SELECT platform, account_id FROM accounts WHERE person_id = ? "
+                            "ORDER BY platform, account_id",
+                            (item["person_id"],),
+                        )
+                    ]
+            return items, total
 
     def profile_alias_details(self, profile_id: int) -> ProfileAliases | None:
         """按画像原件读取别名；未经账号关联的原件没有维护入口。"""

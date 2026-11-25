@@ -1,5 +1,6 @@
 """人物档案的测试（路线图 1.8，05 号文档）：按账号认人，新账号就是新的人，用户只有一个。"""
 
+import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,8 +63,64 @@ def test_meeting_a_new_account_creates_a_contact(directory: PeopleDirectory) -> 
 
     assert stranger.kind is PersonKind.CONTACT
     assert not stranger.is_user
-    assert stranger.name == ""
+    assert stranger.name == "QQ 20000"
     assert directory.accounts_of(stranger.id) == [("qq", "20000")]
+
+
+def test_a_new_contact_uses_the_incoming_display_name(directory: PeopleDirectory) -> None:
+    stranger = directory.meet("qq", "20000", "小甲")
+
+    assert stranger.name == "小甲"
+
+
+def test_a_new_contact_without_a_display_name_uses_platform_and_account(
+    directory: PeopleDirectory,
+) -> None:
+    stranger = directory.meet("qq", "20000", "  ")
+
+    assert stranger.name == "QQ 20000"
+
+
+def test_an_unknown_platform_uses_only_the_account(directory: PeopleDirectory) -> None:
+    stranger = directory.meet("", "20000")
+
+    assert stranger.name == "20000"
+
+
+def test_a_later_display_name_replaces_the_temporary_name(
+    directory: PeopleDirectory,
+) -> None:
+    first = directory.meet("qq", "20000")
+    second = directory.meet("qq", "20000", "小甲")
+
+    assert second.id == first.id
+    assert second.name == "小甲"
+
+
+def test_a_later_display_name_fills_an_empty_archive(tmp_path: Path) -> None:
+    path = tmp_path / "aureus.db"
+    directory = PeopleDirectory(path, ManualClock(NOW))
+    directory.open()
+    try:
+        stranger = directory.meet("qq", "20000")
+        with sqlite3.connect(path) as conn:
+            conn.execute("UPDATE people SET name = '' WHERE id = ?", (stranger.id,))
+
+        renamed = directory.meet("qq", "20000", "小甲")
+
+        assert renamed.name == "小甲"
+    finally:
+        directory.close()
+
+
+def test_a_later_display_name_does_not_overwrite_a_real_name(
+    directory: PeopleDirectory,
+) -> None:
+    directory.meet("qq", "20000", "小甲")
+
+    renamed = directory.meet("qq", "20000", "小乙")
+
+    assert renamed.name == "小甲"
 
 
 def test_meeting_the_same_account_returns_the_same_person(directory: PeopleDirectory) -> None:
