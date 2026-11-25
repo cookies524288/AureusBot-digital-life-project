@@ -202,10 +202,10 @@ class Ledger:
             RuntimeError: 账本没有打开。
             sqlite3.Error: 重试后仍写不进去，这次的记录一条都没有写进去。
         """
-        if not attempts:
-            return
         # 与 record 一样：没打开就不写，避免关闭后还在后台落盘。
         self._require_open()
+        if not attempts:
+            return
         rows = self._rows(organ_id, attempts)
         for retries in range(LEDGER_WRITE_MAX_RETRIES + 1):
             try:
@@ -217,7 +217,7 @@ class Ledger:
                 continue
             if retries:
                 logger.warning(
-                    "账本写入遇到 database is locked，重试 %s 次后成功（器官 %s）",
+                    "账本写入遇到数据库锁等待，重试 %s 次后成功（器官 %s）",
                     retries,
                     organ_id,
                 )
