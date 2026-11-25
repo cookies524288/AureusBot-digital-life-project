@@ -982,7 +982,8 @@ async def _check_derived_recall(
         consolidation_enabled=True,
         consolidation_extract_enabled=True,
         heuristic_recall_enabled=True,
-        max_results=1,
+        heuristic_max_results=1,
+        query_default_limit=1,
     )
     for name, trust, scope, allowed in (
         ("owner", TrustLevel.VERIFIED_USER, VisibilityScope.USER_ONLY, True),
