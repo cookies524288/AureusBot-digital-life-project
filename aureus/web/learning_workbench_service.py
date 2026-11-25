@@ -126,8 +126,47 @@ class LearningWorkbench:
             LanguageContent(text, detail, example),
             origin_scope=scope,
             recorded_at=self.clock.now(),
+            allowed=lambda: not scope or scope in self.scopes(),
         )
         return next(item for item in self.language_payloads(kind) if item["entry_key"] == key)
+
+    def import_language(
+        self,
+        kind: LanguageKind,
+        rows: Sequence[Any],
+        scopes: Sequence[str],
+    ) -> int:
+        """将已由版本化解析器校验的记录写入当前资料库。"""
+        if self.language is None:
+            raise ValueError("学习功能当前关闭。")
+        targets = tuple(dict.fromkeys(scopes))
+        if not set(targets) <= self.scopes().keys():
+            raise ValueError("导入目标已撤权或不存在。")
+        result = self.language.import_workbench_entries(
+            kind,
+            rows,
+            targets,
+            self.clock.now(),
+            allowed=lambda: set(targets) <= self.scopes().keys(),
+        )
+        if result is None:
+            raise ValueError("导入来源已撤权；没有修改。")
+        return result
+
+    def export_language(
+        self, kind: LanguageKind, identifiers: Sequence[int]
+    ) -> list[dict[str, Any]]:
+        """已撤权、已移除或不属于当前可管理集合的目标不会导出。"""
+        entries = [self.language_target(kind, identifier) for identifier in identifiers]
+        assert self.language is not None
+        return self.language.workbench_exports(
+            kind,
+            [entry.entry_key for entry in entries],
+            allowed=lambda: all(
+                entry.learning_source is None or entry.learning_source in self.scopes()
+                for entry in entries
+            ),
+        )
 
     def update_language(
         self, kind: LanguageKind, identifier: int, text: str | None, detail: str | None
