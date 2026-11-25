@@ -444,6 +444,9 @@ def open_core(
             heartbeat.set_inbox_image_indexer(inbox_images)
             heartbeat.set_inbox_attachment_reader(qq.read_inbox_attachment)
             heartbeat.attach_channel(QQ_CHANNEL_NAME, qq.show, can_quote=qq.can_quote_reply)
+        else:
+            # 没有 QQ 时，旧库里留下的平台来源也不再算已授权；本机来源不受影响。
+            heartbeat.set_inbox_route_filter(lambda _conversation: False)
         embedding_progress = EmbeddingProgress(
             models,
             expression_enabled=expression_enabled,

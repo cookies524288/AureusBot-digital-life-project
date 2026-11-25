@@ -27,6 +27,8 @@ async def test_local_expression_vectors_reach_actual_reply(
 ) -> None:
     paths = _paths(tmp_path)
     config = (
+        # 本用例只测回复后的按需补建；自动建索引另有测试覆盖（D125）。
+        "[indexing]\nauto_build_enabled = false\n"
         "[heartbeat]\nplanning_enabled = true\ninbox_debounce_enabled = false\n"
         "[body]\nsleep_enabled = false\n[judge]\nenabled = false\n"
         "[language]\n"

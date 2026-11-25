@@ -20,7 +20,7 @@ from aureus.heartbeat import (
     VisibilityScope,
 )
 from aureus.heartbeat.inbox_images import InboxImageIndex
-from aureus.heartbeat.inbox_store import InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.identity import Identity
 from aureus.memory import (
     EmojiStore,
@@ -29,6 +29,7 @@ from aureus.memory import (
     LanguageKind,
     LanguageStore,
 )
+from aureus.memory.language import LanguagePackageRow
 from aureus.organs import (
     LOCAL_EXPRESSION_EMBEDDING,
     KeyResolver,
@@ -62,9 +63,11 @@ class FakeEmbeddings:
     def __init__(self) -> None:
         self.requests: list[OrganRequest] = []
         self.reject: Exception | None = None
+        self.expression_space = SPACE
+        self.text_space = TEXT_SPACE
+        self.image_space = IMAGE_SPACE
         self.gate_at: int | None = None
         self.gate = asyncio.Event()
-        self.gate.set()
         self.reached = asyncio.Event()
 
     async def call(self, request: OrganRequest) -> OrganResponse:
@@ -76,25 +79,25 @@ class FakeEmbeddings:
             raise self.reject
         inputs = request.embedding_inputs
         if request.organ_id == LOCAL_EXPRESSION_EMBEDDING:
-            assert request.embedding_space == SPACE
+            space = request.embedding_space or self.expression_space
             return OrganResponse(
                 request.organ_id,
                 "",
-                metadata={"embedding_space": SPACE},
+                metadata={"embedding_space": space},
                 embeddings=tuple((1.0, float(index)) for index in range(len(inputs))),
             )
         if request.organ_id == "text_embedding":
             return OrganResponse(
                 request.organ_id,
                 "",
-                metadata={"embedding_space": TEXT_SPACE},
+                metadata={"embedding_space": self.text_space},
                 embeddings=tuple((1.0, 0.0) for _ in inputs),
             )
         if request.organ_id == "image_embedding":
             return OrganResponse(
                 request.organ_id,
                 "",
-                metadata={"embedding_space": IMAGE_SPACE},
+                metadata={"embedding_space": self.image_space},
                 embeddings=((1.0, 0.0),) * len(inputs),
             )
         raise AssertionError(f"没有为器官 {request.organ_id} 准备合成向量")
@@ -108,6 +111,7 @@ class Harness:
         tmp_path: Path,
         *,
         expressions: int = 0,
+        language: bool = False,
         emoji: int = 0,
         inbox: bool = False,
         indexing: IndexingConfig | None = None,
@@ -119,7 +123,7 @@ class Harness:
         self.call = FakeEmbeddings()
         self.language: LanguageStore | None = None
         self.expression_index: ExpressionVectorIndex | None = None
-        if expressions:
+        if expressions or language:
             self.language = LanguageStore(self.database)
             self.language.open()
             for number in range(expressions):
@@ -159,9 +163,9 @@ class Harness:
         )
         self.heartbeat.wake_up()
 
-    def coverage(self) -> tuple[int, int]:
+    def coverage(self, space: str = SPACE) -> tuple[int, int]:
         assert self.language is not None and self.expression_index is not None
-        return self.expression_index.coverage(self.language, SPACE, frozenset())
+        return self.expression_index.coverage(self.language, space, frozenset())
 
     async def beat_and_wait(self) -> None:
         self.heartbeat.beat()
@@ -174,7 +178,9 @@ def _runtime(tmp_path: Path) -> ModelRuntime:
     runtime = ModelRuntime(
         OrganBus(), KeyResolver(tmp_path / "absent.env", environ={}), fake_organs=False
     )
-    runtime.embedding_spaces = EmbeddingSpaces(expression=SPACE)
+    runtime.embedding_spaces = EmbeddingSpaces(
+        expression=SPACE, text=((1, TEXT_SPACE),), image=((1, IMAGE_SPACE),)
+    )
     return runtime
 
 
@@ -215,24 +221,108 @@ async def test_auto_builder_starts_when_embedding_available(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_auto_builder_skips_revoked_sources(tmp_path: Path) -> None:
+    """来源撤权后不再为该会话补建；已建部分保留，统计如实反映缺项（验收 3）。"""
+    harness = Harness(tmp_path, language=True, inbox=True)
+    assert harness.language is not None and harness.inbox is not None
+    scope = ConversationKey("qq", "bot", "group", "group-1").language_scope_key()
+
+    def add_package(text: str) -> None:
+        assert harness.language is not None
+        package = LanguagePackageRow(LanguageContent(text, "测试"), 1, "来源", text)
+        harness.language.save_package(LanguageKind.EXPRESSION, [package])
+        harness.language.package_scope(
+            LanguageKind.EXPRESSION, f"package:{package.digest}", [scope], confirm=True
+        )
+
+    add_package("限范围表达一")
+    harness.inbox.add(
+        Perception(
+            "qq",
+            "member",
+            "你好",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "group-1", "m1"),
+        )
+    )
+    harness.heartbeat.set_inbox_route_filter(lambda key: key.recipient_id == "group-1")
+    harness.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
+    await harness.beat_and_wait()
+    assert harness.expression_index is not None
+    assert harness.expression_index.coverage(
+        harness.language, SPACE, frozenset({scope})
+    ) == (1, 1)
+
+    add_package("限范围表达二")
+    harness.heartbeat.set_inbox_route_filter(lambda _key: False)
+    before = len(harness.call.requests)
+    await harness.beat_and_wait()
+    assert len(harness.call.requests) == before
+    assert harness.expression_index.coverage(
+        harness.language, SPACE, frozenset({scope})
+    ) == (1, 2)
+
+
+@pytest.mark.asyncio
 async def test_emoji_cache_prebuild_reaches_complete(tmp_path: Path) -> None:
-    """文本嵌入可用时按批预建表情描述缓存，直到覆盖全部可发送表情（验收 1）。"""
+    """文本嵌入可用时按批预建表情描述缓存，直到覆盖全部可发送表情（验收 1、6）。"""
     harness = Harness(tmp_path, emoji=3)
+    harness.call.gate_at = 2
     harness.heartbeat.update_available_organs(
         frozenset({"text_embedding"}), text_spaces=((1, TEXT_SPACE),)
     )
-    await harness.beat_and_wait()
+    harness.heartbeat.beat()
+    task = harness.heartbeat._indexing_task
+    assert task is not None
+    await asyncio.wait_for(harness.call.reached.wait(), timeout=5)
     selector = harness.heartbeat.emoji_selector
     assert selector is not None
+    progress = EmbeddingProgress(_runtime(tmp_path), emoji_selector=selector)
+    partial = await progress.read("text_embedding")
+    assert partial is not None
+    [emoji] = [item for item in partial if item.kind == "emoji_cache"]
+    assert (emoji.state, emoji.established, emoji.eligible) == ("partial", 2, 3)
+    harness.call.gate.set()
+    await task
     assert await selector.cache_coverage(((1, TEXT_SPACE),)) == [(1, 3, 3)]
     assert [len(request.embedding_inputs) for request in harness.call.requests] == [2, 1]
 
 
 @pytest.mark.asyncio
+async def test_auto_builder_rebuilds_after_embedding_space_change(tmp_path: Path) -> None:
+    """模型换了空间后丢弃旧空间结果，从新空间重建（行为细则 5）。"""
+    harness = Harness(tmp_path, expressions=3, emoji=2)
+    harness.heartbeat.update_available_organs(
+        frozenset({"text_embedding"}),
+        expression_space=SPACE,
+        text_spaces=((1, TEXT_SPACE),),
+    )
+    await harness.beat_and_wait()
+    assert harness.coverage() == (3, 3)
+    selector = harness.heartbeat.emoji_selector
+    assert selector is not None
+    assert await selector.cache_coverage(((1, TEXT_SPACE),)) == [(1, 2, 2)]
+
+    harness.call.expression_space = "new-expression-space"
+    harness.call.text_space = "new-text-space"
+    harness.heartbeat.update_available_organs(
+        frozenset({"text_embedding"}),
+        expression_space="new-expression-space",
+        text_spaces=((1, "new-text-space"),),
+    )
+    await harness.beat_and_wait()
+    assert harness.coverage("new-expression-space") == (3, 3)
+    assert await selector.cache_coverage(((1, "new-text-space"),)) == [(1, 2, 2)]
+    assert await selector.cache_coverage(((1, TEXT_SPACE),)) == [(1, 0, 2)]
+
+
+@pytest.mark.asyncio
 async def test_image_backfill_indexes_existing_unindexed_images(tmp_path: Path) -> None:
-    """图片嵌入可用时回填已收到但未建索引的图片，只处理当前获准会话（验收 2）。"""
+    """图片嵌入可用时回填已收到但未建索引的图片，只处理当前获准会话（验收 2、6）。"""
     harness = Harness(tmp_path, inbox=True)
     assert harness.inbox is not None
+    harness.call.gate_at = 2
 
     def message(group: str, name: str, *files: str) -> Perception:
         return Perception(
@@ -255,7 +345,31 @@ async def test_image_backfill_indexes_existing_unindexed_images(tmp_path: Path) 
     harness.heartbeat.set_inbox_route_filter(lambda key: key.recipient_id == "group-1")
     harness.heartbeat.set_inbox_attachment_reader(read)
     harness.heartbeat.set_inbox_image_indexer(images)
-    await harness.beat_and_wait()
+    harness.heartbeat.beat()
+    task = harness.heartbeat._indexing_task
+    assert task is not None
+    await asyncio.wait_for(harness.call.reached.wait(), timeout=5)
+    progress = EmbeddingProgress(
+        _runtime(tmp_path),
+        images=images,
+        allows_conversation=lambda key: key.recipient_id == "group-1",
+    )
+    partial = await progress.read("image_embedding")
+    assert partial is not None
+    assert (partial[0].state, partial[0].established, partial[0].eligible) == (
+        "partial",
+        1,
+        2,
+    )
+    harness.call.gate.set()
+    await task
+    complete = await progress.read("image_embedding")
+    assert complete is not None
+    assert (complete[0].state, complete[0].established, complete[0].eligible) == (
+        "complete",
+        2,
+        2,
+    )
 
     with closing(open_connection(harness.database)) as connection:
         rows = connection.execute(

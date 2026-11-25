@@ -142,6 +142,8 @@ class InboxImageIndex:
                     remaining -= 1
                 else:
                     skipped += 1
+        if skipped:
+            logger.debug("图片索引本轮跳过 %s 条暂不可用的附件", skipped)
         return remaining == 0 or skipped > 0, written > 0
 
     def _unindexed_images(

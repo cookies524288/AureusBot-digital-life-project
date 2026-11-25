@@ -429,6 +429,8 @@ class Heartbeat:
             ),
             inbox_store=inbox_store,
         )
+        if self._conversation.expression_recall is not None:
+            self._conversation.expression_recall.set_scope_provider(self._expression_scopes)
         self._memory = MemoryTracker(memory, memory_config or MemoryConfig(), people, findings)
         self._memory_consolidator = (
             MemoryConsolidator(memory, self._memory.config)
@@ -2479,6 +2481,28 @@ class Heartbeat:
             self._build_indexes(), name="aureus-index-builder"
         )
         self._indexing_task.add_done_callback(self._indexing_finished)
+
+    def _expression_scopes(self) -> frozenset[str]:
+        """当前可见、已授权的表达来源范围；全局候选由索引自己并入。"""
+        scopes: set[str] = set()
+        if self._language is not None:
+            pool = self._language.expression_pool()
+            present = {scope for entry in pool for scope in entry.scope_keys}
+            present.update(entry.restricted_scope for entry in pool if entry.restricted_scope)
+            # 这里只挑两段的本机范围键；平台范围键由下面当前可见的会话给出。
+            scopes.update(
+                scope
+                for scope in present
+                if language_runner.allows_learning_scope(scope, lambda _conversation: False)
+            )
+        inbox = self._platform_inbox
+        if inbox is not None:
+            scopes.update(
+                key.language_scope_key()
+                for key in inbox.store.visible_conversation_keys()
+                if inbox.allows(key)
+            )
+        return frozenset(scopes)
 
     def _index_builders(self) -> list[tuple[str, Callable[[], Awaitable[tuple[bool, bool]]]]]:
         """当前可自动构建的索引种类；每种返回（是否还有缺项，本批是否处理过）。"""

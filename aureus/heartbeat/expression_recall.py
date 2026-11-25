@@ -79,6 +79,7 @@ class ExpressionRecall:
         self._backfill: asyncio.Task[None] | None = None
         self._maintenance: asyncio.Task[None] | None = None
         self._auto_building = False
+        self._scope_provider: Callable[[], frozenset[str]] | None = None
         self.maintenance_run: ExpressionBackfillRun | None = None
 
     async def close(self) -> None:
@@ -263,8 +264,17 @@ class ExpressionRecall:
         finally:
             self._auto_building = False
 
+    def set_scope_provider(self, provider: Callable[[], frozenset[str]]) -> None:
+        """由心跳提供当前可见、已授权的来源范围（D125）。"""
+        self._scope_provider = provider
+
     def authorized_scopes(self) -> frozenset[str]:
-        """语言库里出现、且来源过滤器仍允许的范围；全局候选由索引自己并入。"""
+        """当前可处理的来源范围；全局候选由索引自己并入。
+
+        心跳提供范围时以它为准；独立使用时退回语言库里的来源过滤器。
+        """
+        if self._scope_provider is not None:
+            return self._scope_provider()
         pool = self._language.expression_pool()
         scopes = {scope for entry in pool for scope in entry.scope_keys}
         scopes.update(entry.restricted_scope for entry in pool if entry.restricted_scope)
@@ -293,9 +303,7 @@ class ExpressionRecall:
         batch = [entry for entry in batch if valid.get(entry.entry_key) == fingerprint(entry)]
         if not batch:
             return True, False
-        vectors = await self._embed(
-            space, tuple(map(embedding_text, batch)), purpose=purpose
-        )
+        vectors = await self._embed(space, tuple(map(embedding_text, batch)), purpose=purpose)
         current_marks = await current()
         retained = [
             (entry, vector)
@@ -305,9 +313,7 @@ class ExpressionRecall:
         if not retained or self.space != space:
             return True, False
         retained_entries, retained_vectors = zip(*retained, strict=True)
-        await asyncio.to_thread(
-            self._index.publish, space, retained_entries, retained_vectors
-        )
+        await asyncio.to_thread(self._index.publish, space, retained_entries, retained_vectors)
         return len(retained) < len(missing), True
 
     async def _build(self, space: str, scope: str | None) -> None:
