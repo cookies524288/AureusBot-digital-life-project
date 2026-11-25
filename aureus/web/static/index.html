@@ -610,7 +610,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .memory-query-actions{justify-content:flex-end}
 .memory-query-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,auto);gap:6px 18px;align-items:start}
 .memory-stats{font-size:13px;line-height:1.6;text-align:right;padding-top:6px;min-height:1.6em}
-#page-memory #memory-query-text .resource-list{--resource-row:104px;height:calc(var(--resource-row) * 5);overflow-y:auto;overscroll-behavior:contain;padding-right:2px}
+#page-memory #memory-query-text .resource-list,#page-memory #memory-query-profiles .resource-list{--resource-row:104px;height:calc(var(--resource-row) * 5);overflow-y:auto;overscroll-behavior:contain;padding-right:2px}
 .memory-card{display:flex;align-items:flex-start;gap:10px;min-width:0;padding:11px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);transition:border-color var(--dur-fast) var(--ease),background var(--dur-fast) var(--ease)}
 .memory-card:hover{border-color:color-mix(in srgb,var(--accent-strong) 42%,var(--border));background:color-mix(in srgb,var(--accent-soft) 26%,var(--surface))}
 .memory-card.is-removed{opacity:.68}

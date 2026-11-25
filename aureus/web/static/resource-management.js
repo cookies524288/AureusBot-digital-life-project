@@ -604,7 +604,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   });
 
   const profilePanel = $('memory-query-profiles');
-  const profileForm = searchForm('搜索人物画像', '搜索人物、画像或来源');
+  const profileForm = searchForm('搜索人物画像', '搜索名称、群名片或人物 ID');
   profilePanel.append(profileForm);
   const profileMaintenance = '/api/resources/profiles/maintenance';
   async function openProfileMaintenance(item) {
@@ -713,22 +713,110 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     });
     openEditor('维护人物别名', form);
   }
-  const profiles = searchable({panel:profilePanel, id:'profiles', render:item => {
+  // 人物画像按 MaiBot 知识库分成固定几节；现有接口没有的字段显示「暂无」（D122）。
+  function profileIdentity(profile, item) {
+    const raw = profile.original ?? {};
+    const name = item.name || profile.name || raw.person_name;
+    const nickname = profile.nickname || raw.user_nickname || raw.nickname;
+    const groupCard = profile.group_cardname ?? raw.group_cardname;
+    const account = profile.account ?? (raw.platform && raw.user_id ? [raw.platform, raw.user_id] : null);
+    return [
+      name && '称呼：' + readable(name),
+      nickname && '昵称：' + readable(nickname),
+      groupCard != null && groupCard !== '' && '群名片：' + readable(groupCard),
+      account && '账号：' + readable(account),
+    ].filter(Boolean).join('\n');
+  }
+  function profileRaw(profile, ...keys) {
+    const raw = profile.original ?? {};
+    for (const key of keys) {
+      const value = raw[key];
+      if (value != null && value !== '') return value;
+    }
+    return null;
+  }
+  function profileSections(profile, item) {
+    return [
+      section('身份设定', profileIdentity(profile, item)),
+      section('关系设定', profile.relationship_state ?? profileRaw(profile, 'relationship_state', 'relationship')),
+      section('稳定了解', profile.memory_points ?? profileRaw(profile, 'memory_points', 'stable_knowledge', 'stable_understanding')),
+      section('相处偏好', profile.impression ?? profileRaw(profile, 'impression', 'preferences', 'preference')),
+      section('近期互动', profileRaw(profile, 'recent_interactions', 'recent_interaction', 'recent_events')),
+      section('不确定信息', profileRaw(profile, 'uncertain', 'uncertainties', 'uncertain_information') ?? item.pending_reason),
+    ];
+  }
+  function profileDetail(item) {
     if (item.entry_type === 'person') {
       const title = item.name || '未命名人物';
-      return record({text:title, meta:'人物档案'}, () => detail('人物档案',
-        field('当前称呼', item.name), field('首次记录时间', fmtTime(item.first_seen, true))));
+      detail('人物档案', el('div', {class:'stack resource-detail memory-detail'},
+        el('div', {class:'memory-detail-meta'}, typeBadge('人物', 'person')),
+        field('人物 ID', item.person_id ?? '暂无'),
+        field('称呼', item.name || '暂无'),
+        field('首次记录时间', fmtStamp(item.first_seen) || '暂无'),
+        ...profileSections({}, item),
+        el('p', {class:'muted', text:'此人物还没有可用画像。人物在聊天中出现并被整理后会显示在这里。'}),
+        el('div', {class:'row resource-actions'}, action('关闭', () => $('editor-dialog').close()))));
+      return;
     }
     const profile = item.record;
     const title = item.name || profile.name || profile.nickname || '待关联人物';
-    return record({text:title, meta:'人物画像'}, () => detail(title, field('画像', profile.summary || profile.impression),
-      field('原件别名', profile.aliases?.join('、')),
-      field('关联状态', item.pending_reason), field('来源', sourceText(profile)),
-      item.can_edit_aliases ? actions('画像检修', action('检修画像', () => openProfileMaintenance(item)),
-        action('维护别名', event => openProfileAliases(item, event.currentTarget))) : null));
-  }, empty:() => profileForm.elements.q.value.trim()
-    ? '没有符合条件的人物画像，试试清空搜索。'
-    : '还没有人物画像。人物在聊天中出现并被整理后会显示在这里。'},
+    const source = sourceText(profile) || '本地画像';
+    const aliases = profile.aliases?.length ? profile.aliases.join('、') : '暂无';
+    const actionsRow = item.can_edit_aliases
+      ? actions('画像操作', action('检修画像', () => openProfileMaintenance(item)),
+        action('维护别名', event => openProfileAliases(item, event.currentTarget)),
+        action('关闭', () => $('editor-dialog').close()))
+      : el('div', {class:'row resource-actions'}, action('关闭', () => $('editor-dialog').close()));
+    detail(title, el('div', {class:'stack resource-detail memory-detail'},
+      el('div', {class:'memory-detail-meta'}, typeBadge('画像', 'profile'),
+        el('span', {class:'muted', text:source})),
+      field('人物 ID', item.person_id ?? '暂无'),
+      field('称呼', title),
+      field('别名', aliases),
+      field('版本', profile.profile_version != null ? `v${profile.profile_version}` : '暂无'),
+      field('过期时间', fmtStamp(profile.expires_at) || '暂无'),
+      field('更新时间', fmtStamp(profile.occurred_at) || '暂无'),
+      field('来源', source),
+      field('关联状态', item.pending_reason),
+      section('画像正文', profile.summary || profile.impression),
+      ...profileSections(profile, item),
+      profile.evidence?.length ? field('关联证据', profile.evidence.map(entry =>
+        typeof entry === 'string' ? entry : readable(entry)).join('\n')) : null,
+      actionsRow));
+  }
+  function profileCard(item) {
+    if (item.entry_type === 'person') {
+      const title = item.name || '未命名人物';
+      return el('article', {class:'memory-card profile-card'},
+        el('div', {class:'memory-card-main'},
+          el('div', {class:'memory-card-head'}, typeBadge('人物', 'person'),
+            el('button', {class:'memory-card-title', type:'button', text:title, onclick:() => profileDetail(item)}),
+            el('span', {class:'memory-card-status', text:'暂无画像'})),
+          el('p', {class:'memory-card-summary', text:'人物档案已建立，画像会在聊天整理后出现。'}),
+          el('div', {class:'memory-card-meta'},
+            el('span', {class:'memory-source-tag', text:'人物档案'}),
+            item.first_seen && el('time', {datetime:item.first_seen, text:fmtStamp(item.first_seen)}))));
+    }
+    const profile = item.record;
+    const title = item.name || profile.name || profile.nickname || '待关联人物';
+    const version = profile.profile_version != null ? `v${profile.profile_version}` : '版本暂无';
+    const updated = fmtStamp(profile.occurred_at);
+    const groupCard = profile.group_cardname ?? profile.original?.group_cardname;
+    return el('article', {class:'memory-card profile-card'},
+      el('div', {class:'memory-card-main'},
+        el('div', {class:'memory-card-head'}, typeBadge('画像', 'profile'),
+          el('button', {class:'memory-card-title', type:'button', text:title, onclick:() => profileDetail(item)}),
+          item.pending_reason && el('span', {class:'memory-card-status', text:'待关联'})),
+        el('p', {class:'memory-card-summary', text:profile.summary || profile.impression || '暂无画像正文'}),
+        el('div', {class:'memory-card-meta'},
+          el('span', {class:'memory-source-tag', text:version}),
+          updated && el('span', {text:'更新 ' + updated}),
+          groupCard != null && groupCard !== '' && el('span', {class:'memory-source-tag', text:'群名片 ' + readable(groupCard)}))));
+  }
+  const profiles = searchable({panel:profilePanel, id:'profiles', render:profileCard,
+    empty:() => profileForm.elements.q.value.trim()
+      ? '没有符合条件的人物画像，试试清空搜索。'
+      : '还没有人物画像。人物在聊天中出现并被整理后会显示在这里。'},
   profileForm, '/api/resources/profiles', fields => ({q:fields.q.value}));
 
   const picturePanel = $('memory-pictures');
