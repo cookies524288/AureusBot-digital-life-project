@@ -11,6 +11,9 @@ export default defineConfig({
     transform(source, id) {
       if (id.endsWith('.css')) return source.replaceAll("url('/fonts/", "url('/learning-workbench/fonts/")
     },
+  }, {
+    name: 'aureus-html-line-endings',
+    transformIndexHtml: { order: 'post', handler: html => html.replace(/\r+\n/g, '\n') },
   }],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   build: {

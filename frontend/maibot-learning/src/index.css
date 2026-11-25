@@ -272,14 +272,6 @@
 }
 
 @font-face {
-  font-family: 'JetBrains Mono';
-  src: url('/fonts/JetBrainsMono-Medium.ttf') format('truetype');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
   font-family: 'MaiRetroText';
   src:
     local('Bahnschrift Condensed'), local('Bahnschrift'), local('Agency FB'), local('Arial Narrow');

@@ -31,6 +31,7 @@ while (pending.length) {
   if (name.endsWith('.css')) {
     for (const [match, asset] of text.matchAll(/url\(['"]?(\/fonts\/[^'"\s)]+)/g)) {
       const font = `public${asset}`
+      if (font === 'public/fonts/JetBrainsMono-Medium.ttf') continue
       if (!existsSync(join(upstream, font))) throw new Error(`缺少字体：${match}`)
       files.add(font)
     }
@@ -50,7 +51,7 @@ while (pending.length) {
   }
 }
 
-for (const name of ['Jersey20-OFL.txt', 'DepartureMono-OFL.txt', 'ArkPixel12-OFL.txt', 'JetBrainsMono-OFL.txt']) {
+for (const name of ['Jersey20-OFL.txt', 'DepartureMono-OFL.txt', 'ArkPixel-OFL.txt']) {
   if (existsSync(join(upstream, 'public/fonts', name))) files.add(`public/fonts/${name}`)
 }
 
