@@ -9,15 +9,19 @@
 import ast
 import re
 import shutil
+import sqlite3
 import tempfile
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from loguru import logger
 
 from aureus.common import AureusPaths, configure_logging, shutdown_logging
+from aureus.common.sqlite import open_connection
 from aureus.common.vault import SecretVault
+from aureus.core.portability import collect_export_files
 from aureus.identity import IdentityService
 from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
 
@@ -76,6 +80,25 @@ def test_all_writes_stay_inside_the_data_root(
         "system_temp",
         "working_dir",
     ]
+
+
+def test_database_uses_wal_and_export_stays_delete(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path / "home")
+    paths.ensure_directories()
+    database = TimelineDatabase(paths.database_file)
+    database.open()
+    try:
+        database.append("test", RECORD_CONTENT, ActorType.ME)
+        with closing(open_connection(paths.database_file, read_only=True)) as connection:
+            assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        exported = collect_export_files(paths, include_logs=False)["data/aureus.db"]
+    finally:
+        database.close()
+    copy_path = tmp_path / "exported.db"
+    copy_path.write_bytes(exported)
+    with closing(sqlite3.connect(copy_path)) as copy:
+        assert copy.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+        assert copy.execute("SELECT content FROM timeline").fetchall() == [(RECORD_CONTENT,)]
 
 
 def test_moved_data_root_is_still_readable(tmp_path: Path) -> None:

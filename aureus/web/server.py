@@ -196,7 +196,7 @@ async def _push(
                 message = await asyncio.wait_for(outbox.get(), timeout=SESSION_RECHECK_SECONDS)
             except TimeoutError:
                 message = None
-            if not sessions.touch(token):
+            if not await sessions.touch(token):
                 await socket.close(code=WS_POLICY_VIOLATION)
                 return
             if message is not None:
@@ -228,7 +228,7 @@ async def _listen(
     """收网页上说的话，交给网页通道；格式不对或太长只回一条错误，不断开连接。"""
     while True:
         raw = await socket.receive_text()
-        if not sessions.touch(token):
+        if not await sessions.touch(token):
             await socket.close(code=WS_POLICY_VIOLATION)
             return
         try:
@@ -305,7 +305,7 @@ def create_app(
     # 同步依赖会被 FastAPI 放进工作线程，不能和事件循环并发使用同一个 SQLite 连接。
     async def require_session(request: Request) -> str:
         token = request.cookies.get(SESSION_COOKIE, "")
-        if not sessions.touch(token):
+        if not await sessions.touch(token):
             raise HTTPException(401, detail="请先登录。")
         return token
 
@@ -546,7 +546,7 @@ def create_app(
     async def websocket(socket: WebSocket) -> None:
         token = socket.cookies.get(SESSION_COOKIE, "")
         # 来源不对、没登录、还在用默认密码：握手阶段就拒绝，和 HTTP 接口的规则一致。
-        if not _same_origin(socket) or not sessions.touch(token) or auth.password_is_default:
+        if not _same_origin(socket) or not await sessions.touch(token) or auth.password_is_default:
             await socket.close(code=WS_POLICY_VIOLATION)
             return
         await socket.accept()

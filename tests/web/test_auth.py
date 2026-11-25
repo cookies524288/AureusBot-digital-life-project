@@ -317,32 +317,37 @@ def test_confirm_password_checks_and_counts_failures(auth: WebAuth) -> None:
 # ---------- 改密码 ----------
 
 
-def test_changing_the_password_logs_every_device_out(auth: WebAuth, sessions: SessionStore) -> None:
+@pytest.mark.asyncio
+async def test_changing_the_password_logs_every_device_out(
+    auth: WebAuth, sessions: SessionStore
+) -> None:
     phone = auth.login("admin", LOCAL).token
     laptop = auth.login("admin", LOCAL).token
     auth.change_password("admin", GOOD, LOCAL)
-    assert sessions.touch(phone) is False
-    assert sessions.touch(laptop) is False
+    assert await sessions.touch(phone) is False
+    assert await sessions.touch(laptop) is False
     assert auth.login(GOOD, LOCAL).token  # 新密码能登录
     with pytest.raises(LoginRejectedError):
         auth.login("admin", LOCAL)  # 旧的不行
 
 
-def test_changing_needs_the_old_password(auth: WebAuth, sessions: SessionStore) -> None:
+@pytest.mark.asyncio
+async def test_changing_needs_the_old_password(auth: WebAuth, sessions: SessionStore) -> None:
     token = auth.login("admin", LOCAL).token
     with pytest.raises(LoginRejectedError):
         auth.change_password("not the old one", GOOD, LOCAL)
-    assert sessions.touch(token) is True  # 没改成，登录状态不动
+    assert await sessions.touch(token) is True  # 没改成，登录状态不动
     assert auth.password_is_default is True
 
 
-def test_a_bad_new_password_changes_nothing(auth: WebAuth, sessions: SessionStore) -> None:
+@pytest.mark.asyncio
+async def test_a_bad_new_password_changes_nothing(auth: WebAuth, sessions: SessionStore) -> None:
     token = auth.login("admin", LOCAL).token
     with pytest.raises(PasswordPolicyError):
         auth.change_password("admin", "admin", LOCAL)
     with pytest.raises(PasswordPolicyError):
         auth.change_password("admin", "short", LOCAL)
-    assert sessions.touch(token) is True
+    assert await sessions.touch(token) is True
     assert auth.password_is_default is True
 
 

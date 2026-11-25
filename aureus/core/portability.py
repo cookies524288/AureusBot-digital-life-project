@@ -6,6 +6,7 @@
 
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -49,15 +50,26 @@ class ExportResult:
 def _database_copy(database_file: Path) -> bytes:
     """用在线备份接口取数据库的一致副本。只读打开，不会改动原文件。
 
-    副本先放在内存里再取出来，不往别处写临时文件（D38：所有写入都在数据根目录之内）。
+    副本先写进数据根目录里的临时文件，再设回 DELETE 日志模式：主库用 WAL 时，
+    内存里的副本会带着 WAL 标记，导出包必须仍是可移植的 DELETE（D121）。
+    临时文件用完即删，不往数据根目录之外写（D38）。
     """
-    uri = f"{database_file.as_uri()}?mode=ro"
-    with (
-        closing(sqlite3.connect(uri, uri=True)) as source,
-        closing(sqlite3.connect(":memory:")) as copy,
-    ):
-        source.backup(copy)
-        return copy.serialize()
+    handle, name = tempfile.mkstemp(prefix=".export-", suffix=".db", dir=database_file.parent)
+    os.close(handle)
+    copy_path = Path(name)
+    try:
+        uri = f"{database_file.as_uri()}?mode=ro"
+        with (
+            closing(sqlite3.connect(uri, uri=True)) as source,
+            closing(sqlite3.connect(copy_path)) as copy,
+        ):
+            source.backup(copy)
+            row = copy.execute("PRAGMA journal_mode = DELETE").fetchone()
+            if row is None or str(row[0]).lower() != "delete":
+                raise sqlite3.OperationalError("导出副本没有切换到 DELETE 日志模式")
+        return copy_path.read_bytes()
+    finally:
+        copy_path.unlink(missing_ok=True)
 
 
 def _files_under(folder: Path) -> list[Path]:

@@ -31,3 +31,21 @@ def open_connection(db_path: Path, *, read_only: bool = False) -> sqlite3.Connec
     )
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def enable_wal(connection: sqlite3.Connection) -> None:
+    """把数据库切到 WAL 模式（读写不互斥），并核对真的生效了。
+
+    设置存在数据库文件里，之后打开的连接自动沿用。切不过去时抛错，让启动失败：
+    悄悄退回旧模式会在下次卡顿时才发现（D121：宁可启动失败也不假装成功）。
+
+    Args:
+        connection: 可写连接。
+
+    Raises:
+        sqlite3.Error: 切换失败，或者切换后读回来的不是 wal。
+    """
+    row = connection.execute("PRAGMA journal_mode = WAL").fetchone()
+    mode = row[0] if row is not None else None
+    if str(mode).lower() != "wal":
+        raise sqlite3.OperationalError(f"数据库没有切换到 WAL 模式（当前为 {mode!r}）")

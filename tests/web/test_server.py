@@ -766,9 +766,9 @@ async def test_login_dependencies_stay_on_the_request_thread(
         original_touch = rig.sessions.touch
         original_is_default = rig.passwords.is_default
 
-        def touch(token: str) -> bool:
+        async def touch(token: str) -> bool:
             threads.append(get_ident())
-            return original_touch(token)
+            return await original_touch(token)
 
         def is_default() -> bool:
             threads.append(get_ident())

@@ -15,7 +15,7 @@ from typing import Any
 
 from aureus.common import Clock, SystemClock
 from aureus.common.clock import ensure_aware
-from aureus.common.sqlite import open_connection
+from aureus.common.sqlite import enable_wal, open_connection
 from aureus.timeline.models import ActorType, TimelineQuery, TimelineRecord, VisibilityScope
 from aureus.timeline.platform_history import LegacyPlatformHistory
 
@@ -82,6 +82,14 @@ class TimelineDatabase:
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = open_connection(self._db_path)
+        try:
+            # 主库启动时最先由这里打开；WAL 让网页读和心跳写不再互相等锁（D121）。
+            enable_wal(self._conn)
+        except sqlite3.Error:
+            logger.exception("把数据库切换到 WAL 模式失败，启动中止")
+            self._conn.close()
+            self._conn = None
+            raise
         self._init_schema()
 
     def close(self) -> None:
