@@ -535,6 +535,41 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-image{display:grid;justify-content:start;justify-items:end;gap:5px;margin:6px 0 0}
 .inbox-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}
 .inbox-image .btn{justify-self:end}
+/* 平台会话的 Bot 活动面板：只读、像素字体、方块边框和闪烁光标；配色跟随深浅主题（D123）。 */
+.inbox-activity{flex:none;max-height:min(42dvh,360px);margin-top:12px;padding:10px 12px 12px;overflow:auto;background:var(--surface-2);border:2px solid var(--border);border-radius:0;box-shadow:4px 4px 0 var(--border);font-family:'Ark Pixel',var(--mono);font-size:13px;line-height:1.6;overscroll-behavior:contain}
+/* 窗口很矮时活动面板让出高度给消息区，自己的内容在内部滚动，不把会话卡片撑破。 */
+#inbox-thread>#inbox-activity{flex:0 1 auto;min-height:0}
+.inbox-activity-head{position:sticky;top:-10px;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-10px -12px 8px;padding:8px 12px 6px;background:var(--surface-2);border-bottom:2px solid var(--border);letter-spacing:1px}
+.inbox-activity-title{font-weight:700;color:var(--accent-strong)}
+.inbox-activity-state{display:inline-flex;align-items:center;gap:5px;color:var(--text-2);font-size:12px}
+.inbox-activity-state::before{content:'';width:7px;height:7px;background:var(--accent);animation:inbox-activity-blink 1.2s step-end infinite}
+.inbox-activity-round{display:grid;gap:6px}
+.inbox-activity-round-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;color:var(--text-2);font-size:12px}
+.inbox-activity-steps{display:grid;gap:4px;margin:0;padding:0;list-style:none}
+.inbox-activity-step{display:grid;grid-template-columns:4.5em minmax(0,1fr);gap:8px;padding:4px 6px;border-inline-start:3px solid var(--border);background:var(--surface)}
+.inbox-activity-step.done{border-inline-start-color:var(--accent)}
+.inbox-activity-step.failed{border-inline-start-color:var(--danger)}
+.inbox-activity-step.waiting{border-inline-start-color:var(--warn)}
+.inbox-activity-step.skipped{opacity:.62}
+.inbox-activity-step-name{color:var(--text-2);font-size:12px;letter-spacing:.5px}
+.inbox-activity-step.done .inbox-activity-step-name{color:var(--text)}
+.inbox-activity-step-body{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.inbox-activity-message+.inbox-activity-message{margin-top:3px}
+.inbox-activity-message b{color:var(--accent-strong);font-weight:700}
+.inbox-activity-actions{display:grid;gap:2px;margin:4px 0 0;padding:0;list-style:none}
+.inbox-activity-actions li{display:flex;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--text-2)}
+.inbox-activity-tool{color:var(--accent-strong);font-family:var(--mono)}
+.inbox-activity-idle{display:flex;align-items:center;gap:8px;min-height:44px;color:var(--text-2)}
+.inbox-activity-idle-pixels{display:inline-flex;gap:3px}
+.inbox-activity-idle-pixels i{width:7px;height:7px;background:var(--accent);animation:inbox-activity-pulse 1.2s step-end infinite}
+.inbox-activity-idle-pixels i:nth-child(2){animation-delay:.2s}
+.inbox-activity-idle-pixels i:nth-child(3){animation-delay:.4s}
+.inbox-activity-idle-pixels i:nth-child(4){animation-delay:.6s}
+.inbox-activity-cursor{display:inline-block;width:.6em;height:1em;background:var(--accent-strong);animation:inbox-activity-blink 1s step-end infinite;vertical-align:-2px}
+@keyframes inbox-activity-blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@keyframes inbox-activity-pulse{0%,49%{opacity:1}50%,100%{opacity:.18}}
+@media(max-width:820px){.inbox-activity{max-height:38dvh}}
+@media(prefers-reduced-motion:reduce){.inbox-activity-state::before,.inbox-activity-idle-pixels i,.inbox-activity-cursor{animation:none}}
 .resource-page .stack{gap:10px}
 .resource-page>.page-body,.resource-panel{flex:1;min-width:0}
 .resource-navigation,.resource-actions{gap:6px}
@@ -988,6 +1023,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <p id="inbox-message-status" class="empty hidden" role="status"></p>
 <div id="inbox-messages" class="inbox-messages"></div>
 <div id="inbox-typing" role="status"></div>
+<section id="inbox-activity" class="inbox-activity hidden" aria-label="Bot 活动">
+<div class="inbox-activity-head"><span class="inbox-activity-title">BOT ACTIVITY</span><span id="inbox-activity-state" class="inbox-activity-state" role="status">待机</span></div>
+<div id="inbox-activity-log" class="inbox-activity-log"></div>
+</section>
 </div>
 </div></div></section>
 <section id="page-persona" class="page"><div class="page-head"><div><h2>人设</h2></div></div>
@@ -2057,6 +2096,7 @@ function recallFeedback(replyId) {
 
 const PLANNER_ACTION_NAMES = {
   reply: '选择回复（不是发送）', stop: '结束规划', query_memory: '查询记忆',
+  read_platform_history: '读取平台历史', propose_platform_history_cleanup: '预览历史清理',
   inbox_attention: '收件箱关注', planner: '规划器', replyer: '回复器', review: '二次审视', unknown_tool: '未知工具',
 };
 const PLANNER_ACTION_STATES = {requested:'已请求', rejected:'已拒绝', not_run:'未执行', failed:'失败', completed:'完成'};
@@ -2368,6 +2408,7 @@ function clearInboxThread() {
   ++inbox.olderRequest;
   resetInboxMedia();
   clearInboxRetention();
+  clearInboxActivity();
   inbox.selected = null;
   showInboxConversationList();
   inbox.nextBefore = null;
@@ -2404,9 +2445,191 @@ function selectInboxConversation(conversation) {
     button.setAttribute('aria-pressed', String(button.dataset.conversation === selected));
   }
   $('inbox-thread-name').textContent = conversation.name;
+  if (changed || !inboxActivitySession) startInboxActivity(conversation);
   return Promise.all([loadInboxMessages(),
     showInboxRetention(conversation.archive ? null : conversation.key)]);
 }
+
+// 平台会话的 Bot 活动：只轮询当前会话，按轮次展示来信、判断、规划、回复参考和投递（D123）。
+const INBOX_ACTIVITY_REFRESH_MS = 1500;
+const INBOX_ACTIVITY_TIMEOUT_MS = 5000;
+const INBOX_ACTIVITY_HOURS = 1;
+const INBOX_ACTIVITY_LIMIT = 60;
+let inboxActivitySession = null;
+
+function inboxActivityStatus(text) {
+  $('inbox-activity-state').textContent = text;
+}
+
+// 切页、页面隐藏或离线时停止轮询；请求还没回来时一并取消，不弹提示。
+function stopInboxActivity() {
+  const current = inboxActivitySession;
+  inboxActivitySession = null;
+  if (!current) return;
+  current.controller?.abort();
+  clearTimeout(current.timer);
+}
+
+function clearInboxActivity() {
+  stopInboxActivity();
+  $('inbox-activity-log').replaceChildren();
+  $('inbox-activity').classList.add('hidden');
+  inboxActivityStatus('待机');
+}
+
+function inboxActivityQuery(conversation) {
+  const key = conversation.key;
+  return new URLSearchParams({
+    hours: String(INBOX_ACTIVITY_HOURS),
+    limit: String(INBOX_ACTIVITY_LIMIT),
+    conversation: JSON.stringify({
+      platform: key.platform,
+      account_id: key.account_id,
+      kind: key.kind,
+      recipient_id: key.recipient_id,
+    }),
+  });
+}
+
+function startInboxActivity(conversation) {
+  stopInboxActivity();
+  const log = $('inbox-activity-log');
+  log.replaceChildren(inboxActivityIdle());
+  if (!conversation?.key || !state.loggedIn || document.hidden || !navigator.onLine) {
+    $('inbox-activity').classList.add('hidden');
+    inboxActivityStatus('待机');
+    return;
+  }
+  $('inbox-activity').classList.remove('hidden');
+  inboxActivityStatus('同步中');
+  const current = inboxActivitySession = {controller:null, timer:null, signature:''};
+  async function refresh() {
+    if (inboxActivitySession !== current) return;
+    const controller = current.controller = new AbortController();
+    // 比 api() 自带的 10 秒超时短：超时后静默重试，不让全局提示打断看会话的人。
+    current.timer = setTimeout(() => controller.abort(), INBOX_ACTIVITY_TIMEOUT_MS);
+    const res = await api(`/api/timeline?${inboxActivityQuery(conversation)}`,
+      undefined, undefined, {}, controller.signal);
+    if (inboxActivitySession !== current) return;
+    clearTimeout(current.timer);
+    if (res.ok && Array.isArray(res.data?.records)) {
+      inboxActivityStatus('实时');
+      renderInboxActivity(res.data.records, current);
+    } else {
+      inboxActivityStatus('重试中');
+    }
+    current.timer = setTimeout(refresh, INBOX_ACTIVITY_REFRESH_MS);
+  }
+  refresh();
+}
+
+// 最新一轮：优先取带 round_id 的最新轮次；还没开始规划的新来信单独当作当前来信显示。
+function inboxActivityLatestRound(records) {
+  const incoming = records.filter(record => record.event_type === 'message' && record.actor !== 'me');
+  const rounds = records.filter(record => Number.isInteger(record.round_id) && record.round_id > 0);
+  const latestRound = rounds.reduce((latest, record) => Math.max(latest, record.round_id), 0);
+  if (!latestRound) return incoming.length ? {id:null, messages:incoming, events:[]} : null;
+  const pending = incoming.filter(record => record.id > latestRound);
+  if (pending.length) return {id:pending[0].id, messages:pending, events:[]};
+  const events = rounds.filter(record => record.round_id === latestRound);
+  const messageIds = new Set([latestRound]);
+  for (const event of events) {
+    if (!Array.isArray(event.metadata?.in_reply_to)) continue;
+    for (const id of event.metadata.in_reply_to) if (Number.isInteger(id)) messageIds.add(id);
+  }
+  return {id:latestRound, messages:incoming.filter(record => messageIds.has(record.id)), events};
+}
+
+function inboxActivityIdle() {
+  return el('div', {class:'inbox-activity-idle'},
+    el('span', {class:'inbox-activity-idle-pixels', 'aria-hidden':'true'},
+      el('i'), el('i'), el('i'), el('i')),
+    el('span', {text:'待机中'}),
+    el('span', {class:'inbox-activity-cursor', 'aria-hidden':'true'}));
+}
+
+function inboxActivityWaiting() {
+  return [el('span', {text:'等待'}), el('span', {class:'inbox-activity-cursor', 'aria-hidden':'true'})];
+}
+
+// 工具只显示名称、状态和一句结果；参数和器官原始响应不进面板。
+function inboxActivityActions(actions) {
+  if (!actions.length) return null;
+  return el('ul', {class:'inbox-activity-actions'}, actions.map(action => el('li', {},
+    el('span', {class:'inbox-activity-tool', text:PLANNER_ACTION_NAMES[action.action] || '行动'}),
+    el('span', {text:PLANNER_ACTION_STATES[action.status] || '未知状态'}),
+    action.reason ? el('span', {text:action.reason}) : null)));
+}
+
+function inboxActivityRound(round) {
+  const events = round.events;
+  const judgments = events.filter(event => event.event_type === 'judgment');
+  const plans = events.filter(event => ['reply_reference', 'reply_declined', 'planning_interrupted'].includes(event.event_type));
+  const actions = plans.flatMap(event => Array.isArray(event.metadata?.actions) ? event.metadata.actions : []);
+  const references = actions.flatMap(action =>
+    typeof action?.reference === 'string' && action.reference ? [action.reference] : []);
+  const deliveries = events.filter(event => ['reply_delivered', 'reply_delivery_failed'].includes(event.event_type));
+  const noReply = plans.some(event => event.event_type === 'reply_declined'
+    || (event.event_type === 'reply_reference' && event.content.startsWith('建议不回复')));
+  const terminal = deliveries.length > 0 || noReply
+    || plans.some(event => event.event_type === 'planning_interrupted');
+  const present = [round.messages.length > 0, judgments.length > 0, plans.length > 0,
+    references.length > 0, deliveries.length > 0];
+  const lastPresent = present.lastIndexOf(true);
+  const status = index => present[index] ? 'done'
+    : !terminal && index > lastPresent ? 'waiting' : 'skipped';
+  const step = (name, index, content) => {
+    const state = status(index);
+    return el('li', {class:`inbox-activity-step ${state}`},
+      el('span', {class:'inbox-activity-step-name', text:name}),
+      el('div', {class:'inbox-activity-step-body'},
+        ...(content || (state === 'waiting' ? inboxActivityWaiting() : [el('span', {text:'跳过'})]))));
+  };
+  const messages = round.messages.map(message => el('div', {class:'inbox-activity-message'},
+    el('b', {text:`${message.metadata?.sender_name || message.actor_id || '对方'}：`}), message.content));
+  const deliveryFailed = deliveries.some(event => event.event_type === 'reply_delivery_failed');
+  const steps = [
+    step('收到消息', 0, messages.length ? messages : null),
+    step('判断', 1, judgments.length ? judgments.map(event => el('div', {text:event.content})) : null),
+    step('规划', 2, plans.length ? [
+      ...plans.map(event => el('div', {text:event.content})),
+      inboxActivityActions(actions),
+    ].filter(Boolean) : null),
+    step('回复参考', 3, references.length ? references.map(text => el('div', {text})) : null),
+    step('投递', 4, deliveries.length ? deliveries.map(event => el('div', {text:event.content})) : null),
+  ];
+  if (deliveryFailed) steps[4].className = 'inbox-activity-step failed';
+  const times = [...round.messages, ...events].map(record => record.time).sort();
+  return el('section', {class:'inbox-activity-round'},
+    el('div', {class:'inbox-activity-round-head'},
+      el('span', {text:round.id ? `轮次 #${round.id}` : '当前来信'}),
+      times.length ? el('time', {datetime:times[times.length - 1], text:fmtTime(times[times.length - 1], true)}) : null),
+    el('ol', {class:'inbox-activity-steps'}, ...steps));
+}
+
+function renderInboxActivity(records, session) {
+  const round = inboxActivityLatestRound(records);
+  const signature = round
+    ? `${round.id}:${round.messages.map(record => record.id).join(',')}:${round.events.map(record => record.id).join(',')}`
+    : 'idle';
+  if (session.signature === signature) return;
+  session.signature = signature;
+  const log = $('inbox-activity-log');
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.replaceChildren(round ? inboxActivityRound(round) : inboxActivityIdle());
+  if (nearBottom) log.scrollTop = log.scrollHeight;
+}
+
+function followInboxActivity() {
+  if (document.hidden) {
+    stopInboxActivity();
+    return;
+  }
+  if (state.page === 'inbox' && inbox.selected?.key) startInboxActivity(inbox.selected);
+}
+document.addEventListener('visibilitychange', followInboxActivity);
+window.addEventListener('offline', stopInboxActivity);
+window.addEventListener('online', followInboxActivity);
 
 function renderInboxView() {
   const isDesktop = !inbox.view;
@@ -2770,6 +2993,7 @@ $('inbox-history-retry').addEventListener('click', () => {
 });
 PAGES.inbox = {load:loadInbox, leave() {
   ++inbox.conversationRequest;
+  clearInboxActivity();
   inbox.conversations = [];
   inbox.archives = [];
   inbox.enabled = false;

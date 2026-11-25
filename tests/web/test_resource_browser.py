@@ -781,6 +781,78 @@ def test_narrow_inbox_captions_are_independent_and_ignore_stale_requests(browser
     )
 
 
+def test_inbox_activity_panel_shows_latest_round_and_stops_after_leaving(browser: Browser) -> None:
+    browser.open("inbox", 390, 740)
+    _run(
+        browser,
+        """
+      await waitFor(() => typeof renderInboxActivity === 'function' && state.loggedIn,
+        '活动面板脚本未就绪');
+      const group = {platform:'qq',account_id:'1',kind:'group',recipient_id:'2'};
+      const other = {platform:'qq',account_id:'1',kind:'group',recipient_id:'4'};
+      const conversation = {key:group,name:'合成群'};
+      const otherConversation = {key:other,name:'另一群'};
+      const stamp = '2026-11-23T00:00:00Z';
+      const records = {
+        [JSON.stringify(group)]: [
+          {id:10,time:stamp,actor:'user',actor_id:'3',event_type:'message',
+            content:'合成来信',visibility:'group',metadata:{sender_name:'合成好友'}},
+          {id:11,time:stamp,actor:'me',event_type:'judgment',round_id:10,
+            content:'判断了刚收到的消息里的情绪。',visibility:'private',
+            metadata:{in_reply_to:[10]}},
+          {id:12,time:stamp,actor:'me',event_type:'reply_reference',round_id:10,
+            content:'建议回复：打个招呼',visibility:'group',
+            metadata:{in_reply_to:[10],actions:[{action:'reply',status:'completed',
+              reason:'对方在打招呼',reference:'回复参考：你好'}]}},
+          {id:13,time:stamp,actor:'me',event_type:'reply_delivered',round_id:10,
+            content:'你好呀',visibility:'group',metadata:{reply_id:9,segment:1}},
+        ],
+        [JSON.stringify(other)]: [
+          {id:20,time:stamp,actor:'user',actor_id:'5',event_type:'message',
+            content:'另一群的来信',visibility:'group',metadata:{sender_name:'另一人'}},
+        ],
+      };
+      const timelineRequests = [];
+      window.api = async path => {
+        if (path.startsWith('/api/timeline?')) {
+          timelineRequests.push(path);
+          const query = new URLSearchParams(path.split('?')[1]);
+          const key = JSON.parse(query.get('conversation'));
+          return {ok:true,data:{records:records[JSON.stringify(key)] || []}};
+        }
+        return {ok:true,data:{messages:[],next_before_id:null}};
+      };
+      await showPage('inbox', () => {});
+      inbox.view = 'qq';
+      inbox.enabled = true;
+      inbox.conversations = [conversation, otherConversation];
+      await renderInboxView();
+      const pageNode = document.querySelector('#page-inbox');
+      check(pageNode.scrollWidth <= pageNode.clientWidth, '窄屏不得横向溢出');
+      check(!document.querySelector('#inbox-operations')
+        && !document.querySelector('#inbox-send-text')
+        && !document.querySelector('#inbox-file'), '人工输入区已移除');
+      const panel = document.querySelector('#inbox-activity');
+      await waitFor(() => panel.textContent.includes('回复参考：你好'), '活动面板显示回复参考');
+      check(panel.textContent.includes('轮次 #10') && panel.textContent.includes('合成好友')
+        && panel.textContent.includes('判断了刚收到的消息')
+        && panel.textContent.includes('选择回复')
+        && panel.textContent.includes('对方在打招呼') && panel.textContent.includes('你好呀'),
+        '收到、判断、规划、回复参考、投递都在');
+      check(panel.querySelectorAll('button').length === 0, '面板只读');
+      check(timelineRequests[0].includes('conversation='), '请求带会话过滤');
+      await selectInboxConversation(otherConversation);
+      await waitFor(() => panel.textContent.includes('另一群的来信'), '切换会话后显示新会话');
+      check(!panel.textContent.includes('合成来信') && !panel.textContent.includes('你好呀'),
+        '切换会话清空旧内容');
+      const before = timelineRequests.length;
+      PAGES.inbox.leave();
+      await new Promise(resolve => setTimeout(resolve, 1700));
+      check(timelineRequests.length === before, '离开页面后停止轮询');
+    """,
+    )
+
+
 @pytest.mark.parametrize("motion", ["no-preference", "reduce"])
 def test_page_entrance_keeps_current_and_disabled_button_styles(
     browser: Browser, motion: str
