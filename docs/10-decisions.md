@@ -1113,3 +1113,9 @@ QQ 在 D93 的接收范围内先保存到用户数据目录，网页可按平台
 维护者指出 `language.reference_chars` 不符合预期，要求表达召回按 MaiBot 的逻辑。核对固定提交：MaiBot 的向量召回候选池配置 40、硬上限 50，召回后由独立的 LLM 选择子代理挑 0–5 条，注入 replyer 时没有字数上限。Aureus 的召回算法已与 MaiBot 相同，但默认跳过选择器、直接取前 5，并在注入时按 700 字整条裁剪。
 
 决定：一，表达注入不再受 `reference_chars` 限制，选中的 0–5 条原样注入；`reference_chars` 只保留给黑话参考块。二，新增 `[language] expression_vector_candidates`，默认 50，范围 1–50，作为向量召回候选上限（替代原来的 40 常量）。三，恢复独立的表达选择调用：任务名 `expression_selection` 交给 `fast_model`；没有配置 fast_model 或调用失败时，退回直接取向量前 5，不整池注入。四，关键词回退路径同样不受字数限制。五，这会给每轮发言增加一次 fast_model 调用；维护者已知晓它与 D117 快速路径的取舍。实现见[任务](tasks/3.15-expression-recall-alignment.md)。
+
+### D120 · 语言参考不再设字数上限，移除「语言参考字数上限」设置（2026-11-25）
+
+维护者要求去掉设置里的「语言参考字数上限」，只保留条数上限（表达最多 5 条、黑话最多 10 条）。这取代 D119 中「`reference_chars` 只保留给黑话参考块」一条：两类语言参考都按条数注入，不再按字符裁剪。
+
+决定：一，删除 `[language] reference_chars` 配置与设置页条目，包括索引进度提示里对它的引用。二，表达和黑话参考块都不再按字数裁剪；条数上限保持（表达由选择器取 0–5 条，黑话沿用 10 条）。三，旧配置里写了 `reference_chars` 的照常启动并忽略该键，不报错。四，`recall_enabled` 仍是语言参考的总开关。实现并入[表达召回对齐任务](tasks/3.15-expression-recall-alignment.md)。
