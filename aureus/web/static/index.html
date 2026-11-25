@@ -1029,7 +1029,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary" disabled><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
-<div class="row"><button id="cf-restore-all" class="btn danger" disabled>恢复默认设置</button><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
+<div class="row"><button id="cf-open-folder" class="btn" type="button">打开配置文件夹</button><button id="cf-restore-all" class="btn danger" disabled>恢复默认设置</button><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
 <div class="page-body cfg-layout">
 <div id="cf-sidebar" class="cfg-sidebar">
 <div class="cfg-search"><input id="cf-search" type="text" inputmode="search" aria-label="搜索设置" aria-controls="cf-search-results" placeholder="搜索设置"><button id="cf-search-clear" class="btn small hidden" type="button" aria-label="清空设置搜索">清空</button></div>
@@ -4489,6 +4489,11 @@ async function loadConfigPage(force) {
 PAGES.config = { load: () => loadConfigPage(false) };
 $('og-search-settings').addEventListener('click', () => showPage('config', () => focusConfigSection('exploration')));
 
+$('cf-open-folder').addEventListener('click', async () => {
+  const res = await api('/api/open-config-folder', 'POST');
+  if (!res.ok) { failApi(res); return; }
+  toast('已打开配置文件夹。', 'ok');
+});
 $('cf-save').addEventListener('click', async () => {
   if (cf.invalid.size) { toast('有的数字填得不对（' + [...cf.invalid].join('、') + '），改好再保存。', 'error'); return; }
   const keys = Object.keys(cf.changes);

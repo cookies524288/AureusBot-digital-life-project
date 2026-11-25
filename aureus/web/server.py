@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
@@ -787,6 +788,21 @@ def create_app(
         )
 
     if config_files is not None:
+
+        @app.post("/api/open-config-folder")
+        async def open_config_folder(
+            request: Request, _token: Annotated[str, Depends(require_ready)]
+        ) -> dict[str, bool]:
+            """打开固定的配置文件夹。只接受本机网页的请求，不接收路径参数，也不回显路径。"""
+            if not _local_terminal_request(request) or not _same_http_origin(request):
+                raise HTTPException(403, detail="请从本机网页打开配置文件夹。")
+            try:
+                os.startfile(config_files.paths.config_dir)
+            except OSError as error:
+                logger.warning("打开配置文件夹失败（%s）", type(error).__name__)
+                raise HTTPException(500, detail="无法打开配置文件夹，请查看日志。") from None
+            return {"ok": True}
+
         register_config_routes(
             app,
             config_files,
