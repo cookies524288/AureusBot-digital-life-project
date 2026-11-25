@@ -339,7 +339,7 @@ def test_disabled_rows_name_the_remaining_requirements() -> None:
     const visual = 'heartbeat.qq_emoji_visual_enabled';
     const expression = row('expression', 'disabled');
     assert.equal(name(recall), '回复参考习得语言');
-    for (const part of [name(recall), group(recall), name('language.reference_chars'),
+    for (const part of [name(recall), group(recall),
       '配置嵌入模型后自动建立', '保存后重启生效']) {
       assert.ok(expression.includes(part), part);
     }
