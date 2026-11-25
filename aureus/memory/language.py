@@ -858,7 +858,8 @@ class LanguageStore:
         return True
 
     def classify_jargons(
-        self, keys: Sequence[str], status: JargonStatus, now: datetime
+        self, keys: Sequence[str], status: JargonStatus, now: datetime,
+        *, allowed: Callable[[], bool] = lambda: True,
     ) -> int | None:
         """锁定后复验整批条目，只记载真正变化的定性。"""
         with closing(open_connection(self._path)) as connection, connection:
@@ -870,7 +871,7 @@ class LanguageStore:
                 )
                 if not entry.is_removed
             }
-            if not set(keys) <= entries.keys():
+            if not set(keys) <= entries.keys() or not allowed():
                 return None
             return connection.executemany(
                 """INSERT INTO language_jargon_reviews (entry_key, status, recorded_at)
