@@ -631,6 +631,18 @@ def create_app(
     register_memory_graph_grant_routes(
         app, require_ready, sessions.is_active, _same_http_origin, auth, memory_graph_display
     )
+
+    def learning_scopes() -> dict[str, str]:
+        scopes = {'["web","local"]': "网页私聊", '["terminal","local"]': "本机终端"}
+        if inbox_store is not None and allows_inbox_conversation is not None:
+            for conversation in inbox_store.list_conversations(visible_to_user=True):
+                if allows_inbox_conversation(conversation.key):
+                    scopes[conversation.key.language_scope_key()] = conversation.name
+        return scopes
+
+    workbench = LearningWorkbench(
+        resource_language, resource_emojis, clock or SystemClock(), learning_scopes
+    )
     register_expression_cluster_routes(
         app,
         require_ready,
@@ -641,6 +653,7 @@ def create_app(
         sessions.is_active,
         display=expression_cluster_display,
         scopes=embedding_progress.expression_scopes if embedding_progress else None,
+        workbench=workbench,
     )
     register_expression_cluster_grants(
         app,
@@ -692,19 +705,9 @@ def create_app(
         suggest_emoji_replacement=suggest_emoji_replacement,
     )
 
-    def learning_scopes() -> dict[str, str]:
-        scopes = {'["web","local"]': "网页私聊", '["terminal","local"]': "本机终端"}
-        if inbox_store is not None and allows_inbox_conversation is not None:
-            for conversation in inbox_store.list_conversations(visible_to_user=True):
-                if allows_inbox_conversation(conversation.key):
-                    scopes[conversation.key.language_scope_key()] = conversation.name
-        return scopes
-
     register_learning_workbench_routes(
         app,
-        LearningWorkbench(
-            resource_language, resource_emojis, clock or SystemClock(), learning_scopes
-        ),
+        workbench,
         require_ready,
         _same_http_origin,
         sessions.is_active,

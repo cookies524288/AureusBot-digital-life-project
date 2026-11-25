@@ -1,12 +1,13 @@
 """学习页：以独立网页授权只读展示已保存的表达簇。"""
 
 import asyncio
+import hashlib
+import json
 import math
 import re
 import sqlite3
 from collections.abc import Awaitable, Callable, Collection
-from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, Literal, TypedDict
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -15,21 +16,42 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from aureus.memory import (
     ExpressionClusterStore,
     ExpressionVectorIndex,
+    LanguageKind,
     LanguageStore,
     VisibleExpressionCluster,
 )
 
 from .auth import MAX_PASSWORD_LENGTH, LoginLockedError, LoginRejectedError, WebAuth
 from .expression_cluster_grants import ExpressionClusterDisplay
+from .learning_workbench_service import LearningWorkbench
 from .resource_api import DEFAULT_SIZE, MAX_SIZE
 
 type ExpressionClusterGrants = Callable[[str], Collection[str]]
 
 _PATH = "/api/resources/learning/clusters"
+_WORKBENCH = "/api/webui/expression/clusters"
 _LOCATION = re.compile(r"[0-9a-f]{64}")
 _NO_STORE = {"Cache-Control": "no-store"}
 _MISSING = "找不到这个表达簇。"
 type DisplayScopes = Callable[[], Awaitable[frozenset[str]]]
+
+
+class WorkbenchMember(TypedDict):
+    id: int
+    situation: str
+    style: str
+    count: int
+    chat_id: str | None
+    chat_name: str | None
+    checked: bool
+    modified_by: Literal["ai", "user"] | None
+
+
+class WorkbenchCluster(TypedDict):
+    embedding_profile_marker: str
+    cluster_id: int
+    size: int
+    members: list[WorkbenchMember]
 
 
 class ClusterGrant(BaseModel):
@@ -52,6 +74,7 @@ def register_expression_cluster_routes(
     *,
     display: ExpressionClusterDisplay | None = None,
     scopes: DisplayScopes | None = None,
+    workbench: LearningWorkbench | None = None,
 ) -> None:
     """只读取已注入的快照及当前会话的网页授权，默认没有覆盖。"""
 
@@ -61,13 +84,15 @@ def register_expression_cluster_routes(
         return dict.fromkeys(grants(token), "") if grants is not None else {}
 
     async def browse(token: str, *, detail: bool = False) -> tuple[VisibleExpressionCluster, ...]:
+        if not session_is_active(token):
+            raise HTTPException(401, "请先登录。", headers=_NO_STORE)
         if language is None or store is None:
             return ()
         try:
             allowed = await allowed_entries(token)
             if not allowed:
-                return ()
-            if isinstance(store, ExpressionVectorIndex) and display is not None:
+                clusters = ()
+            elif isinstance(store, ExpressionVectorIndex) and display is not None:
                 clusters = await asyncio.to_thread(
                     store.browse, language, allowed_entry_keys=allowed, authorized_versions=allowed
                 )
@@ -124,7 +149,7 @@ def register_expression_cluster_routes(
                     return JSONResponse(
                         {
                             "members": [
-                                asdict(member)
+                                {"text": member.text, "detail": member.detail}
                                 for member in cluster.members[offset : offset + limit]
                             ],
                             "total": total,
@@ -134,6 +159,91 @@ def register_expression_cluster_routes(
                         },
                         headers=_NO_STORE,
                     )
+        raise HTTPException(404, _MISSING, headers=_NO_STORE)
+
+    def projection(
+        clusters: tuple[VisibleExpressionCluster, ...], labels: dict[str, str]
+    ) -> list[WorkbenchCluster]:
+        if workbench is None or language is None or not clusters:
+            return []
+        allowed_keys = {member.entry_key for cluster in clusters for member in cluster.members}
+        entries = {
+            entry.entry_key: entry
+            for entry in workbench.language_rows(LanguageKind.EXPRESSION, scopes=labels)
+            if entry.entry_key in allowed_keys
+        }
+        identifiers = language.workbench_ids(LanguageKind.EXPRESSION, entries)
+        result: list[WorkbenchCluster] = []
+        for cluster in clusters:
+            members: list[WorkbenchMember] = []
+            keys = []
+            for member in cluster.members:
+                entry = entries.get(member.entry_key)
+                if entry is None or (entry.text, entry.detail) != (member.text, member.detail):
+                    continue
+                scope = entry.learning_source or entry.restricted_scope or next(
+                    (key for key in entry.scope_keys if key in labels), None
+                )
+                keys.append(entry.entry_key)
+                members.append({
+                    "id": identifiers[entry.entry_key], "situation": entry.detail,
+                    "style": entry.text, "count": entry.count,
+                    "chat_id": scope, "chat_name": labels.get(scope) if scope else None,
+                    "checked": entry.review_status == "approved", "modified_by": None,
+                })
+            if members:
+                marker = hashlib.sha256(json.dumps([cluster.location, keys]).encode()).hexdigest()
+                result.append({
+                    "embedding_profile_marker": marker, "cluster_id": cluster.cluster_id,
+                    "size": len(members), "members": members,
+                })
+        return result
+
+    async def workbench_clusters(
+        request: Request, token: str, *, detail: bool = False
+    ) -> list[WorkbenchCluster]:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(403, "请从当前网页访问学习资料。", headers=_NO_STORE)
+        clusters = await browse(token, detail=detail)
+        if not clusters or workbench is None:
+            return []
+        try:
+            labels = await asyncio.to_thread(workbench.scopes)
+            projected = await asyncio.to_thread(projection, clusters, labels)
+            current = await asyncio.to_thread(workbench.scopes)
+        except sqlite3.Error:
+            raise HTTPException(503, "暂时无法读取表达簇。", headers=_NO_STORE) from None
+        if clusters != await browse(token, detail=detail) or labels != current:
+            if detail:
+                return []
+            raise HTTPException(409, "表达簇可见范围已变更，请刷新。", headers=_NO_STORE)
+        return projected
+
+    @app.get(_WORKBENCH)
+    async def workbench_list(
+        request: Request, token: Annotated[str, Depends(require_ready)],
+    ) -> JSONResponse:
+        clusters = await workbench_clusters(request, token)
+        return JSONResponse({
+            "success": True, "index_exists": bool(clusters), "index_path": "",
+            "generated_at": None, "updated_at": None, "embedding_model": None,
+            "embedding_dimension": None, "sample_count": sum(item["size"] for item in clusters),
+            "clusters": [{**item, "members": []} for item in clusters],
+        }, headers=_NO_STORE)
+
+    @app.get(_WORKBENCH + "/{cluster_id}/members")
+    async def workbench_members(
+        request: Request, token: Annotated[str, Depends(require_ready)], cluster_id: int,
+        profile_marker: Annotated[str, Query(pattern=r"^[a-f0-9]{64}$")],
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int | None, Query(ge=1, le=MAX_SIZE)] = None,
+    ) -> JSONResponse:
+        for cluster in await workbench_clusters(request, token, detail=True):
+            if cluster["cluster_id"] == cluster_id and cluster["embedding_profile_marker"] == profile_marker:
+                members = cluster["members"][offset:None if limit is None else offset + limit]
+                return JSONResponse({
+                    "success": True, "cluster": {**cluster, "members": members}, "data": members,
+                }, headers=_NO_STORE)
         raise HTTPException(404, _MISSING, headers=_NO_STORE)
 
 
