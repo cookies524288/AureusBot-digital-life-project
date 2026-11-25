@@ -290,12 +290,12 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .chat-log .empty{margin:auto;border:0;background:none}
 .typing-status{display:inline-block;margin:0 14px 8px;padding:5px 8px;border:1px solid var(--stitch);box-shadow:2px 2px var(--border);background:var(--surface);color:var(--text-2);font-size:12px}
 @media(min-width:821px){#chat-typing{padding-left:calc(var(--gutter) + 10px)}}
-#inbox-typing{text-align:right}
-#inbox-typing .typing-status{margin:8px 40px 0 0}
-.typing-dots{display:inline-block;vertical-align:bottom;width:3ch;overflow:hidden;text-align:left}
+#inbox-typing .msg{margin-top:8px}
+.typing-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.typing-dots{display:inline-block;vertical-align:bottom;width:3ch;overflow:hidden;text-align:left;white-space:nowrap}
 .typing-dots::before{content:'...';display:block;width:1ch;overflow:hidden;font-family:monospace;animation:typing-dots 1200ms step-end infinite}
 @keyframes typing-dots{33.333%{width:2ch}66.667%,100%{width:3ch}}
-@media(prefers-reduced-motion:reduce){.typing-dots{display:none}}
+@media(prefers-reduced-motion:reduce){.typing-dots{display:none}.typing-label{position:static;width:auto;height:auto;margin:0;overflow:visible;clip-path:none;white-space:normal}}
 @media (min-width:821px){.chat-head,.chat-log,.composer{padding-left:calc(var(--gutter) + 24px);padding-right:calc(var(--gutter) - 24px)}}
 @media (max-width:820px){.chat-head,.chat-log,.composer{padding-left:14px;padding-right:14px}.msg{max-width:88%}}
 
@@ -2300,6 +2300,15 @@ function clearTyping() {
   current.status.replaceChildren();
 }
 
+// 平台会话的输入提示按批次 1 的来信气泡显示；私聊页仍用原来的小方框。
+function typingIndicator(chat) {
+  const dots = el('span', {class:'typing-dots', 'aria-hidden':'true'});
+  if (chat) return el('span', {class:'typing-status'}, '输入中', dots);
+  return el('article', {class:'msg inbox-msg person'},
+    el('div', {class:'msg-line'},
+      el('div', {class:'bubble'}, el('span', {class:'typing-label', text:'输入中'}), dots)));
+}
+
 function followConversationTyping() {
   clearTyping();
   if (!state.loggedIn || document.hidden || !navigator.onLine) return;
@@ -2317,9 +2326,7 @@ function followConversationTyping() {
     clearTimeout(current.timer);
     const active = !controller.signal.aborted && result.ok && result.data?.typing === true;
     if (!active) current.status.replaceChildren();
-    else if (!current.status.firstChild) current.status.append(el('span', {
-      class:'typing-status',
-    }, '输入中', el('span', {class:'typing-dots', 'aria-hidden':'true'})));
+    else if (!current.status.firstChild) current.status.append(typingIndicator(chat));
     current.timer = setTimeout(refresh, TYPING_REFRESH_MS);
   }
   refresh();
