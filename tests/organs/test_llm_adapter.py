@@ -531,6 +531,16 @@ async def test_probe_accepts_reasoning_only_and_says_so(
 LOCAL_EMBEDDING_URL = "http://127.0.0.1:12345/v1"
 
 
+class FakeEmbeddingClock:
+    """嵌入请求的假时钟：只有客户端创建和请求本身会推进它（D128）。"""
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+
+    def __call__(self) -> float:
+        return self.seconds
+
+
 def local_embedding_route() -> ModelRoute:
     provider = ProviderConfig(name="local", protocol="openai", base_url=LOCAL_EMBEDDING_URL)
     model = ModelConfig(
@@ -566,6 +576,32 @@ async def test_local_embedding_probe_uses_direct_client(
     assert response.metadata["kind"] == "embedding"
     assert response.attempts[0].prompt_tokens == 3
     assert bodies == [{"model": "local-embed", "input": [_MODEL_TEST_INPUT]}]
+
+
+@pytest.mark.asyncio
+async def test_probe_latency_excludes_client_creation(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = FakeEmbeddingClock()
+    monkeypatch.setattr(llm_adapter, "_request_time", clock)
+
+    class SlowClient(httpx.AsyncClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            clock.seconds += 0.5
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(llm_adapter.httpx, "AsyncClient", SlowClient)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        clock.seconds += 0.007
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    route = local_embedding_route()
+    response = await probe_model(
+        route.model, route.provider, keys, transport=httpx.MockTransport(respond)
+    )
+
+    assert response.metadata["latency_ms"] == 7
 
 
 @pytest.mark.asyncio

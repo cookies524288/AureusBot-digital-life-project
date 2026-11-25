@@ -425,6 +425,11 @@ def _embedding_client(
     return client
 
 
+def _request_time() -> float:
+    """嵌入请求的计时点；测试可以换成假时钟（D128）。"""
+    return asyncio.get_running_loop().time()
+
+
 async def _post_embeddings(
     base: str,
     payload: dict[str, Any],
@@ -432,6 +437,7 @@ async def _post_embeddings(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
     local: bool = False,
+    on_request: Callable[[float], None] | None = None,
 ) -> Any:
     """直接请求 OpenAI 兼容的 `/embeddings`，形状与 litellm 的嵌入响应一致（D128）。
 
@@ -441,15 +447,19 @@ async def _post_embeddings(
         params: 服务商参数，提供超时和可选的 API 密钥。
         transport: 测试用的假网络；正式运行传 None。
         local: 回环免费端点，不使用环境里的代理。
+        on_request: 收到完整响应后回调这次请求的耗时（秒），测速用。
 
     Returns:
         带 data 和 usage 的响应；data 由调用方校验。
     """
     headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
     client = _embedding_client(transport, trust_env=not local)
+    started = _request_time() if on_request is not None else 0.0
     response = await client.post(
         base + "/embeddings", headers=headers, json=payload, timeout=params["timeout"]
     )
+    if on_request is not None:
+        on_request(_request_time() - started)
     response.raise_for_status()
     try:
         result = response.json()
@@ -488,7 +498,6 @@ async def probe_model(
     """
     organ_id = "model_test"
     if model.kind == "image_embedding":
-        loop = asyncio.get_running_loop()
         organ = EmbeddingOrgan(
             organ_id,
             [ModelRoute(model, provider, None, None)],
@@ -496,22 +505,25 @@ async def probe_model(
             transport=transport,
         )
         image = base64.b64decode(_PROBE_IMAGE.split(",", 1)[1])
-        started = loop.time()
-        response = await organ.process(OrganRequest(organ_id, "", embedding_inputs=(image,)))
+        measured: list[float] = []
+        response = await organ.process(
+            OrganRequest(organ_id, "", embedding_inputs=(image,)),
+            on_request=measured.append,
+        )
         response.suggestion = json.dumps(response.embeddings[0])
-        response.metadata.update(latency_ms=round((loop.time() - started) * 1000), kind=model.kind)
+        response.metadata.update(latency_ms=round(measured[-1] * 1000), kind=model.kind)
         return response
     route = ModelRoute(model, provider, None, None)
     if model.kind == "embedding" and local_expression_endpoint(route) is not None:
         # 回环免费的嵌入直连，不导入也不经过 litellm（D128）。
         organ = EmbeddingOrgan(organ_id, [route], resolver, transport=transport)
-        loop = asyncio.get_running_loop()
-        started = loop.time()
+        measured = []
         response = await organ.process(
-            OrganRequest(organ_id, "", embedding_inputs=(_MODEL_TEST_INPUT,))
+            OrganRequest(organ_id, "", embedding_inputs=(_MODEL_TEST_INPUT,)),
+            on_request=measured.append,
         )
         response.suggestion = json.dumps(response.embeddings[0])
-        response.metadata.update(latency_ms=round((loop.time() - started) * 1000), kind=model.kind)
+        response.metadata.update(latency_ms=round(measured[-1] * 1000), kind=model.kind)
         return response
     try:
         params = _provider_arguments(provider, resolver)
@@ -706,8 +718,18 @@ class EmbeddingOrgan:
         identity = (route.provider.name, route.provider.base_url, route.model.identifier)
         return sha256(json.dumps(identity).encode()).hexdigest()
 
-    async def process(self, request: OrganRequest) -> OrganResponse:
-        """按器官路线计算一批向量，保持输入顺序。"""
+    async def process(
+        self,
+        request: OrganRequest,
+        *,
+        on_request: Callable[[float], None] | None = None,
+    ) -> OrganResponse:
+        """按器官路线计算一批向量，保持输入顺序。
+
+        Args:
+            request: 嵌入材料。
+            on_request: 直连请求收到响应后回调耗时（秒），测速用；业务调用不传。
+        """
         inputs = request.embedding_inputs
         if not inputs:
             raise OrganCallError(self.organ_id, ["没有嵌入材料"])
@@ -742,7 +764,7 @@ class EmbeddingOrgan:
             vectors: tuple[tuple[float, ...], ...] = ()
             try:
                 async with asyncio.timeout(route.provider.timeout_seconds):
-                    result = await self._send(route, inputs, params)
+                    result = await self._send(route, inputs, params, on_request=on_request)
                 actual = extract_usage(result)
                 if actual.known:
                     usage = actual
@@ -784,7 +806,12 @@ class EmbeddingOrgan:
         raise OrganCallError(self.organ_id, failures or ["未配置可用的模型"], attempts)
 
     async def _send(
-        self, route: ModelRoute, inputs: tuple[str | bytes, ...], params: dict[str, Any]
+        self,
+        route: ModelRoute,
+        inputs: tuple[str | bytes, ...],
+        params: dict[str, Any],
+        *,
+        on_request: Callable[[float], None] | None = None,
     ) -> Any:
         if route.model.kind == "embedding":
             base = local_expression_endpoint(route)
@@ -796,6 +823,7 @@ class EmbeddingOrgan:
                     params,
                     transport=self._transport,
                     local=True,
+                    on_request=on_request,
                 )
             if self.organ_id == LOCAL_EXPRESSION_EMBEDDING:
                 raise _RouteFailureError("表达嵌入需要本机回环地址")
@@ -818,7 +846,9 @@ class EmbeddingOrgan:
                 if isinstance(value, bytes)
             ],
         }
-        return await _post_embeddings(base, payload, params, transport=self._transport)
+        return await _post_embeddings(
+            base, payload, params, transport=self._transport, on_request=on_request
+        )
 
 
 def local_expression_endpoint(route: ModelRoute) -> str | None:
