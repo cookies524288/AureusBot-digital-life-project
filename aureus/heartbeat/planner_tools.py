@@ -14,6 +14,8 @@ from aureus.organs import OrganRequest, OrganResponse, ToolDefinition, ToolExcha
 from aureus.safety import CallRejectedError
 
 _MAX_ROUNDS = 2
+# 查询工具一次最多取多少条记忆；与 [memory] max_results 的范围一致（D118）。
+_MAX_QUERY_LIMIT = 20
 _TOOL_NAMES = frozenset(
     {
         "reply",
@@ -105,6 +107,20 @@ class _QueryArguments(_Arguments):
     keywords: list[Annotated[str, Field(min_length=2, max_length=20)]] = Field(
         min_length=1, max_length=3, description="与当前聊天相关的关键词，最多三个。"
     )
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=_MAX_QUERY_LIMIT,
+        description="最多返回几条相关记忆；不填时使用设置里的查询默认条数（默认 8），范围 1–20。",
+    )
+
+
+@dataclass(frozen=True)
+class _MemoryQuery:
+    """查询工具的一次请求：关键词必填，条数留空时由调用方采用配置默认值。"""
+
+    keywords: tuple[str, ...]
+    limit: int | None
 
 
 class _HistoryBoundary(_Arguments):
@@ -174,9 +190,9 @@ def _inbox(arguments: _Arguments) -> Plan | None:
     return parse_plan_data({"reply": False, **data}) if data else None
 
 
-def _query(arguments: _Arguments) -> tuple[str, ...]:
+def _query(arguments: _Arguments) -> _MemoryQuery:
     assert isinstance(arguments, _QueryArguments)
-    return tuple(dict.fromkeys(arguments.keywords))
+    return _MemoryQuery(tuple(dict.fromkeys(arguments.keywords)), arguments.limit)
 
 
 def _history(arguments: _Arguments) -> HistoryQuery:
@@ -204,7 +220,7 @@ class PlannerTool:
     name: str
     description: str
     arguments: type[_Arguments]
-    handle: Callable[[_Arguments], Plan | tuple[str, ...] | HistoryQuery | date | None]
+    handle: Callable[[_Arguments], Plan | _MemoryQuery | HistoryQuery | date | None]
 
     def definition(self) -> ToolDefinition:
         """供模型或管理端使用的同源参数声明。"""
@@ -337,7 +353,7 @@ async def dispatch_planner_tools[Recall](
     request: OrganRequest,
     tools: tuple[PlannerTool, ...],
     call_organ: Callable[[OrganRequest], Awaitable[OrganResponse]],
-    retrieve: Callable[[tuple[str, ...]], Awaitable[tuple[str, Recall] | None]],
+    retrieve: Callable[[tuple[str, ...], int | None], Awaitable[tuple[str, Recall] | None]],
     *,
     actions: list[PlannerAction] | None = None,
     read_history: Callable[[HistoryQuery], Awaitable[str]] | None = None,
@@ -433,7 +449,8 @@ async def dispatch_planner_tools[Recall](
                     (await preview_cleanup(result), None) if preview_cleanup is not None else None
                 )
             else:
-                fetched = await retrieve(result)
+                assert isinstance(result, _MemoryQuery)
+                fetched = await retrieve(result.keywords, result.limit)
         except CallRejectedError:
             evidence.append(PlannerAction(name, "rejected", "安全网关拒绝查询"))
             raise

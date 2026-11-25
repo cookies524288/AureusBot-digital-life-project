@@ -588,7 +588,7 @@ class ConversationFlow:
             tuple(
                 self._people.history_for(
                     person_id,
-                    limit=self._memory_config.max_results,
+                    limit=self._people_config.history_in_reply_limit,
                     use_local_aliases=self._people_config.profile_alias_maintenance_in_reply_enabled,
                     use_local_content=self._people_config.profile_content_maintenance_in_reply_enabled,
                 )
@@ -766,7 +766,8 @@ class ConversationFlow:
         recall = _RoundRecall()
         if self._memory_config.heuristic_recall_enabled and self._can_recall():
             words = heuristic_keywords(originals)
-            if words and (hits := await self._retrieve(job, words)):
+            limit = self._memory_config.heuristic_max_results
+            if words and (hits := await self._retrieve(job, words, limit)):
                 recall.automatic = words, hits
         try:
             plan, recalled = await self._plan(job, recall)
@@ -1206,9 +1207,13 @@ class ConversationFlow:
         if run is not None:
             run.is_planning = True
 
-        async def retrieve(words: tuple[str, ...]) -> tuple[str, _Recall] | None:
+        async def retrieve(words: tuple[str, ...], limit: int | None) -> tuple[str, _Recall] | None:
             nonlocal pending_hits
-            hits = await self._retrieve(job, words)
+            hits = await self._retrieve(
+                job,
+                words,
+                self._memory_config.query_default_limit if limit is None else limit,
+            )
             if hits is None:
                 return None
             content, pending_hits = format_recall_hits(
@@ -1337,7 +1342,9 @@ class ConversationFlow:
             logger.exception("读取习得表达参考失败")
             return ""
 
-    async def _retrieve(self, job: _ReplyJob, words: tuple[str, ...]) -> list[MemoryHit] | None:
+    async def _retrieve(
+        self, job: _ReplyJob, words: tuple[str, ...], limit: int
+    ) -> list[MemoryHit] | None:
         """后台读取有上限的检索结果，保留查询失败与无命中的区别。"""
         if self._memory is None:
             return None
@@ -1347,7 +1354,6 @@ class ConversationFlow:
                 if job.person_id is None or self._people is None:
                     return []
                 person_keys = self._people.memory_person_keys(job.person_id)
-            limit = self._memory_config.max_results
             hits = await asyncio.to_thread(
                 self._memory.search,
                 words,

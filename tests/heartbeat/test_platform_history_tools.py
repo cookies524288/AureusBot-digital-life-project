@@ -328,7 +328,7 @@ async def test_planner_dispatch_reads_at_most_one_tool_and_does_not_fall_back(mo
         authorized = mode != "revoked"
         return '{"status":"no_results"}'
 
-    async def recall(_words: tuple[str, ...]) -> None:
+    async def recall(_words: tuple[str, ...], _limit: int | None) -> None:
         pytest.fail("不准绕过共享查询上限")
 
     work = dispatch_planner_tools(

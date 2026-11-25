@@ -42,8 +42,8 @@ async def test_missing_or_invalid_tool_cannot_authorize_reply(
             tool_calls=calls,
         )
 
-    async def retrieve(words: tuple[str, ...]) -> tuple[str, str] | None:
-        pytest.fail(f"不应读取记忆：{words}")
+    async def retrieve(words: tuple[str, ...], limit: int | None) -> tuple[str, str] | None:
+        pytest.fail(f"不应读取记忆：{words}，limit={limit}")
 
     actions: list[PlannerAction] = []
     assert await dispatch_planner_tools(
@@ -83,8 +83,8 @@ async def test_reply_quote_requires_capability_and_boolean(
         reply = ToolCall("reply", "quote-1", {**_REPLY.arguments, "quote_source": value})
         return OrganResponse(request.organ_id, "", tool_calls=(reply,))
 
-    async def retrieve(words: tuple[str, ...]) -> tuple[str, str] | None:
-        pytest.fail(f"不应读取记忆：{words}")
+    async def retrieve(words: tuple[str, ...], limit: int | None) -> tuple[str, str] | None:
+        pytest.fail(f"不应读取记忆：{words}，limit={limit}")
 
     plan, _ = await dispatch_planner_tools(
         OrganRequest("planner", "当前消息"), tools, call, retrieve
@@ -111,8 +111,8 @@ async def test_invalid_non_interest_argument_still_rejects_whole_call() -> None:
         )
         return OrganResponse(request.organ_id, "", tool_calls=(reply,))
 
-    async def retrieve(words: tuple[str, ...]) -> tuple[str, str] | None:
-        pytest.fail(f"不应读取记忆：{words}")
+    async def retrieve(words: tuple[str, ...], limit: int | None) -> tuple[str, str] | None:
+        pytest.fail(f"不应读取记忆：{words}，limit={limit}")
 
     actions: list[PlannerAction] = []
     assert await dispatch_planner_tools(
@@ -137,8 +137,8 @@ async def test_only_explicit_terminal_choice_after_real_tool_result(finish: Tool
             request.organ_id, "", tool_calls=(finish if request.tool_history else query,)
         )
 
-    async def retrieve(words: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
-        assert words == ("木卫二",)
+    async def retrieve(words: tuple[str, ...], limit: int | None) -> tuple[str, tuple[str, ...]]:
+        assert words == ("木卫二",) and limit is None
         return "限量内部记忆", words
 
     actions: list[PlannerAction] = []

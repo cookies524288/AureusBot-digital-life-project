@@ -6,6 +6,7 @@ from contextlib import closing
 from datetime import datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -89,6 +90,7 @@ class CountingIndex(MemoryIndex):
 class RecallOrgans:
     def __init__(self) -> None:
         self.keywords: list[str] | int | None = ["木卫二"]
+        self.limit: int | None = None
         self.requests: list[OrganRequest] = []
 
     async def call(self, request: OrganRequest) -> OrganResponse:
@@ -96,7 +98,10 @@ class RecallOrgans:
         if request.context.get("task") != "plan":
             return OrganResponse(request.organ_id, "记得。")
         if self.keywords is not None and not request.tool_history:
-            call = ToolCall("query_memory", "synthetic_query", {"keywords": self.keywords})
+            arguments: dict[str, Any] = {"keywords": self.keywords}
+            if self.limit is not None:
+                arguments["limit"] = self.limit
+            call = ToolCall("query_memory", "synthetic_query", arguments)
         else:
             call = ToolCall(
                 "reply",
@@ -436,7 +441,9 @@ async def test_reply_metadata_only_records_hits_that_fit_the_prompt(
     env.index_more()
     if not explicit:
         env.organs.keywords = None
-    await env.exchange(env.build(MemoryConfig(max_results=8, heuristic_recall_enabled=True)))
+    await env.exchange(
+        env.build(MemoryConfig(query_default_limit=8, heuristic_recall_enabled=True))
+    )
     prompt = dialogue_text(env.organs.requests[-1])
     reply = env.records("message")[-1]
     metadata = reply.metadata
@@ -582,7 +589,8 @@ async def test_legacy_preference_recalls_fact_without_original(
         consolidation_enabled=enabled,
         consolidation_extract_enabled=True,
         heuristic_recall_enabled=True,
-        max_results=1,
+        heuristic_max_results=1,
+        query_default_limit=1,
     )
     original = env.timeline.append(
         "message",
@@ -630,7 +638,7 @@ async def test_fact_decay_and_visibility_change_reply_evidence(
         consolidation_enabled=True,
         consolidation_extract_enabled=True,
         consolidation_half_life_days=1.0,
-        max_results=1,
+        query_default_limit=1,
     )
     env.index.close()
     env.index = CountingIndex(env.database, env.timeline, clock=env.clock, config=config)
@@ -695,6 +703,56 @@ async def test_legacy_planning_switch_does_not_skip_recall(env: MemoryEnv) -> No
     await env.exchange(env.build(heartbeat=HeartbeatConfig(planning_enabled=False)))
     assert len(env.organs.requests) == 3
     assert [keywords for keywords, _, _ in env.index.searches] == [("木卫二",)]
+
+
+@pytest.mark.asyncio
+async def test_heuristic_recall_uses_three_hits(env: MemoryEnv) -> None:
+    env.organs.keywords = None
+    await env.exchange(env.build(MemoryConfig(heuristic_recall_enabled=True)))
+    [(_, _, limit)] = env.index.searches
+    assert limit == 3
+
+
+@pytest.mark.asyncio
+async def test_query_tool_defaults_to_eight_hits(env: MemoryEnv) -> None:
+    await env.exchange(env.build())
+    [(_, _, limit)] = env.index.searches
+    assert limit == 8
+    [query] = [tool for tool in env.organs.requests[0].tools if tool.name == "query_memory"]
+    assert query.parameters["required"] == ["keywords"]
+    field = query.parameters["properties"]["limit"]
+    assert field["default"] is None
+    assert "默认 8" in field["description"] and "1–20" in field["description"]
+    [bounds] = [item for item in field["anyOf"] if item.get("type") == "integer"]
+    assert (bounds["minimum"], bounds["maximum"]) == (1, 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [2, 0, 21])
+async def test_query_tool_respects_explicit_limit(env: MemoryEnv, limit: int) -> None:
+    env.organs.limit = limit
+    await env.exchange(env.build())
+    if 1 <= limit <= 20:
+        [(_, _, actual)] = env.index.searches
+        assert actual == limit
+    else:
+        assert not env.index.searches and len(env.organs.requests) == 1 and not env.sent
+
+
+@pytest.mark.asyncio
+async def test_people_history_keeps_five_hits(
+    env: MemoryEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limits: list[int | None] = []
+
+    def spy(person_id: int, **kwargs: Any) -> list[object]:
+        limits.append(kwargs.get("limit"))
+        return []
+
+    monkeypatch.setattr(env.people, "history_for", spy)
+    env.organs.keywords = None
+    await env.exchange(env.build(MemoryConfig(max_results=9)))
+    assert limits == [5]
 
 
 @pytest.mark.asyncio
