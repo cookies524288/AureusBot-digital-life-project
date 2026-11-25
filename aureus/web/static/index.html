@@ -499,7 +499,13 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-conversation span:first-child,.inbox-msg{overflow-wrap:anywhere}
 .inbox-conversation[aria-pressed="true"]{border-color:var(--accent)}
 .inbox-unread{flex:none;min-width:22px;height:22px;padding:0 4px;border-radius:999px;background:#b22535;color:#fff;text-align:center;font:12px/22px system-ui}
-.inbox-messages{display:flex;flex-direction:column;gap:12px}
+/* 平台会话：卡片填满页面剩余高度，消息区在内部滚动；加载更早时靠高度差锚点保持位置（批次 2）。 */
+#page-inbox .page-body{flex:1;min-height:0;display:flex;flex-direction:column}
+#inbox-layout{flex:1;min-height:0;align-items:stretch}
+#inbox-thread{display:flex;flex-direction:column;min-height:0}
+#inbox-thread>:not(#inbox-messages){flex:none}
+.inbox-messages{display:flex;flex-direction:column;gap:12px;flex:1 1 0;min-height:5rem;overflow-y:auto;overscroll-behavior:contain}
+.inbox-history-status{display:flex;align-items:center;justify-content:center;gap:8px;min-height:28px;font-size:12px;color:var(--text-2)}
 .inbox-msg .msg-line{display:flex;gap:8px;align-items:flex-start;min-width:0;max-width:100%}
 .inbox-msg.user .msg-line{flex-direction:row-reverse}
 .inbox-msg .bubble{min-width:0;max-width:100%}
@@ -513,9 +519,6 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-image{display:grid;justify-content:start;justify-items:end;gap:5px;margin:6px 0 0}
 .inbox-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}
 .inbox-image .btn{justify-self:end}
-.inbox-pagination{margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.inbox-pagination form{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.inbox-pagination input{width:6rem}
 .inbox-compose{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:grid;gap:8px}
 .inbox-compose textarea{width:100%;min-height:70px;resize:vertical}
 .inbox-compose input[type=file]{max-width:100%;min-width:0}
@@ -903,14 +906,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <p id="inbox-empty" class="empty hidden" role="status"></p>
 <div id="inbox-layout" class="inbox-layout hidden">
 <nav id="inbox-conversations" class="card inbox-conversations" aria-label="收件箱会话"></nav>
-<div class="card">
+<div id="inbox-thread" class="card">
 <h3 id="inbox-thread-name">选择会话</h3>
 <div id="inbox-retention" class="stack hidden"></div>
-<nav id="inbox-pagination" class="inbox-pagination hidden" aria-label="会话消息分页">
-<button id="inbox-newer" type="button" class="btn small" disabled>较新一页</button>
-<button id="inbox-more" type="button" class="btn small" disabled>较早一页</button>
-<form id="inbox-jump"><label for="inbox-page">页码</label><input id="inbox-page" type="number" inputmode="numeric" min="1" max="2147483647" step="1" value="1" required><button type="submit" class="btn small">跳转</button></form>
-</nav>
+<div id="inbox-history-status" class="inbox-history-status hidden"><span id="inbox-history-text" role="status"></span><button id="inbox-history-retry" type="button" class="btn small hidden">重试</button></div>
 <p id="inbox-message-status" class="empty hidden" role="status"></p>
 <div id="inbox-messages" class="inbox-messages"></div>
 <div id="inbox-typing" role="status"></div>
@@ -2162,10 +2161,15 @@ $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
 PAGES.timeline = { load: () => loadTimeline(false) };
 // ---------- 平台收件箱 ----------
-const INBOX_MAX_PAGE = 2147483647;
+// 会话消息按旧在上、新在下显示；进入先取最新两页，滚到顶部附近再按 before_id 向前翻（批次 2）。
+const INBOX_PAGE_SIZE = 50;
+const INBOX_PREFETCH_PAGES = 2;
+const INBOX_OLDER_THRESHOLD = 120;
 const inbox = {view:null, enabled:false, conversations:[], archives:[], selected:null,
-  page:1, lastPage:null, conversationRequest:0, messageRequest:0, operationRequest:0,
-  selectionGeneration:0, canOperate:false, operating:false, quote:null, mention:null};
+  conversationRequest:0, messageRequest:0, olderRequest:0, operationRequest:0,
+  selectionGeneration:0, canOperate:false, operating:false, quote:null, mention:null,
+  nextBefore:null, nextBeforeSource:null, loadingOlder:false, historyError:false,
+  messageKeys:new Set()};
 const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
 const inboxScope = key => new URLSearchParams(Object.entries(key).filter(([, value]) => value !== null));
 
@@ -2287,41 +2291,37 @@ function inboxStatus(id, text) {
   status.classList.toggle('hidden', !text);
 }
 
-function renderInboxPager() {
-  $('inbox-pagination').classList.toggle('hidden', !inbox.selected);
-  $('inbox-page').value = String(inbox.page);
-  $('inbox-newer').disabled = !inbox.selected || inbox.page === 1;
-  $('inbox-more').disabled = !inbox.selected || inbox.page >= (inbox.lastPage ?? INBOX_MAX_PAGE);
-}
-
 function clearInboxThread() {
   if (state.page === 'inbox') clearTyping();
   ++inbox.messageRequest;
+  ++inbox.olderRequest;
   resetInboxMedia();
   clearInboxRetention();
   clearInboxOperations();
   inbox.selected = null;
-  inbox.page = 1;
-  inbox.lastPage = null;
+  inbox.nextBefore = null;
+  inbox.nextBeforeSource = null;
+  inbox.loadingOlder = false;
+  inbox.historyError = false;
+  inbox.messageKeys.clear();
+  inboxHistoryStatus('');
   $('inbox-thread-name').textContent = '选择会话';
   $('inbox-messages').replaceChildren();
   $('inbox-messages').removeAttribute('aria-busy');
   inboxStatus('inbox-message-status', '');
-  renderInboxPager();
 }
 
-function selectInboxConversation(conversation, page = 1) {
+function selectInboxConversation(conversation) {
   const changed = !inbox.selected || inboxKey(conversation) !== inboxKey(inbox.selected);
   if (changed) clearInboxOperations();
   inbox.selected = conversation;
   if (changed) followConversationTyping();
-  inbox.lastPage = null;
   const selected = inboxKey(conversation);
   for (const button of $('inbox-conversations').querySelectorAll('button')) {
     button.setAttribute('aria-pressed', String(button.dataset.conversation === selected));
   }
   $('inbox-thread-name').textContent = conversation.name;
-  return Promise.all([loadInboxMessages(page), loadInboxOperations(),
+  return Promise.all([loadInboxMessages(), loadInboxOperations(),
     showInboxRetention(conversation.archive ? null : conversation.key)]);
 }
 
@@ -2412,7 +2412,7 @@ $('inbox-send-text').addEventListener('submit', event => {
     if (inbox.quote === quote) inbox.quote = null;
     if (inbox.mention === mention) inbox.mention = null;
     inboxStatus('inbox-operation-status', `QQ 已确认发送 · 消息 ${data.message_id}`);
-    return loadInboxMessages(1);
+    return loadInboxMessages();
   });
 });
 $('inbox-direct-poke').addEventListener('click', () => pokeInboxMember());
@@ -2459,7 +2459,7 @@ function renderInboxView() {
     }) : null)));
   }
   const previous = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
-  if (entries.length) return selectInboxConversation(previous || entries[0], previous ? inbox.page : 1);
+  if (entries.length) return selectInboxConversation(previous || entries[0]);
   clearInboxThread();
 }
 
@@ -2621,35 +2621,137 @@ function renderInboxMessageActions(message) {
     }}));
 }
 
-// 会话按旧在上、新在下显示；进入或翻页后把最新一条带入视野。
+// 会话按旧在上、新在下显示；消息区自己滚动，进入或刷新后停在最新一条。
 function scrollInboxToLatest() {
-  $('inbox-messages').lastElementChild?.scrollIntoView({block:'nearest'});
+  const list = $('inbox-messages');
+  list.scrollTop = list.scrollHeight;
 }
 
-async function loadInboxMessages(page) {
-  if (!inbox.selected || !Number.isInteger(page) || page < 1 || page > INBOX_MAX_PAGE) return;
-  const request = ++inbox.messageRequest, session = state.loaded;
-  resetInboxMedia();
+// 加载更早消息时用滚动高度差补回位置，正在读的内容不会跳（批次 2）。
+function inboxScrollAnchor() {
   const list = $('inbox-messages');
+  return {top:list.scrollTop, height:list.scrollHeight};
+}
+function restoreInboxScroll(anchor) {
+  const list = $('inbox-messages');
+  list.scrollTop = anchor.top + list.scrollHeight - anchor.height;
+}
+
+// 收件箱原件和旧时间线各自编号，同一个数字不代表同一条消息；去重时连来源一起比较。
+function inboxMessageKey(message) {
+  return `${message.source}:${message.id}`;
+}
+function inboxMessageURL() {
+  return inbox.selected.archive ? '/api/inbox/uncategorized' : '/api/inbox/messages';
+}
+function inboxMessageQuery() {
   const archive = inbox.selected.archive;
   const query = archive ? new URLSearchParams({source:archive}) : inboxScope(inbox.selected.key);
-  query.set('page', String(page));
-  inbox.page = page;
-  renderInboxPager();
+  query.set('limit', String(INBOX_PAGE_SIZE));
+  return query;
+}
+function inboxPageQuery(before, source) {
+  const query = inboxMessageQuery();
+  if (before !== null) {
+    query.set('before_id', String(before));
+    if (!inbox.selected.archive && source) query.set('before_source', source);
+  }
+  return query;
+}
+function inboxHistoryStatus(text, retry = false) {
+  $('inbox-history-text').textContent = text;
+  $('inbox-history-status').classList.toggle('hidden', !text);
+  $('inbox-history-retry').classList.toggle('hidden', !text || !retry);
+}
+
+// 进入会话先取最新一页，再向前预取一页；两页合起来直接渲染，首屏停在最新处（批次 2）。
+async function loadInboxMessages() {
+  if (!inbox.selected) return;
+  const request = ++inbox.messageRequest, session = state.loaded;
+  ++inbox.olderRequest;
+  resetInboxMedia();
+  inbox.loadingOlder = false;
+  inbox.historyError = false;
+  inbox.nextBefore = null;
+  inbox.nextBeforeSource = null;
+  inbox.messageKeys.clear();
+  inboxHistoryStatus('');
+  const list = $('inbox-messages');
   list.replaceChildren();
   list.setAttribute('aria-busy', 'true');
-  inboxStatus('inbox-message-status', `正在加载第 ${page} 页…`);
-  const res = await api(`/api/inbox/${archive ? 'uncategorized' : 'messages'}?${query}`);
-  if (request !== inbox.messageRequest || session !== state.loaded) return;
+  inboxStatus('inbox-message-status', '正在加载消息…');
+  const pages = [];
+  let before = null, source = null, failure = null;
+  for (let index = 0; index < INBOX_PREFETCH_PAGES; ++index) {
+    const res = await api(`${inboxMessageURL()}?${inboxPageQuery(before, source)}`);
+    if (request !== inbox.messageRequest || session !== state.loaded) return;
+    if (!res.ok) { failure = res; break; }
+    pages.push(res.data.messages || []);
+    before = res.data.next_before_id ?? null;
+    source = res.data.next_before_source || null;
+    if (before === null) break;
+  }
   list.removeAttribute('aria-busy');
-  if (!res.ok) { inboxStatus('inbox-message-status', errorText(res)); return; }
-  const {messages, next_before_id} = res.data;
-  if (next_before_id) inbox.lastPage = null;
-  else if (messages.length || page === 1) inbox.lastPage = page;
-  renderInboxPager();
-  list.append(...[...messages].reverse().map(renderInboxMessage));
-  if (messages.length) scrollInboxToLatest();
-  inboxStatus('inbox-message-status', messages.length ? '' : `第 ${page} 页没有消息。`);
+  if (!pages.length) { inboxStatus('inbox-message-status', errorText(failure)); return; }
+  const rendered = [];
+  for (const page of pages.slice().reverse()) {
+    for (const message of page.slice().reverse()) {
+      const key = inboxMessageKey(message);
+      if (inbox.messageKeys.has(key)) continue;
+      inbox.messageKeys.add(key);
+      rendered.push(renderInboxMessage(message));
+    }
+  }
+  inbox.nextBefore = before;
+  inbox.nextBeforeSource = source;
+  list.append(...rendered);
+  scrollInboxToLatest();
+  inboxStatus('inbox-message-status', rendered.length ? '' : '没有可查看的消息。');
+  if (failure) {
+    inbox.historyError = true;
+    inboxHistoryStatus(errorText(failure) || '加载更早的消息失败。', true);
+  } else {
+    maybeLoadOlderInboxMessages();
+  }
+}
+
+// 滚到接近顶部时自动向前加载；失败后停下等用户点「重试」，避免反复请求（批次 2）。
+function maybeLoadOlderInboxMessages() {
+  if (!inbox.selected || inbox.loadingOlder || inbox.historyError || inbox.nextBefore == null) return;
+  if ($('inbox-messages').scrollTop <= INBOX_OLDER_THRESHOLD) loadOlderInboxMessages();
+}
+
+async function loadOlderInboxMessages() {
+  if (!inbox.selected || inbox.loadingOlder || inbox.historyError || inbox.nextBefore == null) return;
+  const request = ++inbox.olderRequest, thread = inbox.messageRequest, session = state.loaded;
+  const list = $('inbox-messages');
+  const query = inboxPageQuery(inbox.nextBefore, inbox.nextBeforeSource);
+  inbox.loadingOlder = true;
+  inboxHistoryStatus('正在加载更早的消息…');
+  const res = await api(`${inboxMessageURL()}?${query}`);
+  if (request !== inbox.olderRequest || thread !== inbox.messageRequest || session !== state.loaded) return;
+  inbox.loadingOlder = false;
+  if (!res.ok) {
+    inbox.historyError = true;
+    inboxHistoryStatus(errorText(res) || '加载更早的消息失败。', true);
+    return;
+  }
+  inbox.nextBefore = res.data.next_before_id ?? null;
+  inbox.nextBeforeSource = res.data.next_before_source || null;
+  const older = [];
+  for (const message of (res.data.messages || []).slice().reverse()) {
+    const key = inboxMessageKey(message);
+    if (inbox.messageKeys.has(key)) continue;
+    inbox.messageKeys.add(key);
+    older.push(renderInboxMessage(message));
+  }
+  if (older.length) {
+    const anchor = inboxScrollAnchor();
+    list.prepend(...older);
+    restoreInboxScroll(anchor);
+  }
+  inboxHistoryStatus('');
+  maybeLoadOlderInboxMessages();
 }
 
 function openQQConfig() {
@@ -2667,11 +2769,10 @@ $('inbox-open-qq').addEventListener('keydown', event => {
 $('inbox-open-archive').addEventListener('click', () => openInboxView('archive'));
 $('inbox-home').addEventListener('click', () => openInboxView(null));
 $('inbox-refresh').addEventListener('click', loadInbox);
-$('inbox-newer').addEventListener('click', () => loadInboxMessages(inbox.page - 1));
-$('inbox-more').addEventListener('click', () => loadInboxMessages(inbox.page + 1));
-$('inbox-jump').addEventListener('submit', event => {
-  event.preventDefault();
-  loadInboxMessages(Number($('inbox-page').value));
+$('inbox-messages').addEventListener('scroll', maybeLoadOlderInboxMessages, {passive:true});
+$('inbox-history-retry').addEventListener('click', () => {
+  inbox.historyError = false;
+  loadOlderInboxMessages();
 });
 PAGES.inbox = {load:loadInbox, leave() {
   ++inbox.conversationRequest;
