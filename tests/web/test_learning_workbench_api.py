@@ -96,8 +96,8 @@ def test_expression_crud_ids_paging_restart_and_source_revocation(tmp_path: Path
             identifier: entry["entry_key"]
         }
         del scopes["source-a"]
-        assert client.get(prefix + f"/{identifier}").status_code == 404
-        assert client.patch(prefix + f"/{identifier}", json={"style": "不可改"}).status_code == 404
+        assert client.get(prefix + f"/{identifier}").status_code == 403
+        assert client.patch(prefix + f"/{identifier}", json={"style": "不可改"}).status_code == 403
         scopes["source-a"] = "重新授权"
         assert client.delete(prefix + f"/{identifier}").is_success
         assert client.get(prefix + f"/{identifier}").status_code == 404
@@ -117,31 +117,160 @@ def test_jargon_classification_is_atomic_and_used_by_runtime(tmp_path: Path) -> 
         assert "月兔" in service.language.jargon_reference(["月兔"], 2000)
         response = client.post(
             "/api/webui/jargon/batch/set-jargon",
-            json={
-                "ids": [identifier, identifier + 999],
-                "is_jargon": False,
-            },
+            json={"ids": [identifier, identifier + 999], "is_jargon": False},
         )
         assert response.status_code == 404
         assert "月兔" in service.language.jargon_reference(["月兔"], 2000)
         assert client.post(
             "/api/webui/jargon/batch/set-jargon",
-            json={
-                "ids": [identifier],
-                "is_jargon": False,
-            },
+            json={"ids": [identifier], "is_jargon": False},
         ).is_success
         assert "月兔" not in service.language.jargon_reference(["月兔"], 2000)
         assert client.post(
             "/api/webui/jargon/batch/set-jargon",
-            json={
-                "ids": [identifier],
-                "is_jargon": True,
-            },
+            json={"ids": [identifier], "is_jargon": True},
         ).is_success
         assert "月兔" in service.language.jargon_reference(["月兔"], 2000)
 
 
+def test_workbench_import_export_skip_conflicts_and_preserve_selected_scope(tmp_path: Path) -> None:
+    client, _service, scopes = _client(tmp_path)
+    prefix = "/api/webui/expression"
+    with client:
+        request = {
+            "chat_id": "source-a",
+            "expressions": [{
+                "situation": "庆祝", "style": "月兔冲线", "content_list": '["合成证据"]',
+                "count": 3, "checked": False, "modified_by": None,
+            }],
+        }
+        imported = client.post(prefix + "/import", json=request)
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["imported_count"] == 1
+        repeated = client.post(prefix + "/import", json=request)
+        assert repeated.status_code == 200 and repeated.json()["imported_count"] == 0
+        page = client.get(prefix + "/list", params={"chat_id": "source-a"}).json()
+        assert page["total"] == 1 and page["data"][0]["style"] == "月兔冲线"
+        exported = client.post(prefix + "/export", json={"chat_id": "source-a"})
+        assert exported.status_code == 200
+        package = json.loads(exported.content)
+        assert package["count"] == 1 and package["expressions"][0]["style"] == "月兔冲线"
+        assert exported.headers["content-disposition"].endswith('filename="aureus-expression.json"')
+        assert client.post(prefix + "/export", json={"chat_id": "not-known"}).status_code == 422
+        scopes.pop("source-a")
+        assert client.post(prefix + "/export", json={"chat_id": "source-a"}).status_code == 422
+        assert client.post(prefix + "/import", json=request).status_code == 422
+
+
+def test_batch_removal_is_atomic_and_rechecks_current_scope(tmp_path: Path) -> None:
+    client, _service, scopes = _client(tmp_path)
+    prefix = "/api/webui/expression"
+    with client:
+        identifiers = []
+        for style in ("第一说法", "第二说法"):
+            response = client.post(prefix + "/", json={
+                "situation": "庆祝", "style": style, "chat_id": "source-a",
+            })
+            identifiers.append(response.json()["data"]["id"])
+        scopes.pop("source-a")
+        denied = client.post(prefix + "/batch/delete", json={"ids": identifiers})
+        assert denied.status_code == 403
+        scopes["source-a"] = "恢复授权"
+        assert client.get(prefix + "/list").json()["total"] == 2
+        assert client.post(prefix + "/batch/delete", json={"ids": identifiers}).is_success
+        assert client.get(prefix + "/list").json()["total"] == 0
+        assert client.get(prefix + "/list", params={"removed": True}).json()["total"] == 2
+
+
+def test_expression_import_reaches_reference_and_export_survives_reopen(tmp_path: Path) -> None:
+    client, service, _scopes = _client(tmp_path)
+    prefix = "/api/webui/expression"
+    with client:
+        imported = client.post(prefix + "/import", json={
+            "chat_id": "source-a",
+            "expressions": [{
+                "situation": "庆祝比赛", "style": "我们赢啦", "content_list": '["合成证据"]',
+                "count": 3, "last_active_time": None, "create_time": None,
+                "checked": False, "modified_by": None,
+            }],
+        })
+        assert imported.status_code == 200, imported.text
+        row = client.get(prefix + "/list", params={"chat_id": "source-a"}).json()["data"][0]
+        assert "我们赢啦" in service.language.expression_reference(
+            "比赛庆祝", "庆祝", (), "speaker", 2000, conversation_key="source-a"
+        )
+        exported = client.post(prefix + "/export", json={"chat_id": "source-a"})
+        assert exported.status_code == 200
+        assert json.loads(exported.content)["expressions"][0]["style"] == "我们赢啦"
+        reopened = LanguageStore(tmp_path / "shared.db")
+        reopened.open()
+        assert reopened.resolve_workbench_ids(LanguageKind.EXPRESSION, [row["id"]]) == {
+            row["id"]: row["entry_key"]
+        }
+        assert "我们赢啦" in reopened.expression_reference(
+            "比赛庆祝", "庆祝", (), "speaker", 2000, conversation_key="source-a"
+        )
+
+
+def test_jargon_import_reaches_reference_and_export_survives_reopen(tmp_path: Path) -> None:
+    client, _service, _scopes = _client(tmp_path)
+    prefix = "/api/webui/jargon"
+    with client:
+        imported = client.post(prefix + "/import", json={
+            "target_session_ids": ["source-b"], "conflict_strategy": "skip",
+            "jargons": [{
+                "content": "合成梗", "meaning": "测试中表示完成", "count": 8,
+                "is_jargon": True, "is_complete": True, "is_global": False,
+                "created_by": "MANUAL",
+            }],
+        })
+        assert imported.status_code == 200, imported.text
+        [row] = client.get(prefix + "/list", params={"session_id": "source-b"}).json()["data"]
+        assert "合成梗" in LanguageStore(tmp_path / "shared.db").jargon_reference(
+            ["合成梗"], 2000, conversation_key="source-b"
+        )
+        exported = client.post(prefix + "/export", json={"ids": [row["id"]]})
+        assert exported.status_code == 200
+        assert json.loads(exported.content)["jargons"][0]["meaning"] == "测试中表示完成"
+        reopened = LanguageStore(tmp_path / "shared.db")
+        reopened.open()
+        assert reopened.resolve_workbench_ids(LanguageKind.JARGON, [row["id"]]) == {
+            row["id"]: row["entry_key"]
+        }
+        assert "合成梗" in reopened.jargon_reference(
+            ["合成梗"], 2000, conversation_key="source-b"
+        )
+
+
+def test_revoked_scope_blocks_import_export_clear_and_delete_without_changes(
+    tmp_path: Path,
+) -> None:
+    client, service, scopes = _client(tmp_path)
+    prefix = "/api/webui/expression"
+    with client:
+        created = client.post(prefix + "/", json={
+            "situation": "庆祝", "style": "保留说法", "chat_id": "source-a",
+        })
+        row = created.json()["data"]
+        before = service.language.entries(LanguageKind.EXPRESSION, include_disabled=True)
+        del scopes["source-a"]
+        assert client.post(prefix + "/import", json={
+            "chat_id": "source-a",
+            "expressions": [{"situation": "庆祝", "style": "不应导入"}],
+        }).status_code == 422
+        assert client.post(prefix + "/export", json={"chat_id": "source-a"}).status_code == 422
+        assert client.post(prefix + "/clear", json={"chat_id": "source-a"}).status_code == 422
+        assert client.delete(prefix + f'/{row["id"]}').status_code == 403
+        assert service.language.entries(LanguageKind.EXPRESSION, include_disabled=True) == before
+        scopes["source-a"] = "重新授权"
+        assert client.post(prefix + "/export", json={"ids": []}).status_code == 422
+        assert client.post(prefix + "/import", json={
+            "chat_id": "source-a", "conflict_strategy": "overwrite",
+            "expressions": [{"situation": "庆祝", "style": "不可覆盖"}],
+        }).status_code == 422
+        assert client.get(prefix + "/list", params={"chat_id": "source-a"}).json()["data"][0][
+            "style"
+        ] == "保留说法"
 def test_emoji_review_is_independent_and_persistent(tmp_path: Path) -> None:
     client, service, _scopes = _client(tmp_path)
     assert service.emojis is not None

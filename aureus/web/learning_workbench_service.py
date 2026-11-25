@@ -101,17 +101,75 @@ class LearningWorkbench:
         if self.language is None:
             raise ValueError("学习功能当前关闭。")
         keys = self.language.resolve_workbench_ids(kind, (identifier,))
+        key = keys.get(identifier)
+        if key is None:
+            raise LookupError("找不到这条学习记录。")
+        scopes = self.scopes()
         entry = next(
             (
                 entry
-                for entry in self.language_rows(kind)
-                if entry.entry_key == keys.get(identifier)
+                for entry in self.language.entries(kind, include_disabled=True)
+                if entry.entry_key == key
             ),
             None,
         )
         if entry is None:
-            raise LookupError("找不到这条学习记录或来源已撤权。")
+            raise LookupError("找不到这条学习记录。")
+        if not self._entry_in_scopes(entry, scopes):
+            raise PermissionError("来源授权已撤权。")
+        if entry.is_removed:
+            raise LookupError("这条学习记录已移除。")
         return entry
+
+    def language_targets_for_maintenance(
+        self, kind: LanguageKind, identifiers: Sequence[int]
+    ) -> list[LanguageEntry]:
+        """映射旧编号并优先核验来源授权，再构造批量维护目标。"""
+        if self.language is None:
+            raise ValueError("学习功能当前关闭。")
+        mapping = self.language.resolve_workbench_ids(kind, identifiers)
+        if any(mapping.get(identifier) is None for identifier in identifiers):
+            raise LookupError("所选记录不存在。")
+        keys = {mapping[identifier] for identifier in identifiers}
+        scopes = self.scopes()
+        entries = {
+            entry.entry_key: entry
+            for entry in self.language.entries(kind, include_disabled=True)
+        }
+        if not keys <= entries.keys():
+            raise LookupError("所选记录已经移除或不存在。")
+        if any(not self._entry_in_scopes(entries[key], scopes) for key in keys):
+            raise PermissionError("来源授权已撤权；没有修改。")
+        if any(entries[key].is_removed for key in keys):
+            raise LookupError("所选记录已经移除。")
+        return [entries[key] for key in keys if key is not None]
+
+    @staticmethod
+    def _entry_in_scopes(entry: LanguageEntry, scopes: dict[str, str]) -> bool:
+        """区分来源撤权、包授权和全局共享，不凭显示名称核准范围。"""
+        return (
+            (entry.learning_source is None or entry.learning_source in scopes)
+            and (entry.restricted_scope is None or entry.restricted_scope in scopes)
+            and (not entry.scope_keys or bool(set(entry.scope_keys) & scopes.keys()))
+        )
+
+    def language_keys_allowed(self, kind: LanguageKind, keys: Sequence[str]) -> bool:
+        """在存储写事务中重验整批条目的原件范围。"""
+        if self.language is None:
+            return False
+        scopes = self.scopes()
+        entries = {
+            entry.entry_key: entry
+            for entry in self.language.entries(kind, include_disabled=True)
+        }
+        if not set(keys) <= entries.keys():
+            return False
+        return all(
+            (entry.learning_source is None or entry.learning_source in scopes)
+            and (entry.restricted_scope is None or entry.restricted_scope in scopes)
+            and (not entry.scope_keys or bool(set(entry.scope_keys) & scopes.keys()))
+            for entry in (entries[key] for key in keys)
+        )
 
     def create_language(
         self, kind: LanguageKind, text: str, detail: str, scope: str | None, example: str = ""
