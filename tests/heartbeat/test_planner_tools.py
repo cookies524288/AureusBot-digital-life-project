@@ -96,6 +96,36 @@ async def test_reply_quote_requires_capability_and_boolean(
 
 
 @pytest.mark.asyncio
+async def test_invalid_non_interest_argument_still_rejects_whole_call() -> None:
+    """兴趣以外的字段不合格时整条拒绝，不因为丢弃兴趣而放行（D103、D115）。"""
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        reply = ToolCall(
+            "reply",
+            "bad-addressed",
+            {
+                "addressed_to_me": "maybe",
+                "reply_reference": "回应",
+                "interest": {"action": "add", "text": "天文", "reason": "想看看"},
+            },
+        )
+        return OrganResponse(request.organ_id, "", tool_calls=(reply,))
+
+    async def retrieve(words: tuple[str, ...]) -> tuple[str, str] | None:
+        pytest.fail(f"不应读取记忆：{words}")
+
+    actions: list[PlannerAction] = []
+    assert await dispatch_planner_tools(
+        OrganRequest("planner", "当前消息"),
+        planner_tools(PlannerToolOptions(interests=True)),
+        call,
+        retrieve,
+        actions=actions,
+    ) == (None, None)
+    assert actions[-1].status == "rejected"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("finish", [_REPLY, ToolCall("stop", "stop-1", {})])
 async def test_only_explicit_terminal_choice_after_real_tool_result(finish: ToolCall) -> None:
     requests: list[OrganRequest] = []
