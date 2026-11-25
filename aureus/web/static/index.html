@@ -1173,7 +1173,7 @@ async function api(path, method, body, headers = {}, signal) {
 // 后端的 detail 已经是中文、不含密码，原样显示；429 补上要等多久。
 // 被切页或调用方取消的请求没有提示（D121）。
 function errorText(res) {
-  if (res.aborted) return '';
+  if (res.aborted || res.timeout) return '';  // 取消不提示；超时已经由 api 提示过
   if (res.status === 0) return '连不上服务，请检查网络后再试。';
   const d = res.data && res.data.detail;
   let text = typeof d === 'string' ? d : '请求没有成功（' + res.status + '）。';
@@ -2155,13 +2155,14 @@ const inboxScope = key => new URLSearchParams(Object.entries(key).filter(([, val
 // 同一次渲染里一个发送者只取一次（D121）。图片在取得槽位后才设 src，加载完释放。
 const INBOX_MEDIA_CONCURRENCY = 3;
 let inboxMediaActive = 0;
+let inboxMediaPumping = false;
 const inboxMediaQueue = [];
-let inboxAvatarGeneration = 0;
+let inboxMediaGeneration = 0;
 const inboxAvatarCache = new Map();
 const inboxAvatarURLs = new Set();
 
 function resetInboxMedia() {
-  ++inboxAvatarGeneration;
+  ++inboxMediaGeneration;
   inboxAvatarCache.clear();
   for (const url of inboxAvatarURLs) URL.revokeObjectURL(url);
   inboxAvatarURLs.clear();
@@ -2169,8 +2170,14 @@ function resetInboxMedia() {
 
 function releaseInboxMedia() {
   inboxMediaActive = Math.max(0, inboxMediaActive - 1);
-  while (inboxMediaActive < INBOX_MEDIA_CONCURRENCY && inboxMediaQueue.length) {
-    inboxMediaQueue.shift()();
+  if (inboxMediaPumping) return;
+  inboxMediaPumping = true;
+  try {
+    while (inboxMediaActive < INBOX_MEDIA_CONCURRENCY && inboxMediaQueue.length) {
+      inboxMediaQueue.shift()();
+    }
+  } finally {
+    inboxMediaPumping = false;
   }
 }
 
@@ -2184,15 +2191,15 @@ function loadInboxAvatar(message) {
   const key = message.conversation.platform + '|' + message.sender_id;
   const cached = inboxAvatarCache.get(key);
   if (cached) return cached;
-  const generation = inboxAvatarGeneration;
+  const generation = inboxMediaGeneration;
   const promise = new Promise(resolve => {
     scheduleInboxMedia(release => {
-      if (generation !== inboxAvatarGeneration || pageAbort.signal.aborted) { resolve(null); release(); return; }
+      if (generation !== inboxMediaGeneration || pageAbort.signal.aborted) { resolve(null); release(); return; }
       const url = `/api/inbox/messages/${message.id}/avatar?${inboxScope(message.conversation)}`;
       fetch(url, {credentials:'same-origin', signal: pageAbort.signal})
         .then(response => response.ok ? response.blob() : null)
         .then(blob => {
-          if (!blob || generation !== inboxAvatarGeneration) { resolve(null); return; }
+          if (!blob || generation !== inboxMediaGeneration) { resolve(null); return; }
           const objectURL = URL.createObjectURL(blob);
           inboxAvatarURLs.add(objectURL);
           resolve(objectURL);
@@ -2206,7 +2213,9 @@ function loadInboxAvatar(message) {
 }
 
 function loadInboxImage(picture, url) {
+  const generation = inboxMediaGeneration;
   scheduleInboxMedia(release => {
+    if (generation !== inboxMediaGeneration || pageAbort.signal.aborted) { release(); return; }
     let finished = false;
     const finish = () => { if (!finished) { finished = true; release(); } };
     picture.addEventListener('load', finish);

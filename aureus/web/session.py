@@ -153,6 +153,7 @@ class SessionStore:
         """
         if not token or len(token) > MAX_TOKEN_LENGTH:
             return False
+        self._require_open()
         digest = _hash_token(token)
         now = self._now()
         state = self._touches.get(digest)
