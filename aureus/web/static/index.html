@@ -50,11 +50,13 @@ h1,h2,h3,h4,p{margin:0}
 ::selection{background:var(--accent-soft)}
 @media not all and (forced-colors:active){
 @supports selector(::-webkit-scrollbar){
-::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar{width:12px;height:12px}
 ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
-/* 胶囊滑块两端全圆；透明边框加 content-box 让滑块离开轨道边缘。 */
-::-webkit-scrollbar-thumb{background-color:var(--text-2);border:2px solid transparent;border-radius:999px;background-clip:content-box}
-::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{background-color:var(--text)}
+/* 胶囊滑块用透明边框把可视宽度收窄：轨道固定 12px，平时只露 6px，鼠标靠近时变粗但不挤动布局。 */
+::-webkit-scrollbar-thumb{background-color:var(--text-2);border:3px solid transparent;border-radius:999px;background-clip:content-box}
+/* 鼠标进入可滚动区域时吸附变粗到 10px；停在滑块上时满宽并加深（3.21）。 */
+*:hover::-webkit-scrollbar-thumb{border-width:1px}
+::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{border-width:0;background-color:var(--text)}
 }
 @supports not selector(::-webkit-scrollbar){
 :root{scrollbar-width:thin;scrollbar-color:var(--text-2) transparent}
