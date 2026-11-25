@@ -52,6 +52,16 @@ class LanguageBatch(BaseModel):
     include_chat_info: bool = False
 
 
+class LanguageExport(BaseModel):
+    """上游导出请求可选指定 ID；不与批量移除契约共用请求模型。"""
+
+    model_config = ConfigDict(extra="forbid")
+    ids: list[Annotated[int, Field(gt=0)]] | None = Field(default=None, max_length=100)
+    chat_id: str | None = Field(default=None, max_length=4096)
+    is_global: bool = False
+    include_chat_info: bool = False
+
+
 class LanguageImport(BaseModel):
     """MaiBot 表达资源 v1；黑话保留额外元数据字段。"""
 
@@ -133,6 +143,8 @@ def register_learning_workbench_routes(
             return await asyncio.to_thread(function, *args, **kwargs)
         except LookupError as error:
             raise HTTPException(404, str(error)) from None
+        except PermissionError as error:
+            raise HTTPException(403, str(error)) from None
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 
@@ -237,17 +249,25 @@ def register_learning_workbench_routes(
         async def remove(body: LanguageBatch) -> dict[str, Any]:
             if not body.ids:
                 raise HTTPException(422, "请至少选择一条记录。")
-            targets = [await run(service.language_target, kind, item) for item in body.ids]
+            targets = await run(service.language_targets_for_maintenance, kind, body.ids)
             assert service.language is not None
             if not await run(
-                service.language.set_removed, kind, [entry.entry_key for entry in targets], True
+                service.language.set_removed,
+                kind,
+                [entry.entry_key for entry in targets],
+                True,
+                allowed=lambda: service.language_keys_allowed(
+                    kind, [entry.entry_key for entry in targets]
+                ),
             ):
-                raise HTTPException(409, "条目已变化，没有修改。")
+                raise HTTPException(409, "条目或来源授权已变化，没有修改。")
             return {"success": True, "message": "已可逆移除。", "deleted_count": len(targets)}
 
         @router.post(path + "/export")
-        async def export(body: LanguageBatch) -> Response:
-            scope = body.chat_id or body.session_id
+        async def export(body: LanguageExport) -> Response:
+            scope = body.chat_id
+            if body.ids == []:
+                raise HTTPException(422, "请至少选择一条要导出的记录。")
             visible = await run(service.language_payloads, kind)
             if scope is not None and scope not in await run(service.scopes):
                 raise HTTPException(422, "所选来源已撤权或不存在。")
@@ -297,6 +317,8 @@ def register_learning_workbench_routes(
             items = body.expressions if kind == LanguageKind.EXPRESSION else body.jargons
             if not items:
                 raise HTTPException(422, "请选择至少一条候选。")
+            if body.conflict_strategy == "overwrite":
+                raise HTTPException(422, "此工作台仅提供安全跳过冲突，不支持覆盖。")
             if kind == LanguageKind.EXPRESSION:
                 if body.chat_id and len(scopes) != 1:
                     raise HTTPException(422, "表达方式请选择一个目标会话。")
@@ -307,10 +329,14 @@ def register_learning_workbench_routes(
                     "expressions": items,
                 }
             else:
+                adapted_items = [
+                    {**item, "created_by": str(item.get("created_by", "manual")).lower()}
+                    for item in items
+                ]
                 package = {
                     "success": True, "version": 1, "type": "maibot.jargon.export",
                     "exported_at": workbench_clock.now().isoformat(),
-                    "include_chat_info": False, "count": len(items), "jargons": items,
+                    "include_chat_info": False, "count": len(items), "jargons": adapted_items,
                 }
             try:
                 rows = read_package(kind, json.dumps(package, ensure_ascii=False).encode())

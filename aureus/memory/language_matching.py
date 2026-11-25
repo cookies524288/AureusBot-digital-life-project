@@ -73,10 +73,8 @@ class LanguageEntry:
         )
 
     def can_reference_expression(self) -> bool:
-        """受质检管理的新表达必须另获人工批准；旧条目沿用原规则。"""
-        return self.review_status != ExpressionReviewStatus.REJECTED and (
-            not self.requires_approval or self.review_status == ExpressionReviewStatus.APPROVED
-        )
+        """D109：来源可见、启用且未移除的表达不以人工审批状态拦截。"""
+        return self.is_enabled and not self.is_removed
 
     def can_reference_jargon(self) -> bool:
         """确认、有义项、启用且未移除才可成为黑话参考。"""
@@ -195,8 +193,6 @@ def select_expressions(
     excluded = tuple(filter(None, map(normalize, avoid)))
     ranked: list[tuple[int, int, LanguageEntry]] = []
     for entry in entries:
-        if entry.review_status == ExpressionReviewStatus.REJECTED:
-            continue
         style = normalize(entry.text)
         if any(term in style for term in excluded):
             continue
