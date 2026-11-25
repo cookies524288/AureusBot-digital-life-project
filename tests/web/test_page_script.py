@@ -248,13 +248,16 @@ def test_platform_desktop_prefetches_by_cursor_and_loads_older_on_scroll() -> No
         await opening;
         assert.deepEqual(requests, [
           {platform:'qq', account_id:'14', kind:'group', recipient_id:'62', limit:'50'},
-          {platform:'qq', account_id:'14', kind:'group', recipient_id:'62', limit:'50', before_id:'10'},
+          {platform:'qq', account_id:'14', kind:'group', recipient_id:'62',
+            limit:'50', before_id:'10'},
         ]);
         const list = $('inbox-messages');
         assert.deepEqual(Array.from(list.children, node => node.className), [
-          'msg inbox-msg person', 'msg inbox-msg user', 'msg inbox-msg person', 'msg inbox-msg user',
+          'msg inbox-msg person', 'msg inbox-msg user',
+          'msg inbox-msg person', 'msg inbox-msg user',
         ]);
-        assert.deepEqual(Array.from(list.children, node => node.children[1].children[1].children[0].textContent),
+        assert.deepEqual(Array.from(list.children,
+          node => node.children[1].children[1].children[0].textContent),
           ['来件 2', '发件 2', '来件 3', '发件 3']);
         const outgoing = list.children[3];
         const time = outgoing.children[0].children.find(node => node.tagName === 'TIME');
