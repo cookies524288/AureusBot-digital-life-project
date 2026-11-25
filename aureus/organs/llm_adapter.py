@@ -254,7 +254,13 @@ def _http_status_reason(status: int) -> str:
     return f"服务商返回 HTTP {status}"
 
 
+# 直连时这些 HTTP 状态码对应 litellm 的「明确拒绝」：请求没有被处理，不产生用量（D131）。
+REJECTED_HTTP_STATUSES = frozenset({400, 401, 403, 404, 422, 429})
+
+
 def _rejected_before_processing(error: Exception) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in REJECTED_HTTP_STATUSES
     return any(
         error_class.__name__ in REJECTED_BEFORE_PROCESSING_ERROR_NAMES
         for error_class in type(error).__mro__

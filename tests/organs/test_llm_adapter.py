@@ -888,6 +888,181 @@ async def test_probe_first_chunk_with_data_does_not_fall_back(
 
 
 @pytest.mark.asyncio
+async def test_local_chat_supports_tools_and_vision(keys: KeyResolver) -> None:
+    bodies: list[dict[str, Any]] = []
+    replies = [
+        {
+            "choices": [{"message": {"content": "red"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+        },
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_read",
+                                "type": "function",
+                                "function": {"name": "read", "arguments": '{"query": "资料"}'},
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        },
+    ]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=replies[len(bodies) - 1])
+
+    transport = httpx.MockTransport(respond)
+    vlm = local_chat_organ(
+        keys,
+        transport,
+        organ_id="vlm",
+        vision=True,
+        reasoning=True,
+        temperature=0.7,
+        max_tokens=300,
+        reasoning_effort="high",
+    )
+    response = await vlm.process(
+        OrganRequest("vlm", "描述图片", media_bytes=b"abc", media_type="image/png")
+    )
+
+    assert response.suggestion == "red"
+    vision_body = bodies[0]
+    assert vision_body["model"] == "magpie-chat"
+    assert vision_body["temperature"] == 0.7
+    assert vision_body["max_tokens"] == 300
+    assert vision_body["reasoning_effort"] == "high"
+    assert "stream" not in vision_body
+    assert vision_body["messages"][-1]["content"][-1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,YWJj"},
+    }
+
+    planner = local_chat_organ(keys, transport, organ_id="planner", max_tokens=100)
+    planned = await planner.process(OrganRequest("planner", "规划材料", tools=(READ_TOOL,)))
+
+    assert planned.tool_calls == (ToolCall("read", "call_read", {"query": "资料"}),)
+    tool_body = bodies[1]
+    assert tool_body["model"] == "magpie-chat"
+    assert tool_body["max_tokens"] == 100
+    assert tool_body["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "查找资料",
+                "parameters": READ_TOOL.parameters,
+            },
+        }
+    ]
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_local_chat_usage_and_failures_match_litellm_mapping(keys: KeyResolver) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "嗨"}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "prompt_tokens_details": {"cached_tokens": 40},
+                },
+            },
+        )
+
+    organ = local_chat_organ(
+        keys, httpx.MockTransport(respond), prices=True, max_tokens=300
+    )
+    response = await organ.process(ask())
+
+    assert response.suggestion == "嗨"
+    assert response.metadata["usage_known"] is True
+    assert response.metadata["prompt_tokens"] == 100
+    assert response.metadata["completion_tokens"] == 20
+    assert response.metadata["cached_tokens"] == 40
+    assert response.metadata["cost"] == pytest.approx(0.00044)
+
+    stream_bodies: list[dict[str, Any]] = []
+
+    def stream_respond(request: httpx.Request) -> httpx.Response:
+        stream_bodies.append(json.loads(request.content))
+        return sse_response(
+            {"choices": [{"delta": {"content": "嗨"}}]},
+            {"choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 1}},
+        )
+
+    streaming = local_chat_organ(keys, httpx.MockTransport(stream_respond))
+    streamed = await streaming.process(OrganRequest("replyer", "你好", stream=True))
+
+    assert streamed.suggestion == "嗨"
+    assert streamed.metadata["usage_known"] is True
+    assert streamed.metadata["prompt_tokens"] == 7
+    assert streamed.metadata["completion_tokens"] == 1
+    assert stream_bodies[0]["stream"] is True
+    assert stream_bodies[0]["stream_options"] == {"include_usage": True}
+
+    for status, reason, rejected in (
+        (401, "认证失败（密钥无效？）", True),
+        (429, "被限流", True),
+        (500, "服务商内部错误", False),
+    ):
+
+        def fail(request: httpx.Request, status: int = status) -> httpx.Response:
+            return httpx.Response(status, json={"error": "x"})
+
+        failing = local_chat_organ(keys, httpx.MockTransport(fail))
+        with pytest.raises(OrganCallError, match=reason) as error:
+            await failing.process(ask())
+        [attempt] = error.value.attempts
+        assert attempt.failure_reason == reason
+        assert attempt.estimated is (not rejected)
+        if rejected:
+            assert attempt.budget_tokens == 0
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_local_chat_stream_empty_reply_falls_back_to_non_streaming(
+    keys: KeyResolver,
+) -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        if bodies[-1].get("stream"):
+            return sse_response({"choices": [{"delta": {"content": None}}]})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "备用"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+        )
+
+    organ = local_chat_organ(keys, httpx.MockTransport(respond))
+    response = await organ.process(OrganRequest("replyer", "你好", stream=True))
+
+    assert response.suggestion == "备用"
+    assert len(bodies) == 2
+    assert bodies[0]["stream"] is True
+    assert "stream" not in bodies[1]
+    assert bodies[1]["messages"] == bodies[0]["messages"]
+    assert [attempt.succeeded for attempt in response.attempts] == [False, True]
+    assert response.attempts[0].failure_reason == EMPTY_REPLY_REASON
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
 async def test_remote_chat_still_uses_litellm(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
