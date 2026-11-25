@@ -227,6 +227,12 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function memorySource(item) {
     return (item.source && sourceText(item.source)) || '本地经历';
   }
+  // 迁入记忆的正文开头带来源序号；只在展示时去掉，库里的原件和检索不变（D130）。
+  function memoryText(value) {
+    return typeof value === 'string'
+      ? value.replace(/^(?:statement|paragraph):[0-9a-f]{32,}:\s*/i, '')
+      : value;
+  }
   // 画像的 occurred_at/expires_at 是秒级时间戳；文字记录的时间是 ISO 字符串，两者都兼容。
   function fmtStamp(value) {
     if (value == null || value === '') return '';
@@ -379,7 +385,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   function lifecycleForm(item, operation) {
     const label = maintenanceLabels[operation];
-    const editor = operation === 'correct' ? textControl('修正正文', item.text, 20000, true) : null;
+    const editor = operation === 'correct'
+      ? textControl('修正正文', memoryText(item.text), 20000, true) : null;
     const result = el('p', {class:'muted', role:'status'});
     const submit = el('button', {class:'btn primary small', text:'生成预览'});
     const form = el('form', {class:'stack'}, field('来源', sourceText(item.source)), editor?.field, submit, result);
@@ -411,7 +418,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         const undo = action('撤销本次操作', event => changePlan('undo', event.currentTarget));
         const buttons = actions('纠错计划', action('返回草稿', () => openEditor(label, form)), confirm);
         editorPane.append(field('原件版本', preview.original_version),
-          field('旧值', preview.before_text), field('新值', preview.after_text),
+          field('旧值', memoryText(preview.before_text)),
+          field('新值', memoryText(preview.after_text)),
           field('影响', `召回${preview.before.is_enabled && !preview.before.is_removed ? '开启' : '关闭'} → ${preview.state.is_enabled && !preview.state.is_removed ? '开启' : '关闭'}；原件保留`),
           field('过期时间', fmtTime(preview.expires_at, true)), buttons, message);
         openEditor(label + '预览', editorPane);
@@ -420,14 +428,15 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     openEditor(label, form);
   }
   function editMemories(items) {
-    const inputs = items.map(item => ({item, ...textControl(labels[item.labels?.[0]] || '记忆正文', item.text, 20000, true)}));
+    const inputs = items.map(item => ({item, shown:memoryText(item.text),
+      ...textControl(labels[item.labels?.[0]] || '记忆正文', memoryText(item.text), 20000, true)}));
     const save = el('button', {class:'btn primary small', text:'保存修正'});
     const form = el('form', {class:'stack'}, inputs.map(row => row.field), save);
     form.addEventListener('submit', async event => {
       event.preventDefault();
       save.disabled = true;
-      for (const {item, input} of inputs) {
-        if (item.text === input.value) continue;
+      for (const {item, input, shown} of inputs) {
+        if (shown === input.value) continue;
         const response = await api('/api/resources/memory', 'PATCH', {...memoryTarget(item), text:input.value});
         if (!response.ok) { fail(response); save.disabled = false; return; }
       }
@@ -490,7 +499,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const type = memoryType(item);
     const status = item.is_removed ? '已移除' : item.is_recallable ? '' : '未参与召回';
     const title = titleOverride || item.actor_label || type;
-    const summary = item.text || (item.kind === 'summary'
+    const text = memoryText(item.text);
+    const summary = text || (item.kind === 'summary'
       ? (item.status === 'superseded' ? '已更正的事实' : '没有证据的事实') : '空文本');
     return el('article', {class:'memory-card' + (item.is_removed ? ' is-removed' : '')},
       box,
@@ -512,10 +522,10 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         el('span', {class:'muted', text:source})),
       field('类型与来源', type + ' · ' + source),
       field('时间', item.recorded_at ? fmtTime(item.recorded_at, true) : '暂无'),
-      field('全文', item.text || '暂无'),
+      field('全文', memoryText(item.text) || '暂无'),
       field('来源', source),
       field('关联条目', memoryRelated(item) || '暂无'),
-      field('原件', item.original_text),
+      field('原件', memoryText(item.original_text)),
       field('召回状态', item.is_recallable ? '参与召回' : '不参与召回'),
       relation && field('关系状态', item.is_frozen ? '已冻结' : item.is_protected ? '受保护' : '正常'),
       memoryActions(item, {guided, relation}),
@@ -564,7 +574,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           el('span', {class:'muted', text:source})),
         field('类型与来源', '会话总结事实 · ' + source),
         field('时间', merged.recorded_at ? fmtTime(merged.recorded_at, true) : '暂无'),
-        field('全文', fact.text || '暂无'),
+        field('全文', memoryText(fact.text) || '暂无'),
         field('来源', source),
         field('关联条目', memoryRelated(merged) || '暂无'),
         field('状态', fact.status === 'superseded' ? '已更正' : term(fact.status)),
@@ -748,13 +758,22 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       section('不确定信息', profileRaw(profile, 'uncertain', 'uncertainties', 'uncertain_information') ?? item.pending_reason),
     ];
   }
+  // 旧档案可能没有名字：按账号显示，不再出现「未命名人物」（D130）。
+  function accountLabel(account) {
+    const [platform, id] = account;
+    return [platform && String(platform).toUpperCase(), id].filter(Boolean).join(' ');
+  }
+  function personName(item) {
+    return item.name || (item.accounts ?? []).map(accountLabel).filter(Boolean).join('、')
+      || `人物 #${item.person_id ?? ''}`;
+  }
   function profileDetail(item) {
     if (item.entry_type === 'person') {
-      const title = item.name || '未命名人物';
+      const title = personName(item);
       detail('人物档案', el('div', {class:'stack resource-detail memory-detail'},
         el('div', {class:'memory-detail-meta'}, typeBadge('人物', 'person')),
         field('人物 ID', item.person_id ?? '暂无'),
-        field('称呼', item.name || '暂无'),
+        field('称呼', title),
         field('首次记录时间', fmtStamp(item.first_seen) || '暂无'),
         ...profileSections({}, item),
         el('p', {class:'muted', text:'此人物还没有可用画像。人物在聊天中出现并被整理后会显示在这里。'}),
@@ -789,7 +808,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   function profileCard(item) {
     if (item.entry_type === 'person') {
-      const title = item.name || '未命名人物';
+      const title = personName(item);
       return el('article', {class:'memory-card profile-card'},
         el('div', {class:'memory-card-main'},
           el('div', {class:'memory-card-head'}, typeBadge('人物', 'person'),

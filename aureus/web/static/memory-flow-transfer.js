@@ -10,6 +10,9 @@
     profile_override_set:'画像维护', person_merged:'人物资料合并', relation_frozen:'关系冻结',
     delete_executed:'删除操作执行', delete_restored:'删除操作恢复'
   };
+  // 迁入记忆的正文开头带来源序号；事件摘要同样只在展示时去掉（D130）。
+  const memoryText = value => typeof value === 'string'
+    ? value.replace(/^(?:statement|paragraph):[0-9a-f]{32,}:\s*/i, '') : value;
   let flow;
 
   function sectionHead(title, note) {
@@ -36,13 +39,14 @@
   function renderEntry(item) {
     const stamp = item.recorded_at ? new Date(item.recorded_at).toLocaleString('zh-CN') : '时间未记录';
     const type = eventTypes[item.event_type] ?? item.event_type;
+    const summary = memoryText(item.summary);
     return el('div', {class:'resource-record'}, el('button', {class:'btn small', type:'button', onclick:() =>
       openEditor(type, el('div', {class:'stack resource-detail'},
         el('time', {datetime:item.recorded_at, text:stamp}),
-        el('p', {text:item.summary}),
+        el('p', {text:summary}),
         item.conversations.length && el('p', {text:'聊天流：' + item.conversations.join(' · ')})))
     }, el('span', {class:'resource-label'},
-      el('span', {class:'resource-title', text:item.summary}),
+      el('span', {class:'resource-title', text:summary}),
       el('span', {class:'resource-meta', text:type + ' · ' + stamp}))));
   }
 
