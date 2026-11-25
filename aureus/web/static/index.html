@@ -3641,7 +3641,7 @@ function renderIndexProgress(item) {
 // 设置名取自设置页同一份 CFG_FIELDS，不另存一份（3.15 追加）。
 const INDEX_PROGRESS_SWITCHES = {
   expression: { key: 'language.recall_enabled',
-    requires: name => `需${name('language.recall_enabled')}开启，且${name('language.reference_chars')}大于零` },
+    requires: name => `需${name('language.recall_enabled')}开启` },
   emoji_cache: { key: 'heartbeat.qq_emoji_visual_enabled',
     requires: name => `需${name('qq.enabled')}和${name('heartbeat.qq_emoji_selection_enabled')}开启，且${name('heartbeat.qq_emoji_visual_enabled')}保持关闭` },
 };
@@ -4075,6 +4075,7 @@ const CFG_FIELDS = {
   'mood.recover_above': ['恢复门槛', '心情回升到多少时退出谨慎状态。'],
   'people.affinity_enabled': ['好感调节', '是否根据互动经历调整好感。'],
   'people.history_in_reply_enabled': ['回复参考人物资料', '是否在正常回复时带上与当前对话有关的迁入人物资料；关闭后仍可查看来源。'],
+  'people.history_in_reply_limit': ['回复里的人物历史条数', '回复上下文里最多带几条这个人的迁移资料，范围 1–20。'],
   'people.profile_alias_maintenance_in_reply_enabled': ['回复使用本地人物别名', '回复检索人物资料时，是否也用本地维护的别名匹配人物。'],
   'people.profile_content_maintenance_in_reply_enabled': ['回复使用本地画像修订', '关闭只影响回复使用本地画像正文或证据覆盖；网页仍保留维护记录。'],
   'people.user_initial_affinity': ['用户初始好感', '首次建立用户资料时采用的好感值。'],
@@ -4125,6 +4126,8 @@ const CFG_FIELDS = {
   'memory.graph_recall_enabled': ['关系图谱检索', '允许检索关系图中的人物和关联证据作为回复参考。'],
   'memory.removal_operations_enabled': ['允许可逆移除记忆资料', '是否开放对记忆资料的移除与撤销操作；不是删除原始记录。'],
   'memory.max_results': ['记忆检索上限', '一次最多找回多少条相关记忆。'],
+  'memory.heuristic_max_results': ['自然召回条数', '每轮规划前按回忆提示词自然召回的条数，范围 1–20。'],
+  'memory.query_default_limit': ['查询工具默认条数', '规划器查询记忆时没有指定条数，就使用这个默认条数，范围 1–20。'],
   'memory.recall_feedback_enabled': ['人工召回评价', '允许评价已投递回复使用的召回依据，不改变召回结果。'],
   'memory.index_batch': ['索引批量条数', '每次最多把多少条记录加入索引。'],
   'memory.consolidation_enabled': ['后台记忆整理', '允许在后台整理之前尚未处理的记忆记录。'],
@@ -4133,7 +4136,7 @@ const CFG_FIELDS = {
   'memory.consolidation_extract_enabled': ['整理时提取记忆要点', '开启后台记忆整理后，是否再用总结器官提取事实或关系。'],
   'language.recall_enabled': ['回复参考习得语言', '回复前检索可用的表达方式和黑话。配好本机嵌入模型后，自动使用表达向量；没有向量结果时使用普通候选。'],
   'language.expression_quality_enabled': ['独立质检表达', '默认开启。判断器官每批最多额外检查 10 个表达，按可选模型预算计费。不合适、检查失败或预算拒绝的条目不入库；质检通过的条目无需人工批准。'],
-  'language.reference_chars': ['语言参考字数上限', '每种语言参考块最多可带多少字符；设为零时不带入参考。'],
+  'language.expression_vector_candidates': ['表达召回候选数', '表达向量召回时最多取多少条候选，范围 1–50。'],
   'diary.enabled': ['日记', '是否根据当天的经历写日记。'],
   'diary.write_after_hour': ['日记起写时间', '每天几点以后可以开始写日记。'],
   'diary.max_input_chars': ['经历字数上限', '写日记时最多参考多少字符的经历。'],
