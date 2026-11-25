@@ -237,7 +237,6 @@ def test_config_defaults_and_ranges() -> None:
     assert (config.layer_cooldown_days, config.min_similarity) == (7, 0.7)
     for field, value in [
         ("enabled", 1),
-        ("organ", 1),
         ("max_input_chars", 999),
         ("max_input_chars", 50001),
         ("layer_cooldown_days", True),
@@ -253,3 +252,5 @@ def test_config_defaults_and_ranges() -> None:
     ]:
         with pytest.raises(ValidationError):
             PersonaGrowthConfig.model_validate({field: value})
+    # 固定使用 summarizer 器官后，旧配置里的 organ 照常读取、忽略（D107）。
+    assert PersonaGrowthConfig.model_validate({"organ": 1}) == PersonaGrowthConfig()

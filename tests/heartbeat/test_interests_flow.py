@@ -121,7 +121,6 @@ async def test_strangers_and_groups_cannot_change_or_see_interests(
     [
         dict(action="remove", interest_id=999, reason="不存在"),
         dict(action="add", text="天文", reason="重复"),
-        dict(action="add", text="字" * 31, reason="太长"),
         dict(action="add", text="音乐", reason="超过容量"),
     ],
 )
@@ -136,6 +135,22 @@ async def test_invalid_interest_changes_do_not_disrupt_reply(
     await rig.exchange("聊聊")
     assert [i.text for i in tracker.interests.active()] == ["天文"]
     assert rig.replies() and not rig.records("interest_changed")
+
+
+async def test_overlong_interest_text_fails_tool_schema_without_replacement_reply(
+    env: InterestEnv,
+) -> None:
+    rig = env.build(policy=InitiativeConfig())
+    tracker = env.connect(rig, max_active=1)
+    assert tracker.interests is not None
+    tracker.interests.add("天文", "seed")
+    env.organs.normal_plans.append(
+        _plan(interest=dict(action="add", text="字" * 31, reason="太长"))
+    )
+    await rig.exchange("聊聊")
+    # 参数超出工具声明的长度，整个 reply 调用被拒；D103 规定不会有替代发言。
+    assert [i.text for i in tracker.interests.active()] == ["天文"]
+    assert not rig.replies() and not rig.records("interest_changed")
 
 
 @pytest.mark.parametrize(
@@ -195,5 +210,6 @@ async def test_contact_profile_cannot_change_interests_with_user_trust(env: Inte
     )
     rig.heartbeat.beat()
     await finish(rig)
+    # 联系人的规划工具不声明 interest 参数，多出的参数使调用被拒，兴趣不会被改（D103）。
     assert tracker.interests is not None and not tracker.interests.active()
-    assert rig.replies() and not rig.records("interest_changed")
+    assert not rig.records("interest_changed")

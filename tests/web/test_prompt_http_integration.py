@@ -85,7 +85,9 @@ def emoji_store(tmp_path: Path) -> EmojiStore:
 @pytest.fixture
 def rig(tmp_path: Path, emoji_store: EmojiStore) -> Iterator[ConfigRig]:
     """使用合成身份、临时目录和网页会话。"""
-    item = ConfigRig(tmp_path, prompt_identity=IDENTITY, emoji_store=emoji_store)
+    # 默认已启用视觉选择（fa88456）；本夹具测文字选择预览，所以显式关掉。
+    runtime = RuntimeConfig(heartbeat=HeartbeatConfig(qq_emoji_visual_enabled=False))
+    item = ConfigRig(tmp_path, prompt_identity=IDENTITY, emoji_store=emoji_store, runtime=runtime)
     item.log_in()
     yield item
     item.close()
@@ -270,7 +272,8 @@ async def test_emoji_text_preview_matches_actual_http_request(
         token_counter=lambda _messages: 12,
         prompts=rig.models.prompts,
     )
-    selector = EmojiSelector(emoji_store, adapter.process, ManualClock(NOW), HeartbeatConfig(), UTC)
+    config = HeartbeatConfig(qq_emoji_visual_enabled=False)
+    selector = EmojiSelector(emoji_store, adapter.process, ManualClock(NOW), config, UTC)
     history = [_dialogue(1, ActorType.PERSON, "合成招呼")]
 
     def forbid_catalog(*_args: object) -> None:
@@ -1206,7 +1209,8 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             assert marker in reply_rich_messages[-2]["content"]
         learner = preview_by_organ["summarizer"]["learn_style"]
         assert "〔新入站样本文本〕" in learner["messages"][1]["content"]
-        assert "增量学习" in learner["note"]
+        assert "增量学习" in learner["label"]
+        assert "收到合格的新样本" in learner["note"]
 
         full = build_system_context(IDENTITY, NOW, None, UTC)
         short = build_system_context(IDENTITY, NOW, None, UTC, include_behavior_style=False)

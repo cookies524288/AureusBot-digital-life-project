@@ -16,9 +16,9 @@ from aureus.memory import (
     MemoryGraphRelationDetail,
     MemoryGraphSource,
     MemoryIndex,
-    MemoryKind,
     MemorySource,
 )
+from aureus.memory.lifecycle import LifecycleAction
 from aureus.timeline import TimelineDatabase
 
 NOW = datetime(2026, 11, 23, tzinfo=UTC)
@@ -204,25 +204,31 @@ def test_removal_and_restore_do_not_override_disabled_graph_items(
         row.source.encode(): row
         for row in index.browse_history("", "active", 0, 10, source_table="relations")
     }
-    outgoing = relations[OUTGOING.encode()]
-    incoming = relations[INCOMING.encode()]
-    assert outgoing.entry_id is not None and incoming.entry_id is not None
-    targets: list[tuple[MemoryKind, int]] = [
-        ("history", outgoing.entry_id),
-        ("history", incoming.entry_id),
-    ]
+    assert OUTGOING.encode() in relations and INCOMING.encode() in relations
+
+    def maintain(source: MemorySource, action: LifecycleAction) -> None:
+        # 关系的停用、移除和恢复都要先预览生命周期计划再应用，不再走批量入口。
+        plan = index.preview_lifecycle(source, action, None, None, lambda: True)
+        assert plan is not None
+        assert index.apply_lifecycle(str(plan["plan_id"]), None, lambda: True, undo=False)
+
     assert _sources(index.query_graph(allowed_sources=GRANTS, neighbor_of=LEFT)) == (
         OUTGOING,
         INCOMING,
         LOOP,
     )
-    assert index.update_resource("history", incoming.entry_id, None, False)
+    # 关系不再走旧的 update_resource 入口，停用要经生命周期计划预览后应用。
+    plan = index.preview_lifecycle(INCOMING, "disable", None, None, lambda: True)
+    assert plan is not None
+    assert index.apply_lifecycle(str(plan["plan_id"]), None, lambda: True, undo=False)
     assert index.graph_detail(INCOMING, allowed_sources=GRANTS) is None
-    assert index.set_resources_removed(targets, True)
+    maintain(OUTGOING, "remove")
+    maintain(INCOMING, "remove")
     assert _sources(index.query_graph(allowed_sources=GRANTS, neighbor_of=LEFT)) == (LOOP,)
     assert index.graph_detail(OUTGOING, allowed_sources=GRANTS) is None
     assert index.get_history(OUTGOING) == original
-    assert index.set_resources_removed(targets, False)
+    maintain(OUTGOING, "restore")
+    maintain(INCOMING, "restore")
     assert _sources(index.query_graph(allowed_sources=GRANTS, neighbor_of=LEFT)) == (OUTGOING, LOOP)
     assert index.graph_detail(OUTGOING, allowed_sources=GRANTS) is not None
     assert index.graph_detail(INCOMING, allowed_sources=GRANTS) is None
