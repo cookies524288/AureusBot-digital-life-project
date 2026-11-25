@@ -50,13 +50,14 @@ h1,h2,h3,h4,p{margin:0}
 ::selection{background:var(--accent-soft)}
 @media not all and (forced-colors:active){
 @supports selector(::-webkit-scrollbar){
-::-webkit-scrollbar{width:12px;height:12px}
-::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:var(--surface-2)}
-::-webkit-scrollbar-thumb{background:var(--text-2);border:2px solid var(--surface-2);border-radius:0}
-::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{background:var(--accent-strong)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+/* 胶囊滑块两端全圆；透明边框加 content-box 让滑块离开轨道边缘。 */
+::-webkit-scrollbar-thumb{background-color:var(--text-2);border:2px solid transparent;border-radius:999px;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{background-color:var(--text)}
 }
 @supports not selector(::-webkit-scrollbar){
-:root{scrollbar-color:var(--text-2) var(--surface-2)}
+:root{scrollbar-width:thin;scrollbar-color:var(--text-2) transparent}
 }
 }
 :where(.chat-log,.cfg-details,.dialog-body):focus-visible{outline:2px solid var(--accent-strong);outline-offset:-2px}
