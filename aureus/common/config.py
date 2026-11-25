@@ -471,6 +471,8 @@ class PeopleConfig(BaseModel):
 
     # 3.3 的迁移人物资料只影响正常回复，关掉后仍可查询来源。
     history_in_reply_enabled: bool = True
+    # 回复上下文里最多带几条这个人的迁移资料；与记忆检索条数分开配置（D118）。
+    history_in_reply_limit: int = Field(default=5, ge=1, le=20)
     profile_alias_maintenance_in_reply_enabled: bool = True
     profile_content_maintenance_in_reply_enabled: bool = True
     # 好感的总开关（D5）；关掉后不记变化、不进上下文。
@@ -631,7 +633,12 @@ class MemoryConfig(BaseModel):
     graph_recall_enabled: bool = True
     recall_feedback_enabled: bool = True
     removal_operations_enabled: bool = True
-    max_results: int = Field(default=5, ge=1, le=20)
+    # 普通检索与融合后的最终条数；自然召回和查询工具各有自己的上限（D118）。
+    max_results: int = Field(default=6, ge=1, le=20)
+    # 每轮规划前按回忆提示词自然召回的条数（D118）。
+    heuristic_max_results: int = Field(default=3, ge=1, le=20)
+    # 规划器的 query_memory 不传 limit 时的条数（D118）。
+    query_default_limit: int = Field(default=8, ge=1, le=20)
     index_batch: int = Field(default=200, ge=1, le=5000)
     consolidation_enabled: bool = False
     consolidation_batch: int = Field(default=64, ge=1, le=500)

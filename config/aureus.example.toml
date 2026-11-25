@@ -275,6 +275,8 @@ config_version = 1
 # affinity_enabled = true
 # 迁入的人物资料是否作为正常回复的内部参考（3.3）
 # history_in_reply_enabled = true
+# 回复上下文里最多带几条这个人的迁移资料，1～20。
+# history_in_reply_limit = 5
 # profile_alias_maintenance_in_reply_enabled = true  # 关掉只影响回复读取本机人工别名
 # profile_content_maintenance_in_reply_enabled = true  # 关掉只影响回复读取本机画像正文和证据覆盖
 # 初值：用户和其他人。只在第一次用到时采用，之后改这里不会改已有的好感。要在 0 和 100 之间（不含两端）。
@@ -381,8 +383,12 @@ config_version = 1
 # graph_recall_enabled = true  # 将已发布迁移图中的有向关系作为内部回复材料
 # recall_feedback_enabled = true    # 人工评价已投递回复的召回依据；不参与排序
 # removal_operations_enabled = true # 记录本地文字记忆的移除和恢复；不影响批量维护
-# 一次最多给回复器几条，1～20。
-# max_results = 5
+# 普通检索与融合后的最终条数，1～20。
+# max_results = 6
+# 每轮规划前按回忆提示词自然召回的条数，1～20。
+# heuristic_max_results = 3
+# 查询工具不传条数时的默认值，1～20。
+# query_default_limit = 8
 # 每拍最多处理几条新的时间线记录，1～5000。
 # index_batch = 200
 # 夜间空闲时整理派生候选，保留时间线与迁入原件。

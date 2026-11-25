@@ -125,6 +125,42 @@ def test_memory_and_diary_switches_are_independent(tmp_path: Path) -> None:
     assert not config.memory.enabled and config.memory.recall_enabled and config.diary.enabled
 
 
+def test_memory_config_defaults_match_mai_mai_bot() -> None:
+    """D118：自然召回 3、普通检索 6、查询工具 8、人物历史 5。"""
+    memory = MemoryConfig()
+    assert memory.max_results == 6
+    assert memory.heuristic_max_results == 3
+    assert memory.query_default_limit == 8
+    assert PeopleConfig().history_in_reply_limit == 5
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("memory", "max_results"),
+        ("memory", "heuristic_max_results"),
+        ("memory", "query_default_limit"),
+        ("people", "history_in_reply_limit"),
+    ],
+)
+@pytest.mark.parametrize("value", [0, 21])
+def test_memory_limit_bounds_are_validated(
+    tmp_path: Path, section: str, field: str, value: int
+) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[{section}]\n{field} = {value}\n")
+    assert field in error_message_of(paths)
+
+
+def test_saved_max_results_still_wins(tmp_path: Path) -> None:
+    """旧配置里显式的 max_results 继续生效，其余两项采用新默认值（D118）。"""
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[memory]\nmax_results = 9\n")
+    memory = load_runtime_config(paths).memory
+    assert memory.max_results == 9
+    assert (memory.heuristic_max_results, memory.query_default_limit) == (3, 8)
+
+
 def test_values_from_file_are_used_and_level_is_case_insensitive(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, 'log_level = "debug"\n')
