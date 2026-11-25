@@ -62,7 +62,6 @@ class LanguageEntry:
     scope_keys: tuple[str, ...] = ()
     package_source: str | None = None
     learning_source: str | None = None
-    requires_approval: bool = False
     restricted_scope: str | None = None
     jargon_status: JargonStatus | None = None
 
@@ -77,13 +76,8 @@ class LanguageEntry:
         return self.is_enabled and not self.is_removed
 
     def can_reference_jargon(self) -> bool:
-        """确认、有义项、启用且未移除才可成为黑话参考。"""
-        return (
-            self.jargon_status == JargonStatus.CONFIRMED
-            and bool(self.detail.strip())
-            and self.is_enabled
-            and not self.is_removed
-        )
+        """义项与旧人工定性分开；只有可用的非空义项才能成为参考。"""
+        return bool(self.detail.strip()) and self.is_enabled and not self.is_removed
 
 
 @dataclass(frozen=True)

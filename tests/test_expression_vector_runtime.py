@@ -12,6 +12,7 @@ from aureus.common import ManualClock
 from aureus.core import model_runtime, runtime
 from aureus.heartbeat import MessageRoute, Perception, TrustLevel
 from aureus.memory import ExpressionVectorIndex, LanguageContent, LanguageKind, LanguageStore
+from aureus.memory.language_matching import ExpressionReviewStatus
 from aureus.organs import LOCAL_EXPRESSION_EMBEDDING, KeyResolver, ModelRoute, ModelsConfig
 from aureus.organs.llm_adapter import EmbeddingOrgan
 from aureus.timeline import VisibilityScope
@@ -38,6 +39,7 @@ async def test_local_expression_vectors_reach_actual_reply(
         store.add_entry(kind, LanguageContent(f"向量暗号-{i:02}", f"无关场景-{i:02}", "例句不外送"))
         for i in range(10)
     ]
+    assert store.review_expressions([keys[0]], ExpressionReviewStatus.REJECTED, "旧审核", NOW) == 1
     store.add_entry(kind, LanguageContent("词法暗号", "普通跑步"))
     store.add_entry(kind, LanguageContent("禁用暗号", "其他场景"))
     models = ModelsConfig.model_validate(

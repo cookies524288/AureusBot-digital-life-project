@@ -290,7 +290,7 @@ class _Thought:
         | asyncio.Task[exploration_runner.ExplorationOutcome]
         | asyncio.Task[DiaryOutcome]
         | asyncio.Task[PersonaReviewOutcome]
-        | asyncio.Task[None]
+        | asyncio.Task[bool]
         | asyncio.Task[ConsolidationOutcome]
         | asyncio.Task[InboxSelection]
         | asyncio.Task[SummaryOutcome]

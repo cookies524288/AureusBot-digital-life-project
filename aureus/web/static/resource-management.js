@@ -261,28 +261,25 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   function classifyJargon(keys, refresh) {
     if (!keys.length) return;
     let busy = false;
-    const status = el('p', {role:'status'});
-    const buttons = [['confirmed', '确认为黑话'], ['non_jargon', '判为非黑话']].map(([value, label]) =>
+    const buttons = [['confirmed', '确认为黑话'], ['non_jargon', '判为非黑话']].map(([status, label]) =>
       action(label, async () => {
         if (busy) return;
         busy = true;
         for (const button of buttons) button.disabled = true;
         try {
           const result = await api('/api/resources/learning/jargon/classification', 'PATCH',
-            {entry_keys:keys, status:value});
+            {entry_keys:keys, status});
           if (!result.ok) { fail(result); return; }
-          status.textContent = `已将 ${result.data.changed} 条定性为${jargonLabels[result.data.status]}。`;
-          toast(status.textContent);
+          toast(`已更新 ${result.data.changed} 条黑话的定性。`);
+          if (buttons[0].isConnected) $('editor-dialog').close();
           await refresh();
-          if (status.isConnected) $('editor-dialog').close();
         } finally {
           busy = false;
           for (const button of buttons) button.disabled = false;
         }
       }));
     detail(`定性 ${keys.length} 条黑话资料`,
-      el('p', {text:'定性不修改释义或召回授权。有释义且启用的已确认黑话才能按授权进入回复。'}),
-      actions('定性结论', ...buttons, action('取消', () => $('editor-dialog').close())), status);
+      actions('定性结论', ...buttons, action('取消', () => $('editor-dialog').close())));
   }
   function importLearning(kind, refresh) {
     const endpoint = '/api/resources/learning/package/' + kind;
@@ -349,52 +346,6 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }
     sync();
     return {remove, restore, checkbox, keys:() => [...selected.keys()], clear() { selected.clear(); sync(); }};
-  }
-  function reviewOptions(placeholder) {
-    return Object.entries({'':placeholder, ...reviewLabels}).map(([value, text]) => el('option', {value, text}));
-  }
-  function expressionReviewForm(entryKeys, refresh, initial = '') {
-    const status = el('select', {required:true}, ...reviewOptions('选择审核结论'));
-    status.value = initial;
-    const reason = textControl('审核理由（拒绝时必填）', '', 500, initial === 'rejected');
-    status.addEventListener('change', () => { reason.input.required = status.value === 'rejected'; });
-    const submit = el('button', {type:'submit', class:'btn primary small', text:'保存审核'});
-    const controls = el('fieldset', {class:'stack'}, el('label', {class:'stack'}, '审核结论', status), reason.field,
-      el('p', {class:'muted', text:'拒绝会排除该表达，但不会移除原件。通过不会启用停用、已移除或待映射的表达。'}), submit);
-    const form = el('form', {class:'stack'}, controls);
-    form.addEventListener('submit', async event => {
-      event.preventDefault();
-      if (controls.disabled) return;
-      controls.disabled = true;
-      try {
-        const response = await api(reviewEndpoint, 'PATCH', {
-          entry_keys:entryKeys, status:status.value, reason:reason.input.value,
-        });
-        if (!response.ok) { fail(response); return; }
-        if (form.isConnected) $('editor-dialog').close();
-        toast(`已审核 ${response.data.changed} 条表达`);
-        await refresh();
-      } finally { controls.disabled = false; }
-    });
-    return form;
-  }
-  function expressionReviewHistory(item) {
-    const body = el('div', {class:'stack'});
-    const history = el('details', {}, el('summary', {text:'审核历史'}), body);
-    let loaded = false;
-    history.addEventListener('toggle', async () => {
-      if (!history.open || loaded) return;
-      const loading = el('p', {text:'读取中…'});
-      body.replaceChildren(loading);
-      const response = await api(reviewEndpoint + '?' + new URLSearchParams({entry_key:item.entry_key}));
-      if (!loading.isConnected) return;
-      if (!response.ok) { body.replaceChildren(el('p', {text:'读取失败，可收起后重新打开。'})); return; }
-      loaded = true;
-      body.replaceChildren(...(response.data.items.length ? response.data.items.map(review =>
-        field(fmtTime(review.recorded_at, true), reviewLabels[review.status] + (review.reason ? ' · ' + review.reason : ''))
-      ) : [el('p', {text:'暂无审核记录'})]));
-    });
-    return history;
   }
   async function editClusterGrant(item) {
     const endpoint = '/api/resources/learning/clusters/grants';
@@ -479,7 +430,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           confirmedKeys = keys;
           summary.replaceChildren(field('当前授权', result.data.before.join('；') || '无'),
             field('确认后授权', result.data.after.join('；') || '无，停止参与召回'),
-            el('p', {text:'这里只设置授权范围，不改变停用、移除或审核状态。'}));
+            el('p', {text:'这里只设置授权范围，不改变停用或移除状态。'}));
           submit.textContent = '确认范围';
           return;
         }
@@ -493,7 +444,6 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const panel = $(kind === 'expression' ? 'learning-expression-list' : 'learning-panel-jargon');
     const disabled = el('label', {}, el('input', {name:'disabled', type:'checkbox'}), ' 显示停用和待映射');
     const removed = el('label', {}, el('input', {name:'removed', type:'checkbox'}), ' 显示已移除');
-    const reviewFilter = kind === 'expression' ? el('select', {name:'review', 'aria-label':'审核状态'}, ...reviewOptions('全部')) : null;
     const jargonFilter = kind === 'jargon' ? el('select', {name:'jargon_status', 'aria-label':'黑话定性'},
       ...Object.entries({'':'全部定性', ...jargonLabels}).map(([value, text]) => el('option', {value, text}))) : null;
     const shared = kind === 'jargon' ? el('input', {name:'shared', type:'checkbox'}) : null;
@@ -505,7 +455,6 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     const authorized = conversationFilter('authorized_conversation_key');
     const originLabels = new Map();
     const toolbar = searchForm('搜索' + learningLabels[kind], '搜索词、释义或例句', disabled, removed,
-      reviewFilter && el('label', {}, '审核状态 ', reviewFilter),
       jargonFilter && el('label', {}, '黑话定性 ', jargonFilter), shared && el('label', {}, shared, ' 仅共享范围'),
       el('label', {}, '来自会话 ', origin), el('label', {}, '授权会话 ', authorized));
     const add = action('添加' + learningLabels[kind], () => editLearning(kind, pager.read));
@@ -514,30 +463,16 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       const link = el('a', {href:'/api/resources/learning/package/' + kind, download:''});
       document.body.append(link); link.click(); link.remove();
     });
-    const queue = reviewFilter && action('快速审核', () => {
-      toolbar.elements.review.value = 'pending';
-      toolbar.elements.disabled.checked = true;
-      toolbar.elements.removed.checked = false;
-      return pager.apply();
-    });
-    const reviewBatch = reviewFilter && action('审核所选', () => {
-      const keys = batch.keys();
-      detail(`审核 ${keys.length} 条所选表达`, expressionReviewForm(keys, pager.read));
-    });
     const classifyBatch = jargonFilter && action('定性所选', () => classifyJargon(batch.keys(), pager.read));
     const batch = batchControls(item => item.entry_key, '/api/resources/learning/batch',
       (entry_keys, removed) => ({kind, entry_keys, removed}), () => pager.read(),
-      count => {
-        if (reviewBatch) reviewBatch.disabled = !count;
-        if (classifyBatch) classifyBatch.disabled = !count || removed.firstChild.checked;
-      });
-    const tools = [add, upload, download, ...(queue ? [queue] : [])];
+      count => { if (classifyBatch) classifyBatch.disabled = !count || removed.firstChild.checked; });
+    const tools = [add, upload, download];
     for (const tool of tools) tool.disabled = true;
     panel.append(toolbar, scopeHint, actions(kind === 'expression' ? '表达操作' : '黑话操作', ...tools),
-      actions('所选资料', reviewBatch, classifyBatch, batch.remove, batch.restore));
+      actions('所选资料', classifyBatch, batch.remove, batch.restore));
     function render(item) {
       const title = item.text + (item.is_removed ? ' · 已移除' : item.pending_scope ? ' · 待映射' : item.is_enabled ? '' : ' · 已停用')
-        + (item.review_status ? ' · ' + reviewLabels[item.review_status] : '')
         + (item.jargon_status ? ' · ' + jargonLabels[item.jargon_status] : '');
       const open = () => detail(title, field(kind === 'jargon' ? '释义' : '使用场景', item.detail),
         field('例句', item.example), field('证据数', item.count), field('发言者', item.speakers.join('、')),
@@ -548,10 +483,6 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         item.jargon_status && field('定性', jargonLabels[item.jargon_status]),
         item.jargon_status && !item.detail && field('释义状态', '尚未填写'),
         item.original && field('原件', item.original.filter(Boolean).join('\n')),
-        item.review_status && field('审核状态', reviewLabels[item.review_status]),
-        item.review_status && expressionReviewHistory(item),
-        item.review_status && expressionReviewForm([item.entry_key], pager.read,
-          item.review_status === 'pending' ? '' : item.review_status),
         el('div', {class:'row'}, action('编辑', () => editLearning(kind, pager.read, item)),
           item.jargon_status && !item.is_removed && action('定性', () => classifyJargon([item.entry_key], pager.read)),
           kind === 'expression' && action('表达簇展示授权', () => editClusterGrant(item)),
@@ -570,8 +501,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     fields => ({kind, q:fields.q.value, recall:fields.disabled.checked || fields.removed.checked ? '' : 'enabled',
       removed:fields.removed.checked, origin_conversation_key:origin.value, authorized_conversation_key:authorized.value,
       ...(fields.jargon_status?.value ? {jargon_status:fields.jargon_status.value} : {}),
-      ...(shared?.checked ? {shared:true} : {}),
-      ...(fields.review?.value ? {review:fields.review.value} : {})}));
+      ...(shared?.checked ? {shared:true} : {})}));
     let scopeGeneration = 0;
     function loadScopes() {
       const generation = ++scopeGeneration;
@@ -1467,7 +1397,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       el('label', {}, '开始日期（UTC）', el('input', {type:'date', name:'start', 'aria-label':'开始日期（UTC）'})),
       el('label', {}, '结束日期（UTC）', el('input', {type:'date', name:'end', 'aria-label':'结束日期（UTC）'})),
       el('button', {class:'btn small primary', text:'查询'}), action('刷新', () => pager.read()));
-    panel.append(el('p', {class:'muted', text:'独立模型质检不是人工审核；挽回的条目仍需在表达列表批准，且仅限原会话。查看记录不会调用模型。'}), form, counts);
+    panel.append(el('p', {class:'muted', text:'挽回的条目仅限原会话，无需人工批准。查看记录不会调用模型。'}), form, counts);
     const dialog = $('editor-dialog');
     let revision = 0;
     function invalidate() {
@@ -1496,7 +1426,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         if (!response.ok) return fail(response);
         const data = response.data;
         body.replaceChildren(field('来源', item.source_label), field('候选说法', data.text), field('情境', data.detail),
-          el('p', {class:'muted', text:actionType === 'rescued' ? '不改原来的模型判断。新条目进入待审，仅此来源会话可用。' : '撤回后即使后来批准或恢复，也不会重新加入回复候选。'}));
+          el('p', {class:'muted', text:actionType === 'rescued' ? '不改原来的模型判断。新条目仅此来源会话可用。' : '撤回后不会重新加入回复候选。'}));
         const confirm = action('确认' + title, async () => {
           confirm.disabled = true;
           const result = await api(path, 'POST', {action:actionType, version:data.version});

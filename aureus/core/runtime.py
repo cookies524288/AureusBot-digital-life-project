@@ -50,7 +50,7 @@ from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat, Perception, registered_templates
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import InboxStore
-from aureus.heartbeat.language_runner import previous_language_scope
+from aureus.heartbeat.language_runner import learning_evidence_available, previous_language_scope
 from aureus.hormones import Hormones
 from aureus.identity import Identity, IdentityHistory
 from aureus.identity.service import IdentityService
@@ -306,15 +306,14 @@ def open_core(
             exploration = exploration.model_copy(update={"enabled": False})
             persona_growth = persona_growth.model_copy(update={"enabled": False})
         language: LanguageStore | None = None
-        if runtime.language.recall_enabled or runtime.language.learning_enabled:
-            try:
-                language = LanguageStore(
-                    paths.database_file, old_source_scope=partial(previous_language_scope, timeline)
-                )
-                language.open()
-            except sqlite3.Error:
-                language = None
-                logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
+        try:
+            language = LanguageStore(
+                paths.database_file, old_source_scope=partial(previous_language_scope, timeline)
+            )
+            language.open()
+        except sqlite3.Error:
+            language = None
+            logger.exception("习得语言库打不开，本次运行关闭语言学习与召回")
         expression_index = None
         expression_enabled = (
             not roleplay
@@ -327,6 +326,10 @@ def open_core(
             except sqlite3.Error:
                 logger.exception("表达向量索引打不开，本次运行使用普通表达候选")
         inbox_store = InboxStore(paths.database_file, the_clock) if runtime.qq.enabled else None
+        if language is not None:
+            language.learning_evidence_available = partial(
+                learning_evidence_available, timeline, inbox_store
+            )
         emoji_store = EmojiStore(
             paths.database_file,
             paths.memory_dir,

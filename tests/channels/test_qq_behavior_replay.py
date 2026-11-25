@@ -152,7 +152,8 @@ async def open_replay(
     bus.register(judge)
     bus.register(planner)
     bus.register(replyer)
-    bus.register(LanguageOrgan("summarizer", learning_requests))
+    if learn:
+        bus.register(LanguageOrgan("summarizer", learning_requests))
     if emoji_vlm is not None:
         bus.register(emoji_vlm)
 
@@ -582,7 +583,7 @@ async def test_group_replay_language_learned_in_private_survives_restart(
         assert plan.prompt.index("GG：抵达终点") < plan.prompt.index("GG：等候开局")
         text = dialogue_text(reply)
         assert "当「庆祝跑步成绩」时，可用「月兔冲线」" in text
-        assert "GG：抵达终点" not in text
+        assert "GG：抵达终点" in text and "GG：等候开局" in text
         assert inbound[0].content not in text and inbound[0].content not in plan.prompt
         assert "不泄露来源消息" in text
         replay.planner.plan = {"reply": True, "intent": "问好"}

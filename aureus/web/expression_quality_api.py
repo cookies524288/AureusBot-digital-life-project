@@ -13,12 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.common import Clock, SystemClock
 from aureus.common.web_identity import WEB_CHANNEL_NAME, WEB_USER_ID
-from aureus.heartbeat.events import EVENT_MESSAGE
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
-from aureus.heartbeat.language_runner import language_sample, previous_language_scope
-from aureus.heartbeat.perception import TrustLevel
+from aureus.heartbeat.language_runner import learning_evidence_available
 from aureus.memory import ExpressionQualityAction, ExpressionQualityStatus, LanguageStore
-from aureus.timeline import ActorType, TimelineDatabase, VisibilityScope
+from aureus.timeline import TimelineDatabase
 
 from .resource_api import DEFAULT_SIZE, MAX_SIZE
 
@@ -68,48 +66,8 @@ def register_expression_quality_routes(
         return labels
 
     def source_exists(scope: str, key: str, record_id: int) -> bool:
-        record = timeline.get(record_id)
-        if record is None or record.event_type != EVENT_MESSAGE:
-            return False
-        if record.actor_type not in (ActorType.USER, ActorType.PERSON):
-            return False
-        if scope in _LOCAL_LABELS:
-            return (
-                scope
-                == json.dumps(
-                    (record.metadata.get("channel"), record.actor_id), separators=(",", ":")
-                )
-                and record.actor_type == ActorType.USER
-                and record.metadata.get("trust") == TrustLevel.VERIFIED_USER
-                and record.visibility == VisibilityScope.USER_ONLY
-                and language_sample(record, None, scope).source_key == key
-            )
-        inbox_id = record.metadata.get("inbox_message_id")
-        if inbox is None or allows_inbox is None or type(inbox_id) is not int:
-            return False
-        try:
-            route = ConversationKey.from_scope_key(scope)
-        except (ValueError, TypeError):
-            return False
-        if (
-            not all(isinstance(part, str) for part in route.parameters())
-            or route.kind not in ("group", "private")
-            or route.language_scope_key() != scope
-            or not allows_inbox(route)
-        ):
-            return False
-        message = inbox.get_visible_message(route, inbox_id)
-        if (
-            message is None
-            or message.direction != "incoming"
-            or message.perception.sender_id != record.actor_id
-            or message.perception.content != record.content
-        ):
-            return False
-        sample = language_sample(record, message.perception.source_message_id, scope)
-        return sample.source_key == key or (
-            sample.previous_source_key == key
-            and previous_language_scope(timeline, record_id, key) == scope
+        return scope in conversations() and learning_evidence_available(
+            timeline, inbox, scope, key, record_id
         )
 
     @app.get(_PATH)
