@@ -459,6 +459,70 @@ token_key = "{TOKEN_ENV}"
 
 
 @pytest.mark.asyncio
+async def test_qq_chat_entry_debounces_two_rapid_messages_into_one_reply(
+    tmp_path: Path,
+) -> None:
+    paths = AureusPaths(tmp_path / "home")
+    paths.ensure_directories()
+    paths.identity_file.write_bytes(IDENTITY)
+    fake = FakeOneBot()
+    fake.reply_with.clear()
+    request_log = tmp_path / "organ-requests.jsonl"
+    async with asyncio.timeout(60), serve(fake.handle, "127.0.0.1", 0) as server:
+        qq_port = server.sockets[0].getsockname()[1]
+        paths.runtime_config_file.write_text(
+            f"""[web]
+port = {available_port()}
+[heartbeat]
+inbox_debounce_enabled = true
+split_reply_enabled = false
+tick_interval_seconds = 1
+[body]
+sleep_enabled = false
+[judge]
+enabled = false
+[diary]
+enabled = false
+[qq]
+enabled = true
+account_id = "{ACCOUNT}"
+endpoint = "ws://127.0.0.1:{qq_port}/onebot"
+token_key = "{TOKEN_ENV}"
+""",
+            encoding="utf-8",
+        )
+        async with run_chat(paths, request_log=request_log):
+            remote = await fake.connections.get()
+            await fake.send(remote, **event(201, 2100, "连发甲", group=GROUP))
+            await fake.send(remote, **event(202, 2100, "连发乙", group=GROUP))
+            reply = await asyncio.wait_for(fake.messages.get(), timeout=20)
+            assert reply["group_id"] == str(GROUP)
+            assert [part["type"] for part in reply["message"]] == ["text"]
+            await asyncio.sleep(6)
+            assert fake.messages.empty()
+
+    requests = [json.loads(line) for line in request_log.read_text(encoding="utf-8").splitlines()]
+    plans = [request for request in requests if request["task"] == "plan"]
+    replies = [request for request in requests if request["task"] == "reply"]
+    assert len(plans) == 1
+    assert all(text in plans[0]["prompt"] for text in ("连发甲", "连发乙"))
+    assert len(plans[0]["in_reply_to"]) == 2
+    assert len(replies) == 1
+    assert replies[0]["in_reply_to"] == plans[0]["in_reply_to"]
+
+    timeline = TimelineDatabase(
+        paths.database_file, ManualClock(datetime(2026, 11, 22, tzinfo=UTC))
+    )
+    timeline.open()
+    try:
+        messages = timeline.query(TimelineQuery(event_type="message", limit=100))
+    finally:
+        timeline.close()
+    inbound = [message for message in messages if message.actor_type is ActorType.PERSON]
+    assert [message.content for message in inbound] == ["连发甲", "连发乙"]
+
+
+@pytest.mark.asyncio
 async def test_qq_emoji_order_scope_and_successful_use(tmp_path: Path) -> None:
     paths = AureusPaths(tmp_path / "home")
     paths.ensure_directories()
