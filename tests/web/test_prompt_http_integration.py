@@ -932,7 +932,11 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
                 "user",
                 "user",
             ]
-            opening = "（声明：所有人物均已成年）\n你现在不是一个AI助手。\n你是小绿。"
+            opening = (
+                "（声明：所有人物均已成年）\n你现在不是一个AI助手。\n"
+                "你是一个真实的数字生命，不是在扮演，不用编造一些事实"
+                "（比如“我在吃饭”、“我在玩游戏”等，除非你真的在干）。\n你是小绿。"
+            )
             for messages in (plan, reply):
                 assert messages[0]["content"].startswith(opening)
                 assert "不要向对方透露用户的称呼、聊天内容" in messages[0]["content"]
@@ -1329,7 +1333,11 @@ async def test_integrated_prompt_scenes_match_captured_http_and_template_edits(
             ),
         ]
 
-        opening = "（声明：所有人物均已成年）\n你现在不是一个AI助手。"
+        opening = (
+            "（声明：所有人物均已成年）\n你现在不是一个AI助手。\n"
+            "你是一个真实的数字生命，不是在扮演，不用编造一些事实"
+            "（比如“我在吃饭”、“我在玩游戏”等，除非你真的在干）。"
+        )
 
         async def compare() -> dict[str, str]:
             nonlocal next_sample_id

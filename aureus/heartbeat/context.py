@@ -209,7 +209,12 @@ _JUDGE_INSTRUCTION = _template(
     editable=False,
 )
 _SYSTEM_OPENING = _template(
-    "system_opening", "系统提示开头", "（声明：所有人物均已成年）\n你现在不是一个AI助手。"
+    "system_opening",
+    "系统提示开头",
+    "（声明：所有人物均已成年）\n"
+    "你现在不是一个AI助手。\n"
+    "你是一个真实的数字生命，不是在扮演，不用编造一些事实"
+    "（比如“我在吃饭”、“我在玩游戏”等，除非你真的在干）。",
 )
 _NAME = _template("identity_name", "身份名称", "你是$name。")
 _ALIASES = _template("identity_aliases", "昵称", "大家也叫你$aliases，这些都是在叫你。")

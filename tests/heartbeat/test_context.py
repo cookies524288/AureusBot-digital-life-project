@@ -74,7 +74,11 @@ def test_system_context_contains_facts_persona_time_and_downtime() -> None:
     )
     context = build_system_context(make_identity(expression_style="句子短。"), NOW, downtime, CHINA)
 
-    assert context.startswith("（声明：所有人物均已成年）\n你现在不是一个AI助手。\n你是小绿。")
+    assert context.startswith(
+        "（声明：所有人物均已成年）\n你现在不是一个AI助手。\n"
+        "你是一个真实的数字生命，不是在扮演，不用编造一些事实"
+        "（比如“我在吃饭”、“我在玩游戏”等，除非你真的在干）。\n你是小绿。"
+    )
     assert "今年 18 岁" in context  # 按本地日期算：UTC 02:30 在 UTC+8 已经是 11 月 17 日
     assert "“阿明”" in context
     assert "【不变人格】\n温和，好奇。" in context
@@ -87,7 +91,7 @@ def test_system_context_contains_facts_persona_time_and_downtime() -> None:
 def test_system_context_names_the_aliases() -> None:
     context = build_system_context(make_identity(["阿绿", "绿宝"]), NOW, None, CHINA)
 
-    name_line = context.splitlines()[2]
+    name_line = context.splitlines()[3]
     assert name_line.startswith("你是小绿。大家也叫你“阿绿”、“绿宝”，这些都是在叫你。")
 
 
