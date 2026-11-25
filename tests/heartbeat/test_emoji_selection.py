@@ -145,7 +145,9 @@ async def test_removed_emoji_is_not_selected_and_recovery_keeps_moderation(tmp_p
         assert "庆祝" in request.prompt and "停用" not in request.prompt
         return OrganResponse(request.organ_id, '{"selected": 1}')
 
-    selector = EmojiSelector(store, call, clock, HeartbeatConfig(), UTC)
+    # 默认已启用视觉选择（fa88456）；本用例测文字选择，所以显式关掉。
+    config = HeartbeatConfig(qq_emoji_visual_enabled=False)
+    selector = EmojiSelector(store, call, clock, config, UTC)
 
     async def select() -> EmojiReplyPart | None:
         return await selector.select(
@@ -197,7 +199,8 @@ async def test_semantic_selection_refreshes_incrementally_and_falls_back(tmp_pat
             embeddings=tuple(vectors[str(text)] for text in request.embedding_inputs),
         )
 
-    selector = EmojiSelector(store, call, clock, HeartbeatConfig(), UTC)
+    config = HeartbeatConfig(qq_emoji_visual_enabled=False)  # 本用例测语义选择，关掉默认的视觉选择
+    selector = EmojiSelector(store, call, clock, config, UTC)
 
     async def select(emotion: str) -> EmojiReplyPart | None:
         return await selector.select(
@@ -243,7 +246,8 @@ async def test_no_embedding_uses_text_and_skips_missing_or_invalid_selection(
         assert request.prompt.count("表示喜欢") == 1
         return OrganResponse(request.organ_id, next(answers))
 
-    selector = EmojiSelector(store, call, clock, HeartbeatConfig(), UTC)
+    config = HeartbeatConfig(qq_emoji_visual_enabled=False)  # 本用例测文字选择，关掉默认的视觉选择
+    selector = EmojiSelector(store, call, clock, config, UTC)
     plan = parse_plan('{"reply": true, "intent": "打招呼", "select_emoji": {"emotion": "喜欢"}}')
     assert plan is not None and plan.emoji is not None
     intent = plan.emoji
