@@ -237,11 +237,14 @@ class InboxAttention:
         return messages
 
     def active_messages(self) -> list[InboxMessage]:
-        """翻到当前停留会话的新消息，权限变化时退出会话。"""
+        """翻到当前停留会话的新消息，权限变化时退出会话。
+
+        入场时规划器选的条数只管「进入哪个会话」，后续补读按 inbox_read_limit 读全部新未读（D116）。
+        """
         residence = self.residence
         if not self._staying or residence is None or not self.permits(residence):
             return []
-        return self.store.read_window(residence.conversation, limit=residence.read_limit)
+        return self.store.read_window(residence.conversation, limit=self.read_limit)
 
     def debounce_messages(self, key: ConversationKey) -> list[InboxMessage]:
         """尚未驻留的优先来信沿用原来的同会话防抖。"""

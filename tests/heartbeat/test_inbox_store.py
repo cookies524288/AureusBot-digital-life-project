@@ -163,10 +163,35 @@ def test_read_window_marks_only_selected_route_through_entry_watermark(
     with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=1) as executor:
         patch.setattr(inbox_store, "_message", observe_snapshot)
         pending = executor.submit(receive)
-        assert store.read_window(oldest.conversation, limit=2) == [middle, newest]
+        assert store.read_window(oldest.conversation, limit=2) == [oldest, middle]
         late = pending.result(timeout=2)
 
     assert late is not None
-    assert store.list_unread(oldest.conversation) == [late]
+    assert store.list_unread(oldest.conversation) == [newest, late]
     assert store.list_unread(other_group.conversation) == [other_group]
     assert store.list_unread(other_account.conversation) == [other_account]
+
+
+def test_read_window_does_not_skip_unread_when_limit_smaller(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    saved = []
+    for number in range(1, 6):
+        entry = store.add(_message(number))
+        assert entry is not None
+        saved.append(entry)
+    conversation = saved[0].conversation
+
+    assert [entry.perception.content for entry in store.read_window(conversation, limit=2)] == [
+        "1",
+        "2",
+    ]
+    assert [entry.perception.content for entry in store.list_unread(conversation)] == [
+        "3",
+        "4",
+        "5",
+    ]
+    assert [entry.perception.content for entry in store.read_window(conversation, limit=2)] == [
+        "3",
+        "4",
+    ]
+    assert [entry.perception.content for entry in store.list_unread(conversation)] == ["5"]

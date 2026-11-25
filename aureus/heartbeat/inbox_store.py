@@ -601,16 +601,16 @@ class InboxStore:
         return [_message(row) for row in rows]
 
     def read_window(self, conversation: ConversationKey, *, limit: int) -> list[InboxMessage]:
-        """取得最新未读窗口，并在同一事务内读到此次入场水位。"""
+        """从最早的未读开始读取一批，并在同一事务内推进到本批最后一条。"""
         with closing(open_connection(self._path)) as database, database:
             database.execute("BEGIN IMMEDIATE")
             rows = database.execute(
-                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} ORDER BY m.id DESC LIMIT ?",
+                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} ORDER BY m.id LIMIT ?",
                 (*conversation.parameters(), limit),
             ).fetchall()
             if not rows:
                 return []
-            messages = [_message(row) for row in reversed(rows)]
+            messages = [_message(row) for row in rows]
             database.execute(
                 f"""UPDATE inbox_conversations SET last_read_id = ?,
                 first_read_id = COALESCE(first_read_id, (SELECT MIN(m.id) FROM inbox_messages m

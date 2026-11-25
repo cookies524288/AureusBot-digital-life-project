@@ -80,11 +80,13 @@ def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> No
     candidates = attention.browse(clock.now(), can_browse=True)
     assert [item.key.recipient_id for item in candidates] == ["busy", "backlog"]
     rows = attention.read_selection(InboxSelection(candidates[1].key, 35))
-    assert rows[0].perception.content == "10"
-    assert rows[-1].perception.content == "44"
+    assert rows[0].perception.content == "0"
+    assert rows[-1].perception.content == "34"
     assert len(rows) == 35
     assert attention.active_conversation == candidates[1].key
-    assert store.list_unread(candidates[1].key) == []
+    assert [row.perception.content for row in store.list_unread(candidates[1].key)] == [
+        str(number) for number in range(35, 45)
+    ]
     assert len(store.list_unread(candidates[0].key)) == 2
 
 
@@ -141,8 +143,10 @@ async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> N
     assert len(store.list_unread(selection.conversation)) == 2
     attention.allows = lambda key: key.account_id == "bot" and key.recipient_id == "group-two"
     rows = attention.read_selection(selection)
-    assert [row.perception.content for row in rows] == ["message-6"]
-    assert store.list_unread(selection.conversation) == []
+    assert [row.perception.content for row in rows] == ["message-5"]
+    assert [row.perception.content for row in store.list_unread(selection.conversation)] == [
+        "message-6"
+    ]
     assert len(store.list_unread(candidates[1].key)) == 1
 
 
@@ -230,6 +234,45 @@ def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -
         assert sum(row.unread_count for row in store.list_conversations()) == 26
     finally:
         timeline.close()
+
+
+def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    store = InboxStore(database, clock)
+    attention = InboxAttention(
+        store, TimelineDatabase(database, clock), None, [], enabled=True, read_limit=5
+    )
+
+    def save(message: str) -> None:
+        assert (
+            store.add(
+                Perception(
+                    "qq",
+                    "visitor",
+                    message,
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("bot", "group", "active", message),
+                )
+            )
+            is not None
+        )
+
+    save("first")
+    key = ConversationKey("qq", "bot", "group", "active")
+    assert [row.perception.content for row in attention.read_selection(InboxSelection(key, 1))] == [
+        "first"
+    ]
+    assert attention.residence is not None and attention.residence.read_limit == 1
+    for message in ("second", "third", "fourth"):
+        save(message)
+    assert [row.perception.content for row in attention.active_messages()] == [
+        "second",
+        "third",
+        "fourth",
+    ]
+    assert store.list_unread(key) == []
 
 
 @pytest.mark.asyncio
