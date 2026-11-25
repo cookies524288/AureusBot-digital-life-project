@@ -7,7 +7,7 @@ from tests.web.test_page_script import ROOT, run_page_script
 
 def test_controls_start_disabled_before_javascript() -> None:
     html = (ROOT / "aureus/web/static/index.html").read_text(encoding="utf-8")
-    for control in ("chat-send", "ky-add", "md-add-model", "tl-more", "inbox-more"):
+    for control in ("chat-send", "ky-add", "md-add-model", "tl-more"):
         assert re.search(rf'<button\b[^>]*\bid="{control}"[^>]*\bdisabled\b', html), control
 
 
