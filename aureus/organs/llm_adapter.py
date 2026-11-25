@@ -1,5 +1,8 @@
 """器官层：真实器官，通过 litellm 调用大模型（D24）。
 
+回环地址的 OpenAI 兼容对话服务商直接走 HTTP `/chat/completions`，不经 litellm、
+不走代理（D131）；其余服务商仍由 litellm 调用。
+
 一个 LLMOrgan 对应 models.toml 里的一个器官（planner、replyer……），
 按配置里的顺序尝试它的模型：前一个失败（密钥缺失、超时、限流、
 返回为空……）才顺延到下一个，全部失败就抛 OrganCallError，
@@ -15,7 +18,7 @@ import base64
 import json
 import os
 import wave
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from hashlib import sha256
@@ -78,7 +81,7 @@ async def _read_stream(
     """读取流式响应：正文、用量，以及有没有收到推理内容。
 
     Args:
-        stream: litellm 的流式响应。
+        stream: litellm 的流式响应，或直连网关时由 `_direct_chat_stream` 生成的同形分片。
         tools: 收集工具调用的收集器；不需要时传 None。
         on_first_output: 第一次收到非空正文或推理内容时调用一次，测速用它记延迟。
 
@@ -393,8 +396,8 @@ def _probe_attempt(
 
 
 @dataclass
-class _EmbeddingClientEntry:
-    """同一个事件循环里共用的一条嵌入 HTTP 客户端（D128）。"""
+class _SharedClientEntry:
+    """同一个事件循环里共用的一条 HTTP 客户端（D128、D131）。"""
 
     loop: asyncio.AbstractEventLoop
     transport: httpx.AsyncBaseTransport | None
@@ -402,18 +405,18 @@ class _EmbeddingClientEntry:
     client: httpx.AsyncClient
 
 
-_EMBEDDING_CLIENTS: list[_EmbeddingClientEntry] = []
+_SHARED_CLIENTS: list[_SharedClientEntry] = []
 
 
-def _embedding_client(
+def _shared_client(
     transport: httpx.AsyncBaseTransport | None, *, trust_env: bool
 ) -> httpx.AsyncClient:
-    """取得当前事件循环共用的嵌入客户端，保留连接池（D128）。
+    """取得当前事件循环共用的 HTTP 客户端，保留连接池（D128、D131）。
 
     客户端绑定事件循环，不能跨循环共用，所以按循环分开；transport 只用于测试。
     """
     loop = asyncio.get_running_loop()
-    for entry in _EMBEDDING_CLIENTS:
+    for entry in _SHARED_CLIENTS:
         if (
             entry.loop is loop
             and entry.transport is transport
@@ -422,41 +425,41 @@ def _embedding_client(
         ):
             return entry.client
     client = httpx.AsyncClient(transport=transport, trust_env=trust_env)
-    _EMBEDDING_CLIENTS.append(_EmbeddingClientEntry(loop, transport, trust_env, client))
+    _SHARED_CLIENTS.append(_SharedClientEntry(loop, transport, trust_env, client))
     return client
 
 
-async def close_embedding_clients() -> None:
-    """关闭当前事件循环里共用的嵌入客户端（D128）。"""
+async def close_shared_clients() -> None:
+    """关闭当前事件循环里共用的 HTTP 客户端（D128、D131）。"""
     loop = asyncio.get_running_loop()
-    for entry in list(_EMBEDDING_CLIENTS):
+    for entry in list(_SHARED_CLIENTS):
         if entry.loop is loop:
-            _EMBEDDING_CLIENTS.remove(entry)
+            _SHARED_CLIENTS.remove(entry)
             await entry.client.aclose()
 
 
-def _close_embedding_clients_at_exit() -> None:
-    """进程退出时关闭所有还开着的嵌入客户端（D128）。
+def _close_shared_clients_at_exit() -> None:
+    """进程退出时关闭所有还开着的共享客户端（D128）。
 
     正式运行的 asyncio.run 结束时，事件循环已经关闭，不能再在里面等待；
     这里用一个短循环关闭连接池。仍在别的线程运行的循环交给它自己收尾。
     """
-    entries = list(_EMBEDDING_CLIENTS)
-    _EMBEDDING_CLIENTS.clear()
+    entries = list(_SHARED_CLIENTS)
+    _SHARED_CLIENTS.clear()
     for entry in entries:
         if entry.client.is_closed or entry.loop.is_running():
             continue
         try:
             asyncio.run(entry.client.aclose())
         except Exception as error:
-            logger.debug("退出时关闭嵌入客户端失败：{}", type(error).__name__)
+            logger.debug("退出时关闭共享客户端失败：{}", type(error).__name__)
 
 
-atexit.register(_close_embedding_clients_at_exit)
+atexit.register(_close_shared_clients_at_exit)
 
 
 def _request_time() -> float:
-    """嵌入请求的计时点；测试可以换成假时钟（D128）。"""
+    """直连请求的计时点；测试可以换成假时钟（D128）。"""
     return asyncio.get_running_loop().time()
 
 
@@ -483,7 +486,7 @@ async def _post_embeddings(
         带 data 和 usage 的响应；data 由调用方校验。
     """
     headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
-    client = _embedding_client(transport, trust_env=not local)
+    client = _shared_client(transport, trust_env=not local)
     started = _request_time() if on_request is not None else 0.0
     response = await client.post(
         base + "/embeddings", headers=headers, json=payload, timeout=params["timeout"]
@@ -506,6 +509,221 @@ async def _post_embeddings(
             prompt_tokens=usage.get("prompt_tokens", usage.get("total_tokens")),
             completion_tokens=0,
         ),
+    )
+
+
+def _tool_call_object(raw: Any) -> Any:
+    """把 OpenAI 的 tool_calls 转成 litellm 那样的属性形状（D131）。"""
+    if not isinstance(raw, dict):
+        return raw
+    function = raw.get("function")
+    function_object = SimpleNamespace(name=None, arguments=None)
+    if isinstance(function, dict):
+        function_object = SimpleNamespace(
+            name=function.get("name"), arguments=function.get("arguments")
+        )
+    fields = {key: raw[key] for key in ("id", "index", "type") if key in raw}
+    return SimpleNamespace(**fields, function=function_object)
+
+
+def _usage_object(raw: Any) -> SimpleNamespace | None:
+    """把 OpenAI 的 usage 转成 `extract_usage` 认识的形状；缺字段保持 None。"""
+    if not isinstance(raw, dict):
+        return None
+    details = raw.get("prompt_tokens_details")
+    return SimpleNamespace(
+        prompt_tokens=raw.get("prompt_tokens"),
+        completion_tokens=raw.get("completion_tokens"),
+        prompt_tokens_details=(
+            SimpleNamespace(cached_tokens=details.get("cached_tokens"))
+            if isinstance(details, dict)
+            else None
+        ),
+    )
+
+
+def _chat_message(message: dict[str, Any]) -> SimpleNamespace:
+    """把 OpenAI 的 message 或 delta 转成 litellm 那样的对象（D131）。"""
+    fields: dict[str, Any] = {"content": message.get("content")}
+    for name in ("reasoning_content", "reasoning"):
+        if name in message:
+            fields[name] = message[name]
+    calls = message.get("tool_calls")
+    if calls is not None:
+        fields["tool_calls"] = (
+            [_tool_call_object(call) for call in calls] if isinstance(calls, list) else calls
+        )
+    return SimpleNamespace(**fields)
+
+
+def _chat_response(result: dict[str, Any]) -> Any:
+    """把非流式 `/chat/completions` 返回体转成 litellm 的响应形状（D131）。"""
+    choices: list[SimpleNamespace] = []
+    raw_choices = result.get("choices")
+    if isinstance(raw_choices, list):
+        for raw in raw_choices:
+            if not isinstance(raw, dict):
+                continue
+            message = raw.get("message")
+            choices.append(
+                SimpleNamespace(
+                    message=_chat_message(message if isinstance(message, dict) else {})
+                )
+            )
+    response = SimpleNamespace(choices=choices)
+    usage = _usage_object(result.get("usage"))
+    if usage is not None:
+        response.usage = usage
+    return response
+
+
+def _stream_chunk(result: dict[str, Any]) -> Any:
+    """把一条流式 `/chat/completions` 数据转成 litellm 的流式分片形状（D131）。"""
+    choices: list[SimpleNamespace] = []
+    raw_choices = result.get("choices")
+    if isinstance(raw_choices, list):
+        for raw in raw_choices:
+            if not isinstance(raw, dict):
+                continue
+            delta = raw.get("delta")
+            choices.append(
+                SimpleNamespace(
+                    delta=_chat_message(delta if isinstance(delta, dict) else {}),
+                    finish_reason=raw.get("finish_reason"),
+                )
+            )
+    chunk = SimpleNamespace(choices=choices)
+    usage = _usage_object(result.get("usage"))
+    if usage is not None:
+        chunk.usage = usage
+    return chunk
+
+
+def _chat_headers(api_key: str | None) -> dict[str, str]:
+    return {"Authorization": "Bearer " + api_key} if api_key else {}
+
+
+async def _post_chat(
+    base: str,
+    payload: dict[str, Any],
+    timeout: float,
+    *,
+    api_key: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    on_request: Callable[[float], None] | None = None,
+) -> Any:
+    """直接请求回环 OpenAI 兼容网关的 `/chat/completions`（D131）。
+
+    Args:
+        base: 服务商地址，末尾不带斜杠。
+        payload: 请求体。
+        timeout: 服务商配置的超时（秒）。
+        api_key: 有密钥时放进 Authorization 头。
+        transport: 测试用的假网络；正式运行传 None。
+        on_request: 收到完整响应后回调这次请求的耗时（秒），测速用。
+
+    Returns:
+        与 litellm 非流式响应形状一致的响应。
+    """
+    client = _shared_client(transport, trust_env=False)
+    started = _request_time() if on_request is not None else 0.0
+    response = await client.post(
+        base + "/chat/completions",
+        headers=_chat_headers(api_key),
+        json=payload,
+        timeout=timeout,
+    )
+    if on_request is not None:
+        on_request(_request_time() - started)
+    response.raise_for_status()
+    try:
+        result = response.json()
+    except ValueError as error:
+        raise _RouteFailureError(EMPTY_REPLY_REASON) from error
+    if not isinstance(result, dict):
+        raise _RouteFailureError(EMPTY_REPLY_REASON)
+    return _chat_response(result)
+
+
+async def _direct_chat_stream(
+    base: str,
+    payload: dict[str, Any],
+    timeout: float,
+    *,
+    api_key: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> AsyncIterator[Any]:
+    """直接读取回环 OpenAI 兼容网关的流式 `/chat/completions`（D131）。"""
+    client = _shared_client(transport, trust_env=False)
+    async with client.stream(
+        "POST",
+        base + "/chat/completions",
+        headers=_chat_headers(api_key),
+        json=payload,
+        timeout=timeout,
+    ) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line.removeprefix("data:").strip()
+            if not data:
+                continue
+            if data == "[DONE]":
+                break
+            try:
+                result = json.loads(data)
+            except ValueError as error:
+                raise _RouteFailureError(EMPTY_REPLY_REASON) from error
+            if not isinstance(result, dict):
+                raise _RouteFailureError(EMPTY_REPLY_REASON)
+            yield _stream_chunk(result)
+
+
+async def _send_chat(
+    route: ModelRoute,
+    completion: CompletionFunction | None,
+    kwargs: dict[str, Any],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    on_request: Callable[[float], None] | None = None,
+) -> Any:
+    """按路线发出一次对话请求：回环 OpenAI 兼容服务商直连，其余走 litellm（D131）。
+
+    Args:
+        route: 这次走的模型路线。
+        completion: litellm 的调用函数；本地直连时用不到，可以是 None。
+        kwargs: litellm 风格的请求参数（模型、消息、超时等）。
+        transport: 测试用的假网络；正式运行传 None。
+        on_request: 直连非流式请求的耗时回调，测速用。
+
+    Returns:
+        非流式响应，或可直接读取的流式响应。
+    """
+    endpoint = local_chat_endpoint(route)
+    if endpoint is None:
+        assert completion is not None  # 远程路线在构造器官时已加载 litellm。
+        return await completion(**kwargs)
+    payload = {"model": route.model.identifier}
+    for key in (
+        "messages",
+        "temperature",
+        "max_tokens",
+        "reasoning_effort",
+        "tools",
+        "stream",
+        "stream_options",
+    ):
+        if key in kwargs:
+            payload[key] = kwargs[key]
+    timeout = kwargs["timeout"]
+    api_key = kwargs.get("api_key")
+    if payload.get("stream"):
+        return _direct_chat_stream(
+            endpoint, payload, timeout, api_key=api_key, transport=transport
+        )
+    return await _post_chat(
+        endpoint, payload, timeout, api_key=api_key, transport=transport, on_request=on_request
     )
 
 
@@ -559,7 +777,6 @@ async def probe_model(
         params = _provider_arguments(provider, resolver)
     except _RouteFailureError as error:
         raise OrganCallError(organ_id, [error.reason]) from None
-    library = await asyncio.to_thread(_import_litellm)
     embedding = model.kind == "embedding"
     transcription = model.kind == "transcription"
     capability = capability or (model.kind if embedding or transcription else "text")
@@ -575,6 +792,15 @@ async def probe_model(
             raise OrganCallError(organ_id, ["Anthropic 协议没有嵌入接口。"])
         if protocol == "openai_responses":
             protocol = "openai"
+    endpoint = None if embedding or transcription else local_chat_endpoint(route)
+    # 回环 OpenAI 兼容对话直连，不导入 litellm（D131）；其余能力照旧走 litellm。
+    library = None if endpoint is not None else await asyncio.to_thread(_import_litellm)
+    completion: CompletionFunction | None = None
+    if not embedding and not transcription and library is not None:
+        completion = library.acompletion
+    if endpoint is not None:
+        # 先把共享客户端建好，测速延迟只从真正发出请求算起（D131）。
+        _shared_client(transport, trust_env=False)
     params["model"] = LITELLM_PREFIX_BY_PROTOCOL[protocol] + model.identifier
     loop = asyncio.get_running_loop()
     started = loop.time()
@@ -591,87 +817,106 @@ async def probe_model(
         inputs, 0 if embedding or transcription else _MODEL_TEST_MAX_TOKENS
     )
     try:
-        async with asyncio.timeout(provider.timeout_seconds):
-            if transcription:
+        if transcription:
+            assert library is not None
+            async with asyncio.timeout(provider.timeout_seconds):
                 result = await library.atranscription(file=_probe_audio(), **params)
-                if isinstance(result.text, str):
-                    latency = loop.time() - started
-                    reply = result.text.strip() or "接口已返回，静音没有可转写的文字。"
-                actual = extract_usage(result)
-                if actual.known:
-                    usage = actual
-            elif embedding:
-                result = await library.aembedding(**inputs, **params)
-                if result.data and result.data[0].get("embedding"):
-                    latency = loop.time() - started
-                    reply = json.dumps(result.data[0]["embedding"])
-                actual = extract_usage(result)
-                if actual.known:
-                    usage = actual
-            elif capability == "tools":
-                result = await library.acompletion(
-                    **inputs, max_tokens=_MODEL_TEST_MAX_TOKENS, **params
-                )
+            if isinstance(result.text, str):
                 latency = loop.time() - started
-                actual = extract_usage(result)
-                if actual.known:
-                    usage = actual
-                message = result.choices[0].message
-                calls = getattr(message, "tool_calls", None) or []
-                reply = (
-                    json.dumps(
-                        [
-                            {"name": call.function.name, "arguments": call.function.arguments}
-                            for call in calls
-                        ],
-                        ensure_ascii=False,
-                    )
-                    if calls
-                    else (message.content or "")
+                reply = result.text.strip() or "接口已返回，静音没有可转写的文字。"
+            actual = extract_usage(result)
+            if actual.known:
+                usage = actual
+        elif embedding:
+            assert library is not None
+            async with asyncio.timeout(provider.timeout_seconds):
+                result = await library.aembedding(**inputs, **params)
+            if result.data and result.data[0].get("embedding"):
+                latency = loop.time() - started
+                reply = json.dumps(result.data[0]["embedding"])
+            actual = extract_usage(result)
+            if actual.known:
+                usage = actual
+        elif capability == "tools":
+            measured: list[float] = []
+            async with asyncio.timeout(provider.timeout_seconds):
+                result = await _send_chat(
+                    route,
+                    completion,
+                    {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                    transport=transport,
+                    on_request=measured.append,
                 )
-                if (
-                    len(calls) != 1
-                    or calls[0].function.name != "echo"
-                    or json.loads(calls[0].function.arguments) != {"value": "OK"}
-                ):
-                    failure = "工具调用名称或参数与测试要求不符。"
-            else:
-                stream = await library.acompletion(
-                    **inputs,
-                    stream=True,
-                    max_tokens=_MODEL_TEST_MAX_TOKENS,
-                    **params,
+            latency = measured[-1] if measured else loop.time() - started
+            actual = extract_usage(result)
+            if actual.known:
+                usage = actual
+            message = result.choices[0].message
+            calls = getattr(message, "tool_calls", None) or []
+            reply = (
+                json.dumps(
+                    [
+                        {"name": call.function.name, "arguments": call.function.arguments}
+                        for call in calls
+                    ],
+                    ensure_ascii=False,
+                )
+                if calls
+                else (message.content or "")
+            )
+            if (
+                len(calls) != 1
+                or calls[0].function.name != "echo"
+                or json.loads(calls[0].function.arguments) != {"value": "OK"}
+            ):
+                failure = "工具调用名称或参数与测试要求不符。"
+        else:
+            async with asyncio.timeout(provider.timeout_seconds):
+                stream = await _send_chat(
+                    route,
+                    completion,
+                    {
+                        **params,
+                        **inputs,
+                        "stream": True,
+                        "max_tokens": _MODEL_TEST_MAX_TOKENS,
+                    },
+                    transport=transport,
                 )
                 text, usage, reasoning = await _read_stream(stream, on_first_output=mark_latency)
-                reply = text or ""
-                if text is None:
-                    # 流式没有正文：同一请求去掉 stream 再试一次（D127）。这次重试先按
-                    # 一次请求估算，拿到非流式响应的真实用量再覆盖（用量以非流式为准）。
-                    if not usage.known:
-                        usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
-                    attempts.append(
-                        _probe_attempt(
-                            model,
-                            provider,
-                            usage,
-                            REASONING_ONLY_REASON if reasoning else EMPTY_REPLY_REASON,
-                        )
-                    )
+            reply = text or ""
+            if text is None:
+                # 流式没有正文：同一请求去掉 stream 再试一次（D127）。这次重试先按
+                # 一次请求估算，拿到非流式响应的真实用量再覆盖（用量以非流式为准）。
+                if not usage.known:
                     usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
-                    result = await library.acompletion(
-                        **inputs, max_tokens=_MODEL_TEST_MAX_TOKENS, **params
+                attempts.append(
+                    _probe_attempt(
+                        model,
+                        provider,
+                        usage,
+                        REASONING_ONLY_REASON if reasoning else EMPTY_REPLY_REASON,
                     )
-                    actual = extract_usage(result)
-                    if actual.known:
-                        usage = actual
-                    text = _read_text(result)
-                    reasoning = reasoning or _read_reasoning(result)
-                    if text is not None:
-                        reply = text
-                        latency = loop.time() - started
-                    elif reasoning:
-                        reply = REASONING_ONLY_REASON
-                        latency = loop.time() - started
+                )
+                usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
+                async with asyncio.timeout(provider.timeout_seconds):
+                    result = await _send_chat(
+                        route,
+                        completion,
+                        {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                        transport=transport,
+                    )
+                actual = extract_usage(result)
+                if actual.known:
+                    usage = actual
+                text = _read_text(result)
+                reasoning = reasoning or _read_reasoning(result)
+                if text is not None:
+                    reply = text
+                    latency = loop.time() - started
+                elif reasoning:
+                    reply = REASONING_ONLY_REASON
+                    latency = loop.time() - started
     except Exception as error:
         failure = _failure_reason(error)
         if _rejected_before_processing(error):
@@ -881,18 +1126,12 @@ class EmbeddingOrgan:
         )
 
 
-def local_expression_endpoint(route: ModelRoute) -> str | None:
-    """只接受明确的免费 OpenAI 兼容回环端点；不用代理、跳转或 DNS（D101）。"""
-    provider, model = route.provider, route.model
-    if (
-        model.kind != "embedding"
-        or provider.protocol not in ("openai", "openai_responses")
-        or not provider.base_url
-        or any((model.price_in, model.price_out, model.price_cache_in))
-    ):
+def _loopback_endpoint(base_url: str | None) -> str | None:
+    """校验回环地址并返回规范化的服务商地址；不解析 DNS、不走代理（D101）。"""
+    if not base_url:
         return None
     try:
-        url = httpx.URL(provider.base_url)
+        url = httpx.URL(base_url)
         host = "127.0.0.1" if url.host == "localhost" else url.host
         if (
             url.scheme not in ("http", "https")
@@ -906,6 +1145,28 @@ def local_expression_endpoint(route: ModelRoute) -> str | None:
     except (ValueError, httpx.InvalidURL):
         return None
     return str(url.copy_with(host=host)).rstrip("/")
+
+
+def local_expression_endpoint(route: ModelRoute) -> str | None:
+    """只接受明确的免费 OpenAI 兼容回环端点；不用代理、跳转或 DNS（D101）。"""
+    provider, model = route.provider, route.model
+    if (
+        model.kind != "embedding"
+        or provider.protocol not in ("openai", "openai_responses")
+        or any((model.price_in, model.price_out, model.price_cache_in))
+    ):
+        return None
+    return _loopback_endpoint(provider.base_url)
+
+
+def local_chat_endpoint(route: ModelRoute) -> str | None:
+    """回环地址的 OpenAI 兼容对话服务商直连 `/chat/completions`（D131）。
+
+    只接受 openai 协议：openai_responses 走的是另一套接口，保持原路径。
+    """
+    if route.model.kind != "llm" or route.provider.protocol != "openai":
+        return None
+    return _loopback_endpoint(route.provider.base_url)
 
 
 def _read_embedding_batch(data: Any, size: int) -> tuple[tuple[float, ...], ...]:
@@ -1037,6 +1298,7 @@ class LLMOrgan:
         sleep: SleepFunction | None = None,
         *,
         prompts: PromptStore | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         llm_routes = conversational_routes(organ_id, routes)
         if routes and not llm_routes:
@@ -1056,6 +1318,8 @@ class LLMOrgan:
         self._token_counter = token_counter or count_prompt_tokens
         self._sleep = sleep or asyncio.sleep
         self._prompts = prompts
+        # 测试用的假网络；本地回环对话直连时传给共享客户端（D131）。
+        self._transport = transport
 
     @classmethod
     def from_config(
@@ -1066,6 +1330,8 @@ class LLMOrgan:
         completion: CompletionFunction | None = None,
         token_counter: TokenCounter | None = None,
         sleep: SleepFunction | None = None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> Self:
         """按 models.toml 的配置创建某个器官。
 
@@ -1076,6 +1342,7 @@ class LLMOrgan:
             completion: 调用大模型的函数；不传就用 litellm。
             token_counter: 估算输入 token 数的函数；不传就用 litellm 的计数工具。
             sleep: 重试之间的等待函数；不传就用 asyncio.sleep。
+            transport: 测试用的假网络；正式运行不传。
 
         Returns:
             这个器官的 LLMOrgan。
@@ -1084,7 +1351,13 @@ class LLMOrgan:
             ConfigError: 配置里没有这个器官，或者它没有对话模型。
         """
         return cls(
-            organ_id, config.routes_for(organ_id), key_resolver, completion, token_counter, sleep
+            organ_id,
+            config.routes_for(organ_id),
+            key_resolver,
+            completion,
+            token_counter,
+            sleep,
+            transport=transport,
         )
 
     async def process(self, request: OrganRequest) -> OrganResponse:
@@ -1283,7 +1556,9 @@ class LLMOrgan:
         try:
             completion = self._completion
             assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
-            response = await completion(**kwargs)
+            response = await _send_chat(
+                route, completion, kwargs, transport=self._transport
+            )
             if kwargs.get("stream"):
                 text, usage, reasoning_only = await _read_stream(response, tools)
                 if text is None and (tools is None or tools.finish() == ()):
@@ -1303,7 +1578,9 @@ class LLMOrgan:
                         for key, value in kwargs.items()
                         if key not in ("stream", "stream_options")
                     }
-                    response = await completion(**retry_kwargs)
+                    response = await _send_chat(
+                        route, completion, retry_kwargs, transport=self._transport
+                    )
                     usage = extract_usage(response)
                     text = _read_text(response)
                     reasoning_only = reasoning_only or _read_reasoning(response)

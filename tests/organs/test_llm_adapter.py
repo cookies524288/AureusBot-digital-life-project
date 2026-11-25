@@ -33,11 +33,17 @@ from aureus.organs.llm_adapter import (
     RETRY_BACKOFF_SECONDS,
     EmbeddingOrgan,
     LLMOrgan,
-    close_embedding_clients,
+    close_shared_clients,
     count_prompt_tokens,
     probe_model,
 )
-from aureus.organs.model_config import ModelConfig, ModelRoute, ModelsConfig, ProviderConfig
+from aureus.organs.model_config import (
+    ModelConfig,
+    ModelRoute,
+    ModelsConfig,
+    ProviderConfig,
+    ReasoningLevel,
+)
 
 
 @pytest.mark.asyncio
@@ -577,7 +583,7 @@ async def test_local_embedding_probe_uses_direct_client(
     assert response.metadata["kind"] == "embedding"
     assert response.attempts[0].prompt_tokens == 3
     assert bodies == [{"model": "local-embed", "input": [_MODEL_TEST_INPUT]}]
-    await close_embedding_clients()
+    await close_shared_clients()
 
 
 @pytest.mark.parametrize(
@@ -607,7 +613,7 @@ async def test_local_embedding_probe_failures_are_reported(
 
     assert error.value.attempts[0].succeeded is False
     assert error.value.attempts[0].failure_reason == reason
-    await close_embedding_clients()
+    await close_shared_clients()
 
 
 @pytest.mark.asyncio
@@ -634,7 +640,7 @@ async def test_probe_latency_excludes_client_creation(
     )
 
     assert response.metadata["latency_ms"] == 7
-    await close_embedding_clients()
+    await close_shared_clients()
 
 
 @pytest.mark.asyncio
@@ -667,7 +673,7 @@ async def test_embedding_client_is_reused_between_calls(
 
     assert len(created) == 1
     assert len(requests) == 2
-    await close_embedding_clients()
+    await close_shared_clients()
 
 
 @pytest.mark.asyncio
@@ -697,12 +703,12 @@ async def test_embedding_client_closes_on_shutdown(
     assert len(created) == 1
     assert not created[0].is_closed
 
-    await close_embedding_clients()
+    await close_shared_clients()
 
     assert created[0].is_closed
     await organ.process(request)
     assert len(created) == 2
-    await close_embedding_clients()
+    await close_shared_clients()
 
 
 @pytest.mark.asyncio
@@ -721,6 +727,111 @@ async def test_remote_embedding_still_uses_litellm(
     assert response.attempts[0].budget_tokens == 5
     assert embedding.calls[0]["model"] == "openai/big-model"
     assert len(embedding.calls[0]["input"]) == 1
+
+
+LOCAL_CHAT_URL = "http://127.0.0.1:12345/v1"
+
+
+def local_chat_route(
+    *,
+    vision: bool = False,
+    prices: bool = False,
+    reasoning: bool = False,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    reasoning_effort: ReasoningLevel | None = None,
+) -> ModelRoute:
+    provider = ProviderConfig(name="local-chat", protocol="openai", base_url=LOCAL_CHAT_URL)
+    model = ModelConfig(
+        name="local-chat",
+        identifier="magpie-chat",
+        provider="local-chat",
+        vision=vision,
+        price_in=4.0 if prices else None,
+        price_out=8.0 if prices else None,
+        price_cache_in=1.0 if prices else None,
+        reasoning_levels=("high",) if reasoning else (),
+    )
+    return ModelRoute(model, provider, temperature, max_tokens, reasoning_effort)
+
+
+def local_chat_organ(
+    keys: KeyResolver,
+    transport: httpx.AsyncBaseTransport,
+    *,
+    organ_id: str = "replyer",
+    **route_kwargs: Any,
+) -> LLMOrgan:
+    return LLMOrgan(
+        organ_id,
+        [local_chat_route(**route_kwargs)],
+        keys,
+        FakeCompletion(),
+        fixed_counter,
+        transport=transport,
+    )
+
+
+def sse_response(*chunks: dict[str, Any]) -> httpx.Response:
+    body = "".join(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks)
+    return httpx.Response(
+        200,
+        content=(body + "data: [DONE]\n\n").encode("utf-8"),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_chat_probe_uses_direct_http(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_import() -> Any:
+        raise AssertionError("本地对话不应导入 litellm")
+
+    monkeypatch.setattr(llm_adapter, "_import_litellm", fail_import)
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == LOCAL_CHAT_URL + "/chat/completions"
+        bodies.append(json.loads(request.content))
+        return sse_response({"choices": [{"delta": {"content": "OK"}}]})
+
+    route = local_chat_route()
+    result = await probe_model(
+        route.model, route.provider, keys, transport=httpx.MockTransport(respond)
+    )
+
+    assert result.suggestion == "OK"
+    assert result.metadata["latency_ms"] >= 0
+    assert bodies == [
+        {
+            "model": "magpie-chat",
+            "messages": [{"role": "user", "content": _MODEL_TEST_INPUT}],
+            "max_tokens": 32,
+            "stream": True,
+        }
+    ]
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_remote_chat_still_uses_litellm(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        yield make_stream_chunk(content="远程")
+
+    completion = FakeCompletion(chunks())
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    result = await probe_model(config.models[0], config.providers[0], keys)
+
+    assert result.suggestion == "远程"
+    assert completion.calls[0]["model"] == "openai/big-model"
+    assert completion.calls[0]["api_base"] == "https://api.example.com/v1"
+    assert completion.calls[0]["stream"] is True
 
 
 @pytest.mark.asyncio
