@@ -202,7 +202,7 @@ def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None
     ) -> ModelRuntime:
         assert not fake_organs
         bus = OrganBus()
-        for organ_id in ("planner", "replyer", "summarizer"):
+        for organ_id in ("planner", "replyer", "summarizer", "utils"):
             bus.register(RecordingOrgan(organ_id, []))
         return ModelRuntime(bus, resolver, fake_organs=True)
 
@@ -361,7 +361,7 @@ async def test_qq_chat_entry_learns_once_and_recalls_across_group_and_private(
     request_log = tmp_path / "organ-requests.jsonl"
     samples = [
         event(number, 2100, f"跑步第 {number} 场：GG，月兔冲线。", group=GROUP)
-        for number in range(101, 105)
+        for number in range(101, 112)
     ]
     async with asyncio.timeout(60), serve(fake.handle, "127.0.0.1", 0) as server:
         qq_port = server.sockets[0].getsockname()[1]
@@ -370,6 +370,9 @@ async def test_qq_chat_entry_learns_once_and_recalls_across_group_and_private(
 port = {available_port()}
 [heartbeat]
 planning_enabled = true
+inbox_debounce_enabled = false
+working_memory_capacity = 22
+working_memory_retain = 2
 split_reply_enabled = false
 tick_interval_seconds = 1
 [body]
@@ -378,6 +381,7 @@ sleep_enabled = false
 enabled = false
 [language]
 learning_enabled = true
+expression_quality_enabled = false
 [diary]
 enabled = false
 [qq]
@@ -396,13 +400,13 @@ token_key = "{TOKEN_ENV}"
                 assert reply["group_id"] == str(GROUP)
                 assert [part["type"] for part in reply["message"]] == ["text"]
             async with asyncio.timeout(10):
-                while sum(entry.count for entry in store.entries(LanguageKind.JARGON)) < 4:
+                while sum(entry.count for entry in store.entries(LanguageKind.JARGON)) < 10:
                     await asyncio.sleep(0.05)
 
         async with run_chat(paths, request_log=request_log):
             remote = await fake.connections.get()
             await fake.send(remote, **samples[0])
-            await fake.send(remote, **event(105, 2200, "gg，来聊跑步。"))
+            await fake.send(remote, **event(112, 2200, "gg，来聊跑步。"))
             reply = await fake.messages.get()
             assert reply == {
                 "message_type": "private",
@@ -421,20 +425,16 @@ token_key = "{TOKEN_ENV}"
         timeline.close()
     inbound = [message for message in messages if message.actor_type is ActorType.PERSON]
     assert [message.metadata["source_message_id"] for message in inbound] == [
-        "9000:101",
-        "9000:102",
-        "9000:103",
-        "9000:104",
-        "9000:105",
+        *(f"9000:{number}" for number in range(101, 113)),
     ]
-    evidence_ids = tuple(message.id for message in inbound[:4])
+    evidence_ids = tuple(message.id for message in inbound[:10])
     expression = store.entries(LanguageKind.EXPRESSION)
     assert [(entry.text, entry.count, entry.evidence_ids) for entry in expression] == [
-        ("月兔冲线", 4, evidence_ids)
+        ("月兔冲线", 10, evidence_ids)
     ]
     jargon = store.entries(LanguageKind.JARGON)
     assert [(entry.text, entry.detail, entry.count, entry.evidence_ids) for entry in jargon] == [
-        ("GG", "抵达终点", 4, evidence_ids)
+        ("GG", "抵达终点", 10, evidence_ids)
     ]
 
     requests = [json.loads(line) for line in request_log.read_text(encoding="utf-8").splitlines()]
@@ -444,7 +444,10 @@ token_key = "{TOKEN_ENV}"
         if request["task"] == "learn_jargon"
         for sample in request["samples"]
     ]
-    assert learned_texts in ([row.content for row in inbound[:4]], [row.content for row in inbound])
+    assert learned_texts in (
+        [row.content for row in inbound[:10]],
+        [row.content for row in inbound],
+    )
     private_requests = {
         request["organ"]: request
         for request in requests
