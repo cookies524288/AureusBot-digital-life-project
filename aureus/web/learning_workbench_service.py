@@ -286,9 +286,9 @@ class LearningWorkbench:
                 if entry.description
                 else "unknown",
                 "emotion": ",".join(entry.tags) or None,
-                "record_time": 0,
-                "register_time": None,
-                "last_used_time": None,
+                "record_time": entry.collected_at or 0,
+                "register_time": entry.collected_at if entry.is_registered else None,
+                "last_used_time": entry.last_used_at,
             }
             for entry in entries
         ]
@@ -298,9 +298,38 @@ class LearningWorkbench:
         if self.emojis is None:
             raise ValueError("表情库当前关闭。")
         keys = self.emojis.resolve_workbench_ids((identifier,))
-        entry = next(
-            (entry for entry in self.emoji_rows() if entry.entry_key == keys.get(identifier)), None
-        )
+        entry_key = keys.get(identifier)
+        entry = self.emojis.catalog_entry(entry_key) if entry_key is not None else None
+        if entry is None:
+            removed = self.emojis.catalog_entry(entry_key, removed=True) if entry_key else None
+            if removed is not None:
+                raise LookupError("这张表情已移除。")
+            raise LookupError("找不到这张表情。")
+        return entry
+
+    def find_emoji(self, identifier: int) -> EmojiRecord:
+        """解析旧式整数编号，仅用于上传可能产生的待审批记录。"""
+        if self.emojis is None:
+            raise ValueError("表情库当前关闭。")
+        keys = self.emojis.resolve_workbench_ids((identifier,))
+        key = keys.get(identifier)
+        entry = self.emojis.catalog_entry(key) if key else None
         if entry is None:
             raise LookupError("找不到这张表情。")
         return entry
+
+    def set_emoji_removed(self, identifiers: Sequence[int], removed: bool) -> bool:
+        """使用同一 EmojiStore 的可逆移除标记。"""
+        if self.emojis is None:
+            raise ValueError("表情库当前关闭。")
+        keys = self.emojis.resolve_workbench_ids(identifiers)
+        if any(identifier not in keys for identifier in identifiers):
+            return False
+        entry_keys = [keys[identifier] for identifier in identifiers]
+        return self.emojis.set_removed(entry_keys, removed)
+
+    def emoji_counts(self) -> dict[str, int]:
+        """使用目录存储返回真实计数。"""
+        if self.emojis is None:
+            raise ValueError("表情库当前关闭。")
+        return self.emojis.catalog_counts()

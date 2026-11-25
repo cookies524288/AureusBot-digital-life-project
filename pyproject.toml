@@ -25,6 +25,7 @@ dependencies = [
     "pillow>=13.0.0",
     "platformdirs>=4.14.5",
     "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.34",
     "tomlkit>=0.15.2",
     "tzdata>=2026.6",
     "uvicorn[standard]>=0.54.0",
