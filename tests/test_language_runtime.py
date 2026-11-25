@@ -310,7 +310,8 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
         await feed(113, 124, "再来 再来 月兔冲线")
         await settle()
         assert learn_calls() == first_count
-        assert heart.language_learning_status()["pending"] > 0
+        pending_partial = heart.language_learning_status()["pending"]
+        assert isinstance(pending_partial, int) and pending_partial > 0
         clock.advance(timedelta(seconds=1))
         await settle()
         assert learn_calls() == first_count + 2
@@ -328,7 +329,7 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
         await feed(125, 148, "取消后可重试")
         await settle()
         pending_blocked = heart.language_learning_status()["pending"]
-        assert pending_blocked > 0
+        assert isinstance(pending_blocked, int) and pending_blocked > 0
 
         async def beat_until_started() -> None:
             for _ in range(8):

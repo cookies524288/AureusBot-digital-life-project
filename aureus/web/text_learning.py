@@ -150,7 +150,10 @@ async def extract_candidates(
                 {
                     "title": candidate.title,
                     "description": candidate.description,
-                    "evidence": sources.get(candidate.source_id, ""),
+                    "evidence": (
+                        "" if candidate.source_id is None
+                        else sources.get(candidate.source_id, "")
+                    ),
                 }
             )
     return result

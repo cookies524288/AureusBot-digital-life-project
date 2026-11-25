@@ -7,7 +7,7 @@
 import asyncio
 import json
 import sqlite3
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import uuid4
@@ -698,7 +698,7 @@ def register_learning_workbench_routes(
             raise HTTPException(422, "请使用批量表情上传表单。")
         too_large = False
 
-        async def bounded_body() -> AsyncIterator[bytes]:
+        async def bounded_body() -> AsyncGenerator[bytes, None]:
             nonlocal too_large
             size = 0
             async for chunk in request.stream():

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from aureus.channels import WebChannel
-from aureus.common import LanguageConfig
+from aureus.common import LanguageConfig, ManualClock
 from aureus.memory import LanguageContent, LanguageKind
 from aureus.memory.language_matching import JargonStatus
 from aureus.web import create_app
@@ -22,15 +22,17 @@ from tests.web.test_server import FakeHeartbeat
 
 def test_summary_fields_follow_clock_and_current_records(tmp_path: Path) -> None:
     client, service, scopes = _client(tmp_path)
+    clock = service.clock
+    assert isinstance(clock, ManualClock)
     with client:
         summary = "/api/webui/expression/stats/summary"
         assert client.get(summary).raise_for_status().json()["data"]["recent_7days"] == 0
         client.post("/api/webui/expression/", json={
             "style": "旧说法", "situation": "庆祝", "chat_id": "source-a",
         }).raise_for_status()
-        service.clock.advance(timedelta(days=7))
+        clock.advance(timedelta(days=7))
         assert client.get(summary).raise_for_status().json()["data"]["recent_7days"] == 1
-        service.clock.advance(timedelta(seconds=1))
+        clock.advance(timedelta(seconds=1))
         client.post("/api/webui/expression/", json={
             "style": "新说法", "situation": "庆祝", "chat_id": "source-b",
         }).raise_for_status()
