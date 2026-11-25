@@ -4,6 +4,7 @@
 
 | 本项目的文件 | 来源 | 原许可证 | 我们改了什么 |
 |---|---|---|---|
+| `aureus/memory/emoji_thumbnails.py` | MaiBot 1.3.15 [缩略图服务](https://github.com/Mai-with-u/MaiBot/blob/062d45c/src/webui/routers/emoji/support.py) | GPL-3.0 | 沿用首帧、色彩模式转换、Lanczos 和 WebP 参数；改用同库内容地址、原子写入、数据目录与大小上限。 |
 | `aureus/heartbeat/speech.py` | MaiBot `src/chat/utils/utils.py` 里的 `_split_into_sentence_segments`、`_merge_processed_segments_to_max_count`、`protect_kaomoji`、`recover_kaomoji`，https://github.com/Mai-with-u/MaiBot/blob/main/src/chat/utils/utils.py | GPL-3.0 | 去掉按概率合并的随机步骤，改成确定性的；只在句号、感叹号、问号、分号和换行处拆；条数超限时均匀合并而不是返回默认回复；去掉对配置、平台、日志和 LLM 断句的依赖，改成纯函数 |
 | `aureus/heartbeat/recall.py` 的 `format_recall` | MaiBot `src/maisaka/builtin_tool/query_memory.py` 里的 `_build_replyer_memory_reference`，https://github.com/Mai-with-u/MaiBot/blob/edf42446f123149c57fc79765dd5a8b004b8524c/src/maisaka/builtin_tool/query_memory.py | GPL-3.0 | 保留查询、命中数、编号行和空白归一；改用本项目的 MemoryHit、当地时间和人物称呼；补无命中说明和 900 字整条裁剪；不接入它的工具框架和记忆后端 |
 | `aureus/memory/language_matching.py` 的黑话匹配 | MaiBot 安装包 1.3.15，`src/maisaka/jargon_context_matcher.py` 的 `_normalize_match_text`、`_contains_mechanical_match`、`_calculate_match_score`、`match_jargons_for_context`，https://github.com/Mai-with-u/MaiBot | GPL-3.0 | 沿用小写和空白归一、子串、频率和上下文位置计分、十条上限。以词与释义为去重键，保留各义的证据。 |
