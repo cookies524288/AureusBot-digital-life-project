@@ -151,12 +151,14 @@ class ExpressionRecall:
 
     def backfill(self, scope: str | None) -> None:
         """只启动一个补建任务，在对应回复调用之后处理当前合规材料。"""
-        if self.space is not None and not self._build_busy():
+        if self.space is not None and not self.build_busy:
             self._backfill = asyncio.create_task(
                 self._build(self.space, scope), name="aureus-expression-index"
             )
 
-    def _build_busy(self) -> bool:
+    @property
+    def build_busy(self) -> bool:
+        """当前运行时仍有向量构建任务在途。"""
         return any(
             task is not None and not task.done() for task in (self._backfill, self._maintenance)
         )
@@ -169,7 +171,7 @@ class ExpressionRecall:
         allows: Callable[[], Awaitable[bool]],
     ) -> ExpressionBackfillRun | None:
         """复用当前本地路线和写入器，在原授权内补建一小批缺项。"""
-        if self.space != space or self._build_busy():
+        if self.space != space or self.build_busy:
             return None
         run = ExpressionBackfillRun(uuid4().hex, owner, space)
         self.maintenance_run = run

@@ -10,8 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.heartbeat.expression_recall import EXPRESSION_MAINTENANCE_BATCH, ExpressionRecall
+from aureus.memory.expression_index import ExpressionSpaceCoverage
 
 _PATH = "/api/resources/learning/vector-spaces"
+_WORKBENCH = "/api/webui/expression"
 _NO_STORE = {"Cache-Control": "no-store"}
 
 
@@ -42,9 +44,10 @@ def register_expression_vector_routes(
         if not session_is_active(token):
             raise HTTPException(401, "请先登录。", headers=_NO_STORE)
 
-    @app.get(_PATH)
-    async def list_spaces(token: Annotated[str, Depends(require_ready)]) -> JSONResponse:
+    async def read_spaces(token: str) -> tuple[str | None, list[ExpressionSpaceCoverage]]:
+        check_session(token)
         active = available()
+        binding = progress.models.embedding_spaces if progress is not None else None
         try:
             scopes = await progress.expression_scopes() if progress is not None else frozenset()
             rows = await progress.expression_spaces(scopes, active) if progress is not None else []
@@ -52,8 +55,14 @@ def register_expression_vector_routes(
         except (sqlite3.Error, OSError):
             raise HTTPException(503, "暂时无法读取表达向量空间。", headers=_NO_STORE) from None
         check_session(token)
-        if active != available() or not scopes <= current:
+        if (active != available() or scopes != current
+                or (progress is not None and binding is not progress.models.embedding_spaces)):
             raise HTTPException(409, "模型路线或来源授权已变更，请刷新。", headers=_NO_STORE)
+        return active, rows
+
+    @app.get(_PATH)
+    async def list_spaces(token: Annotated[str, Depends(require_ready)]) -> JSONResponse:
+        active, rows = await read_spaces(token)
         run = recall.maintenance_run if recall is not None else None
         return JSONResponse(
             {
@@ -73,6 +82,67 @@ def register_expression_vector_routes(
             },
             headers=_NO_STORE,
         )
+
+    async def workbench_spaces(
+        request: Request, token: str
+    ) -> tuple[str | None, list[ExpressionSpaceCoverage]]:
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise HTTPException(403, "请从当前网页访问学习资料。", headers=_NO_STORE)
+        return await read_spaces(token)
+
+    @app.get(_WORKBENCH + "/runtime/vectors/spaces")
+    async def workbench_list(
+        request: Request, token: Annotated[str, Depends(require_ready)],
+    ) -> JSONResponse:
+        active, rows = await workbench_spaces(request, token)
+        building = recall is not None and recall.build_busy
+        run = recall.maintenance_run if recall is not None else None
+        failed = run is not None and run.space == active and run.owner == token and run.state == "failed"
+        result = {
+            "success": True,
+            "state": "syncing" if building else "failed" if failed else
+                     "ready" if any(row.established for row in rows) else "empty",
+            "items": [
+                {
+                    "space_id": row.space,
+                    "embedding_fingerprint": {
+                        "hash": row.space,
+                        **({"dimension": row.dimension} if row.dimension is not None else {}),
+                    },
+                    "state": ("syncing" if building else "active") if row.space == active else "saved",
+                    "can_delete": False,
+                    "vector_count": row.established,
+                    "size_bytes": row.size_bytes,
+                    "last_used_at": None,
+                }
+                for row in rows
+            ],
+        }
+        if active is not None:
+            result["target_space_id"] = active
+        return JSONResponse(result, headers=_NO_STORE)
+
+    @app.get(_WORKBENCH + "/vector-build-progress")
+    async def workbench_progress(
+        request: Request, token: Annotated[str, Depends(require_ready)],
+    ) -> JSONResponse:
+        active, rows = await workbench_spaces(request, token)
+        current = next((row for row in rows if row.space == active), None)
+        done, total = (current.established, current.eligible) if current is not None else (0, 0)
+        if progress is None or not progress.expression_enabled:
+            state = "disabled"
+        elif progress.models.embedding_spaces.expression is None:
+            state = "unconfigured"
+        elif current is None:
+            state = "waiting_profile"
+        elif recall is not None and recall.build_busy:
+            state = "running"
+        else:
+            state = "pending" if done < total else "completed"
+        return JSONResponse({
+            "status": state, "completed": done, "total": total,
+            "percent": round(done * 100 / total) if total else 0,
+        }, headers=_NO_STORE)
 
     @app.post(_PATH + "/backfill", status_code=202)
     async def start(

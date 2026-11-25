@@ -53,6 +53,8 @@ class ExpressionSpaceCoverage:
     space: str
     established: int
     eligible: int
+    size_bytes: int = 0
+    dimension: int | None = None
 
 
 class ExpressionVectorIndex:
@@ -162,23 +164,29 @@ class ExpressionVectorIndex:
             connection.execute("BEGIN")
             candidates = self.candidates(language, scopes, connection)
             eligible = {entry.entry_key: fingerprint(entry) for entry in candidates}
-            counts = {} if space is None else {space: 0}
+            counts: dict[str, tuple[int, int, int | None]] = (
+                {} if space is None else {space: (0, 0, None)}
+            )
             if include_saved:
                 rows = connection.execute(
-                    "SELECT space, entry_key, fingerprint FROM expression_runtime_vectors "
+                    "SELECT space, entry_key, fingerprint, length(CAST(vector AS BLOB)), dimension "
+                    "FROM expression_runtime_vectors "
                     "ORDER BY space"
                 )
             else:
                 rows = connection.execute(
-                    "SELECT space, entry_key, fingerprint FROM expression_runtime_vectors "
+                    "SELECT space, entry_key, fingerprint, 0, NULL "
+                    "FROM expression_runtime_vectors "
                     "WHERE space = ?",
                     (space,),
                 )
-            for key, entry_key, mark in rows:
-                matched = eligible.get(entry_key) == mark
-                counts[key] = counts.get(key, 0) + matched
+            for key, entry_key, mark, size, dimension in rows:
+                if eligible.get(entry_key) == mark:
+                    count, size_bytes, _ = counts.get(key, (0, 0, None))
+                    counts[key] = (count + 1, size_bytes + size, dimension)
             return [
-                ExpressionSpaceCoverage(key, count, len(eligible)) for key, count in counts.items()
+                ExpressionSpaceCoverage(key, count, len(eligible), size, dimension)
+                for key, (count, size, dimension) in counts.items()
             ]
 
     @staticmethod
@@ -231,7 +239,12 @@ class ExpressionVectorIndex:
         return tuple(
             VisibleExpressionCluster(
                 _fingerprint(f"{space}:{cluster}:" + ":".join(mark for _, mark in group)),
-                tuple(ExpressionClusterMember(entry.text, entry.detail) for entry, _ in group),
+                tuple(
+                    ExpressionClusterMember(entry.text, entry.detail, entry.entry_key)
+                    for entry, _ in group
+                ),
+                space,
+                cluster,
             )
             for (space, cluster), group in clusters.items()
         )

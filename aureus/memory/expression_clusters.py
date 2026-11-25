@@ -75,10 +75,11 @@ class ExpressionClusters:
 
 @dataclass(frozen=True)
 class ExpressionClusterMember:
-    """获准展示的表达方式和使用情景，不含内部证据。"""
+    """获准展示的表达方式、使用情景及供宿主映射的不公开原件键。"""
 
     text: str
     detail: str
+    entry_key: str
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,8 @@ class VisibleExpressionCluster:
 
     location: str
     members: tuple[ExpressionClusterMember, ...]
+    embedding_space: str
+    cluster_id: int
 
 
 class ExpressionClusterStore:
@@ -162,7 +165,8 @@ class ExpressionClusterStore:
         with closing(open_connection(self._path)) as connection:
             rows = connection.execute(
                 """
-                SELECT snapshot.snapshot_id, member.cluster_id, member.entry_key, member.fingerprint
+                SELECT snapshot.snapshot_id, snapshot.embedding_space, member.cluster_id,
+                    member.entry_key, member.fingerprint
                 FROM expression_cluster_snapshots AS snapshot
                 JOIN expression_cluster_members AS member USING (snapshot_id)
                 WHERE snapshot.format_version = ?
@@ -172,6 +176,7 @@ class ExpressionClusterStore:
             ).fetchall()
         if not rows:
             return ()
+        spaces_by_snapshot = {row["snapshot_id"]: row["embedding_space"] for row in rows}
         current = {
             entry.entry_key: entry
             for entry in language.entries(LanguageKind.EXPRESSION)
@@ -186,10 +191,14 @@ class ExpressionClusterStore:
             if entry is not None and _fingerprint(_embedding_text(entry)) == row["fingerprint"]:
                 key = (row["snapshot_id"], row["cluster_id"])
                 visible.setdefault(key, []).append(
-                    ExpressionClusterMember(entry.text, entry.detail)
+                    ExpressionClusterMember(entry.text, entry.detail, entry.entry_key)
                 )
         return tuple(
-            VisibleExpressionCluster(_fingerprint(f"{snapshot_id}:{cluster_id}"), tuple(members))
+            VisibleExpressionCluster(
+                _fingerprint(f"{snapshot_id}:{cluster_id}"), tuple(members),
+                spaces_by_snapshot[snapshot_id],
+                cluster_id,
+            )
             for (snapshot_id, cluster_id), members in visible.items()
         )
 
