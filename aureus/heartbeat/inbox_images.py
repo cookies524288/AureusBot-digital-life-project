@@ -76,6 +76,8 @@ class InboxImageIndex:
         enabled: Callable[[], bool],
     ) -> None:
         self._path, self._call, self._enabled = path, call, enabled
+        # 后台回填持有这一批的写权；此时按需索引跳过，等下一轮回填统一处理。
+        self._backfilling = False
         with closing(open_connection(path)) as connection:
             connection.executescript(_SCHEMA)
 
@@ -86,7 +88,12 @@ class InboxImageIndex:
 
     async def index(self, perception: Perception, attachment: MediaReference, image: bytes) -> None:
         """收到有效图片时保存向量；被网关拒绝或模型失败时保留原消息。"""
-        if not self._enabled() or perception.route is None or attachment.kind != "image":
+        if (
+            self._backfilling
+            or not self._enabled()
+            or perception.route is None
+            or attachment.kind != "image"
+        ):
             return
         try:
             await self._index(perception, attachment, image)
@@ -107,44 +114,50 @@ class InboxImageIndex:
         """
         if not self._enabled():
             return False, False
-        conversations = await asyncio.to_thread(store.visible_conversation_keys)
-        remaining = limit
-        written = 0
-        skipped = 0
-        for conversation in conversations:
-            if remaining <= 0:
-                break
-            if not allows(conversation):
-                continue
-            rows = await asyncio.to_thread(self._unindexed_images, conversation, remaining)
-            for message_id, position in rows:
-                loaded = await asyncio.to_thread(
-                    store.get_visible_image, conversation, message_id, position
-                )
-                if loaded is None:
-                    skipped += 1
+        if self._backfilling:
+            return True, False
+        self._backfilling = True
+        try:
+            conversations = await asyncio.to_thread(store.visible_conversation_keys)
+            remaining = limit
+            written = 0
+            skipped = 0
+            for conversation in conversations:
+                if remaining <= 0:
+                    break
+                if not allows(conversation):
                     continue
-                perception, attachment, _note = loaded
-                media = await read(perception, attachment)
-                if media is None:
-                    skipped += 1
-                    continue
-                data, _mime = media
-                try:
-                    saved = await self._index(
-                        perception, attachment, data, propagate_rejection=True
+                rows = await asyncio.to_thread(self._unindexed_images, conversation, remaining)
+                for message_id, position in rows:
+                    loaded = await asyncio.to_thread(
+                        store.get_visible_image, conversation, message_id, position
                     )
-                except SQLiteError:
-                    logger.exception("图片向量索引写入失败")
-                    saved = False
-                if saved:
-                    written += 1
-                    remaining -= 1
-                else:
-                    skipped += 1
-        if skipped:
-            logger.debug("图片索引本轮跳过 %s 条暂不可用的附件", skipped)
-        return remaining == 0 or skipped > 0, written > 0
+                    if loaded is None:
+                        skipped += 1
+                        continue
+                    perception, attachment, _note = loaded
+                    media = await read(perception, attachment)
+                    if media is None:
+                        skipped += 1
+                        continue
+                    data, _mime = media
+                    try:
+                        saved = await self._index(
+                            perception, attachment, data, propagate_rejection=True
+                        )
+                    except SQLiteError:
+                        logger.exception("图片向量索引写入失败")
+                        saved = False
+                    if saved:
+                        written += 1
+                        remaining -= 1
+                    else:
+                        skipped += 1
+            if skipped:
+                logger.debug("图片索引本轮跳过 %s 条暂不可用的附件", skipped)
+            return remaining == 0 or skipped > 0, written > 0
+        finally:
+            self._backfilling = False
 
     def _unindexed_images(
         self, conversation: ConversationKey, limit: int
