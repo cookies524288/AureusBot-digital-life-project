@@ -496,6 +496,16 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-platform-icon{width:36px;height:36px;color:var(--accent);shape-rendering:crispEdges}
 .inbox-layout{display:grid;grid-template-columns:minmax(165px,1fr) minmax(0,2.5fr);gap:12px;align-items:start}
 .inbox-layout .card{min-width:0}.inbox-conversations{max-height:65dvh;overflow:auto}
+.inbox-thread-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.inbox-thread-head h3{min-width:0;overflow-wrap:anywhere}
+#inbox-back-to-list{display:none}
+#inbox-open-qq{-webkit-touch-callout:none;user-select:none}
+/* 窄屏进入会话后收起列表，让消息区占满；返回按钮恢复列表并保留当前选中（批次 4 收尾）。 */
+@media(max-width:820px){
+#inbox-layout[data-thread-open="true"]{grid-template-columns:minmax(0,1fr)}
+#inbox-layout[data-thread-open="true"] .inbox-conversations{display:none}
+#inbox-layout[data-thread-open="true"] #inbox-back-to-list{display:inline-flex}
+}
 .inbox-conversations h4{margin:8px 0 4px;color:var(--text-2);font-size:12px}
 .inbox-conversation{width:100%;min-height:40px;justify-content:space-between;text-align:left;gap:8px;margin:2px 0}
 .inbox-conversation span:first-child,.inbox-msg{overflow-wrap:anywhere}
@@ -939,7 +949,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="inbox-layout" class="inbox-layout hidden">
 <nav id="inbox-conversations" class="card inbox-conversations" aria-label="收件箱会话"></nav>
 <div id="inbox-thread" class="card">
-<h3 id="inbox-thread-name">选择会话</h3>
+<div class="inbox-thread-head"><h3 id="inbox-thread-name">选择会话</h3><button id="inbox-back-to-list" type="button" class="btn small" aria-controls="inbox-conversations">返回会话列表</button></div>
 <div id="inbox-retention" class="stack hidden"></div>
 <div id="inbox-history-status" class="inbox-history-status hidden"><span id="inbox-history-text" role="status"></span><button id="inbox-history-retry" type="button" class="btn small hidden">重试</button></div>
 <p id="inbox-message-status" class="empty hidden" role="status"></p>
@@ -2331,6 +2341,7 @@ function clearInboxThread() {
   clearInboxRetention();
   clearInboxOperations();
   inbox.selected = null;
+  showInboxConversationList();
   inbox.nextBefore = null;
   inbox.nextBeforeSource = null;
   inbox.loadingOlder = false;
@@ -2343,11 +2354,24 @@ function clearInboxThread() {
   inboxStatus('inbox-message-status', '');
 }
 
+// 窄屏（≤820px）进入会话后由 CSS 收起列表；桌面宽度不受这个状态影响，仍是两栏（批次 4 收尾）。
+function showInboxThreadPane() {
+  $('inbox-layout').dataset.threadOpen = 'true';
+}
+function showInboxConversationList() {
+  $('inbox-layout').dataset.threadOpen = 'false';
+  const selected = inbox.selected ? inboxKey(inbox.selected) : null;
+  const button = [...$('inbox-conversations').querySelectorAll('button')]
+    .find(item => item.dataset.conversation === selected);
+  button?.focus();
+}
+
 function selectInboxConversation(conversation) {
   const changed = !inbox.selected || inboxKey(conversation) !== inboxKey(inbox.selected);
   if (changed) clearInboxOperations();
   inbox.selected = conversation;
   if (changed) followConversationTyping();
+  if (changed) showInboxThreadPane();
   const selected = inboxKey(conversation);
   for (const button of $('inbox-conversations').querySelectorAll('button')) {
     button.setAttribute('aria-pressed', String(button.dataset.conversation === selected));
@@ -2484,7 +2508,7 @@ function renderInboxView() {
     if (!items.length) continue;
     list.append(el('h4', {text:label}), ...items.map(item => el('button', {
       type:'button', class:'btn inbox-conversation', 'aria-pressed':String(inbox.selected && inboxKey(inbox.selected) === inboxKey(item) || false),
-      'data-conversation':inboxKey(item), onclick:() => selectInboxConversation(item),
+      'data-conversation':inboxKey(item), onclick:() => { showInboxThreadPane(); selectInboxConversation(item); },
     }, el('span', {text:item.name}), item.unread_count ? el('span', {
       class:'inbox-unread', text:item.unread_count > 99 ? '99+' : String(item.unread_count),
       'aria-label':item.unread_count + ' 条未读消息',
@@ -2790,14 +2814,51 @@ function openQQConfig() {
   return showPage('config', () => focusConfigSection('qq'));
 }
 
-$('inbox-open-qq').addEventListener('click', () => openInboxView('qq'));
-$('inbox-open-qq').addEventListener('contextmenu', event => { event.preventDefault(); openQQConfig(); });
+// 触屏长按 QQ 图标与桌面右键等价：按住约 500ms 打开平台配置；滑动或抬起取消，长按后不触发进入会话（批次 4 收尾）。
+const QQ_LONG_PRESS_MS = 500, QQ_LONG_PRESS_MOVE_PX = 10;
+let qqPressTimer = 0, qqPressPoint = null, qqLongPressFired = false;
+function cancelQQLongPress() {
+  clearTimeout(qqPressTimer);
+  qqPressTimer = 0;
+  qqPressPoint = null;
+}
+$('inbox-open-qq').addEventListener('pointerdown', event => {
+  qqLongPressFired = false;
+  if (event.pointerType !== 'touch') return;
+  cancelQQLongPress();
+  qqPressPoint = {x:event.clientX, y:event.clientY};
+  qqPressTimer = setTimeout(() => {
+    qqPressTimer = 0;
+    qqPressPoint = null;
+    qqLongPressFired = true;
+    openQQConfig();
+  }, QQ_LONG_PRESS_MS);
+});
+$('inbox-open-qq').addEventListener('pointermove', event => {
+  if (!qqPressPoint) return;
+  if (Math.hypot(event.clientX - qqPressPoint.x, event.clientY - qqPressPoint.y) > QQ_LONG_PRESS_MOVE_PX) cancelQQLongPress();
+});
+$('inbox-open-qq').addEventListener('pointerup', cancelQQLongPress);
+$('inbox-open-qq').addEventListener('pointercancel', cancelQQLongPress);
+$('inbox-open-qq').addEventListener('pointerleave', cancelQQLongPress);
+$('inbox-open-qq').addEventListener('click', () => {
+  if (qqLongPressFired) { qqLongPressFired = false; return; }
+  openInboxView('qq');
+});
+$('inbox-open-qq').addEventListener('contextmenu', event => {
+  event.preventDefault();
+  if (qqLongPressFired) return;
+  if (qqPressPoint) qqLongPressFired = true;   // 触屏长按弹出的系统菜单：吞掉随后的 click
+  cancelQQLongPress();
+  openQQConfig();
+});
 $('inbox-open-qq').addEventListener('keydown', event => {
   if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
     event.preventDefault();
     openQQConfig();
   }
 });
+$('inbox-back-to-list').addEventListener('click', showInboxConversationList);
 $('inbox-open-archive').addEventListener('click', () => openInboxView('archive'));
 $('inbox-home').addEventListener('click', () => openInboxView(null));
 $('inbox-refresh').addEventListener('click', loadInbox);
