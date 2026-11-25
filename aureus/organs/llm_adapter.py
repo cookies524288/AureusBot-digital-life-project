@@ -59,23 +59,56 @@ SleepFunction = Callable[[float], Awaitable[None]]
 TokenCounter = Callable[[list[dict[str, str]]], int]
 
 
+def _has_reasoning(value: Any) -> bool:
+    """推理内容在 litellm 里可能叫 reasoning_content，也可能是 reasoning（D127）。"""
+    for field in ("reasoning_content", "reasoning"):
+        text = getattr(value, field, None)
+        if isinstance(text, str) and text.strip():
+            return True
+    return False
+
+
 async def _read_stream(
-    stream: Any, tools: ToolCallCollector | None = None
-) -> tuple[str | None, TokenUsage]:
+    stream: Any,
+    tools: ToolCallCollector | None = None,
+    on_first_output: Callable[[], None] | None = None,
+) -> tuple[str | None, TokenUsage, bool]:
+    """读取流式响应：正文、用量，以及有没有收到推理内容。
+
+    Args:
+        stream: litellm 的流式响应。
+        tools: 收集工具调用的收集器；不需要时传 None。
+        on_first_output: 第一次收到非空正文或推理内容时调用一次，测速用它记延迟。
+
+    Returns:
+        去掉首尾空白的正文（没有正文时为 None）、用量、是否收到过推理内容。
+    """
     pieces: list[str] = []
     usage = TokenUsage(known=False)
+    reasoning = False
+    first_output = False
     async with aclosing(stream):
         async for chunk in stream:
             if chunk.choices:
                 choice = chunk.choices[0]
-                if isinstance(content := getattr(choice.delta, "content", None), str):
+                delta = choice.delta
+                content = getattr(delta, "content", None)
+                if isinstance(content, str):
                     pieces.append(content)
+                visible = isinstance(content, str) and bool(content.strip())
+                if _has_reasoning(delta):
+                    reasoning = True
+                    visible = True
+                if visible and not first_output:
+                    first_output = True
+                    if on_first_output is not None:
+                        on_first_output()
                 if tools is not None:
                     tools.read_choice(choice, stream=True)
             actual = extract_usage(chunk)
             if actual.known:
                 usage = actual
-    return "".join(pieces).strip() or None, usage
+    return "".join(pieces).strip() or None, usage, reasoning
 
 
 # 协议 → litellm 的模型前缀。openai/responses/ 触发 OpenAI Responses 协议；
@@ -1027,7 +1060,7 @@ class LLMOrgan:
             assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
             response = await completion(**kwargs)
             if kwargs.get("stream"):
-                text, usage = await _read_stream(response, tools)
+                text, usage, _ = await _read_stream(response, tools)
             else:
                 usage = extract_usage(response)
                 if self.organ_id == "voice":
