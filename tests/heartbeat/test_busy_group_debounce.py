@@ -336,8 +336,15 @@ async def test_steering_interrupt_limit_completes_and_delivers(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_zero_interrupt_limit_never_restarts_the_planner(tmp_path: Path) -> None:
-    """D142：打断上限 0 表示从不打断，本轮正常完成并投递。"""
+@pytest.mark.parametrize(
+    ("steering", "max_interrupts", "expected_stream"),
+    [(True, 0, True), (False, 4, False)],
+    ids=["zero-limit", "steering-off"],
+)
+async def test_planner_is_not_interrupted_when_zero_limit_or_steering_off(
+    tmp_path: Path, steering: bool, max_interrupts: int, expected_stream: bool
+) -> None:
+    """D142：上限 0 表示从不打断；关闭快速反应时规划器非流式、也不打断。"""
     clock = ManualClock(datetime(2026, 11, 26, 10, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     timeline = TimelineDatabase(database, clock)
@@ -352,6 +359,7 @@ async def test_zero_interrupt_limit_never_restarts_the_planner(tmp_path: Path) -
     class InterruptibleOrgans(Organs):
         async def call(self, request: OrganRequest) -> OrganResponse:
             if request.context.get("task") == "plan":
+                assert request.stream is expected_stream
                 plans.append(request)
                 started.set()
                 try:
@@ -371,7 +379,8 @@ async def test_zero_interrupt_limit_never_restarts_the_planner(tmp_path: Path) -
         identity=Identity.model_validate(_IDENTITY),
         config=HeartbeatConfig(
             split_reply_enabled=False,
-            planner_steering_max_interrupts=0,
+            planner_message_steering=steering,
+            planner_steering_max_interrupts=max_interrupts,
         ),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
@@ -489,6 +498,7 @@ async def test_off_mode_still_interrupts_with_quick_reaction(tmp_path: Path) -> 
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
         assert len(plans) == 2
+        assert plans[-1].stream is True
         assert len(plans[-1].context["in_reply_to"]) == 2
         assert "打断" in plans[-1].prompt
 
