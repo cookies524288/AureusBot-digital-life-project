@@ -479,3 +479,36 @@ def test_timestamps_are_stored_in_utc_even_if_the_clock_is_not(temp_db_path: Pat
     assert record.timestamp == datetime(2026, 11, 18, 0, 0, tzinfo=UTC)
     assert stored.timestamp.utcoffset() == timedelta(0)
     assert stored.timestamp == record.timestamp
+
+
+def test_append_notifies_listeners_with_the_new_record(database: TimelineDatabase):
+    """3.43：追加钩子只读地收到刚写入的记录。"""
+    seen: list[TimelineRecord] = []
+    database.add_append_listener(seen.append)
+
+    record = database.append("message", "你好", ActorType.USER, actor_id="u1")
+
+    assert seen == [record]
+    assert database.get(record.id) == record
+
+
+def test_a_failing_listener_does_not_break_append(database: TimelineDatabase):
+    def broken(_record: TimelineRecord) -> None:
+        raise RuntimeError("这个订阅者坏了")
+
+    database.add_append_listener(broken)
+
+    record = database.append("message", "照样写进去", ActorType.ME)
+
+    assert database.get(record.id) is not None
+
+
+def test_unsubscribing_stops_the_listener_and_can_repeat(database: TimelineDatabase):
+    seen: list[TimelineRecord] = []
+    remove = database.add_append_listener(seen.append)
+
+    remove()
+    remove()
+    database.append("message", "不该通知", ActorType.ME)
+
+    assert seen == []

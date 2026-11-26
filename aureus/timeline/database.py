@@ -5,10 +5,11 @@ metadata 存成 JSON 文本（D41 第 9 条）。
 """
 
 import ast
+import contextlib
 import json
 import logging
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,7 @@ class TimelineDatabase:
         self._db_path = db_path
         self._clock = clock or SystemClock()
         self._conn: sqlite3.Connection | None = None
+        self._append_listeners: list[Callable[[TimelineRecord], None]] = []
         self.platform_history = LegacyPlatformHistory(db_path)
 
     def open(self) -> None:
@@ -155,6 +157,25 @@ class TimelineDatabase:
 
         self._conn.commit()
 
+    def add_append_listener(
+        self, listener: Callable[[TimelineRecord], None]
+    ) -> Callable[[], None]:
+        """登记追加钩子：每次成功追加后收到刚写入的那条记录。
+
+        钩子只读：记录已经提交，时间线只追加、不能改（D11）。钩子用来通知别的子系统
+        （比如网页实时推送），它出错只记日志，不影响追加本身。
+
+        Returns:
+            取消登记的函数；重复调用没有影响。
+        """
+        self._append_listeners.append(listener)
+
+        def remove() -> None:
+            with contextlib.suppress(ValueError):
+                self._append_listeners.remove(listener)
+
+        return remove
+
     def append(
         self,
         event_type: str,
@@ -205,7 +226,7 @@ class TimelineDatabase:
         )
         self._conn.commit()
 
-        return TimelineRecord(
+        record = TimelineRecord(
             id=cursor.lastrowid or 0,
             timestamp=timestamp,
             actor_type=actor_type,
@@ -215,6 +236,12 @@ class TimelineDatabase:
             visibility=visibility,
             metadata=metadata or {},
         )
+        for listener in list(self._append_listeners):
+            try:
+                listener(record)
+            except Exception:
+                logger.exception("时间线追加钩子出错，不影响这条记录")
+        return record
 
     def query(self, query: TimelineQuery) -> Sequence[TimelineRecord]:
         """查询时间线记录。
