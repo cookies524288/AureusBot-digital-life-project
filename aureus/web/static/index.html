@@ -35,7 +35,7 @@ color-scheme:light;
 color-scheme:dark;}
 
 /* 浅色主题只加深主按钮和导航的金色，不改变共用强调色。 */
-:root:not([data-theme='dark']){--control-gold-deep:#755800}
+:root:not([data-theme='dark']){--control-gold-deep:#755800;--ink-secondary:#556970;--ink-accent:#805f00;--ink-ok:#596900;--ink-warn:#aa3e12;--ink-danger:#b62927}
 :root:not([data-theme='dark']) .btn.primary{background:var(--accent-strong);border-color:var(--accent-strong)}
 :root:not([data-theme='dark']) .btn.primary:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--control-gold-deep);border-color:var(--control-gold-deep)}
 :root:not([data-theme='dark']) :is(.nav-item,.nav-group){--text-2:var(--text);--accent-strong:var(--control-gold-deep)}
@@ -167,16 +167,16 @@ nav.side .nav-item[aria-disabled=true]::before{transition:none}
 .btn:focus-visible,.nav-item:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
-.field>label:not(.editor-field-label),.field-label{font-size:13px;color:var(--text-2)}
+.field>label:not(.editor-field-label),.field-label{font-size:13px;color:var(--ink-secondary,var(--text-2))}
 .editor-field-label{display:flex;flex-direction:column;gap:inherit;min-width:0}
-.field .hint{font-size:12px;color:var(--text-2)}
-.field-label .hint{margin-inline-start:.5em;color:color-mix(in srgb,var(--text-2) 90%,var(--surface))}
+.field .hint{font-size:12px;color:var(--ink-secondary,var(--text-2))}
+.field-label .hint{margin-inline-start:.5em;color:var(--ink-secondary,color-mix(in srgb,var(--text-2) 90%,var(--surface)))}
 input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]),select,textarea{box-sizing:border-box;min-width:0;max-width:100%;width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit;transition:border-color var(--dur-fast)}
 input:is([type=checkbox],[type=radio],[type=range]){accent-color:var(--accent)}
 input::file-selector-button{font:inherit;color:inherit;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px 8px;margin-right:8px;cursor:pointer}
 input:hover,select:hover,textarea:hover{border-color:var(--text-2)}
 input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-input[readonly],textarea[readonly]{background:var(--surface-2);color:var(--text-2)}
+input[readonly],textarea[readonly]{background:var(--surface-2);color:var(--ink-secondary,var(--text-2))}
 textarea{resize:vertical;min-height:96px;line-height:1.6}
 /* 非登录页的秘密输入框不用 password 类型，避免密码管理器识别；仍以圆点遮挡（3.40） */
 .secret-input{-webkit-text-security:disc}
@@ -188,11 +188,11 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .card.flat{box-shadow:none}
 .divider{height:1px;background:var(--border);margin:14px 0}
 
-.tag{display:inline-flex;align-items:center;gap:4px;padding:1px 9px;border-radius:999px;font-size:12px;background:var(--surface-2);color:var(--text-2);white-space:nowrap}
-.tag.accent{background:var(--accent-soft);color:var(--accent-strong)}
-.tag.ok{background:var(--ok-soft);color:var(--ok)}
-.tag.warn{background:var(--warn-soft);color:var(--warn)}
-.tag.danger{background:var(--danger-soft);color:var(--danger)}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:1px 9px;border-radius:999px;font-size:12px;background:var(--surface-2);color:var(--ink-secondary,var(--text-2));white-space:nowrap}
+.tag.accent{background:var(--accent-soft);color:var(--ink-accent,var(--accent-strong))}
+.tag.ok{background:var(--ok-soft);color:var(--ink-ok,var(--ok))}
+.tag.warn{background:var(--warn-soft);color:var(--ink-warn,var(--warn))}
+.tag.danger{background:var(--danger-soft);color:var(--ink-danger,var(--danger))}
 
 /* 开关：真正的 checkbox，外观换成滑块，键盘和读屏照常可用 */
 .switch{position:relative;display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
@@ -213,9 +213,9 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .toast.leaving{pointer-events:none;opacity:0;animation:toast-out var(--dur-out) ease-in both}
 @keyframes toast-in{from{opacity:0;translate:0 8px;scale:.98}to{opacity:1;translate:0;scale:1}}
 @keyframes toast-out{from{opacity:1;translate:0}to{opacity:0;translate:0 5px}}
-.banner{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--warn);font-size:14px}
-.banner.danger{background:var(--danger-soft);color:var(--danger)}
-.banner.info{background:var(--accent-soft);color:var(--accent-strong)}
+.banner{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border-radius:var(--radius-sm);background:var(--warn-soft);color:var(--ink-warn,var(--warn));font-size:14px}
+.banner.danger{background:var(--danger-soft);color:var(--ink-danger,var(--danger))}
+.banner.info{background:var(--accent-soft);color:var(--ink-accent,var(--accent-strong))}
 .empty{padding:28px 16px;text-align:center;color:var(--text-2);border:1px dashed var(--border);border-radius:var(--radius)}
 
 /* 登录页和改密码页：居中的一张卡片 */
@@ -378,7 +378,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .layer-card textarea{min-height:120px}
 .version-row{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--border);font-size:13px}
 .version-row>.tag{max-width:35%;min-width:0;white-space:normal;overflow-wrap:anywhere}
-.version-reading{flex:1;min-width:0;color:var(--text-2)}
+.version-reading{flex:1;min-width:0;color:var(--ink-secondary,var(--text-2))}
 .version-reading summary{cursor:pointer;min-height:44px;padding-block:12px;list-style-position:inside;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .version-reading p{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 8px;color:var(--text)}
 @media(max-width:640px){.version-row{flex-wrap:wrap}.version-reading{flex-basis:100%}}
