@@ -3928,7 +3928,27 @@ async function refreshInboxMessages() {
   if (request !== inbox.latestRequest || thread !== inbox.messageRequest
       || session !== state.loaded || state.page !== 'inbox' || !inbox.selected) return;
   if (!res.ok) return;
-  appendInboxMessages(res.data.messages || []);
+  const messages = res.data.messages;
+  if (Array.isArray(messages) && !messages.length && res.data.next_before_id == null) {
+    // 最新页的完整空快照优先于更早发出的预取和历史翻页（3.64）。
+    ++inbox.messageRequest;
+    pageCache.delete('inbox-messages:' + inboxKey(inbox.selected));
+    const list = $('inbox-messages');
+    if (inbox.messageKeys.size) {
+      resetInboxMedia();
+      const typing = list.querySelector(':scope > .inbox-typing');
+      list.replaceChildren(...(typing ? [typing] : []));
+      inbox.messageKeys.clear();
+    }
+    if (inbox.loadingOlder || inbox.historyError) inboxHistoryStatus('');
+    inbox.loadingOlder = inbox.historyError = false;
+    inbox.nextBefore = inbox.nextBeforeSource = null;
+    list.removeAttribute('aria-busy');
+    const emptyText = '没有可查看的消息。';
+    if ($('inbox-message-status').textContent !== emptyText) inboxStatus('inbox-message-status', emptyText);
+    return;
+  }
+  appendInboxMessages(messages || []);
 }
 
 // 只追加没见过的消息；第一条 Bot 回复原地替换输入中气泡，多段回复依次接在后面（3.47）。
@@ -3954,7 +3974,8 @@ function appendInboxMessages(messages) {
   if (!added) return;
   if (typing) list.append(typing);   // 新的来信追加后，输入中气泡仍在末尾
   if (typingSession && replaced) typingSession.bubbleReplaced = true;
-  clearPageCache('inbox-messages:' + inboxKey(inbox.selected));
+  inboxStatus('inbox-message-status', '');
+  pageCache.delete('inbox-messages:' + inboxKey(inbox.selected));
   if (stick) scrollInboxToLatest();
 }
 
