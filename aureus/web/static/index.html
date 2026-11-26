@@ -2351,7 +2351,7 @@ function invalidateLiveTopic(topic) {
 function refreshCurrentPage() {
   switch (state.page) {
     case 'overview': return loadOverview();
-    case 'timeline': return loadTimeline(false);
+    case 'timeline': return loadTimeline(false, false, true, true);
     case 'inbox': return refreshInboxLive();
     case 'monitor': return loadMonitor(true);
     case 'chat': return loadChatHistory();
@@ -3130,7 +3130,7 @@ function timelineItem(rec, inContext, {
   const prefix = text.slice(0, previewLimit).split('\n', 3).join('\n').replace(/[\uD800-\uDBFF]$/, '');
   const preview = prefix === text ? text : prefix + '…';
   const content = el('div', { class: 'tl-content', text: preview });
-  const toggle = preview === text ? null : el('button', {type:'button', class:'btn small', text:'展开正文', 'aria-expanded':'false', onclick:() => {
+  const toggle = preview === text ? null : el('button', {type:'button', class:'btn small tl-body-toggle', text:'展开正文', 'aria-expanded':'false', onclick:() => {
     const expand = toggle.getAttribute('aria-expanded') === 'false';
     content.textContent = expand ? text : preview;
     toggle.textContent = expand ? '收起正文' : '展开正文';
@@ -3164,7 +3164,9 @@ function renderTimeline() {
       const id = record.recall_feedback_reply_id || (record.recall_feedback_available ? record.id : null);
       const showFeedback = id && !feedback.has(id);
       if (showFeedback) feedback.add(id);
-      return timelineItem(record, inContext, {feedbackId: showFeedback ? id : null});
+      const row = timelineItem(record, inContext, {feedbackId: showFeedback ? id : null});
+      row.dataset.recordId = String(record.id);
+      return row;
     }
     for (const record of records) {
       if (record.round_id && !groups.has(record.round_id)) groups.set(record.round_id, []);
@@ -3188,6 +3190,30 @@ function renderTimeline() {
   appendBand(history, false);
   if (history.length && current.length) list.append(tlDivider());
   appendBand(current, true);
+}
+// 只在实际替换时读取开关，选中文本延后刷新期间用户仍可改变展开状态。
+function renderLiveTimeline(list) {
+  const reading = new Map(), top = $('page-timeline').scrollTop;
+  for (const row of list.querySelectorAll('.tl-item')) {
+    const body = row.querySelector('.tl-body-toggle'), details = row.querySelector('.tl-details');
+    const expanded = body?.getAttribute('aria-expanded') === 'true';
+    const active = document.activeElement;
+    const focus = active && (active === body ? 'body' : active === details?.firstElementChild ? 'details' : null);
+    if (expanded || details?.open || focus) reading.set(row.dataset.recordId, {expanded, open:details?.open, focus});
+  }
+  renderTimeline();
+  let retained = false;
+  for (const row of list.querySelectorAll('.tl-item')) {
+    const saved = reading.get(row.dataset.recordId);
+    if (!saved) continue;
+    const body = row.querySelector('.tl-body-toggle'), details = row.querySelector('.tl-details');
+    if (saved.expanded && body) { body.click(); retained = true; }
+    if (saved.open && details) { details.open = true; retained = true; }
+    const control = saved.focus === 'body' ? body : saved.focus === 'details' ? details?.firstElementChild : null;
+    if (control) { control.focus({preventScroll:true}); retained = true; }
+  }
+  if (retained) $('page-timeline').scrollTop = top;
+  else scrollTimelineToLatest();
 }
 function tlDivider() {
   const limit = tl.context ? tl.context.message_limit : '';
@@ -3263,6 +3289,8 @@ function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
   const anchor = more ? timelineScrollAnchor() : null;
   if (more) {
     updateLiveRegion(list, () => { renderTimeline(); restoreTimelineScroll(anchor); });
+  } else if (scroll === 'live') {
+    updateLiveRegion(list, () => renderLiveTimeline(list));
   } else if (scroll === 'preserve') {
     updateLiveRegion(list, () => {
       const current = timelineScrollablePosition();
@@ -3277,7 +3305,8 @@ function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
   }
   list.removeAttribute('aria-busy');
 }
-async function loadTimeline(more, switching = false, force = false) {
+async function loadTimeline(more, switching = false, force = false, live = false) {
+  const navigation = pageNavigation;
   const button = $('tl-more');
   const query = new URLSearchParams({ hours: $('tl-hours').value, limit: '100' });
   if (tl.filter) query.set('types', tl.filter);
@@ -3311,7 +3340,8 @@ async function loadTimeline(more, switching = false, force = false) {
     button.classList.add('hidden');
   }
   const res = await api('/api/timeline?' + query);
-  if (request !== timelineRequest || session !== state.loaded) return;
+  if (request !== timelineRequest || session !== state.loaded ||
+      (live && (navigation !== pageNavigation || state.page !== 'timeline'))) return;
   const missing = $('tl-missing');
   if (notBuilt(res)) {
     missing.textContent = NOT_BUILT_TEXT;
@@ -3333,7 +3363,8 @@ async function loadTimeline(more, switching = false, force = false) {
   }
   if (!more) cacheWrite('timeline:' + base, res.data, TIMELINE_CACHE_MS);
   timelineQuery = base;
-  applyTimelineData(res.data, {more, scroll: more || shownFromCache || switching ? 'preserve' : 'latest'});
+  applyTimelineData(res.data, {more, scroll: live && timelineRendered && !replacesFilter ? 'live' :
+    more || shownFromCache || switching ? 'preserve' : 'latest'});
 }
 $('tl-hours').addEventListener('change', () => loadTimeline(false, true));
 $('tl-more').addEventListener('click', () => loadTimeline(true));
