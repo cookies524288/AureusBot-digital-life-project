@@ -1592,6 +1592,7 @@ function showAuth(view, message) {
   state.loaded = {};
   state.entranceSeen.clear();
   resetPageCache();
+  timelineRendered = null;
   prefetchedPages.clear();
   idlePrefetchScheduled = false;
   pageNavigation = null;
@@ -2793,6 +2794,7 @@ function restoreTimelineScrollRatio(anchor) {
 
 let timelineRequest = 0;
 let timelineQuery = '';
+let timelineRendered = null;   // 当前 DOM 是根据哪一份第一页数据渲染的
 const TIMELINE_CACHE_MS = 15000;
 // 把一页时间线数据放进页面；scroll 决定渲染后停在哪里：
 // latest 停在最新一条，preserve 按整页比例保留当前位置，anchor 用列表高度差补回。
@@ -2812,6 +2814,7 @@ function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
   }));
   if (!entries.length) summary.textContent = '暂无滚动摘要。';
   tl.records = more ? [...new Map(data.records.concat(tl.records).map(record => [record.id, record])).values()] : data.records;
+  if (!more) timelineRendered = data;
   tl.next = data.next_before_id;
   tl.context = data.context;
   const button = $('tl-more');
@@ -2846,8 +2849,8 @@ async function loadTimeline(more, switching = false, force = false) {
   if (!more) {
     const cached = force ? null : cacheRead('timeline:' + base, TIMELINE_CACHE_MS);
     if (cached) {
-      // 同一筛选的列表还留在页面上，缓存也没过期，直接显示，不重新生成 DOM（D129）。
-      if (cached.fresh && !replacesFilter && list.childElementCount) return;
+      // 页面上的列表就是这份缓存渲染的，且缓存没过期，直接显示，不重新生成 DOM（D129）。
+      if (cached.fresh && !replacesFilter && cached.data === timelineRendered && list.childElementCount) return;
       timelineQuery = base;
       $('tl-missing').classList.add('hidden');
       applyTimelineData(cached.data, {scroll: switching ? 'preserve' : 'latest'});
