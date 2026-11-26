@@ -268,6 +268,22 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .ov-cells{height:100%;background:var(--signal-track);mask-image:repeating-linear-gradient(90deg,#000 0 calc(8.33333% - 2px),transparent calc(8.33333% - 2px) 8.33333%)}.ov-cells i{display:block;height:100%;background:var(--signal);transition:width .71s var(--ease)}.ov-gauge.unlimited .ov-cells{background:repeating-linear-gradient(135deg,var(--signal-track) 0 3px,transparent 3px 6px)}
 .ov-state,.ov-activity{font-size:14px;line-height:1.7;overflow-wrap:anywhere}.ov-state .state-line{border:0;padding:0}.ov-state .state-line+.state-line{margin-top:4px}.ov-state details{margin-top:7px}.ov-state summary{cursor:pointer;color:var(--tile-muted);width:fit-content;font-size:13px}.ov-state summary:focus-visible{outline:2px solid var(--signal)}
 .ov-activity{list-style:none;padding:0;margin:0}.ov-activity li{display:flex;justify-content:space-between;gap:10px;align-items:baseline}.ov-activity li+li{margin-top:5px;padding-top:5px;border-top:1px dashed var(--tile-rule)}.ov-activity time{flex:none;font-variant-numeric:tabular-nums}.ov-empty{color:var(--tile-muted);font-size:14px}
+/* 3.45 总览「回复参考」复用平台活动面板的步骤结构，颜色改回总览卡片体系。 */
+.ov-activity-flow{font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.ov-activity-flow .inbox-activity-round{gap:5px}
+.ov-activity-flow .inbox-activity-round-head{color:var(--tile-muted);font-size:12px}
+.ov-activity-flow .inbox-activity-steps{gap:3px}
+.ov-activity-flow .inbox-activity-step{grid-template-columns:4.2em minmax(0,1fr);gap:7px;padding:2px 0 2px 7px;background:transparent;border-inline-start:2px solid var(--tile-rule)}
+.ov-activity-flow .inbox-activity-step.done{border-inline-start-color:var(--signal)}
+.ov-activity-flow .inbox-activity-step.failed{border-inline-start-color:var(--danger)}
+.ov-activity-flow .inbox-activity-step.waiting{border-inline-start-color:var(--signal)}
+.ov-activity-flow .inbox-activity-step-name{color:var(--tile-muted);font-size:12px}
+.ov-activity-flow .inbox-activity-step.done .inbox-activity-step-name{color:var(--tile-ink)}
+.ov-activity-flow .inbox-activity-message b,.ov-activity-flow .inbox-activity-tool{color:var(--signal)}
+.ov-activity-flow .inbox-activity-actions li{color:var(--tile-muted)}
+.ov-activity-flow .inbox-activity-idle{color:var(--tile-muted);min-height:36px}
+.ov-activity-flow .inbox-activity-idle-pixels i,.ov-activity-flow .inbox-activity-cursor{background:var(--signal)}
+@media(max-width:620px){.ov-activity-flow .inbox-activity-step{grid-template-columns:3.9em minmax(0,1fr)}}
 .ov-links{display:grid;grid-column:1/-1;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.ov-link{border:0;background:transparent;padding:0;text-align:left;cursor:pointer}.ov-link>.ov-face{display:flex;align-items:center;gap:9px;padding:14px 13px 19px;line-height:1.4;font-size:14px;font-weight:600}.ov-link .ico{color:var(--tile-muted)}.ov-link .ov-arrow{margin-left:auto;width:12px;height:12px;opacity:.75}.ov-link:focus-visible{outline:2px solid var(--accent-strong);outline-offset:4px}
 @media(hover:hover) and (prefers-reduced-motion:no-preference){.ov-tracking .ov-slot:hover>.ov-face{translate:0 2px}.ov-tracking .ov-link:active>.ov-face{translate:0 4px}}
 @media(min-width:821px) and (max-width:1100px){#page-overview{padding-inline:clamp(36px,9vw,105px)}}
@@ -995,7 +1011,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div class="ov-task"><span>当前任务</span><strong id="ov-task"></strong></div></div></article>
 <article class="ov-slot ov-energy"><div class="ov-face"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-zap"/></svg>精力</h3><div class="ov-energy-line"><strong id="ov-energy" class="ov-readout"></strong><span id="ov-tier" class="ov-tier"></span></div><div class="ov-gauge" aria-hidden="true"><div class="ov-cells"><i id="ov-meter"></i></div></div></div></article>
 <article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg>状态摘要</h3></div><div id="ov-state" class="ov-state"></div></div></article>
-<article class="ov-slot ov-reference"><div class="ov-face"><h3 class="ov-label">回复参考</h3><p id="ov-reference" class="tl-content">暂无回复参考</p><p id="ov-reference-source" class="muted"></p></div></article>
+<article class="ov-slot ov-reference"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label">回复参考</h3><span class="ov-period">最新一轮</span></div><div id="ov-activity-flow" class="ov-activity-flow"></div></div></article>
 <article class="ov-slot"><div class="ov-face"><div class="ov-card-head"><h3 class="ov-label"><svg class="ico" aria-hidden="true"><use href="#i-timeline"/></svg>最近动态</h3><span class="ov-period">近 24 小时</span></div><ul id="ov-activity" class="ov-activity"></ul></div></article>
 <div class="ov-links"><button type="button" class="ov-slot ov-link" data-go="chat"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg><span>私聊</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
 <button type="button" class="ov-slot ov-link" data-go="monitor"><span class="ov-face"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg><span>内部状态</span><svg class="ico ov-arrow" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 5h5V3h2v2h2v2H9v2H7V7H2z"/></svg></span></button>
@@ -1951,12 +1967,14 @@ function showOverviewSignal(snapshot) {
   setLiveText($('ov-task'), paused ? '—' : task);
 }
 
-function showOverviewReference(snapshot) {
-  const reference = snapshot.reply_reference;
-  setLiveText($('ov-reference'), reference?.content || '暂无回复参考');
-  setLiveText($('ov-reference-source'), reference
-    ? [fmtTime(reference.time, true), CHANNEL_NAMES[reference.channel], VISIBILITY_NAMES[reference.visibility]].filter(Boolean).join(' · ')
-    : '');
+// 3.45：回复参考卡片显示最新一轮的活动步骤，复用平台会话的轮次渲染函数，样式由总览卡片接管。
+function renderOverviewRound(records, ok = true) {
+  const flow = $('ov-activity-flow');
+  const round = ok ? inboxActivityLatestRound(records) : null;
+  updateLiveRegion(flow, () => {
+    flow.replaceChildren(round ? inboxActivityRound(round) : inboxActivityIdle());
+    if (!ok) flow.append(el('p', {class:'ov-empty', text:'暂时无法读取活动'}));
+  });
 }
 
 // 只在登录后的总览前台采样；每次读完再计时，以免慢响应叠加或重播整页动效。
@@ -1970,7 +1988,8 @@ function renderOverview(d) {
   setLiveText($('ov-version'), d.version ? 'V' + d.version : '');
   setLiveText($('ov-date'), new Date().toLocaleDateString('zh-CN', {year:'numeric', month:'long', day:'numeric', weekday:'long'}));
   showOverviewSignal(d);
-  showOverviewReference(d);
+  const flow = $('ov-activity-flow');
+  if (!flow.childElementCount) flow.append(inboxActivityIdle());
   const limited = d.energy_level != null;
   const percent = limited ? Math.round(d.energy_level * 100) : 0;
   setLiveText($('ov-energy'), limited ? percent + '%' : '不限');
@@ -2008,18 +2027,23 @@ function loadOverview() {
   const request = ++overviewRequest;
   const cached = cacheRead('overview', OVERVIEW_CACHE_MS);
   const cachedActivity = cacheRead('overview-activity', OVERVIEW_CACHE_MS);
+  const cachedRound = cacheRead('overview-round', OVERVIEW_CACHE_MS);
   let needsSnapshot = true;
   let activityFresh = false;
+  let roundFresh = false;
   if (cached) renderOverview(cached.data);   // 先显示缓存，第一次采样仍会整体刷新
   if (cachedActivity) { renderOverviewActivity(cachedActivity.data); activityFresh = cachedActivity.fresh; }
+  if (cachedRound) { renderOverviewRound(cachedRound.data.records, true); roundFresh = cachedRound.fresh; }
   const current = () => request === overviewRequest && state.loggedIn && state.page === 'overview';
   const schedule = () => { overviewSignalTimer = setTimeout(sample, OVERVIEW_SIGNAL_INTERVAL_MS); };
   async function sample(reportFailure = false) {
     if (!current()) return;
     if (document.hidden) { schedule(); return; }
-    // 总览和最近动态互不依赖，同时发出（D129）；动态晚到不影响主卡片先出现。
+    // 总览、最近动态和最新一轮互不依赖，同时发出（D129）；动态晚到不影响主卡片先出现。
     const activityRequest = activityFresh ? null : api('/api/timeline?hours=24&limit=3');
     activityFresh = true;
+    const roundRequest = roundFresh ? null : api('/api/timeline?hours=24&limit=60');
+    roundFresh = true;
     const res = await api('/api/overview');
     if (!current()) return;
     if (notBuilt(res)) {
@@ -2046,13 +2070,19 @@ function loadOverview() {
     } else {
       cacheWrite('overview', res.data, OVERVIEW_CACHE_MS);
       showOverviewSignal(res.data);
-      showOverviewReference(res.data);
     }
     if (activityRequest) {
       activityRequest.then(recent => {
         if (!current()) return;
         if (recent.ok) cacheWrite('overview-activity', recent.data, OVERVIEW_CACHE_MS);
         renderOverviewActivity(recent);
+      });
+    }
+    if (roundRequest) {
+      roundRequest.then(round => {
+        if (!current()) return;
+        if (round.ok) cacheWrite('overview-round', round.data, OVERVIEW_CACHE_MS);
+        renderOverviewRound(round.ok ? round.data.records : [], round.ok);
       });
     }
   }
@@ -6524,13 +6554,16 @@ function prefetchInto(path, key, ttl) {
 }
 const PAGE_PREFETCH = {
   overview() {
-    if (freshCache('overview', OVERVIEW_CACHE_MS) && freshCache('overview-activity', OVERVIEW_CACHE_MS)) return Promise.resolve();
+    if (freshCache('overview', OVERVIEW_CACHE_MS) && freshCache('overview-activity', OVERVIEW_CACHE_MS)
+        && freshCache('overview-round', OVERVIEW_CACHE_MS)) return Promise.resolve();
     const session = state.loaded;
-    return Promise.all([prefetchRequest('/api/overview'), prefetchRequest('/api/timeline?hours=24&limit=3')])
-      .then(([overview, activity]) => {
+    return Promise.all([prefetchRequest('/api/overview'), prefetchRequest('/api/timeline?hours=24&limit=3'),
+      prefetchRequest('/api/timeline?hours=24&limit=60')])
+      .then(([overview, activity, round]) => {
         if (session !== state.loaded) return;
         if (overview.ok) cacheWrite('overview', overview.data, OVERVIEW_CACHE_MS);
         if (activity.ok) cacheWrite('overview-activity', activity.data, OVERVIEW_CACHE_MS);
+        if (round.ok) cacheWrite('overview-round', round.data, OVERVIEW_CACHE_MS);
       });
   },
   chat: () => state.loaded.chat ? Promise.resolve() : loadChatHistory(true, true),
