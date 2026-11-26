@@ -167,7 +167,8 @@ nav.side .nav-item[aria-disabled=true]::before{transition:none}
 .btn:focus-visible,.nav-item:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
 .field{display:flex;flex-direction:column;gap:4px;min-width:0}
-.field>label,.field-label{font-size:13px;color:var(--text-2)}
+.field>label:not(.editor-field-label),.field-label{font-size:13px;color:var(--text-2)}
+.editor-field-label{display:flex;flex-direction:column;gap:inherit;min-width:0}
 .field .hint{font-size:12px;color:var(--text-2)}
 .field-label .hint{margin-inline-start:.5em;color:color-mix(in srgb,var(--text-2) 90%,var(--surface))}
 input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=hidden]),select,textarea{box-sizing:border-box;min-width:0;max-width:100%;width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit;transition:border-color var(--dur-fast)}
@@ -4423,7 +4424,7 @@ function personaLayerCard(key, title, content, history) {
         await loadPersona(true);
       }) }))) : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有历史版本。' })];
   return el('div', { class: 'card layer-card' },
-    el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }))),
+    el('div', { class: 'card-head' }, el('div', {}, el('h3', {}, el('label', { for: 'ps-' + key, text: title })))),
     area,
     el('div', { class: 'row', style: 'justify-content:flex-end;margin-top:10px' }, save),
     el('div', { class: 'field-label', style: 'margin-top:12px', text: '最近的版本' }),
@@ -4638,7 +4639,7 @@ function editorField(label, value, options) {
     return el('option', { value: option.value, text: option.label, selected: option.value === value });
   })) : el('input', { type: opt.type || 'text', 'aria-label': label, min: opt.min, step: opt.step, required: !!opt.required, placeholder: opt.hint });
   input.value = value === null || value === undefined ? '' : value;
-  return { input, node: el('div', { class: 'field' }, el('label', { text: label }), input) };
+  return { input, node: el('div', { class: 'field' }, el('label', { class: 'editor-field-label' }, el('span', { class: 'field-label', text: label }), input)) };
 }
 // 密钥和当前密码用 text + CSS 遮挡，避免被密码管理器当成登录密码（3.40）。
 function secretEditorField(label, value, options) {
