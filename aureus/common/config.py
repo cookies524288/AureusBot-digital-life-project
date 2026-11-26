@@ -127,8 +127,10 @@ class HeartbeatConfig(BaseModel):
     # 月度上限、失控拦截、急停、权限检查这些安全检查照常生效。
     roleplay_mode: bool = False
     working_memory_enabled: bool = True
-    working_memory_capacity: int = Field(default=80, ge=2, le=300)
-    working_memory_retain: int = Field(default=25, ge=1)
+    # 每轮上下文只保留最新的这么多条，更早的丢弃出上下文，不删除时间线和收件箱原件（D146）。
+    working_memory_capacity: int = Field(default=50, ge=2, le=300)
+    # 每次整理后保留的近期原文条数；默认值随 D146 从 25 改为 20。
+    working_memory_retain: int = Field(default=20, ge=1)
 
     @model_validator(mode="before")
     @classmethod

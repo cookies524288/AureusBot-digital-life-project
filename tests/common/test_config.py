@@ -350,6 +350,35 @@ def test_heartbeat_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert heartbeat.planner_message_steering is True
     assert heartbeat.planner_steering_max_interrupts == 4
     assert heartbeat.inbox_read_limit == 15  # D145
+    assert (heartbeat.working_memory_capacity, heartbeat.working_memory_retain) == (50, 20)  # D146
+
+
+def test_working_memory_defaults_example_and_explicit_values(tmp_path: Path) -> None:
+    """D146：每轮上下文容量默认 50、保留 20，模板与代码一致，显式值照常读取。"""
+    defaults = HeartbeatConfig()
+    assert (defaults.working_memory_capacity, defaults.working_memory_retain) == (50, 20)
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    lines = example.read_text(encoding="utf-8").splitlines()
+    assert "# working_memory_capacity = 50" in lines
+    assert "# working_memory_retain = 20" in lines
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths, "[heartbeat]\nworking_memory_capacity = 120\nworking_memory_retain = 40\n"
+    )
+    heartbeat = load_runtime_config(paths).heartbeat
+    assert (heartbeat.working_memory_capacity, heartbeat.working_memory_retain) == (120, 40)
+    # 去掉显式值后恢复默认 50/20。
+    write_runtime_config(paths, "[heartbeat]\n")
+    restored = load_runtime_config(paths).heartbeat
+    assert (restored.working_memory_capacity, restored.working_memory_retain) == (50, 20)
+
+
+def test_working_memory_retain_must_be_smaller_than_capacity(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths, "[heartbeat]\nworking_memory_capacity = 20\nworking_memory_retain = 20\n"
+    )
+    assert "working_memory_retain" in error_message_of(paths)
 
 
 def test_legacy_organ_overrides_are_ignored_and_explicit_debounce_opt_out_is_kept(

@@ -94,8 +94,8 @@ config_version = 1
 # roleplay_mode = false
 # 工作记忆达到容量时整理最早的（容量减保留条数）条，保留近期焦点。
 # working_memory_enabled = true
-# working_memory_capacity = 80
-# working_memory_retain = 25
+# working_memory_capacity = 50
+# working_memory_retain = 20
 
 # 自动建索引（设计见 docs/10-decisions.md 的 D125）。配置好嵌入模型后，
 # 心跳会在后台按批补齐表达、表情描述和已收到图片的向量索引，直到全部建完。
