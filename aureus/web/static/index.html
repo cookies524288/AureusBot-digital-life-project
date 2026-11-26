@@ -483,8 +483,63 @@ nav.side .nav-label{text-align:center}
 .model-action .ico{width:16px;height:16px}
 .model-action.delete{background:var(--danger);border-color:var(--danger);color:#fff}
 .model-action.delete:hover{background:var(--danger);border-color:var(--danger);color:#fff;filter:brightness(.92)}
-.vision-field{display:flex;align-items:center;gap:8px;width:max-content;cursor:pointer}
-.vision-field input{width:16px;height:16px;margin:0;accent-color:#358238}
+.model-editor-dialog{width:min(960px,calc(100vw - 32px))}
+.model-editor-dialog .dialog-body{padding-top:16px}
+.model-form{display:grid;gap:16px}
+.model-form-section{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--border)}
+.model-form-section:first-child{border-top:0;padding-top:0}
+.model-form-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.model-form-section-head h3{margin:0;font-size:14px}
+.model-form-section-head .hint{margin:0}
+.model-form-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.model-form-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.model-form-grid .full{grid-column:1/-1}
+.model-switch-row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2)}
+.model-switch-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+.model-switch-copy strong{font-size:13px}
+.model-switch-copy small{color:var(--text-2);font-size:12px;line-height:1.4}
+.model-switch-disabled{opacity:.6}
+.model-price-periods{display:grid;gap:8px}
+.model-price-period{display:grid;grid-template-columns:78px 78px repeat(3,minmax(0,1fr)) 32px;gap:8px;align-items:end;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.model-price-period .field{gap:2px;min-width:0}
+.model-price-period label{font-size:11px;color:var(--text-2)}
+.model-price-period input{padding:7px 8px;font-size:12px}
+.model-price-period .btn{width:32px;height:32px;padding:0}
+.model-editor-error{border:1px solid var(--danger);border-radius:var(--radius-sm);padding:9px 12px;color:var(--danger);font-size:13px;background:color-mix(in srgb,var(--danger-soft) 45%,transparent)}
+.model-editor-error:empty{display:none}
+.model-editor-note{font-size:12px;color:var(--text-2)}
+.model-catalog-host{display:grid;gap:6px;margin-top:6px}
+.model-catalog-host .catalog-search{width:100%}
+.model-catalog{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.model-catalog select{flex:1;min-width:140px}
+.model-level-choices{display:flex;flex-wrap:wrap;gap:6px 14px}
+.model-level-choice{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer}
+.model-level-choice input{width:15px;height:15px;margin:0;accent-color:var(--accent)}
+.model-level-more{font-size:12px;color:var(--text-2)}
+.model-level-more summary{cursor:pointer}
+.model-parameter-box{display:grid;gap:8px;align-content:start}
+.model-extra-keys{display:flex;flex-wrap:wrap;gap:5px;min-height:18px}
+.model-extra-keys code{font-size:11px;padding:2px 6px;border-radius:5px;background:var(--surface-2)}
+.extra-params-dialog{width:min(760px,calc(100vw - 32px))}
+.extra-params-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.extra-params-tabs .btn.active{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong)}
+.extra-params-pane{display:grid;gap:10px}
+.extra-params-json{width:100%;min-height:280px;font-family:var(--mono);font-size:12px;line-height:1.5;resize:vertical}
+.extra-params-preview{margin:0;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2);font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto}
+.extra-tree{display:grid;gap:8px}
+.extra-node{display:grid;gap:8px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px;background:var(--surface)}
+.extra-node-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--text-2)}
+.extra-row{display:grid;grid-template-columns:minmax(90px,1fr) 92px minmax(120px,1.6fr) 30px;gap:8px;align-items:center}
+.extra-row .field{gap:2px}
+.extra-row input,.extra-row select{font-size:12px;padding:7px 8px}
+.extra-row .extra-key{font-family:var(--mono)}
+.extra-row .extra-remove,.extra-array-row .extra-remove{grid-column:4;grid-row:1;width:30px;height:30px;padding:0}
+.extra-nested{grid-column:1/-1;margin-left:14px;border-left:2px solid var(--border);padding-left:10px}
+.extra-array-row{grid-template-columns:30px 92px minmax(120px,1.6fr) 30px}
+.extra-array-index{font-size:12px;color:var(--text-2);font-variant-numeric:tabular-nums}
+.extra-add{justify-self:start}
+@media(max-width:640px){.extra-row{grid-template-columns:minmax(0,1fr) 90px 30px}.extra-array-row{grid-template-columns:30px 90px 30px}.extra-row .extra-value,.extra-array-row .extra-value{grid-column:1/-1}.extra-row .extra-remove,.extra-array-row .extra-remove{grid-column:3;grid-row:1;justify-self:end}}
+@media(max-width:820px){.model-editor-dialog{width:calc(100vw - 16px)}.model-form-grid,.model-form-grid.three{grid-template-columns:1fr}.model-price-period{grid-template-columns:1fr 1fr}.model-price-period .model-period-remove{justify-self:end}}
 #model-test-status{position:fixed;z-index:52;top:max(20px,env(safe-area-inset-top));right:18px;display:grid;gap:6px;max-height:75dvh;overflow:auto}
 .probe-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 .model-test-notice{width:min(320px,calc(100vw - 36px));padding:12px 28px;color:#292d2e;overflow-wrap:anywhere;
@@ -740,7 +795,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 @media(max-width:1050px){.memory-graph-layout{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:680px){.inbox-layout{grid-template-columns:minmax(0,1fr)}.inbox-conversations{max-height:30dvh}}
 @media(max-width:1100px){.model-library{grid-template-columns:1fr}.model-vendors{position:static}.provider-list{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;max-height:none}.provider-row{flex:0 0 auto;min-width:160px;max-width:260px}.model-vendor-add{flex:none}}
-@media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar{gap:8px}.model-search{flex-basis:100%}.model-count{order:3}.model-toolbar select{flex:1}.model-toolbar-actions{width:100%;margin-left:0}.model-toolbar-actions .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
+@media(max-width:820px){.nav-trigger{display:none}nav.side .nav-item{display:flex}.cfg-tabs .nav-item{padding-right:18px}.cfg-tabs .count{right:5px}#toasts{right:3vw}.model-table-wrap{display:none}.model-cards{display:grid}.model-toolbar{gap:8px}.model-search{flex-basis:100%}.model-toolbar select{flex:1}.model-toolbar-actions{width:100%;margin-left:0}.model-toolbar-actions .btn{flex:1}.dialog-head,.dialog-body,.dialog-foot{padding-left:16px;padding-right:16px}.editor-dialog.drawer{inset:8px 8px 8px auto;width:calc(100vw - 16px);height:calc(100dvh - 16px);max-height:calc(100dvh - 16px)}.drawer .dialog-shell{max-height:calc(100dvh - 18px)}}
 
 /* 器官关系图：颜色表示连线方向，所有器官共用一张像素块面。 */
 .og-overview{--step:#52756a;--branch:#957343;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:clamp(12px,2.5vw,24px)}
@@ -1218,6 +1273,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <footer class="dialog-foot"><button id="cf-restore-all-cancel" class="btn" type="button" autofocus>取消</button><button id="cf-restore-all-submit" class="btn danger" type="submit">确认恢复</button></footer>
 </form></dialog>
 <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="editor-title"></h3><button id="editor-close" class="btn small" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></header><div id="editor-body" class="dialog-body"></div><footer id="editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="model-editor-dialog" class="editor-dialog model-editor-dialog" aria-labelledby="model-editor-title" closedby="closerequest"><div class="dialog-shell"><header class="dialog-head"><h3 id="model-editor-title"></h3><button id="model-editor-close" class="btn small" type="button" aria-label="关闭编辑"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></header><div id="model-editor-body" class="dialog-body"></div><footer id="model-editor-footer" class="dialog-foot"></footer></div></dialog>
+<dialog id="extra-params-dialog" class="editor-dialog extra-params-dialog" aria-labelledby="extra-params-title" closedby="closerequest"><div class="dialog-shell"><header class="dialog-head"><h3 id="extra-params-title">编辑额外参数</h3><button id="extra-params-close" class="btn small" type="button" aria-label="关闭额外参数"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></header><div id="extra-params-body" class="dialog-body"></div><footer id="extra-params-footer" class="dialog-foot"></footer></div></dialog>
 <dialog id="provider-key-dialog" class="editor-dialog" aria-labelledby="provider-key-title" closedby="any"><div class="dialog-shell"><header class="dialog-head"><h3 id="provider-key-title"></h3><form method="dialog"><button class="btn small" aria-label="关闭新增 API 密钥"><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header><div id="provider-key-body" class="dialog-body"></div><footer id="provider-key-footer" class="dialog-foot"></footer></div></dialog>
 <dialog id="prompt-preview" class="editor-dialog prompt-preview" aria-labelledby="prompt-preview-title" closedby="any"><div class="dialog-shell">
 <header class="dialog-head"><h3 id="prompt-preview-title">完整提示词</h3><form method="dialog"><button class="btn small" aria-label="关闭预览" autofocus><svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></form></header>
@@ -1704,7 +1761,7 @@ function showAuth(view, message) {
   pageNavigation = null;
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
-  for (const id of ['planner-tools', 'provider-key-dialog', 'editor-dialog', 'confirm-dialog', 'prompt-preview', 'cf-restore-all-dialog']) if ($(id).open) $(id).close();
+  for (const id of ['planner-tools', 'provider-key-dialog', 'editor-dialog', 'model-editor-dialog', 'extra-params-dialog', 'confirm-dialog', 'prompt-preview', 'cf-restore-all-dialog']) if ($(id).open) $(id).close();
   $('ky-add').disabled = true;
   if (typeof closeSocket === 'function') closeSocket();
   $('app').classList.add('hidden');
@@ -4063,7 +4120,8 @@ function applyModelsConfig(data) {
   refreshDirty();
 }
 async function loadModelsConfig(force = false) {
-  const editing = () => $('editor-dialog').open || $('confirm-dialog').open;
+  const editing = () => $('editor-dialog').open || $('model-editor-dialog').open
+    || $('extra-params-dialog').open || $('confirm-dialog').open;
   const request = ++modelLoadRevision, session = state.loaded;
   if (mdl.pending || mdl.dirty || (mdl.cfg && editing())) return true;
   const cached = force ? null : cacheRead('models', CONFIG_CACHE_TTL_MS);
@@ -4124,15 +4182,18 @@ function mountCatalog(host, name, choose, searchable = false) {
   host.replaceChildren();
   const saved = mdl.baseline?.providers.find(p => p.name === name);
   const draft = mdl.cfg.providers.find(p => p.name === name);
-  if (!saved || !draft || catalogKey(saved) !== catalogKey(draft)) return;
+  if (!saved || !draft || catalogKey(saved) !== catalogKey(draft)) {
+    host.append(el('div', { class: 'model-editor-note', text: '先保存厂商配置，才能获取可选模型。' }));
+    return;
+  }
   const key = catalogKey(saved);
   if (!catalogs.has(key)) refreshCatalog(saved);
-  const select = el('select', { 'aria-label': 'API供应商可选模型' });
+  const select = el('select', { 'aria-label': '厂商可选模型' });
   const search = searchable ? el('input', { type: 'search', class: 'catalog-search',
-    'aria-label': '搜索供应商模型', placeholder: '搜索供应商模型' }) : null;
+    'aria-label': '搜索厂商模型', placeholder: '搜索厂商模型' }) : null;
   const refresh = el('button', { type:'button', class: 'btn small', 'aria-label': '刷新可选模型' }, pixelIcon('refresh'), '刷新');
   const status = el('div', { class: 'muted', role: 'status' });
-  const row = el('div', { class: 'row catalog-row' }, select, refresh);
+  const row = el('div', { class: 'row catalog-row model-catalog' }, select, refresh);
   row.dataset.catalog = key;
   if (search) host.append(search);
   host.append(row, status);
@@ -4141,9 +4202,9 @@ function mountCatalog(host, name, choose, searchable = false) {
     const query = search?.value.trim().toLowerCase() || '';
     const matches = ids.filter(id => id.toLowerCase().includes(query));
     const options = matches.map(id => el('option', { value: id, text: id }));
-    select.replaceChildren(el('option', { value: '', text: '选择API供应商模型' }), ...options);
+    select.replaceChildren(el('option', { value: '', text: '选择厂商模型' }), ...options);
     select.disabled = !matches.length;
-    status.textContent = !ids.length ? 'API供应商没有返回可选模型。' :
+    status.textContent = !ids.length ? '厂商没有返回可选模型。' :
       !matches.length ? '没有匹配的模型。' : '';
   }
   async function load() {
@@ -4186,6 +4247,7 @@ function renderModels() {
   for (const model of matching) counts.set(model.provider, (counts.get(model.provider) || 0) + 1);
   const providerButton = (name, label, base, count) => el('button', { class: 'provider-row' + (mdl.provider === name ? ' active' : ''),
     type: 'button', 'aria-pressed': String(mdl.provider === name), 'aria-disabled': String(mdl.provider === name),
+    title: label + (base ? ' · ' + base : ''),
     onclick: () => {
       if (mdl.provider === name) return;
       mdl.provider = name;
@@ -4201,8 +4263,8 @@ function renderModels() {
   $('md-edit-provider').disabled = !mdl.provider;
   configureProbeButton($('md-test-provider'), 'provider', mdl.provider);
   $('md-add-model').disabled = !cfg.providers.length;
-  $('md-search-count').textContent = search ? '找到 ' + matching.length + ' 个结果' : '';
   renderModelRows(matching);
+  $('md-search-count').textContent = search ? '找到 ' + $('md-models').children.length + ' 个结果' : '';
 }
 function modelEnabledCheckbox(model, className) {
   return el('input', { type: 'checkbox', class: className || '', checked: model.enabled !== false,
@@ -4385,43 +4447,41 @@ $('md-kind').addEventListener('change', renderModels);
 $('md-add-provider').addEventListener('click', () => openProviderEditor(null));
 $('md-edit-provider').addEventListener('click', () => openProviderEditor(mdl.cfg.providers.find(provider => provider.name === mdl.provider)));
 $('md-add-model').addEventListener('click', () => openModelEditor(null));
+$('model-editor-close').addEventListener('click', () => $('model-editor-dialog').close());
+$('model-editor-dialog').addEventListener('close', () => {
+  if ($('model-editor-dialog').open) return;
+  $('model-editor-body').replaceChildren();
+  $('model-editor-footer').replaceChildren();
+});
+$('extra-params-close').addEventListener('click', () => $('extra-params-dialog').close());
+$('extra-params-dialog').addEventListener('close', () => {
+  if ($('extra-params-dialog').open) return;
+  $('extra-params-body').replaceChildren();
+  $('extra-params-footer').replaceChildren();
+});
 
 function openProviderEditor(provider) {
   const original = provider, isNew = !provider;
-  provider = provider || { name: '', protocol: (mdl.choices.protocols || ['openai'])[0], ...mdl.defaults.providers };
+  const draft = provider ? clone(provider) : { name: '', protocol: (mdl.choices.protocols || ['openai'])[0],
+    ...clone(mdl.defaults?.providers || {}) };
   const legacyKey = original?.api_key_env || null;
-  const selected = provider.api_key_ref ? 'vault:' + provider.api_key_ref : legacyKey ? 'legacy' : '';
-  const keyChoices = [{value:'', label:'不使用密钥'}, ...(mdl.entries || []).filter(entry => entry.kind === 'api_key').map(entry => ({value:'vault:' + entry.id, label:entry.name}))];
-  if (selected === 'legacy') keyChoices.push({value:'legacy', label:'环境变量 · ' + legacyKey});
-  if (provider.api_key_ref && !keyChoices.some(item => item.value === selected)) keyChoices.push({value:selected, label:'引用的 API key 已删除'});
+  const selected = draft.api_key_ref ? 'vault:' + draft.api_key_ref : legacyKey ? 'legacy' : '';
+  const keyChoices = [{ value: '', label: '不使用密钥' },
+    ...(mdl.entries || []).filter(entry => entry.kind === 'api_key').map(entry => ({ value: 'vault:' + entry.id, label: entry.name }))];
+  if (selected === 'legacy') keyChoices.push({ value: 'legacy', label: '环境变量 · ' + legacyKey });
+  if (draft.api_key_ref && !keyChoices.some(item => item.value === selected)) {
+    keyChoices.push({ value: selected, label: '引用的 API key 已删除' });
+  }
   const fields = {
-    name: editorField('API供应商名称', provider.name, { required: true }),
-    protocol: editorField('协议', provider.protocol, { values: mdl.choices.protocols || [provider.protocol] }),
-    base_url: editorField('请求地址', provider.base_url, { hint: '留空使用该协议的默认地址' }),
-    key: editorField('API key', selected, { values: keyChoices }),
-    timeout: editorField('超时（秒）', provider.timeout_seconds, { type: 'number', min: 1, required: true, step: 'any' }),
-    retry: editorField('失败重试次数', provider.max_retry, { type: 'number', min: 0, required: true, step: 1 }),
+    name: editorField('厂商名称', draft.name, { required: true }),
+    protocol: editorField('协议', draft.protocol, { values: mdl.choices.protocols || [draft.protocol] }),
+    base_url: editorField('请求地址', draft.base_url, { hint: '留空使用该协议的默认地址' }),
+    key: editorField('密钥来源', selected, { values: keyChoices }),
+    timeout: editorField('超时（秒）', draft.timeout_seconds, { type: 'number', min: 1, required: true, step: 'any' }),
+    retry: editorField('失败重试次数', draft.max_retry, { type: 'number', min: 0, required: true, step: 1 }),
   };
-  const apply = () => {
-    if (!validFields(fields)) return;
-    const next = { name: fieldText(fields.name), protocol: fields.protocol.input.value, base_url: fieldText(fields.base_url) || null,
-      api_key_env: fields.key.input.value === 'legacy' ? legacyKey : null,
-      api_key_ref: fields.key.input.value.startsWith('vault:') ? fields.key.input.value.slice(6) : null,
-      timeout_seconds: fieldNumber(fields.timeout), max_retry: fieldNumber(fields.retry) };
-    if (mdl.cfg.providers.some(item => item !== original && item.name === next.name)) { toast('API供应商名称已存在。', 'error'); return; }
-    const rename = original && original.name !== next.name ? ['providers', original.name, next.name] : undefined;
-    if (original) {
-      for (const model of mdl.cfg.models) if (model.provider === original.name) model.provider = next.name;
-      Object.assign(original, next);
-    } else mdl.cfg.providers.push(next);
-    mdl.provider = next.name;
-    markDirty(rename).then(ok => {
-      if (!ok || !state.loggedIn) return;
-      refreshCatalog(next);
-      renderModels();
-    });
-    if (isNew) $('editor-dialog').close();
-  };
+  fields.base_url.node.classList.add('full');
+  const error = el('div', { class: 'model-editor-error', role: 'alert' });
   const keyStatus = el('span');
   const updateSource = () => {
     const source = fields.key.input.value;
@@ -4430,103 +4490,573 @@ function openProviderEditor(provider) {
       : mdl.keys[legacyKey];
     const missing = source && (present === false || source.startsWith('vault:') && !present);
     keyStatus.className = missing ? 'danger-text' : 'muted';
-    keyStatus.textContent = !source ? '未使用密钥' : source === 'legacy' && present === undefined ? '环境变量引用' : present ? 'API key 已配置' : '引用的 API key 未配置或已删除';
+    keyStatus.textContent = !source ? '未使用密钥' : source === 'legacy' && present === undefined
+      ? '环境变量引用' : present ? 'API key 已配置' : '引用的 API key 未配置或已删除';
   };
-  const body = editorForm(isNew ? '添加API供应商' : '编辑API供应商 · 自动保存', fields, () => { updateSource(); if (!isNew) apply(); },
-    isNew ? el('button', { class: 'btn primary', text: '添加API供应商', onclick: apply }) : null);
+  fields.key.input.addEventListener('change', updateSource);
   updateSource();
-  body.append(el('div', {class:'row'}, keyStatus,
-    el('button', {class:'btn small', text:'新增 API 密钥', onclick:event => {
-      event.currentTarget.focus();
-      // 同一次 Escape 只允许关闭最上层的密钥弹窗。
-      $('editor-dialog').setAttribute('closedby', 'none');
-      openKeyEditor(null, 'create', entry => {
-        const value = 'vault:' + entry.id;
-        fields.key.input.append(el('option', {value, text:entry.name}));
-        fields.key.input.value = value;
-        updateSource();
-        if (!isNew) apply();
-      });
-    }})));
-  if (original) {
-    body.append(el('button', { class: 'btn danger', text: '删除API供应商', onclick: () => removeProvider(original) }));
-  }
-}
-async function removeProvider(provider) {
-  if (!await confirmAction('确定要删除API供应商「' + provider.name + '」及其模型吗？')) return;
-  mdl.cfg.models = mdl.cfg.models.filter(model => model.provider !== provider.name);
-  mdl.cfg.providers = mdl.cfg.providers.filter(item => item.name !== provider.name);
-  markDirty(); notifyModelWarnings(); renderModels(); renderOrgans(); $('editor-dialog').close();
+  const newKey = el('button', { type: 'button', class: 'btn small', text: '新增 API 密钥', onclick: () => {
+    openKeyEditor(null, 'create', entry => {
+      const value = 'vault:' + entry.id;
+      fields.key.input.append(el('option', { value, text: entry.name }));
+      fields.key.input.value = value;
+      updateSource();
+    });
+  } });
+  const cancel = el('button', { type: 'button', class: 'btn', text: '取消',
+    onclick: () => $('model-editor-dialog').close() });
+  const save = el('button', { type: 'button', class: 'btn primary', text: '保存' });
+  save.addEventListener('click', async () => {
+    error.textContent = '';
+    if (!validFields(fields)) return;
+    const name = fieldText(fields.name);
+    if (mdl.cfg.providers.some(item => item !== original && item.name === name)) {
+      error.textContent = '厂商名称已存在。';
+      fields.name.input.focus();
+      return;
+    }
+    const next = { name, protocol: fields.protocol.input.value,
+      base_url: fieldText(fields.base_url) || null,
+      api_key_env: fields.key.input.value === 'legacy' ? legacyKey : null,
+      api_key_ref: fields.key.input.value.startsWith('vault:') ? fields.key.input.value.slice(6) : null,
+      timeout_seconds: fieldNumber(fields.timeout), max_retry: fieldNumber(fields.retry) };
+    const nextConfig = clone(mdl.cfg);
+    const rename = original && original.name !== name ? ['providers', original.name, name] : undefined;
+    if (original) {
+      const index = nextConfig.providers.findIndex(item => item.name === original.name);
+      if (index < 0) { error.textContent = '找不到要编辑的厂商，请刷新后再试。'; return; }
+      nextConfig.providers[index] = next;
+      for (const model of nextConfig.models) if (model.provider === original.name) model.provider = name;
+    } else nextConfig.providers.push(next);
+    save.disabled = true; cancel.disabled = true; if (original) remove.disabled = true;
+    const ok = await saveModelsConfig(nextConfig, rename);
+    save.disabled = false; cancel.disabled = false; if (original) remove.disabled = false;
+    if (!ok) return;
+    mdl.provider = name;
+    $('model-editor-dialog').close();
+    refreshCatalog(next);
+    renderModels();
+    toast(isNew ? '厂商已添加。' : '厂商已保存。', 'ok');
+  });
+  const remove = el('button', { type: 'button', class: 'btn danger', text: '删除厂商', onclick: async () => {
+    if (!await confirmAction('确定要删除厂商「' + original.name + '」及其模型吗？')) return;
+    save.disabled = true; cancel.disabled = true; remove.disabled = true;
+    const nextConfig = clone(mdl.cfg);
+    nextConfig.providers = nextConfig.providers.filter(item => item.name !== original.name);
+    nextConfig.models = nextConfig.models.filter(model => model.provider !== original.name);
+    const ok = await saveModelsConfig(nextConfig);
+    if (!ok) { save.disabled = false; cancel.disabled = false; remove.disabled = false; return; }
+    if (mdl.provider === original.name) mdl.provider = '';
+    $('model-editor-dialog').close();
+    renderModels(); renderOrgans(); notifyModelWarnings();
+    toast('厂商已删除。', 'ok');
+  } });
+  const body = el('div', { class: 'model-form' }, error,
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' }, el('h3', { text: '基本信息' })),
+      el('div', { class: 'model-form-grid' }, fields.name.node, fields.protocol.node),
+      el('div', { class: 'model-form-grid' }, fields.base_url.node)),
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' }, el('h3', { text: '密钥与连接' }),
+        el('span', { class: 'hint', text: '只保存密钥名称；原文在密钥库或环境变量里' })),
+      el('div', { class: 'model-form-grid three' }, fields.key.node, fields.timeout.node, fields.retry.node),
+      el('div', { class: 'row' }, keyStatus, newKey)),
+    original ? el('section', { class: 'model-form-section' },
+      el('div', { class: 'row', style: 'justify-content:flex-end' }, remove)) : null);
+  $('model-editor-title').textContent = isNew ? '添加厂商' : '编辑厂商';
+  $('model-editor-body').replaceChildren(body);
+  $('model-editor-body').scrollTop = 0;
+  $('model-editor-footer').replaceChildren(cancel, save);
+  const dialog = $('model-editor-dialog');
+  if (!dialog.open) dialog.showModal();
+  fields.name.input.focus();
 }
 
+const MODEL_TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const MODEL_END_TIME_PATTERN = /^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/;
+const modelMinutes = value => {
+  const [hours, minutes] = String(value).split(':').map(Number);
+  return hours * 60 + minutes;
+};
+function validatePricePeriods(periods) {
+  if (periods.length > 12) return '分时价格最多 12 段。';
+  let previousEnd = 0;
+  for (const [index, period] of periods.entries()) {
+    if (!MODEL_TIME_PATTERN.test(period.start)) return '第 ' + (index + 1) + ' 段的开始时间要写成 HH:MM。';
+    if (!MODEL_END_TIME_PATTERN.test(period.end)) return '第 ' + (index + 1) + ' 段的结束时间要写成 HH:MM 或 24:00。';
+    const start = modelMinutes(period.start), end = modelMinutes(period.end);
+    if (start >= end) return '第 ' + (index + 1) + ' 段的开始时间必须早于结束时间。';
+    if (start < previousEnd) return '分时价格要按开始时间排列，而且不能重叠。';
+    for (const key of ['price_in', 'price_out', 'price_cache_in']) {
+      if (!Number.isFinite(period[key]) || period[key] < 0) return '第 ' + (index + 1) + ' 段的价格必须是大于等于 0 的数字。';
+    }
+    previousEnd = end;
+  }
+  return '';
+}
+function modelEditorSwitch(title, description, checked, onChange) {
+  const input = el('input', { type: 'checkbox', checked });
+  input.addEventListener('change', () => onChange(input.checked));
+  return { input, node: el('div', { class: 'model-switch-row' },
+    el('div', { class: 'model-switch-copy' }, el('strong', { text: title }),
+      description ? el('small', { text: description }) : null),
+    el('label', { class: 'switch' }, input, el('span', { class: 'track' }))) };
+}
+const EXTRA_PARAM_TYPES = [
+  { value: 'string', label: '文字' }, { value: 'number', label: '数字' },
+  { value: 'boolean', label: '开关' }, { value: 'null', label: '空' },
+  { value: 'object', label: '对象' }, { value: 'array', label: '数组' },
+];
+const EXTRA_PARAM_CORE_KEYS = ['model', 'messages', 'tools', 'stream', 'stream_options', 'timeout', 'num_retries', 'api_base', 'api_key'];
+const EXTRA_PARAM_UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+function extraUnsafeKey(value) {
+  if (!value || typeof value !== 'object') return '';
+  for (const key of Object.keys(value)) {
+    if (EXTRA_PARAM_UNSAFE_KEYS.has(key)) return key;
+    const nested = extraUnsafeKey(value[key]);
+    if (nested) return nested;
+  }
+  return '';
+}
+function extraValueType(value) {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'object') return 'object';
+  if (typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  return 'string';
+}
+function extraConvert(value, type) {
+  if (type === 'number') { const number = Number(value); return Number.isFinite(number) ? number : 0; }
+  if (type === 'boolean') return Boolean(value);
+  if (type === 'null') return null;
+  if (type === 'object') return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  if (type === 'array') return Array.isArray(value) ? value : [];
+  return value === null || value === undefined ? '' : String(value);
+}
+function extraParamsError(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '额外参数必须是 JSON 对象。';
+  const core = EXTRA_PARAM_CORE_KEYS.filter(key => Object.prototype.hasOwnProperty.call(value, key));
+  if (core.length) return '额外参数不能覆盖核心请求字段：' + core.join('、') + '。';
+  const unsafe = extraUnsafeKey(value);
+  if (unsafe) return '额外参数不能使用保留字段名：' + unsafe + '。';
+  let encoded;
+  try { encoded = JSON.stringify(value); } catch { return '额外参数的值必须是 JSON 能表示的类型。'; }
+  if (new TextEncoder().encode(encoded).length > 8192) return '额外参数最多 8192 字节。';
+  return '';
+}
+function uniqueExtraKey(object, base) {
+  let index = 1, key = base;
+  while (Object.prototype.hasOwnProperty.call(object, key)) key = base + (++index);
+  return key;
+}
+function extraValueControl(value, setValue, onChange) {
+  const type = extraValueType(value);
+  if (type === 'string') {
+    const input = el('input', { type: 'text', value, 'aria-label': '参数值' });
+    input.addEventListener('input', () => { setValue(input.value); onChange(false); });
+    return input;
+  }
+  if (type === 'number') {
+    const input = el('input', { type: 'number', step: 'any', value, 'aria-label': '参数值' });
+    input.addEventListener('input', () => { setValue(input.value === '' ? 0 : Number(input.value)); onChange(false); });
+    return input;
+  }
+  if (type === 'boolean') {
+    const select = el('select', { 'aria-label': '参数值' },
+      el('option', { value: 'true', text: 'true' }), el('option', { value: 'false', text: 'false' }));
+    select.value = String(value);
+    select.addEventListener('change', () => { setValue(select.value === 'true'); onChange(false); });
+    return select;
+  }
+  if (type === 'null') return el('span', { class: 'muted', text: 'null' });
+  if (type === 'object') return extraObjectEditor(value, onChange);
+  return extraArrayEditor(value, onChange);
+}
+function extraTypeSelect(value, onChange) {
+  const select = el('select', { class: 'extra-type', 'aria-label': '参数类型' },
+    EXTRA_PARAM_TYPES.map(type => el('option', { value: type.value, text: type.label })));
+  select.value = extraValueType(value);
+  select.addEventListener('change', () => onChange(select.value));
+  return select;
+}
+function extraObjectEditor(object, onChange) {
+  const node = el('div', { class: 'extra-node' });
+  node.append(el('div', { class: 'extra-node-head' }, el('span', { text: '对象' })));
+  const rows = el('div', { class: 'extra-tree' });
+  for (const key of Object.keys(object)) rows.append(extraObjectRow(object, key, onChange));
+  const add = el('button', { type: 'button', class: 'btn small extra-add', text: '添加字段',
+    onclick: () => { object[uniqueExtraKey(object, '字段')] = ''; onChange(true); } });
+  node.append(rows, add);
+  return node;
+}
+function extraObjectRow(object, initialKey, onChange) {
+  let key = initialKey;
+  const keyInput = el('input', { class: 'extra-key', value: key, 'aria-label': '参数名' });
+  keyInput.addEventListener('change', () => {
+    const nextKey = keyInput.value.trim();
+    if (!nextKey || EXTRA_PARAM_UNSAFE_KEYS.has(nextKey)
+        || (nextKey !== key && Object.prototype.hasOwnProperty.call(object, nextKey))) {
+      toast('参数名不能为空、重复或使用保留字段名。', 'error');
+      keyInput.value = key;
+      return;
+    }
+    if (nextKey === key) return;
+    const entries = Object.entries(object).map(([name, value]) => [name === key ? nextKey : name, value]);
+    for (const name of Object.keys(object)) delete object[name];
+    for (const [name, value] of entries) object[name] = value;
+    key = nextKey;
+    onChange(false);
+  });
+  const nested = ['object', 'array'].includes(extraValueType(object[key]));
+  const valueCell = el('div', { class: 'extra-value' + (nested ? ' extra-nested' : '') });
+  const renderValue = () => {
+    valueCell.replaceChildren(extraValueControl(object[key],
+      value => { object[key] = value; }, onChange));
+  };
+  const typeSelect = extraTypeSelect(object[key], type => {
+    object[key] = extraConvert(object[key], type);
+    onChange(true);
+  });
+  renderValue();
+  const remove = el('button', { type: 'button', class: 'btn small extra-remove', 'aria-label': '删除参数 ' + key,
+    onclick: () => { delete object[key]; onChange(true); } }, pixelIcon('trash'));
+  return el('div', { class: 'extra-row' }, keyInput, typeSelect, valueCell, remove);
+}
+function extraArrayEditor(array, onChange) {
+  const node = el('div', { class: 'extra-node' });
+  node.append(el('div', { class: 'extra-node-head' }, el('span', { text: '数组' })));
+  const rows = el('div', { class: 'extra-tree' });
+  array.forEach((value, index) => {
+    const nested = ['object', 'array'].includes(extraValueType(array[index]));
+    const valueCell = el('div', { class: 'extra-value' + (nested ? ' extra-nested' : '') });
+    valueCell.append(extraValueControl(array[index], next => { array[index] = next; }, onChange));
+    const typeSelect = extraTypeSelect(array[index], type => {
+      array[index] = extraConvert(array[index], type);
+      onChange(true);
+    });
+    const remove = el('button', { type: 'button', class: 'btn small extra-remove', 'aria-label': '删除第 ' + (index + 1) + ' 项',
+      onclick: () => { array.splice(index, 1); onChange(true); } }, pixelIcon('trash'));
+    rows.append(el('div', { class: 'extra-row extra-array-row' },
+      el('span', { class: 'extra-array-index', text: String(index) }), typeSelect, valueCell, remove));
+  });
+  const add = el('button', { type: 'button', class: 'btn small extra-add', text: '添加项',
+    onclick: () => { array.push(''); onChange(true); } });
+  node.append(rows, add);
+  return node;
+}
+function openExtraParamsEditor(initial, onSave) {
+  const dialog = $('extra-params-dialog');
+  const body = $('extra-params-body'), footer = $('extra-params-footer');
+  let working = clone(initial || {});
+  let active = 'visual', jsonText = JSON.stringify(working, null, 2), jsonError = '';
+  const error = el('div', { class: 'model-editor-error', role: 'alert' });
+  const tabs = el('div', { class: 'extra-params-tabs' });
+  const visualButton = el('button', { type: 'button', class: 'btn small', text: '可视化编辑' });
+  const jsonButton = el('button', { type: 'button', class: 'btn small', text: 'JSON 编辑' });
+  const pane = el('div', { class: 'extra-params-pane' });
+  const save = el('button', { type: 'button', class: 'btn primary', text: '保存' });
+  const cancel = el('button', { type: 'button', class: 'btn', text: '取消', onclick: () => dialog.close() });
+  const refreshError = () => {
+    const message = jsonError || extraParamsError(working);
+    error.textContent = message;
+    save.disabled = !!message;
+  };
+  const change = structural => {
+    if (structural) renderVisual();
+    refreshError();
+  };
+  function renderVisual() {
+    const root = el('div', { class: 'extra-tree' });
+    root.append(extraObjectEditor(working, change));
+    pane.replaceChildren(root);
+    refreshError();
+  }
+  function renderJson() {
+    jsonText = JSON.stringify(working, null, 2);
+    const textarea = el('textarea', { class: 'extra-params-json', rows: 16, spellcheck: 'false',
+      'aria-label': '额外参数 JSON' });
+    textarea.value = jsonText;
+    const preview = el('pre', { class: 'extra-params-preview', 'aria-label': '额外参数预览' });
+    preview.textContent = jsonText;
+    const update = () => {
+      jsonText = textarea.value;
+      try {
+        const parsed = JSON.parse(jsonText || '{}');
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('顶层必须是对象');
+        working = parsed;
+        jsonError = '';
+        preview.textContent = JSON.stringify(working, null, 2);
+      } catch {
+        jsonError = 'JSON 格式不对，请检查括号、引号和逗号。';
+        preview.textContent = '';
+      }
+      refreshError();
+    };
+    textarea.addEventListener('input', update);
+    pane.replaceChildren(el('div', { class: 'model-editor-note',
+      text: '顶层必须是对象；保存前会检查核心键和 8192 字节上限。' }), textarea, preview);
+    refreshError();
+  }
+  function setTab(tab) {
+    if (tab === active) return;
+    if (tab === 'visual' && jsonError) { toast('先修正 JSON 格式。', 'error'); return; }
+    active = tab;
+    visualButton.classList.toggle('active', tab === 'visual');
+    jsonButton.classList.toggle('active', tab === 'json');
+    visualButton.setAttribute('aria-pressed', String(tab === 'visual'));
+    jsonButton.setAttribute('aria-pressed', String(tab === 'json'));
+    if (tab === 'visual') renderVisual(); else renderJson();
+  }
+  visualButton.addEventListener('click', () => setTab('visual'));
+  jsonButton.addEventListener('click', () => setTab('json'));
+  tabs.append(visualButton, jsonButton);
+  save.addEventListener('click', () => {
+    const message = jsonError || extraParamsError(working);
+    if (message) { error.textContent = message; return; }
+    onSave(clone(working));
+    dialog.close();
+  });
+  visualButton.classList.add('active');
+  visualButton.setAttribute('aria-pressed', 'true');
+  jsonButton.setAttribute('aria-pressed', 'false');
+  $('extra-params-body').replaceChildren(el('div', { class: 'stack' }, tabs, error, pane));
+  $('extra-params-body').scrollTop = 0;
+  footer.replaceChildren(cancel, save);
+  renderVisual();
+  if (!dialog.open) dialog.showModal();
+}
 function openModelEditor(model, identifier = '') {
+  if (!mdl.cfg?.providers.length) { toast('先添加厂商，再添加模型。', 'error'); return; }
   const original = model, isNew = !model;
-  model = model || { name: '', identifier, provider: mdl.provider || mdl.cfg.providers[0].name, ...clone(mdl.defaults.models) };
+  const providerName = model?.provider || mdl.provider || mdl.cfg.providers[0].name;
+  const draft = model ? clone(model) : normalizeModel({ name: '', identifier, provider: providerName,
+    ...clone(mdl.defaults?.models || {}) });
+  draft.name = draft.name || '';
+  draft.identifier = draft.identifier || identifier;
+  draft.provider = draft.provider || providerName;
   const fields = {
-    provider: editorField('API供应商', model.provider, { values: mdl.cfg.providers.map(provider => provider.name) }),
-    identifier: editorField('模型标识符', model.identifier, { required: true }),
-    name: editorField('模型名称', model.name, { hint: '留空使用 [供应商名称]模型标识符' }),
-    kind: editorField('模型类型', model.kind, { values: MODEL_KIND_OPTIONS }),
-    price_in: editorField('输入价格（元 / 百万 token）', model.price_in, { type: 'number', min: 0, step: 'any' }),
-    price_out: editorField('输出价格（元 / 百万 token）', model.price_out, { type: 'number', min: 0, step: 'any' }),
-    price_cache_in: editorField('缓存命中输入价格', model.price_cache_in, { type: 'number', min: 0, step: 'any' }),
-    temperature: editorField('温度', model.temperature, { type: 'number', min: 0, step: 'any' }),
-    max_tokens: editorField('单次回复 token 上限', model.max_tokens, { type: 'number', min: 1, step: 1 }),
+    name: editorField('模型名称', draft.name, { hint: '留空使用 [厂商]标识符' }),
+    provider: editorField('API 提供商', draft.provider, { values: mdl.cfg.providers.map(provider => provider.name) }),
+    identifier: editorField('模型标识符', draft.identifier, { required: true, hint: '从厂商目录选择，或手动填写' }),
+    kind: editorField('模型类型', draft.kind, { values: MODEL_KIND_OPTIONS }),
+    price_in: editorField('输入价格（¥/M token）', draft.price_in, { type: 'number', min: 0, step: 'any', hint: '留空表示未知' }),
+    price_out: editorField('输出价格（¥/M token）', draft.price_out, { type: 'number', min: 0, step: 'any', hint: '留空表示未知' }),
+    price_cache_in: editorField('缓存价格（¥/M token）', draft.price_cache_in, { type: 'number', min: 0, step: 'any', hint: '留空按输入价计算' }),
+    temperature: editorField('模型温度', draft.temperature, { type: 'number', min: 0, step: 'any', hint: '留空使用服务商默认值' }),
+    max_tokens: editorField('最大 Token', draft.max_tokens, { type: 'number', min: 1, step: 1, hint: '留空使用服务商默认值' }),
   };
-  const levels = new Set(model.reasoning_levels || []);
-  const defaultName = () => '[' + fields.provider.input.value + ']' + fieldText(fields.identifier);
-  const updateName = () => { fields.name.input.placeholder = defaultName(); };
-  updateName();
-  fields.identifier.input.addEventListener('input', updateName);
-  fields.provider.input.addEventListener('change', updateName);
-  const vision = el('input', { type: 'checkbox', checked: model.vision });
-  const visionField = el('label', { class: 'vision-field' }, vision, '视觉');
-  fields.kind.node.append(visionField);
+  fields.identifier.node.classList.add('full');
+  const error = el('div', { class: 'model-editor-error', role: 'alert' });
+  const defaultName = () => '[' + fields.provider.input.value + ']' + fields.identifier.input.value.trim();
+  const updateNameHint = () => { fields.name.input.placeholder = defaultName(); };
+  updateNameHint();
+  fields.identifier.input.addEventListener('input', updateNameHint);
+  const visionSwitch = modelEditorSwitch('启用视觉', '仅语言模型可以开启。', !!draft.vision, checked => { draft.vision = checked; });
   const updateVision = () => {
-    vision.disabled = fields.kind.input.value !== 'llm';
-    visionField.classList.toggle('hidden', vision.disabled);
-    if (vision.disabled) vision.checked = false;
+    const isLlm = fields.kind.input.value === 'llm';
+    visionSwitch.node.classList.toggle('hidden', !isLlm);
+    if (!isLlm) { visionSwitch.input.checked = false; draft.vision = false; }
   };
-  updateVision();
   fields.kind.input.addEventListener('change', updateVision);
-  vision.addEventListener('change', () => { if (!isNew) apply(); });
-  const apply = () => {
+  updateVision();
+  const periodsHost = el('div', { class: 'model-price-periods' });
+  const addPeriod = el('button', { type: 'button', class: 'btn small', onclick: () => {
+    draft.price_periods.push({ start: '08:00', end: '12:00',
+      price_in: fieldNumber(fields.price_in) ?? 0, price_out: fieldNumber(fields.price_out) ?? 0,
+      price_cache_in: fieldNumber(fields.price_cache_in) ?? 0 });
+    renderPeriods();
+  } }, pixelIcon('plus'), '添加时段');
+  function renderPeriods() {
+    periodsHost.replaceChildren();
+    if (!draft.price_periods.length) periodsHost.append(el('p', { class: 'model-editor-note',
+      text: '未配置分时价格，所有时间使用默认价格。' }));
+    draft.price_periods.forEach((period, index) => {
+      const numberInput = (key, label) => {
+        const input = el('input', { type: 'number', min: 0, step: 'any',
+          value: period[key] === null || period[key] === undefined ? '' : period[key],
+          'aria-label': '时段 ' + (index + 1) + ' ' + label });
+        input.addEventListener('input', () => { period[key] = input.value === '' ? NaN : Number(input.value); });
+        return el('div', { class: 'field' }, el('label', { text: label }), input);
+      };
+      const start = el('input', { type: 'text', value: period.start, maxlength: 5,
+        placeholder: '08:00', 'aria-label': '时段 ' + (index + 1) + ' 开始时间' });
+      const end = el('input', { type: 'text', value: period.end, maxlength: 5,
+        placeholder: '12:00', 'aria-label': '时段 ' + (index + 1) + ' 结束时间' });
+      start.addEventListener('input', () => { period.start = start.value.trim(); });
+      end.addEventListener('input', () => { period.end = end.value.trim(); });
+      const remove = el('button', { type: 'button', class: 'btn small model-period-remove',
+        'aria-label': '删除时段 ' + (index + 1), onclick: () => { draft.price_periods.splice(index, 1); renderPeriods(); } }, pixelIcon('trash'));
+      periodsHost.append(el('div', { class: 'model-price-period' },
+        el('div', { class: 'field' }, el('label', { text: '开始' }), start),
+        el('div', { class: 'field' }, el('label', { text: '结束' }), end),
+        numberInput('price_in', '输入价'), numberInput('price_out', '输出价'), numberInput('price_cache_in', '缓存价'), remove));
+    });
+    addPeriod.disabled = draft.price_periods.length >= 12;
+  }
+  renderPeriods();
+  const levelSet = new Set(draft.reasoning_levels || []);
+  const levelLabels = { low: '低', medium: '中', high: '高' };
+  const levelChoice = (level, label) => {
+    const checkbox = el('input', { type: 'checkbox', checked: levelSet.has(level) });
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) levelSet.add(level); else levelSet.delete(level);
+      draft.reasoning_levels = [...levelSet];
+    });
+    return el('label', { class: 'model-level-choice' }, checkbox, label);
+  };
+  const levelChoices = el('div', { class: 'model-level-choices' },
+    ...['low', 'medium', 'high'].map(level => levelChoice(level, levelLabels[level] + '（' + level + '）')));
+  const otherLevels = (mdl.choices.reasoning_levels || []).filter(level => !['low', 'medium', 'high'].includes(level));
+  const levelMore = el('details', { class: 'model-level-more' }, el('summary', { text: '更多等级' }),
+    el('div', { class: 'model-level-choices' }, ...otherLevels.map(level => levelChoice(level, level))));
+  const thinkingSwitch = modelEditorSwitch('启用思考', '为 true 时请求写入 thinking.type = enabled。',
+    !!draft.thinking, checked => { draft.thinking = checked; });
+  const providerProtocol = () => mdl.cfg.providers.find(provider => provider.name === fields.provider.input.value)?.protocol || '';
+  const webSearchSwitch = modelEditorSwitch('启用联网搜索', '给支持的协议添加原生 web_search 工具。',
+    !!draft.web_search, checked => { draft.web_search = checked; });
+  const updateWebSearch = () => {
+    const supported = providerProtocol() === 'openai_responses';
+    webSearchSwitch.input.disabled = !supported;
+    webSearchSwitch.node.classList.toggle('model-switch-disabled', !supported);
+    const hint = webSearchSwitch.node.querySelector('small');
+    if (hint) hint.textContent = supported
+      ? '给支持的协议添加原生 web_search 工具。'
+      : '当前协议不支持原生联网搜索，保存后不会生效。';
+  };
+  fields.provider.input.addEventListener('change', updateWebSearch);
+  updateWebSearch();
+  const temperatureSwitch = modelEditorSwitch('自定义模型温度', '关闭时使用服务商默认值。',
+    draft.temperature !== null && draft.temperature !== undefined, checked => {
+      if (checked) {
+        if (draft.temperature === null || draft.temperature === undefined) draft.temperature = 0.7;
+        fields.temperature.input.value = draft.temperature;
+      } else {
+        draft.temperature = null;
+        fields.temperature.input.value = '';
+      }
+      fields.temperature.input.disabled = !checked;
+      fields.temperature.node.classList.toggle('hidden', !checked);
+    });
+  const maxTokensSwitch = modelEditorSwitch('自定义最大 Token', '关闭时使用服务商默认值。',
+    draft.max_tokens !== null && draft.max_tokens !== undefined, checked => {
+      if (checked) {
+        if (draft.max_tokens === null || draft.max_tokens === undefined) draft.max_tokens = 2048;
+        fields.max_tokens.input.value = draft.max_tokens;
+      } else {
+        draft.max_tokens = null;
+        fields.max_tokens.input.value = '';
+      }
+      fields.max_tokens.input.disabled = !checked;
+      fields.max_tokens.node.classList.toggle('hidden', !checked);
+    });
+  fields.temperature.input.disabled = draft.temperature === null || draft.temperature === undefined;
+  fields.temperature.node.classList.toggle('hidden', fields.temperature.input.disabled);
+  fields.max_tokens.input.disabled = draft.max_tokens === null || draft.max_tokens === undefined;
+  fields.max_tokens.node.classList.toggle('hidden', fields.max_tokens.input.disabled);
+  const extraButton = el('button', { type: 'button', class: 'btn model-extra-button' });
+  const extraKeys = el('div', { class: 'model-extra-keys' });
+  const updateExtra = () => {
+    const keys = Object.keys(draft.extra_params || {});
+    extraButton.textContent = keys.length ? '已配置 ' + keys.length + ' 个参数' : '未配置额外参数';
+    extraKeys.replaceChildren(...keys.slice(0, 5).map(key => el('code', { text: key })));
+    if (keys.length > 5) extraKeys.append(el('span', { class: 'muted', text: '…' }));
+  };
+  extraButton.addEventListener('click', () => openExtraParamsEditor(draft.extra_params, value => {
+    draft.extra_params = value;
+    updateExtra();
+  }));
+  updateExtra();
+  const catalogHost = el('div', { class: 'model-catalog-host' });
+  fields.identifier.node.append(catalogHost);
+  const loadCatalog = () => mountCatalog(catalogHost, fields.provider.input.value, id => {
+    fields.identifier.input.value = id;
+    if (!fields.name.input.value.trim()) fields.name.input.value = id;
+    updateNameHint();
+  }, true);
+  fields.provider.input.addEventListener('change', () => { updateNameHint(); loadCatalog(); });
+  loadCatalog();
+  const body = el('div', { class: 'model-form' }, error,
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' }, el('h3', { text: '基本信息' })),
+      el('div', { class: 'model-form-grid' }, fields.name.node, fields.provider.node),
+      el('div', { class: 'model-form-grid' }, fields.identifier.node),
+      el('div', { class: 'model-form-grid' }, fields.kind.node),
+      visionSwitch.node),
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' }, el('h3', { text: '默认价格' }),
+        el('span', { class: 'hint', text: '元 / 百万 token' })),
+      el('div', { class: 'model-form-grid three' }, fields.price_in.node, fields.price_out.node, fields.price_cache_in.node)),
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' },
+        el('div', { class: 'stack' }, el('h3', { text: '分时价格' }),
+          el('span', { class: 'hint', text: '每日 · 服务器本地时间 · 左闭右开 · 未命中时段使用默认价格' })),
+        addPeriod),
+      periodsHost),
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' }, el('h3', { text: '思考与联网' })),
+      thinkingSwitch.node,
+      el('div', { class: 'field' }, el('label', { text: '思考力度（模型支持的等级）' }),
+        el('span', { class: 'hint', text: '器官页按这些等级选择；与启用思考独立。' }), levelChoices, levelMore),
+      webSearchSwitch.node),
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' }, el('h3', { text: '生成参数' })),
+      el('div', { class: 'model-form-grid' },
+        el('div', { class: 'model-parameter-box' }, temperatureSwitch.node, fields.temperature.node),
+        el('div', { class: 'model-parameter-box' }, maxTokensSwitch.node, fields.max_tokens.node))),
+    el('section', { class: 'model-form-section' },
+      el('div', { class: 'model-form-section-head' }, el('h3', { text: '额外参数' }),
+        el('span', { class: 'hint', text: '合并进请求参数；不能覆盖核心字段' })),
+      extraButton, extraKeys));
+  const cancel = el('button', { type: 'button', class: 'btn', text: '取消',
+    onclick: () => $('model-editor-dialog').close() });
+  const save = el('button', { type: 'button', class: 'btn primary', text: '保存' });
+  save.addEventListener('click', async () => {
+    error.textContent = '';
     if (!validFields(fields)) return;
-    const name = fieldText(fields.name) || defaultName();
-    if (mdl.cfg.models.some(item => item !== original && item.name === name)) { toast('模型名称已存在。', 'error'); return; }
-    const next = { name, identifier: fieldText(fields.identifier), provider: fields.provider.input.value, kind: fields.kind.input.value,
-      vision: fields.kind.input.value === 'llm' && !!vision.checked, enabled: model.enabled !== false,
-      price_in: fieldNumber(fields.price_in), price_out: fieldNumber(fields.price_out), price_cache_in: fieldNumber(fields.price_cache_in),
-      price_periods: clone(model.price_periods || []),
-      temperature: fieldNumber(fields.temperature), max_tokens: fieldNumber(fields.max_tokens), reasoning_levels: [...levels],
-      thinking: !!model.thinking, web_search: !!model.web_search, extra_params: clone(model.extra_params || {}) };
+    const name = fields.name.input.value.trim() || defaultName();
+    if (mdl.cfg.models.some(item => item !== original && item.name === name)) {
+      error.textContent = '模型名称已存在。';
+      fields.name.input.focus();
+      return;
+    }
+    const periods = [...draft.price_periods].sort((a, b) => modelMinutes(a.start) - modelMinutes(b.start));
+    const periodError = validatePricePeriods(periods);
+    if (periodError) { error.textContent = periodError; return; }
+    const next = { ...draft, name, identifier: fields.identifier.input.value.trim(),
+      provider: fields.provider.input.value, kind: fields.kind.input.value,
+      vision: fields.kind.input.value === 'llm' && !!visionSwitch.input.checked,
+      price_in: fieldNumber(fields.price_in), price_out: fieldNumber(fields.price_out),
+      price_cache_in: fieldNumber(fields.price_cache_in),
+      price_periods: periods.map(period => ({ start: period.start, end: period.end,
+        price_in: period.price_in, price_out: period.price_out, price_cache_in: period.price_cache_in })),
+      temperature: temperatureSwitch.input.checked ? fieldNumber(fields.temperature) : null,
+      max_tokens: maxTokensSwitch.input.checked ? fieldNumber(fields.max_tokens) : null,
+      thinking: !!draft.thinking, web_search: !!draft.web_search,
+      reasoning_levels: [...levelSet], extra_params: clone(draft.extra_params || {}) };
+    const nextConfig = clone(mdl.cfg);
     const rename = original && original.name !== name ? ['models', original.name, name] : undefined;
     if (original) {
-      for (const organ of Object.values(mdl.cfg.organs)) organ.models = organ.models.map(item => item === original.name ? name : item);
-      Object.assign(original, next);
-    } else mdl.cfg.models.push(next);
-    markDirty(rename); renderModels(); renderOrgans();
-    if (isNew) $('editor-dialog').close();
-  };
-  const body = editorForm(isNew ? '添加模型' : '编辑模型 · 自动保存', fields, () => { if (!isNew) apply(); },
-    isNew ? el('button', { class: 'btn primary', text: '添加模型', onclick: apply }) : null);
-  const catalogHost = el('div');
-  fields.identifier.node.append(catalogHost);
-  const loadChoices = () => mountCatalog(catalogHost, fields.provider.input.value, id => {
-    fields.identifier.input.value = id;
-    updateName();
-    if (!isNew) apply();
-  }, true);
-  fields.provider.input.addEventListener('change', loadChoices);
-  loadChoices();
-  const choices = el('div', { class: 'row' });
-  for (const level of mdl.choices.reasoning_levels || []) {
-    const checkbox = el('input', { type: 'checkbox', checked: levels.has(level) });
-    checkbox.addEventListener('change', () => { if (checkbox.checked) levels.add(level); else levels.delete(level); if (!isNew) apply(); });
-    choices.append(el('label', { class: 'row' }, checkbox, level));
-  }
-  const reasoning = el('div', { class: 'field' }, el('label', { text: '支持的思考等级' }), choices);
-  body.append(reasoning);
+      const index = nextConfig.models.findIndex(item => item.name === original.name);
+      if (index < 0) { error.textContent = '找不到要编辑的模型，请刷新后再试。'; return; }
+      nextConfig.models[index] = next;
+      for (const organ of Object.values(nextConfig.organs)) organ.models = organ.models.map(item => item === original.name ? name : item);
+    } else nextConfig.models.push(next);
+    save.disabled = true; cancel.disabled = true;
+    const ok = await saveModelsConfig(nextConfig, rename);
+    save.disabled = false; cancel.disabled = false;
+    if (!ok) return;
+    $('model-editor-dialog').close();
+    renderModels(); renderOrgans();
+    toast(isNew ? '模型已添加。' : '模型已保存。', 'ok');
+  });
+  $('model-editor-title').textContent = isNew ? '添加模型' : '编辑模型';
+  $('model-editor-body').replaceChildren(body);
+  $('model-editor-body').scrollTop = 0;
+  $('model-editor-footer').replaceChildren(cancel, save);
+  const dialog = $('model-editor-dialog');
+  if (!dialog.open) dialog.showModal();
+  fields.name.input.focus();
 }
 async function removeModel(model) {
   if (!await confirmAction('确定要删除模型「' + model.name + '」吗？')) return;
