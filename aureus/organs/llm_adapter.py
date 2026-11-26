@@ -13,7 +13,8 @@
 """
 
 # 模型测速的提示词、工具定义与测试图片移植自 MaiBot 1.3.15（GPL-3.0），
-# 固定提交 062d45c 的 src/webui/routers/model.py；来源与改动见 THIRD_PARTY.md。
+# 固定提交 062d45c 的 src/webui/routers/model.py；按本项目的逐项能力探测
+# 拆分调用，来源、改动与许可见 THIRD_PARTY.md。
 
 import asyncio
 import atexit
