@@ -5610,6 +5610,15 @@ let idlePrefetchScheduled = false;
 // 预取请求不绑定当前页：切页时不取消，点击目标页时可以直接用已经取回的数据。
 const prefetchRequest = path => api(path, undefined, undefined, {}, undefined, true);
 const freshCache = (key, ttl) => Boolean(cacheRead(key, ttl)?.fresh);
+// 单个接口的预取：已有新鲜缓存就不重复请求，失败静默。
+function prefetchInto(path, key, ttl) {
+  if (freshCache(key, ttl)) return Promise.resolve();
+  const session = state.loaded;
+  return prefetchRequest(path).then(res => {
+    if (session !== state.loaded || !res.ok) return;
+    cacheWrite(key, res.data, ttl);
+  });
+}
 const PAGE_PREFETCH = {
   overview() {
     if (freshCache('overview', OVERVIEW_CACHE_MS) && freshCache('overview-activity', OVERVIEW_CACHE_MS)) return Promise.resolve();
@@ -5646,54 +5655,12 @@ const PAGE_PREFETCH = {
       cacheWrite(key, res.data, TIMELINE_CACHE_MS);
     });
   },
-  inbox() {
-    if (freshCache('inbox-conversations', INBOX_CACHE_MS)) return Promise.resolve();
-    const session = state.loaded;
-    return prefetchRequest('/api/inbox/conversations').then(res => {
-      if (session !== state.loaded || !res.ok) return;
-      cacheWrite('inbox-conversations', res.data, INBOX_CACHE_MS);
-    });
-  },
-  persona() {
-    if (freshCache('settings', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
-    const session = state.loaded;
-    return prefetchRequest('/api/settings').then(res => {
-      if (session !== state.loaded || !res.ok) return;
-      cacheWrite('settings', res.data, CONFIG_CACHE_TTL_MS);
-    });
-  },
-  models() {
-    if (freshCache('models', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
-    const session = state.loaded;
-    return prefetchRequest('/api/models').then(res => {
-      if (session !== state.loaded || !res.ok) return;
-      cacheWrite('models', res.data, CONFIG_CACHE_TTL_MS);
-    });
-  },
-  keys() {
-    if (freshCache('keys', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
-    const session = state.loaded;
-    return prefetchRequest('/api/keys').then(res => {
-      if (session !== state.loaded || !res.ok) return;
-      cacheWrite('keys', res.data, CONFIG_CACHE_TTL_MS);
-    });
-  },
-  prompts() {
-    if (freshCache('prompts', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
-    const session = state.loaded;
-    return prefetchRequest('/api/prompts').then(res => {
-      if (session !== state.loaded || !res.ok) return;
-      cacheWrite('prompts', res.data, CONFIG_CACHE_TTL_MS);
-    });
-  },
-  config() {
-    if (freshCache('config', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
-    const session = state.loaded;
-    return prefetchRequest('/api/config').then(res => {
-      if (session !== state.loaded || !res.ok) return;
-      cacheWrite('config', res.data, CONFIG_CACHE_TTL_MS);
-    });
-  },
+  inbox: () => prefetchInto('/api/inbox/conversations', 'inbox-conversations', INBOX_CACHE_MS),
+  persona: () => prefetchInto('/api/settings', 'settings', CONFIG_CACHE_TTL_MS),
+  models: () => prefetchInto('/api/models', 'models', CONFIG_CACHE_TTL_MS),
+  keys: () => prefetchInto('/api/keys', 'keys', CONFIG_CACHE_TTL_MS),
+  prompts: () => prefetchInto('/api/prompts', 'prompts', CONFIG_CACHE_TTL_MS),
+  config: () => prefetchInto('/api/config', 'config', CONFIG_CACHE_TTL_MS),
 };
 PAGE_PREFETCH.organs = PAGE_PREFETCH.models;
 function prefetchPage(name) {
