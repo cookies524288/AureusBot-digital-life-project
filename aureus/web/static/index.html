@@ -3932,11 +3932,16 @@ function renderInboxView({keepSelection = false} = {}) {
       'aria-label':item.unread_count + ' 条未读消息',
     }) : null)));
   }
-  const previous = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
+  const selectedEntry = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
   if (entries.length) {
-    // 后台刷新会话列表时，选中项还在就只更新列表，不重载消息和活动（D129）。
-    if (keepSelection && previous && inbox.selected) return Promise.resolve();
-    return selectInboxConversation(previous || entries[0]);
+    // 同一路由的名称和未读数可以变化，但不需要重开消息、输入状态或活动（D129）。
+    if (keepSelection && selectedEntry) {
+      inbox.selected = selectedEntry;
+      const title = $('inbox-thread-name');
+      if (title.textContent !== selectedEntry.name) title.textContent = selectedEntry.name;
+      return Promise.resolve();
+    }
+    return selectInboxConversation(selectedEntry || entries[0]);
   }
   clearInboxThread();
 }
