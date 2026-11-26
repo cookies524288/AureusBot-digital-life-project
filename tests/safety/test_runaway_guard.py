@@ -156,6 +156,34 @@ def test_failures_are_counted_per_organ(clock: ManualClock) -> None:
     assert guard.blocked_reason("planner") is None
 
 
+# ---------- 模型测试的失败暂停豁免（D132） ----------
+
+
+def test_model_test_is_not_paused_by_consecutive_failures(clock: ManualClock) -> None:
+    guard = make_guard(clock, max_consecutive_failures=1, max_calls_per_minute=100)
+    fail_times(guard, 10, "model_test")
+    assert guard.blocked_reason("model_test") is None
+
+
+def test_model_test_still_rate_limited(clock: ManualClock) -> None:
+    guard = make_guard(clock, max_calls_per_minute=2, max_consecutive_failures=1)
+    fail_times(guard, 2, "model_test")
+    reason = guard.blocked_reason("model_test")
+    assert reason is not None
+    assert "2" in reason  # 每分钟上限照常生效
+    clock.advance(timedelta(minutes=1))
+    assert guard.blocked_reason("model_test") is None
+
+
+def test_other_organs_still_pause_after_failures(clock: ManualClock) -> None:
+    guard = make_guard(clock, max_consecutive_failures=1, max_calls_per_minute=100)
+    fail_times(guard, 5, "model_test")  # 模型测试失败不影响别的器官
+    assert guard.blocked_reason(ORGAN) is None
+    fail_times(guard, 1, ORGAN)
+    assert guard.blocked_reason(ORGAN) is not None
+    assert guard.blocked_reason("model_test") is None
+
+
 # ---------- 开关 ----------
 
 

@@ -4,6 +4,7 @@
 - 最近 1 分钟放行的调用达到上限，就拒绝；
 - 连续失败达到次数，就暂停一段时间；暂停结束后只要再失败一次就再暂停（熔断器的「半开」），
   成功一次，连续失败数清零。
+- 模型测试（`model_test`）不因连续失败暂停，每分钟频率限制照常（D132）。
 
 状态只放在内存里，重启后清零。来源：器官调用的次数和成败；影响：拒绝调用；
 开关：`SafetyConfig.runaway_guard_enabled`（D5）。
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # 频率限制看的时间窗口：「每分钟最多 N 次」里的那一分钟。
 RATE_WINDOW = timedelta(minutes=1)
+
+# D132：模型测试只受频率限制，不因连续失败暂停；其它器官照常。
+FAILURE_PAUSE_EXEMPT_ORGANS = frozenset({"model_test"})
 
 
 class RunawayGuard:
@@ -84,6 +88,9 @@ class RunawayGuard:
             return
         if succeeded:
             self._consecutive_failures[organ_id] = 0
+            return
+        if organ_id in FAILURE_PAUSE_EXEMPT_ORGANS:
+            # D132：模型测试的失败不累计，只受频率限制。
             return
         failures = self._consecutive_failures.get(organ_id, 0) + 1
         self._consecutive_failures[organ_id] = failures
