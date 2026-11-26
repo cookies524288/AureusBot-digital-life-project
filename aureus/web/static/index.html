@@ -2152,6 +2152,7 @@ function loadOverview() {
     if (!current()) return;
     if (document.hidden) { schedule(); return; }
     // 总览、最近动态和最新一轮互不依赖，同时发出（D129）；动态晚到不影响主卡片先出现。
+    const generation = timelineGeneration;
     const activityRequest = activityFresh ? null : api('/api/timeline?hours=24&limit=3');
     activityFresh = true;
     const roundRequest = roundFresh ? null : api('/api/timeline?hours=24&limit=60');
@@ -2185,14 +2186,14 @@ function loadOverview() {
     }
     if (activityRequest) {
       activityRequest.then(recent => {
-        if (!current() || recent.aborted) return;   // 切页或新一次采样取消的请求不显示失败
+        if (!current() || generation !== timelineGeneration || recent.aborted) return;
         if (recent.ok) cacheWrite('overview-activity', recent.data, OVERVIEW_CACHE_MS);
         renderOverviewActivity(recent);
       });
     }
     if (roundRequest) {
       roundRequest.then(round => {
-        if (!current() || round.aborted) return;
+        if (!current() || generation !== timelineGeneration || round.aborted) return;
         if (round.ok) cacheWrite('overview-round', round.data, OVERVIEW_CACHE_MS);
         renderOverviewRound(round.ok ? round.data.records : [], round.ok);
       });
@@ -2342,8 +2343,16 @@ const LIVE_TOPIC_CACHE_PREFIXES = {
 };
 const liveRefreshTimers = new Map();
 let socketNeedsCatchUp = false;
+let timelineGeneration = 0;
 
 function invalidateLiveTopic(topic) {
+  if (topic === 'timeline') {
+    // 变更前的读取可自然结束，但不能再共享，也不能回填这次失效的快照（3.64 P）。
+    timelineGeneration++;
+    for (const path of inFlightGets.keys()) {
+      if (path.startsWith('/api/timeline?')) inFlightGets.delete(path);
+    }
+  }
   for (const prefix of LIVE_TOPIC_CACHE_PREFIXES[topic] || []) clearPageCache(prefix);
 }
 
@@ -3315,7 +3324,7 @@ async function loadTimeline(more, switching = false, force = false, live = false
   if (more) query.set('before_id', String(tl.next));
   const list = $('tl-list');
   const replacesFilter = !more && base !== timelineQuery;
-  const request = ++timelineRequest, session = state.loaded;
+  const request = ++timelineRequest, session = state.loaded, generation = timelineGeneration;
   let shownFromCache = false;
   if (!more) {
     const cached = force ? null : cacheRead('timeline:' + base, TIMELINE_CACHE_MS);
@@ -3340,7 +3349,7 @@ async function loadTimeline(more, switching = false, force = false, live = false
     button.classList.add('hidden');
   }
   const res = await api('/api/timeline?' + query);
-  if (request !== timelineRequest || session !== state.loaded ||
+  if (request !== timelineRequest || session !== state.loaded || generation !== timelineGeneration ||
       (live && (navigation !== pageNavigation || state.page !== 'timeline'))) return;
   const missing = $('tl-missing');
   if (notBuilt(res)) {
@@ -6866,7 +6875,7 @@ function renderMonitorResponses({ov, hormones, recent, persona}) {
 }
 let monitorRequest = 0;
 async function loadMonitor(force = false) {
-  const request = ++monitorRequest;
+  const request = ++monitorRequest, generation = timelineGeneration;
   const cached = force ? null : cacheRead('monitor', MONITOR_CACHE_MS);
   if (cached) {
     renderMonitorResponses(cached.data);
@@ -6878,7 +6887,7 @@ async function loadMonitor(force = false) {
     api('/api/timeline?hours=24&limit=12'),
     api('/api/timeline?hours=720&limit=6&types=persona_changed,identity_changed'),
   ]);
-  if (request !== monitorRequest || !state.loggedIn || state.page !== 'monitor') return;
+  if (request !== monitorRequest || generation !== timelineGeneration || !state.loggedIn || state.page !== 'monitor') return;
   if (!ov.ok) {
     if (cached) { fail(ov); return; }   // 刷新失败保留缓存内容
     renderMonitorResponses({ov, hormones, recent, persona});
@@ -6918,27 +6927,26 @@ const PAGE_PREFETCH = {
   overview() {
     if (freshCache('overview', OVERVIEW_CACHE_MS) && freshCache('overview-activity', OVERVIEW_CACHE_MS)
         && freshCache('overview-round', OVERVIEW_CACHE_MS)) return Promise.resolve();
-    const session = state.loaded;
-    return Promise.all([prefetchRequest('/api/overview'), prefetchRequest('/api/timeline?hours=24&limit=3'),
-      prefetchRequest('/api/timeline?hours=24&limit=60')])
-      .then(([overview, activity, round]) => {
-        if (session !== state.loaded) return;
-        if (overview.ok) cacheWrite('overview', overview.data, OVERVIEW_CACHE_MS);
-        if (activity.ok) cacheWrite('overview-activity', activity.data, OVERVIEW_CACHE_MS);
-        if (round.ok) cacheWrite('overview-round', round.data, OVERVIEW_CACHE_MS);
-      });
+    const session = state.loaded, generation = timelineGeneration;
+    const read = (path, key, timeline = false) => prefetchRequest(path).then(res => {
+      if (!res.ok || session !== state.loaded || (timeline && generation !== timelineGeneration)) return;
+      cacheWrite(key, res.data, OVERVIEW_CACHE_MS);
+    });
+    return Promise.all([read('/api/overview', 'overview'),
+      read('/api/timeline?hours=24&limit=3', 'overview-activity', true),
+      read('/api/timeline?hours=24&limit=60', 'overview-round', true)]);
   },
   chat: () => state.loaded.chat ? Promise.resolve() : loadChatHistory(true, true),
   monitor() {
     if (freshCache('monitor', MONITOR_CACHE_MS)) return Promise.resolve();
-    const session = state.loaded;
+    const session = state.loaded, generation = timelineGeneration;
     return Promise.all([
       prefetchRequest('/api/overview'),
       prefetchRequest('/api/timeline?hours=72&limit=10&types=hormone_triggered,judgment'),
       prefetchRequest('/api/timeline?hours=24&limit=12'),
       prefetchRequest('/api/timeline?hours=720&limit=6&types=persona_changed,identity_changed'),
     ]).then(([overview, hormones, recent, persona]) => {
-      if (session !== state.loaded || !overview.ok) return;
+      if (session !== state.loaded || generation !== timelineGeneration || !overview.ok) return;
       cacheWrite('monitor', {ov: overview, hormones, recent, persona}, MONITOR_CACHE_MS);
     });
   },
@@ -6947,9 +6955,9 @@ const PAGE_PREFETCH = {
     if (tl.filter) query.set('types', tl.filter);
     const key = 'timeline:' + String(query);
     if (freshCache(key, TIMELINE_CACHE_MS)) return Promise.resolve();
-    const session = state.loaded;
+    const session = state.loaded, generation = timelineGeneration;
     return prefetchRequest('/api/timeline?' + query).then(res => {
-      if (session !== state.loaded || !res.ok) return;
+      if (session !== state.loaded || generation !== timelineGeneration || !res.ok) return;
       cacheWrite(key, res.data, TIMELINE_CACHE_MS);
     });
   },
