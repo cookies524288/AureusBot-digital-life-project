@@ -1,7 +1,7 @@
 """导出与导入（D45，14 号文档第 4 节）：把数据根目录里值得带走的东西打成一个 zip。
 
-不含密钥（secrets.vault、secrets.key、.env，D36）、单实例锁文件和快照；日志默认不含。
-数据库用 SQLite 自带的在线备份接口取一致的副本，不直接复制可能正在写的文件。
+不含密钥（secrets.vault、secrets.key、.env，D36）、单实例锁和它的 PID 标记、快照；
+日志默认不含。数据库用 SQLite 自带的在线备份接口取一致的副本，不直接复制可能正在写的文件。
 """
 
 import hashlib
@@ -23,6 +23,8 @@ from aureus.identity import IdentityService, SingleInstanceLockError
 # 导出包的格式版本。以后改了包的结构就加一；导入时遇到比它新的包要拒绝（D45 第 3 条）。
 EXPORT_FORMAT_VERSION = 1
 MANIFEST_NAME = "manifest.json"
+# 单实例锁和它的 PID 标记只代表一次运行，导出包不带（D45、D144）。
+LOCK_MARKER_NAMES = ("aureus.lock", "aureus.lock.pid")
 
 # 导入包的资源上限（审查 H1）。manifest 在包里，校验值只能发现损坏，拦不住
 # 「声明一个巨大文件」的包，所以导入前先按声明的大小和条目数拒绝，不去解压。
@@ -86,6 +88,7 @@ def exportable_paths(paths: AureusPaths, *, include_logs: bool) -> list[Path]:
     就把别处的东西悄悄带进包里。导入时也用它判断目标里有没有已有的数据。
     """
     home = paths.home.resolve()
+    lock_markers = {paths.home / name for name in LOCK_MARKER_NAMES}
     candidates = [paths.runtime_config_file, paths.identity_file, paths.models_config_file]
     folders = [paths.diary_dir, paths.memory_dir, paths.skills_dir]
     if include_logs:
@@ -96,7 +99,10 @@ def exportable_paths(paths: AureusPaths, *, include_logs: bool) -> list[Path]:
     return [
         path
         for path in candidates
-        if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(home)
+        if path.is_file()
+        and not path.is_symlink()
+        and path.resolve().is_relative_to(home)
+        and path not in lock_markers
     ]
 
 

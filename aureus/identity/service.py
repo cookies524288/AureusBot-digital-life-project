@@ -9,9 +9,12 @@
 依赖：只依赖 common（import-linter 检查）
 """
 
+import os
 import tomllib
+from pathlib import Path
 
 from filelock import FileLock, Timeout
+from loguru import logger
 from pydantic import ValidationError
 
 from aureus.common import AureusPaths
@@ -113,14 +116,15 @@ class IdentityService:
         lock_file.parent.mkdir(parents=True, exist_ok=True)
 
         self._lock = FileLock(lock_file, timeout=timeout)
-        return _LockContextManager(self._lock)
+        return _LockContextManager(self._lock, self._paths.home / "aureus.lock.pid")
 
 
 class _LockContextManager:
-    """FileLock 的包装，捕获 Timeout 并转换为自定义异常。"""
+    """FileLock 的包装：把 Timeout 换成自定义异常，并在锁旁记录持有者 PID。"""
 
-    def __init__(self, lock: FileLock):
+    def __init__(self, lock: FileLock, pid_file: Path):
         self._lock = lock
+        self._pid_file = pid_file
 
     def __enter__(self):
         try:
@@ -128,10 +132,27 @@ class _LockContextManager:
         except Timeout as e:
             raise SingleInstanceLockError(
                 "另一个 Aureus 实例正在运行。\n"
-                "请先确认并关掉那个进程；只删锁文件没有用，锁是由运行中的进程持有的。"
+                "请先在任务管理器里确认并结束那个进程；只删锁文件没有用，"
+                "锁是由运行中的进程持有的。"
             ) from e
+        self._write_pid()
         return self._lock
 
+    def _write_pid(self) -> None:
+        """把持有者 PID 写到锁旁边，供启动器在锁不释放时核对（D144）。
+
+        写失败只记日志：标记只用于诊断和接管，不能影响单实例锁本身。
+        """
+        try:
+            self._pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        except OSError as error:
+            logger.warning("无法写入单实例锁 PID 标记 {}：{}", self._pid_file, error)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
+        # 先删标记再放锁：新实例随后持锁时会写自己的 PID，不会把它的标记删掉。
+        try:
+            self._pid_file.unlink(missing_ok=True)
+        except OSError as error:
+            logger.warning("无法删除单实例锁 PID 标记 {}：{}", self._pid_file, error)
         self._lock.release()
         return False

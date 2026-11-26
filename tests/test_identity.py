@@ -1,5 +1,6 @@
 """身份子系统的测试。"""
 
+import os
 import tempfile
 import textwrap
 from collections.abc import Generator
@@ -199,3 +200,38 @@ def test_lock_file_location(paths: AureusPaths):
     expected_lock_file = paths.home / "aureus.lock"
     with service.acquire_lock():
         assert expected_lock_file.exists()
+
+
+def test_lock_records_current_pid_and_removes_the_marker(paths: AureusPaths):
+    """持锁期间写当前 PID，释放后删除标记。"""
+    pid_file = paths.home / "aureus.lock.pid"
+    with IdentityService(paths).acquire_lock():
+        assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+    assert not pid_file.exists()
+
+
+def test_lock_overwrites_a_stale_pid_marker(paths: AureusPaths):
+    """异常退出留下的 PID 标记由下一次成功持锁覆盖。"""
+    paths.home.mkdir(parents=True, exist_ok=True)
+    pid_file = paths.home / "aureus.lock.pid"
+    pid_file.write_text("999999", encoding="utf-8")
+
+    with IdentityService(paths).acquire_lock():
+        assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+
+
+def test_pid_marker_write_failure_does_not_block_the_lock(
+    paths: AureusPaths, monkeypatch: pytest.MonkeyPatch
+):
+    """PID 标记写不进去时只记日志，单实例锁仍然可用。"""
+    real_write_text = Path.write_text
+
+    def fake_write_text(self: Path, *args: object, **kwargs: object) -> int:
+        if self.name == "aureus.lock.pid":
+            raise PermissionError("模拟：没有写入权限")
+        return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+    with IdentityService(paths).acquire_lock():
+        pass
+    assert not (paths.home / "aureus.lock.pid").exists()

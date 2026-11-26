@@ -116,6 +116,18 @@ def test_export_includes_logs_only_when_asked(source: AureusPaths, tmp_path: Pat
     assert "data/logs/aureus.log" not in names(tmp_path / "without.zip")
 
 
+def test_export_excludes_lock_markers(source: AureusPaths, tmp_path: Path) -> None:
+    (source.home / "aureus.lock").write_text("", encoding="utf-8")
+    (source.home / "aureus.lock.pid").write_text("999999", encoding="utf-8")
+
+    archive = tmp_path / "out.zip"
+    export_data(source, archive, CLOCK)
+
+    exported = names(archive)
+    assert "aureus.lock" not in exported
+    assert "aureus.lock.pid" not in exported
+
+
 def test_export_leaves_the_source_untouched(source: AureusPaths, tmp_path: Path) -> None:
     export_data(source, tmp_path / "out.zip", CLOCK)
     assert records(source) == [RECORD]
