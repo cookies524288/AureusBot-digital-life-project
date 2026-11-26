@@ -1202,8 +1202,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
 const $ = id => document.getElementById(id);
-const state = { loggedIn: false, qqLink: false, page: '', loaded: {}, botPronoun: 'Ta',
-  entranceSeen: new Set() };
+const state = { loggedIn: false, qqLink: false, page: '', loaded: {}, botPronoun: 'Ta' };
 let editorGeneration = 0;
 
 for (const control of document.querySelectorAll('input, textarea, select, form')) control.setAttribute('autocomplete', 'off');
@@ -1452,6 +1451,11 @@ window.addEventListener('resize', clearScrollbarEdge);
 const PAGES = {};   // 页面名 -> {prepare, load, leave}。prepare 同步选中子页并返回加载函数。
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const PAGE_ENTRANCE_SPEED = 1.3;
+// 每次切页都播放入场动画（D133），但只处理首屏可见的有限元素：
+// 整页文字扫描和大量动画在大页面上会形成长任务（D129）。
+// 120 个目标足够覆盖常见首屏，4000 个元素是单次扫描上限。
+const PAGE_ENTRANCE_MAX_TARGETS = 120;
+const PAGE_ENTRANCE_MAX_ELEMENTS = 4000;
 // 普通文字按所在元素入场。表格行、消息和按钮等复合控件作为整体，避免内部文字重复播放。
 const REVEAL_GROUP = 'tr, .msg, .tl-item, .model-compact, .provider-row, .key-card, .composer, .banner, .empty';
 let pageEntrance = null;
@@ -1495,6 +1499,7 @@ function startPageEntrance(page) {
   stopPageEntrance();
   const watched = new WeakSet();
   const animations = new Set();
+  let targets = 0;
   function play(node, frames, timing) {
     const animation = node.animate(frames, timing);
     animations.add(animation);
@@ -1519,10 +1524,22 @@ function startPageEntrance(page) {
           fill:'backwards', easing:'cubic-bezier(.22,.72,.24,1)'});
     }
   }, {root:page});
+  function elementOnScreen(element, bounds) {
+    for (const rect of element.getClientRects()) {
+      if (rect.bottom > bounds.top && rect.top < bounds.bottom &&
+        rect.right > bounds.left && rect.left < bounds.right) return true;
+    }
+    return false;
+  }
+  // 只收集当前首屏可见的元素：滚动后才出现的元素不再入场，避免整页扫描（D133）。
+  // 目标数量设上限，防止大列表一次创建过多动画。
   function watch(node) {
+    if (targets >= PAGE_ENTRANCE_MAX_TARGETS) return;
     if (!node || node === page || !page.contains(node) || watched.has(node) ||
-      node.closest('button, input, select, textarea') || !node.getClientRects().length) return;
+      node.closest('button, input, select, textarea')) return;
+    if (!elementOnScreen(node, page.getBoundingClientRect())) return;
     watched.add(node);
+    targets += 1;
     visible.observe(node);
   }
   function watchContent(element) {
@@ -1530,22 +1547,38 @@ function startPageEntrance(page) {
       watch(element.closest(REVEAL_GROUP) || element.closest('button, label, select, textarea, summary, p, h1, h2, h3, h4') || element);
     }
   }
+  // 按元素树遍历，整棵不可见的子树直接跳过：滚动到页面底部的长列表不会先耗尽扫描预算。
+  // 复合控件和带直接文字的元素作为整体入场，跳过其子树，避免重复动画和整页文字扫描。
+  const ENTRANCE_CONTROLS = 'button, input, select, textarea, label, summary, .ov-slot, .og-cables';
+  function hasDirectText(element) {
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE && node.data.trim()) return true;
+    }
+    return false;
+  }
   function discover(root) {
-    if (root.nodeType === Node.TEXT_NODE) {
-      if (root.data.trim()) watchContent(root.parentElement);
-      return;
-    }
     if (root.nodeType !== Node.ELEMENT_NODE) return;
-    // 表单值、占位符和纯图形没有可遍历的文字节点。
-    const controls = 'input:not([type="hidden"]), select, textarea, button, .ov-slot, .og-cables';
-    function watchControl(control) {
-      if (control.matches('.ov-slot, .og-cables')) watch(control);
-      else watchContent(control);
+    const bounds = page.getBoundingClientRect();
+    const stack = Array.from(root.children).reverse();
+    let visited = 0;
+    while (stack.length && targets < PAGE_ENTRANCE_MAX_TARGETS && visited < PAGE_ENTRANCE_MAX_ELEMENTS) {
+      const element = stack.pop();
+      visited += 1;
+      if (element.matches('script, style, template, svg') || !elementOnScreen(element, bounds)) continue;
+      if (element.matches(REVEAL_GROUP) || element.matches('.ov-slot, .og-cables')) {
+        watch(element);
+        continue;
+      }
+      if (element.matches(ENTRANCE_CONTROLS)) {
+        watchContent(element);
+        continue;
+      }
+      if (hasDirectText(element)) {
+        watchContent(element);
+        continue;
+      }
+      for (let index = element.children.length - 1; index >= 0; index -= 1) stack.push(element.children[index]);
     }
-    if (root.matches(controls)) watchControl(root);
-    root.querySelectorAll(controls).forEach(watchControl);
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) if (walker.currentNode.data.trim()) watchContent(walker.currentNode.parentElement);
   }
   const entrance = {scan: () => discover(page), stop() {
     visible.disconnect();
@@ -1586,11 +1619,9 @@ async function showPage(name, onShown) {
     btn.setAttribute('aria-disabled', String(current));
   }
   const load = PAGES[name].prepare?.(images ? 'images' : undefined) ?? PAGES[name].load;
-  // 入场动画只在本次登录第一次进入该页时播放（D129）；再次切回不再扫描整页文字。
-  const firstVisit = !state.entranceSeen.has(name);
-  if (firstVisit) state.entranceSeen.add(name);
-  const entrance = firstVisit ? startPageEntrance(page) : null;
   navigation.loading = load?.();
+  // 缓存命中时 load 会同步渲染内容，先让它出现再启动入场动画；每次切页都播放（D133）。
+  const entrance = startPageEntrance(page);
   await navigation.loading;
   if (pageNavigation !== navigation) return;
   // 补上本次导航异步读到的内容，后续状态更新无需入场。
@@ -1632,7 +1663,6 @@ function showAuth(view, message) {
   pendingLiveUpdates.clear();
   catalogs.clear();
   state.loaded = {};
-  state.entranceSeen.clear();
   resetPageCache();
   timelineRendered = null;
   prefetchedPages.clear();
