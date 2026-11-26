@@ -1589,6 +1589,8 @@ function showAuth(view, message) {
   state.loaded = {};
   state.entranceSeen.clear();
   resetPageCache();
+  prefetchedPages.clear();
+  idlePrefetchScheduled = false;
   pageNavigation = null;
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
@@ -1627,6 +1629,7 @@ async function enter() {
   $('app').classList.remove('hidden');
   showPage(location.hash.slice(1));
   if (typeof openSocket === 'function') openSocket();
+  scheduleIdlePrefetch();
 }
 
 $('login-btn').addEventListener('click', async () => {
@@ -1957,10 +1960,10 @@ function mergeChatHistory(items) {
   if (!selectionTouches(log)) log.scrollTop = log.scrollHeight;
 }
 
-function loadChatHistory() {
+function loadChatHistory(detached = false) {
   const loaded = state.loaded;
   if (!loaded.chat) $('chat-send').disabled = true;
-  loaded.chat ??= api('/api/history').then(res => {
+  loaded.chat ??= api('/api/history', undefined, undefined, {}, undefined, detached).then(res => {
     if (state.loaded !== loaded) return;
     $('chat-send').disabled = false;
     if (!res.ok) { delete loaded.chat; fail(res); return; }
@@ -5590,6 +5593,137 @@ async function loadMonitor(force = false) {
 $('mo-refresh').addEventListener('click', () => loadMonitor(true));
 PAGES.monitor = { load: loadMonitor };
 setInterval(() => { if (state.loggedIn && state.page === 'monitor') loadMonitor(true); }, MONITOR_REFRESH_MS);
+
+// ---------- 预取（D129）：悬停或键盘聚焦导航时先取目标页数据；空闲时按顺序补几页 ----------
+// 学习页的大块 CSS/JS 仍只在进入时按需加载，不放进预取；长期记忆按筛选和可视高度分页，进入时再取。
+const PREFETCH_STORAGE_KEY = 'aureus-page-prefetch';
+let pagePrefetchEnabled = true;
+try { pagePrefetchEnabled = localStorage.getItem(PREFETCH_STORAGE_KEY) !== 'off'; } catch (e) { /* 不能存就默认开 */ }
+const prefetchedPages = new Set();
+let idlePrefetchScheduled = false;
+// 预取请求不绑定当前页：切页时不取消，点击目标页时可以直接用已经取回的数据。
+const prefetchRequest = path => api(path, undefined, undefined, {}, undefined, true);
+const freshCache = (key, ttl) => Boolean(cacheRead(key, ttl)?.fresh);
+const PAGE_PREFETCH = {
+  overview() {
+    if (freshCache('overview', OVERVIEW_CACHE_MS) && freshCache('overview-activity', OVERVIEW_CACHE_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return Promise.all([prefetchRequest('/api/overview'), prefetchRequest('/api/timeline?hours=24&limit=3')])
+      .then(([overview, activity]) => {
+        if (session !== state.loaded) return;
+        if (overview.ok) cacheWrite('overview', overview.data, OVERVIEW_CACHE_MS);
+        if (activity.ok) cacheWrite('overview-activity', activity.data, OVERVIEW_CACHE_MS);
+      });
+  },
+  chat: () => state.loaded.chat ? Promise.resolve() : loadChatHistory(true),
+  monitor() {
+    if (freshCache('monitor', MONITOR_CACHE_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return Promise.all([
+      prefetchRequest('/api/overview'),
+      prefetchRequest('/api/timeline?hours=72&limit=10&types=hormone_triggered,judgment'),
+      prefetchRequest('/api/timeline?hours=24&limit=12'),
+      prefetchRequest('/api/timeline?hours=720&limit=6&types=persona_changed,identity_changed'),
+    ]).then(([overview, hormones, recent, persona]) => {
+      if (session !== state.loaded || !overview.ok) return;
+      cacheWrite('monitor', {ov: overview, hormones, recent, persona}, MONITOR_CACHE_MS);
+    });
+  },
+  timeline() {
+    const query = new URLSearchParams({ hours: $('tl-hours').value, limit: '100' });
+    if (tl.filter) query.set('types', tl.filter);
+    const key = 'timeline:' + String(query);
+    if (freshCache(key, TIMELINE_CACHE_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return prefetchRequest('/api/timeline?' + query).then(res => {
+      if (session !== state.loaded || !res.ok) return;
+      cacheWrite(key, res.data, TIMELINE_CACHE_MS);
+    });
+  },
+  inbox() {
+    if (freshCache('inbox-conversations', INBOX_CACHE_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return prefetchRequest('/api/inbox/conversations').then(res => {
+      if (session !== state.loaded || !res.ok) return;
+      cacheWrite('inbox-conversations', res.data, INBOX_CACHE_MS);
+    });
+  },
+  persona() {
+    if (freshCache('settings', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return prefetchRequest('/api/settings').then(res => {
+      if (session !== state.loaded || !res.ok) return;
+      cacheWrite('settings', res.data, CONFIG_CACHE_TTL_MS);
+    });
+  },
+  models() {
+    if (freshCache('models', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return prefetchRequest('/api/models').then(res => {
+      if (session !== state.loaded || !res.ok) return;
+      cacheWrite('models', res.data, CONFIG_CACHE_TTL_MS);
+    });
+  },
+  keys() {
+    if (freshCache('keys', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return prefetchRequest('/api/keys').then(res => {
+      if (session !== state.loaded || !res.ok) return;
+      cacheWrite('keys', res.data, CONFIG_CACHE_TTL_MS);
+    });
+  },
+  prompts() {
+    if (freshCache('prompts', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return prefetchRequest('/api/prompts').then(res => {
+      if (session !== state.loaded || !res.ok) return;
+      cacheWrite('prompts', res.data, CONFIG_CACHE_TTL_MS);
+    });
+  },
+  config() {
+    if (freshCache('config', CONFIG_CACHE_TTL_MS)) return Promise.resolve();
+    const session = state.loaded;
+    return prefetchRequest('/api/config').then(res => {
+      if (session !== state.loaded || !res.ok) return;
+      cacheWrite('config', res.data, CONFIG_CACHE_TTL_MS);
+    });
+  },
+};
+PAGE_PREFETCH.organs = PAGE_PREFETCH.models;
+function prefetchPage(name) {
+  if (!pagePrefetchEnabled || !state.loggedIn || state.page === name || prefetchedPages.has(name)) return;
+  const task = PAGE_PREFETCH[name]?.();
+  if (!task) return;
+  prefetchedPages.add(name);
+  task.catch(() => prefetchedPages.delete(name));
+}
+for (const btn of document.querySelectorAll('.nav-item[data-page]')) {
+  btn.addEventListener('pointerenter', () => prefetchPage(btn.dataset.page));
+  btn.addEventListener('focus', () => prefetchPage(btn.dataset.page));
+}
+// 空闲时一次补一页，不和当前页抢请求；学习工作台不预取。
+const IDLE_PREFETCH_PAGES = ['timeline', 'inbox', 'persona', 'models', 'keys', 'prompts', 'config', 'monitor'];
+function scheduleIdlePrefetch() {
+  if (!pagePrefetchEnabled || idlePrefetchScheduled) return;
+  idlePrefetchScheduled = true;
+  let index = 0;
+  const run = () => {
+    if (!pagePrefetchEnabled || !state.loggedIn) return;
+    while (index < IDLE_PREFETCH_PAGES.length && prefetchedPages.has(IDLE_PREFETCH_PAGES[index])) index++;
+    if (index >= IDLE_PREFETCH_PAGES.length) return;
+    prefetchPage(IDLE_PREFETCH_PAGES[index++]);
+    if ('requestIdleCallback' in window) requestIdleCallback(run, {timeout: 5000});
+    else setTimeout(run, 2000);
+  };
+  if ('requestIdleCallback' in window) requestIdleCallback(run, {timeout: 5000});
+  else setTimeout(run, 2000);
+}
+// 开关：控制台执行 __aureusSetPagePrefetch(false/true)，或把 localStorage 的
+// aureus-page-prefetch 设成 off；下次登录生效，不改服务端配置。
+window.__aureusSetPagePrefetch = enabled => {
+  pagePrefetchEnabled = Boolean(enabled);
+  try { localStorage.setItem(PREFETCH_STORAGE_KEY, pagePrefetchEnabled ? 'on' : 'off'); } catch (e) { /* 只对本次会话生效 */ }
+};
 
 // ---------- 启动：先问登录状态，再决定显示登录页、改密码页还是主界面 ----------
 async function watchLauncherExit() {
