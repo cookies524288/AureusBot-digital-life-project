@@ -372,10 +372,17 @@ def test_heartbeat_debounce_max_wait_must_not_be_shorter_than_the_window(
     paths = AureusPaths(tmp_path)
     write_runtime_config(
         paths,
-        "[heartbeat]\ninbox_debounce_seconds = 10.0\n"
-        "inbox_debounce_max_wait_seconds = 5.0\n",
+        "[heartbeat]\ninbox_debounce_seconds = 10.0\ninbox_debounce_max_wait_seconds = 5.0\n",
     )
     assert "inbox_debounce_max_wait_seconds" in error_message_of(paths)
+
+
+def test_heartbeat_debounce_max_wait_follows_a_larger_window(tmp_path: Path) -> None:
+    # 旧配置可能把防抖窗口设到 20 秒以上，不写上限时要自动取窗口本身，不能拒绝启动。
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[heartbeat]\ninbox_debounce_seconds = 60.0\n")
+    heartbeat = load_runtime_config(paths).heartbeat
+    assert heartbeat.inbox_debounce_max_wait_seconds == 60.0
 
 
 def test_heartbeat_debounce_max_wait_can_be_set(tmp_path: Path) -> None:

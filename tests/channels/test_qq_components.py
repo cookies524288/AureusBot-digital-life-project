@@ -61,9 +61,7 @@ def test_qq_scope_defaults_to_all_conversations_and_optional_group_limits() -> N
         Receiver(),
         lambda candidate: candidate == str(OWNER),
     )
-    assert restricted.allows_inbox_conversation(
-        ConversationKey("qq", account, "group", str(GROUP))
-    )
+    assert restricted.allows_inbox_conversation(ConversationKey("qq", account, "group", str(GROUP)))
     assert restricted.allows_inbox_conversation(
         ConversationKey("qq", account, "private", str(OWNER))
     )

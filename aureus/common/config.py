@@ -92,9 +92,7 @@ class HeartbeatConfig(BaseModel):
     inbox_debounce_seconds: float = Field(default=4.0, gt=0, le=60, allow_inf_nan=False)
     # 防抖最多等这么久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口（D138）。
     # 必须不小于 inbox_debounce_seconds。
-    inbox_debounce_max_wait_seconds: float = Field(
-        default=20.0, ge=1, le=120, allow_inf_nan=False
-    )
+    inbox_debounce_max_wait_seconds: float = Field(default=20.0, ge=1, le=120, allow_inf_nan=False)
     inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
     plan_organ: ClassVar[str] = "planner"
     qq_emoji_collection_enabled: bool = False
@@ -138,6 +136,20 @@ class HeartbeatConfig(BaseModel):
         表情语义开关已删，向量模型配好后自动启用，旧键同样丢弃（D107）。
         """
         return drop_legacy_keys(value, ("plan_organ", "reply_organ", "qq_emoji_semantic_enabled"))
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_debounce_max_wait(cls, value: object) -> object:
+        """不写上限时默认 20 秒；防抖窗口更大时自动取窗口本身，旧配置照常读取（D138）。"""
+        if isinstance(value, dict) and "inbox_debounce_max_wait_seconds" not in value:
+            debounce = value.get("inbox_debounce_seconds")
+            if (
+                isinstance(debounce, (int, float))
+                and not isinstance(debounce, bool)
+                and debounce > 20.0
+            ):
+                return {**value, "inbox_debounce_max_wait_seconds": float(debounce)}
+        return value
 
     @model_validator(mode="after")
     def validate_typing_jitter(self) -> Self:
