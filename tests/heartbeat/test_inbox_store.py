@@ -121,9 +121,10 @@ def test_list_attention_unread_combines_senders_mentions_and_paginates(tmp_path:
     assert store.list_attention_unread(
         conversation, ["owner"], after=(0, owner_mentioned.id), limit=2
     ) == [mention_old, mention_later]
-    assert store.list_attention_unread(
-        conversation, ["owner"], after=(0, owner.id), limit=2
-    ) == [owner_mentioned, mention_old]
+    assert store.list_attention_unread(conversation, ["owner"], after=(0, owner.id), limit=2) == [
+        owner_mentioned,
+        mention_old,
+    ]
     assert store.list_attention_unread(conversation, []) == [
         mention_old,
         mention_later,
