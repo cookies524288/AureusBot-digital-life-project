@@ -726,6 +726,22 @@ class InboxStore:
             ).fetchall()
         return [_message(row) for row in rows]
 
+    def list_mentioned_unread(
+        self,
+        conversation: ConversationKey,
+        *,
+        after_id: int | None = None,
+        limit: int = 50,
+    ) -> list[InboxMessage]:
+        """按入箱顺序分页读取指定会话内已验证发件人的被点名未读（D137）。"""
+        with closing(open_connection(self._path)) as database:
+            rows = database.execute(
+                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} AND m.id > ? "
+                "AND m.trust != ? AND m.mentioned = 1 ORDER BY m.id LIMIT ?",
+                (*conversation.parameters(), after_id or 0, TrustLevel.UNVERIFIED, limit),
+            ).fetchall()
+        return [_message(row) for row in rows]
+
     def mark_read(self, ids: Iterable[int]) -> None:
         """把已确认且相邻的消息计入连续已读范围，保留中间的未读。"""
         confirmed = set(ids)

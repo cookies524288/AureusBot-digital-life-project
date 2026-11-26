@@ -62,6 +62,23 @@ def test_priority_confirmation_keeps_older_unread_and_other_conversations(tmp_pa
     ] == ["read", "read"]
 
 
+def test_list_mentioned_unread_filters_verified_unread_and_paginates(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    first = store.add(replace(_message(1), mentioned=True))
+    unmentioned = store.add(_message(2))
+    unverified = store.add(replace(_message(3, verified=False), mentioned=True))
+    later = store.add(replace(_message(4), mentioned=True))
+    other_group = store.add(replace(_message(5, "2"), mentioned=True))
+    assert first and unmentioned and unverified and later and other_group
+
+    conversation = first.conversation
+    assert store.list_mentioned_unread(conversation, limit=1) == [first]
+    assert store.list_mentioned_unread(conversation, after_id=first.id, limit=1) == [later]
+    assert store.list_mentioned_unread(conversation, after_id=later.id) == []
+    store.mark_read([first.id])
+    assert store.list_mentioned_unread(conversation) == [later]
+
+
 def test_sparse_legacy_migration_preserves_unread_and_message_ids(tmp_path: Path) -> None:
     path = tmp_path / "inbox.db"
     store = InboxStore(path, _clock())

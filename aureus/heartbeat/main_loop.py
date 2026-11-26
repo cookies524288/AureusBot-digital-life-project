@@ -692,15 +692,17 @@ class Heartbeat:
         self._conversation.inbox_media.index_image = indexer.index
 
     def on_inbox_message(self, message: InboxMessage) -> None:
-        """来信已保存，重要来信立即叫醒心跳。"""
+        """来信已保存，重要来信立即叫醒心跳；提及只唤醒，不抢占（D94、D137）。"""
         inbox = self._platform_inbox
         if self._maintenance_paused or inbox is None:
             return
-        if inbox.allows(message.conversation):
+        allowed = inbox.allows(message.conversation)
+        if allowed:
             # 只带收件箱序号：网页据此让平台页失效并重新拉取，不推正文。
             self.live_events.publish(LiveEvent(TOPIC_INBOX, {"id": message.id}))
-        if inbox.is_priority(message.perception) and inbox.allows(message.conversation):
-            self._preempt_inbox(inbox, message.conversation)
+        if allowed and inbox.is_priority(message.perception):
+            if inbox.preempts(message.perception):
+                self._preempt_inbox(inbox, message.conversation)
             self._wake.set()
         if message.conversation == self._inbox_followup_key():
             self._inbox_followups.add(message.conversation)
@@ -1872,11 +1874,12 @@ class Heartbeat:
             self._interrupt_inbox(inbox, "会话已失去阅读权限，未投递。")
         messages = inbox.priority_messages()
         for message in messages:
-            self._preempt_inbox(inbox, message.conversation)
+            if inbox.preempts(message.perception):
+                self._preempt_inbox(inbox, message.conversation)
         self._submit_inbox(messages)
 
     def _preempt_inbox(self, inbox: InboxAttention, conversation: ConversationKey) -> None:
-        reason = "特别关心或绑定用户的来信抢占了会话，未投递。"
+        reason = "绑定用户、特别关心或被点名的来信抢占了会话，未投递。"
         if inbox.residence is not None and conversation != inbox.residence.conversation:
             self._interrupt_inbox(inbox, reason)
         thought = self._thought
@@ -1976,6 +1979,7 @@ class Heartbeat:
     def _requeue_reply(self, thought: _Thought) -> None:
         for heard in thought.replying_to:
             priority = Priority.USER if heard.is_user else Priority.CONTACT
+            # 绑定用户、特别关心或被点名的来信优先排队；抢占仍只由用户和特别关心触发（D137）。
             if (
                 priority == Priority.CONTACT
                 and _platform_key(heard) is not None
@@ -2078,6 +2082,7 @@ class Heartbeat:
             if inbox_message is not None and inbox is not None and residence is None:
                 inbox.store.mark_read([inbox_message.id])
             priority = _priority_of(perception, person)
+            # 绑定用户、特别关心或被点名的来信按特别关心排队；抢占仍只由用户和特别关心触发（D137）。
             if (
                 priority is Priority.CONTACT
                 and inbox_message is not None

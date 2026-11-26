@@ -150,16 +150,25 @@ class InboxAttention:
                     self._special.discard(person_id)
 
     def is_priority(self, perception: Perception) -> bool:
-        """只有已验证的发信账号能以用户或特别关心的身份唤醒。"""
+        """已验证的用户、特别关心或被点名的来信能唤醒心跳（D94、D137）。"""
         if perception.trust is TrustLevel.UNVERIFIED:
             return False
+        return perception.mentioned or self._preempts_verified(perception)
+
+    def preempts(self, perception: Perception) -> bool:
+        """只有已验证的用户或特别关心的来信能抢占当前会话；提及只唤醒（D95、D137）。"""
+        if perception.trust is TrustLevel.UNVERIFIED:
+            return False
+        return self._preempts_verified(perception)
+
+    def _preempts_verified(self, perception: Perception) -> bool:
         if self._people is None:
             return (perception.channel, perception.sender_id) in self._user_accounts
         person = self._people.find(perception.channel, perception.sender_id)
         return person is not None and (person.is_user or person.id in self._special)
 
     def priority_messages(self) -> list[InboxMessage]:
-        """先收绑定用户和特别关心的未读，重启后也会检查。"""
+        """先收绑定用户、特别关心和被点名的未读，重启后也会检查（D94、D137）。"""
         accounts: dict[str, set[str]] = defaultdict(set)
         users = self._people.user_accounts() if self._people is not None else self._user_accounts
         for platform, account_id in users:
@@ -168,24 +177,39 @@ class InboxAttention:
             for person_id in self._special:
                 for platform, account_id in self._people.accounts_of(person_id):
                     accounts[platform].add(account_id)
-        if not accounts:
-            return []
-        messages: list[InboxMessage] = []
+        messages: dict[int, InboxMessage] = {}
         for item in self.store.list_unread_conversations():
-            if (
-                item.key != self.active_conversation
-                and (senders := accounts.get(item.key.platform))
-                and self.allows(item.key)
-            ):
-                messages.extend(self._priority_page(item.key, senders))
-        return sorted(messages, key=lambda row: row.id)[:_PRIORITY_LIMIT]
+            if item.key == self.active_conversation or not self.allows(item.key):
+                continue
+            if senders := accounts.get(item.key.platform):
+                for row in self._priority_page(item.key, senders):
+                    messages[row.id] = row
+            for row in self._mention_page(item.key):
+                messages[row.id] = row
+        return sorted(messages.values(), key=lambda row: row.id)[:_PRIORITY_LIMIT]
 
     def _priority_page(self, key: ConversationKey, senders: set[str]) -> list[InboxMessage]:
+        return self._unread_page(
+            lambda after_id, limit: self.store.list_priority_unread(
+                key, senders, after_id=after_id, limit=limit
+            )
+        )
+
+    def _mention_page(self, key: ConversationKey) -> list[InboxMessage]:
+        return self._unread_page(
+            lambda after_id, limit: self.store.list_mentioned_unread(
+                key, after_id=after_id, limit=limit
+            )
+        )
+
+    def _unread_page(
+        self, fetch: Callable[[int | None, int], list[InboxMessage]]
+    ) -> list[InboxMessage]:
         messages: list[InboxMessage] = []
         after_id = None
         while len(messages) < _PRIORITY_LIMIT:
             remaining = _PRIORITY_LIMIT - len(messages)
-            rows = self.store.list_priority_unread(key, senders, after_id=after_id, limit=remaining)
+            rows = fetch(after_id, remaining)
             messages.extend(
                 row
                 for row in rows
