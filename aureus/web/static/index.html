@@ -171,6 +171,8 @@ input:hover,select:hover,textarea:hover{border-color:var(--text-2)}
 input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 input[readonly],textarea[readonly]{background:var(--surface-2);color:var(--text-2)}
 textarea{resize:vertical;min-height:96px;line-height:1.6}
+/* 非登录页的秘密输入框不用 password 类型，避免密码管理器识别；仍以圆点遮挡（3.40） */
+.secret-input{-webkit-text-security:disc}
 .form-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
 
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow)}
@@ -903,7 +905,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 
 <div id="login-error" class="banner danger hidden" role="alert"></div>
 <div class="field"><label for="password">密码</label>
-<input id="password" type="password" autocomplete="off"></div>
+<input id="password" type="password" autocomplete="current-password"></div>
 <button id="login-btn" class="btn primary">登录</button>
 </div>
 </section>
@@ -914,9 +916,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <p id="change-hint" class="muted"></p>
 <div id="change-error" class="banner danger hidden" role="alert"></div>
 <div class="field"><label for="old-password">旧密码</label>
-<input id="old-password" type="password" autocomplete="off"></div>
+<input id="old-password" type="text" class="secret-input" autocomplete="off" spellcheck="false"></div>
 <div class="field"><label for="new-password">新密码</label>
-<input id="new-password" type="password" autocomplete="off">
+<input id="new-password" type="text" class="secret-input" autocomplete="off" spellcheck="false">
 <span class="hint">至少 8 位。改完后所有设备都会退出，需要用新密码重新登录。</span></div>
 <button id="change-btn" class="btn primary">修改密码</button>
 </div>
@@ -1146,7 +1148,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 <div class="field" style="margin-top:14px"><label for="ps-immutable">不变人格</label><textarea id="ps-immutable" rows="8"></textarea></div>
 <div class="row" style="margin-top:14px;justify-content:flex-end">
-<input id="ps-password" type="password" placeholder="当前密码" autocomplete="off" style="max-width:220px">
+<input id="ps-password" type="text" class="secret-input" placeholder="当前密码" autocomplete="off" spellcheck="false" style="max-width:220px">
 <button id="ps-save-baseline" class="btn primary" disabled>保存设定</button>
 </div>
 </div>
@@ -1219,7 +1221,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <div id="cf-restart" class="banner hidden">配置已保存，重启后生效。</div>
 <div id="cf-missing" class="empty hidden"></div>
 <div id="cf-content" class="stack hidden">
-<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="password" placeholder="当前密码" autocomplete="off" style="max-width:220px;margin-left:8px"></div>
+<div id="cf-password-box" class="banner hidden">你改动了「安全」或「网页」里的项，要输入当前密码：<input id="cf-password" type="text" class="secret-input" placeholder="当前密码" autocomplete="off" spellcheck="false" style="max-width:220px;margin-left:8px"></div>
 <div id="cf-section"></div>
 </div>
 <section id="qq-link" class="stack card hidden" aria-labelledby="qq-link-title">
@@ -1272,7 +1274,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <header class="dialog-head"><h3 id="cf-restore-all-title">恢复默认设置</h3></header>
 <div class="dialog-body stack"><div class="stack" id="cf-restore-all-scope"><p>已保存的可恢复运行设置将恢复为默认值，重启后生效；此浏览器的界面字体会立即恢复默认，未保存的修改会丢弃。</p>
 <p>只读项、没有默认值的设置、账户凭据和绑定、人设、密钥、模型及其它页面的配置和数据均保留。</p></div>
-<label class="field"><span>当前密码</span><input id="cf-restore-all-password" type="password" autocomplete="current-password" required></label>
+<label class="field"><span>当前密码</span><input id="cf-restore-all-password" type="text" class="secret-input" autocomplete="off" spellcheck="false" required></label>
 <div id="cf-restore-all-error" class="banner danger hidden" role="alert"></div></div>
 <footer class="dialog-foot"><button id="cf-restore-all-cancel" class="btn" type="button" autofocus>取消</button><button id="cf-restore-all-submit" class="btn danger" type="submit">确认恢复</button></footer>
 </form></dialog>
@@ -1300,9 +1302,22 @@ const $ = id => document.getElementById(id);
 const state = { loggedIn: false, qqLink: false, page: '', loaded: {}, botPronoun: 'Ta' };
 let editorGeneration = 0;
 
-for (const control of document.querySelectorAll('input, textarea, select, form')) control.setAttribute('autocomplete', 'off');
+// 只有登录页密码交给浏览器自动填充；其余控件明确让常见密码管理器忽略（3.40）。
+const NO_AUTOFILL_ATTRIBUTES = {
+  autocomplete: 'off',
+  'data-lpignore': 'true',
+  'data-1p-ignore': '',
+  'data-bwignore': '',
+  'data-form-type': 'other',
+};
+function markNoAutofill(control) {
+  for (const [name, value] of Object.entries(NO_AUTOFILL_ATTRIBUTES)) control.setAttribute(name, value);
+}
+for (const control of document.querySelectorAll('input, textarea, select, form')) {
+  if (control.id !== 'password') markNoAutofill(control);
+}
 function el(tag, props, ...kids) {
-  if (['input', 'textarea', 'select', 'form'].includes(tag)) props = {...props, autocomplete:'off'};
+  if (['input', 'textarea', 'select', 'form'].includes(tag)) props = {...props, ...NO_AUTOFILL_ATTRIBUTES};
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props || {})) {
     if (key === 'class') node.className = value;
@@ -1475,7 +1490,7 @@ function openEditor(title, body, drawer, actions, editor = 'editor') {
 }
 $('editor-close').addEventListener('click', () => $('editor-dialog').close());
 function clearEditorSecrets(editor = 'editor') {
-  for (const input of $(editor + '-body').querySelectorAll('input[type="password"], textarea[data-secret]')) input.value = '';
+  for (const input of $(editor + '-body').querySelectorAll('[data-secret]')) input.value = '';
 }
 for (const editor of ['editor', 'provider-key']) {
   const dialog = $(editor + '-dialog');
@@ -4155,6 +4170,14 @@ function editorField(label, value, options) {
   input.value = value === null || value === undefined ? '' : value;
   return { input, node: el('div', { class: 'field' }, el('label', { text: label }), input) };
 }
+// 密钥和当前密码用 text + CSS 遮挡，避免被密码管理器当成登录密码（3.40）。
+function secretEditorField(label, value, options) {
+  const field = editorField(label, value, {...(options || {}), type: 'text'});
+  field.input.classList.add('secret-input');
+  field.input.setAttribute('data-secret', '');
+  field.input.setAttribute('spellcheck', 'false');
+  return field;
+}
 function editorForm(title, fields, onChange, action, editor) {
   const body = el('div', { class: 'stack' }, ...Object.values(fields).map(field => field.node));
   for (const field of Object.values(fields)) field.input.addEventListener('change', onChange);
@@ -5111,7 +5134,7 @@ async function loadKeysPage(force = false) {
   applyKeysPage(res.data);
 }
 function keyValueField(label, kind, value = '') {
-  const field = editorField(label, value, {type:'password', required:true});
+  const field = secretEditorField(label, value, {required:true});
   if (kind === 'other') {
     field.input = el('textarea', {rows:5, 'data-secret':'', 'aria-label':label, autocomplete:'off', spellcheck:'false', required:true});
     field.input.value = value;
@@ -5141,7 +5164,7 @@ function openKeyEditor(entry, action = 'create', onProviderKey) {
     });
   }
   if (action === 'update') fields.value = keyValueField('新密钥值', entry.kind);
-  fields.password = editorField('当前密码', '', {type:'password', required:true});
+  fields.password = secretEditorField('当前密码', '', {required:true});
   const [title, saveLabel, success] = {
     create:['添加密钥', '保存密钥', '密钥已保存。'],
     rename:['修改密钥名称', '保存名称', '名称已更新。'],
