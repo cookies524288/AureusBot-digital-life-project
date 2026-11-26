@@ -268,3 +268,161 @@ def test_read_window_does_not_skip_unread_when_limit_smaller(tmp_path: Path) -> 
         "4",
     ]
     assert [entry.perception.content for entry in store.list_unread(conversation)] == ["5"]
+
+
+def test_read_latest_and_clear_returns_newest_batch_and_drops_older_unread(tmp_path: Path) -> None:
+    """D145：只读最新一批，返回按时间升序，更早未读一并标已读。"""
+    path = tmp_path / "inbox.db"
+    store = InboxStore(path, _clock())
+    saved = []
+    for number in range(1, 7):
+        entry = store.add(_message(number))
+        assert entry is not None
+        saved.append(entry)
+    other = store.add(_message(7, "2"))
+    assert other is not None
+    conversation = saved[0].conversation
+
+    latest = store.read_latest_and_clear(conversation, limit=2)
+
+    assert [entry.perception.content for entry in latest] == ["5", "6"]
+    assert [entry.perception.content for entry in store.list_unread(conversation)] == []
+    assert [entry.perception.content for entry in store.list_unread(other.conversation)] == ["7"]
+    reopened = InboxStore(path, _clock())
+    assert [entry.status for entry in reopened.list_messages(conversation)] == [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+    ]
+    with closing(open_connection(path)) as database:
+        [row] = database.execute(
+            "SELECT first_read_id, last_read_id FROM inbox_conversations WHERE recipient_id = '1'"
+        )
+    assert tuple(row) == (saved[0].id, saved[-1].id)
+
+
+def test_read_latest_and_clear_without_unread_keeps_the_watermark(tmp_path: Path) -> None:
+    """没有未读时返回空、不改水位；已读消息不会重新变成未读。"""
+    path = tmp_path / "inbox.db"
+    store = InboxStore(path, _clock())
+    first = store.add(_message(1))
+    assert first is not None
+    store.mark_read([first.id])
+    with closing(open_connection(path)) as database:
+        [before] = database.execute("SELECT first_read_id, last_read_id FROM inbox_conversations")
+
+    assert store.read_latest_and_clear(first.conversation, limit=5) == []
+
+    with closing(open_connection(path)) as database:
+        [after] = database.execute("SELECT first_read_id, last_read_id FROM inbox_conversations")
+    assert tuple(after) == tuple(before)
+    assert store.list_unread(first.conversation) == []
+    second = store.add(_message(2))
+    assert second is not None
+    assert store.list_unread(first.conversation) == [second]
+
+
+def test_read_latest_and_clear_limit_larger_than_unread_returns_all(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    saved = []
+    for number in range(1, 4):
+        entry = store.add(_message(number))
+        assert entry is not None
+        saved.append(entry)
+    conversation = saved[0].conversation
+
+    assert [
+        entry.perception.content for entry in store.read_latest_and_clear(conversation, limit=10)
+    ] == ["1", "2", "3"]
+    assert store.list_unread(conversation) == []
+    with closing(open_connection(tmp_path / "inbox.db")) as database:
+        [row] = database.execute(
+            "SELECT last_read_id FROM inbox_conversations WHERE recipient_id = '1'"
+        )
+    assert row[0] == saved[-1].id
+
+
+def test_read_latest_and_clear_keeps_skipped_messages_in_read_history(tmp_path: Path) -> None:
+    """被跳过标已读的消息仍在收件箱与已读历史里，可按关键字查回（D145 第四条）。"""
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    saved = []
+    for number in range(1, 6):
+        entry = store.add(_message(number))
+        assert entry is not None
+        saved.append(entry)
+    conversation = saved[0].conversation
+
+    assert [
+        entry.perception.content for entry in store.read_latest_and_clear(conversation, limit=1)
+    ] == ["5"]
+    assert store.list_unread(conversation) == []
+    history = store.list_read_history(
+        conversation,
+        VisibilityScope.PUBLIC,
+        before_id=None,
+        keyword=None,
+        limit=10,
+    )
+    assert [entry.perception.content for entry in history] == ["5", "4", "3", "2", "1"]
+    skipped = store.list_read_history(
+        conversation,
+        VisibilityScope.PUBLIC,
+        before_id=None,
+        keyword="2",
+        limit=10,
+    )
+    assert [entry.perception.content for entry in skipped] == ["2"]
+    assert [entry.status for entry in store.list_messages(conversation)] == [
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+    ]
+
+
+def test_read_latest_and_clear_only_advances_to_the_newest_incoming(tmp_path: Path) -> None:
+    """水位以最大入站消息为准；之后的外发消息不会让新来信变成未读。"""
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    first = store.add(_message(1))
+    second = store.add(_message(2))
+    assert first and second
+    conversation = first.conversation
+
+    assert [entry.id for entry in store.read_latest_and_clear(conversation, limit=10)] == [
+        first.id,
+        second.id,
+    ]
+    store.add_delivered(_message(3), sender_name="bot")
+    assert store.list_unread(conversation) == []
+    third = store.add(_message(4))
+    assert third is not None
+    assert store.list_unread(conversation) == [third]
+
+
+def test_mark_read_after_clearing_is_idempotent_and_keeps_the_watermark(tmp_path: Path) -> None:
+    """D145：清空后再对已读 id 走 mark_read，不报错、不把水位拉回。"""
+    path = tmp_path / "inbox.db"
+    store = InboxStore(path, _clock())
+    first = store.add(_message(1))
+    second = store.add(_message(2))
+    assert first and second
+    conversation = first.conversation
+    assert [entry.id for entry in store.read_latest_and_clear(conversation, limit=1)] == [second.id]
+
+    store.mark_read([first.id, second.id])
+    with closing(open_connection(path)) as database:
+        [row] = database.execute("SELECT last_read_id FROM inbox_conversations")
+    assert row[0] == second.id
+    assert store.list_unread(conversation) == []
+
+    later = store.add(_message(3))
+    assert later is not None
+    store.mark_read([first.id, second.id])
+    with closing(open_connection(path)) as database:
+        [row] = database.execute("SELECT last_read_id FROM inbox_conversations")
+    assert row[0] == second.id
+    assert store.list_unread(conversation) == [later]

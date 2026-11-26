@@ -629,6 +629,43 @@ class InboxStore:
             )
             return messages
 
+    def read_latest_and_clear(
+        self, conversation: ConversationKey, *, limit: int
+    ) -> list[InboxMessage]:
+        """读取最新的 limit 条未读，并在同一事务内清空该会话的全部未读（D145）。
+
+        大群消息来得比心跳快，从最早未读逐批追赶会让水位永远落在后面；这里只取最新一批，
+        水位直接推到当前最大入站消息，更早没读到的直接标已读丢弃，下一轮从新未读开始。
+        丢弃不等于删除：消息仍在收件箱里，已读历史仍可查询（D145 第四条）。
+
+        Args:
+            conversation: 完整会话路由。
+            limit: 本次最多返回几条未读。
+
+        Returns:
+            最新的至多 limit 条未读，按入箱序号升序（时间顺序）；没有未读时返回空列表。
+        """
+        with closing(open_connection(self._path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            rows = database.execute(
+                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} ORDER BY m.id DESC LIMIT ?",
+                (*conversation.parameters(), limit),
+            ).fetchall()
+            if not rows:
+                return []
+            messages = [_message(row) for row in reversed(rows)]
+            database.execute(
+                f"""UPDATE inbox_conversations SET last_read_id = (
+                    SELECT MAX(m.id) FROM inbox_messages m
+                    WHERE m.conversation_id = inbox_conversations.id
+                      AND m.direction = 'incoming'
+                ), first_read_id = COALESCE(first_read_id, (SELECT MIN(m.id) FROM inbox_messages m
+                    WHERE m.conversation_id = inbox_conversations.id AND m.direction = 'incoming'))
+                WHERE {_KEY}""",
+                conversation.parameters(),
+            )
+            return messages
+
     def summary_scopes(self) -> list[tuple[ConversationKey, VisibilityScope]]:
         """列出已保存且有可处理可见性的会话范围，不返回任何消息正文。"""
         with closing(open_connection(self._path)) as database:
