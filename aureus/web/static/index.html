@@ -6099,6 +6099,7 @@ const CFG_FIELDS = {
   'heartbeat.working_memory_retain': ['保留近期经历条数', '每次整理后保留在工作记忆中的原始经历条数。保存后重启生效。'],
   'heartbeat.inbox_attention_enabled': ['自主翻阅和特别关心调整', '允许自主翻阅收件箱，并由规划器调整特别关心；关闭后仍会因重要来信唤醒。'],
   'heartbeat.inbox_read_limit': ['自主翻阅条数上限', '每次自主翻阅从所有选中会话合计读取的消息条数。优先唤醒的来信单独处理。保存后重启生效。'],
+  'heartbeat.inbox_debounce_max_wait_seconds': ['防抖最多等待（秒）', '人多的群里消息不断时，最多等这么久就开始规划；必须不小于防抖窗口。保存后重启生效。'],
   'heartbeat.inbox_debounce_enabled': ['会话消息防抖', '默认开启：合并短时间内同一会话的新消息，规划使用流式请求。关闭后保存，重启生效。'],
   'heartbeat.inbox_debounce_seconds': ['防抖窗口秒数', '同一会话的每条新消息都会重新开始计时。保存后重启生效。'],
   'heartbeat.inbox_debounce_max_restarts': ['规划重开次数上限', '同一轮规划最多可被新消息打断并重开的次数。保存后重启生效。'],

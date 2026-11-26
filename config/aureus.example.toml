@@ -51,6 +51,9 @@ config_version = 1
 # 开启后合并同会话来信，规划器用流式请求。思考期间新来信可重开本轮规划。
 # inbox_debounce_enabled = true
 # inbox_debounce_seconds = 4.0
+# 防抖最多等多久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口。
+# 必须不小于 inbox_debounce_seconds。
+# inbox_debounce_max_wait_seconds = 20.0
 # inbox_debounce_max_restarts = 4
 # QQ 表情收集与回复选择。配置 [organs.emoji] 可使用专门的文字模型。
 # qq_emoji_collection_enabled = false

@@ -347,6 +347,8 @@ def test_heartbeat_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert heartbeat.reply_organ == "replyer"
     assert heartbeat.plan_organ == "planner"
     assert heartbeat.inbox_debounce_enabled is True
+    assert heartbeat.inbox_debounce_seconds == 4.0
+    assert heartbeat.inbox_debounce_max_wait_seconds == 20.0  # D138：最多等 20 秒
 
 
 def test_legacy_organ_overrides_are_ignored_and_explicit_debounce_opt_out_is_kept(
@@ -362,6 +364,24 @@ def test_legacy_organ_overrides_are_ignored_and_explicit_debounce_opt_out_is_kep
     assert heartbeat.reply_organ == "replyer"
     assert heartbeat.plan_organ == "planner"
     assert heartbeat.inbox_debounce_enabled is False
+
+
+def test_heartbeat_debounce_max_wait_must_not_be_shorter_than_the_window(
+    tmp_path: Path,
+) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths,
+        "[heartbeat]\ninbox_debounce_seconds = 10.0\n"
+        "inbox_debounce_max_wait_seconds = 5.0\n",
+    )
+    assert "inbox_debounce_max_wait_seconds" in error_message_of(paths)
+
+
+def test_heartbeat_debounce_max_wait_can_be_set(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[heartbeat]\ninbox_debounce_max_wait_seconds = 30.0\n")
+    assert load_runtime_config(paths).heartbeat.inbox_debounce_max_wait_seconds == 30.0
 
 
 def test_heartbeat_example_values_equal_the_defaults(tmp_path: Path) -> None:
@@ -407,6 +427,9 @@ def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
         ("tick_interval_seconds", "true"),
         ("emoji_selection_grace_seconds", "-0.1"),
         ("emoji_selection_grace_seconds", "5.1"),
+        ("inbox_debounce_max_wait_seconds", "true"),
+        ("inbox_debounce_max_wait_seconds", '"20"'),
+        ("inbox_debounce_max_wait_seconds", "nan"),
     ],
 )
 def test_heartbeat_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:

@@ -1892,7 +1892,6 @@ class Heartbeat:
             return
         inbox.interrupt()
         self._invalidate_judgments(residence=residence)
-        self._planner_restarts.pop(residence.conversation, None)
         queued = [heard for heard in self._unanswered if heard.residence is residence]
         if queued:
             target = queued[-1].perception
@@ -2943,8 +2942,17 @@ class Heartbeat:
         if not self._config.inbox_debounce_enabled or not batch or _platform_key(batch[-1]) is None:
             return 0.0
         latest = max(heard.record.timestamp for heard in batch)
+        earliest = min(heard.record.timestamp for heard in batch)
         waited = max(0.0, (self._clock.now() - latest).total_seconds())
-        return max(0.0, self._config.inbox_debounce_seconds - waited)
+        waited_from_first = max(0.0, (self._clock.now() - earliest).total_seconds())
+        # D138：最近一条消息的 4 秒窗口和这一批最早的 20 秒上限，谁先到就按谁。
+        return max(
+            0.0,
+            min(
+                self._config.inbox_debounce_seconds - waited,
+                self._config.inbox_debounce_max_wait_seconds - waited_from_first,
+            ),
+        )
 
     def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""

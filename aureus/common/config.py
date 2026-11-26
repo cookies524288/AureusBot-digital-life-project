@@ -90,6 +90,11 @@ class HeartbeatConfig(BaseModel):
     inbox_read_limit: int = Field(default=35, ge=1, le=200)
     inbox_debounce_enabled: bool = True
     inbox_debounce_seconds: float = Field(default=4.0, gt=0, le=60, allow_inf_nan=False)
+    # 防抖最多等这么久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口（D138）。
+    # 必须不小于 inbox_debounce_seconds。
+    inbox_debounce_max_wait_seconds: float = Field(
+        default=20.0, ge=1, le=120, allow_inf_nan=False
+    )
     inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
     plan_organ: ClassVar[str] = "planner"
     qq_emoji_collection_enabled: bool = False
@@ -146,6 +151,13 @@ class HeartbeatConfig(BaseModel):
         """保留的近期焦点必须比工作记忆容量小。"""
         if self.working_memory_retain >= self.working_memory_capacity:
             raise ValueError("working_memory_retain 必须小于 working_memory_capacity")
+        return self
+
+    @model_validator(mode="after")
+    def validate_debounce_wait(self) -> Self:
+        """防抖最多等待不能比防抖窗口还短。"""
+        if self.inbox_debounce_max_wait_seconds < self.inbox_debounce_seconds:
+            raise ValueError("inbox_debounce_max_wait_seconds 不能小于 inbox_debounce_seconds")
         return self
 
 
