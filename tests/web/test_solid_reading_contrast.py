@@ -89,7 +89,7 @@ def test_solid_reading_paths(dark: bool) -> None:
             if hover:
                 row.append(".provider-row:not([aria-disabled=true]):hover")
             bg = prop("background", *row)
-            for text in (".provider-base", ".provider-count"):
+            for text in (".provider-name", ".provider-base", ".provider-count"):
                 selectors = [ancestor + " " + text for ancestor in row]
                 check(f"厂商 {active=} {hover=} {text}", prop("color", *selectors),
                       background(".model-vendors") if bg == "transparent" else bg)
