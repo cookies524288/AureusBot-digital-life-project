@@ -287,7 +287,9 @@ def test_unchanged_sensitive_and_readonly_fields_are_ignored_before_confirmation
         json={
             "changes": {
                 "web": config["web"],
-                "safety": {"max_calls_per_minute": config["safety"]["max_calls_per_minute"]},
+                "safety": {
+                    "max_consecutive_failures": config["safety"]["max_consecutive_failures"]
+                },
                 "config_version": config["config_version"],
             },
             "password": "wrong",
