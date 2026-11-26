@@ -1598,7 +1598,7 @@ async def test_first_model_success_passes_the_configured_call_arguments(keys: Ke
     assert call["model"] == "openai/big-model"
     assert call["api_base"] == "https://api.example.com/v1"
     assert call["api_key"] == CLOUD_SECRET
-    assert call["timeout"] == 90.0
+    assert call["timeout"] == 120.0
     assert call["num_retries"] == 0  # 重试由适配器自己做，每次请求都记账（审查 H4）
     assert call["temperature"] == 0.9  # 模型自己的
     assert call["max_tokens"] == 300  # 器官上的，优先于模型的 2000

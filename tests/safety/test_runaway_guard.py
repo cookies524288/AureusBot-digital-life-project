@@ -9,7 +9,7 @@ import pytest
 
 from aureus.common import ManualClock, SafetyConfig
 from aureus.safety import RunawayGuard
-from aureus.safety.runaway_guard import MODEL_TEST_CALLS_PER_MINUTE, MODEL_TEST_ORGAN
+from aureus.safety.runaway_guard import MODEL_TEST_ORGAN
 
 START = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
 ORGAN = "replyer"
@@ -20,7 +20,7 @@ def clock() -> ManualClock:
     return ManualClock(START)
 
 
-def make_guard(clock: ManualClock, **overrides: int | bool) -> RunawayGuard:
+def make_guard(clock: ManualClock, **overrides: int | bool | None) -> RunawayGuard:
     return RunawayGuard(SafetyConfig(**overrides), clock)  # pyright: ignore[reportArgumentType]
 
 
@@ -74,6 +74,17 @@ def test_rate_limit_is_per_organ(clock: ManualClock) -> None:
     call(guard, "replyer")
     assert guard.blocked_reason("replyer") is not None
     assert guard.blocked_reason("planner") is None
+
+
+def test_no_rate_limit_by_default_allows_many_calls(clock: ManualClock) -> None:
+    # D135：不写上限表示不限流；也不记录调用次数，内存不随调用增长。
+    guard = make_guard(clock)
+    for _ in range(100):
+        call(guard, ORGAN)
+        call(guard, MODEL_TEST_ORGAN)
+    assert guard.blocked_reason(ORGAN) is None
+    assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
+    assert guard._recent_calls == {}
 
 
 # ---------- 连续失败暂停 ----------
@@ -166,20 +177,29 @@ def test_model_test_is_not_paused_by_consecutive_failures(clock: ManualClock) ->
     assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
 
 
-def test_model_test_has_its_own_rate_limit(clock: ManualClock) -> None:
-    guard = make_guard(clock, max_calls_per_minute=2, max_consecutive_failures=1)
-    for _ in range(MODEL_TEST_CALLS_PER_MINUTE):
+def test_model_test_uses_its_own_rate_limit(clock: ManualClock) -> None:
+    # D135：显式写了模型测试上限时照常生效，第 4 次被拒，窗口滑过后恢复。
+    guard = make_guard(clock, model_test_calls_per_minute=3)
+    for _ in range(3):
         call(guard, MODEL_TEST_ORGAN)
     reason = guard.blocked_reason(MODEL_TEST_ORGAN)
     assert reason is not None
-    assert str(MODEL_TEST_CALLS_PER_MINUTE) in reason  # 独立上限照常生效
+    assert "3" in reason
     clock.advance(timedelta(minutes=1))
+    assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
+
+
+def test_reply_rate_limit_does_not_limit_model_test(clock: ManualClock) -> None:
+    # D135：只设了回复上限时，模型测试仍不限。
+    guard = make_guard(clock, max_calls_per_minute=2)
+    for _ in range(10):
+        call(guard, MODEL_TEST_ORGAN)
     assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
 
 
 def test_model_test_does_not_use_the_reply_rate_limit(clock: ManualClock) -> None:
     guard = make_guard(clock, max_calls_per_minute=2, max_consecutive_failures=1)
-    for _ in range(MODEL_TEST_CALLS_PER_MINUTE):
+    for _ in range(10):
         call(guard, MODEL_TEST_ORGAN)
     call(guard, ORGAN)
     call(guard, ORGAN)
@@ -187,7 +207,7 @@ def test_model_test_does_not_use_the_reply_rate_limit(clock: ManualClock) -> Non
 
 
 def test_reply_calls_do_not_use_the_model_test_rate_limit(clock: ManualClock) -> None:
-    guard = make_guard(clock, max_calls_per_minute=2, max_consecutive_failures=1)
+    guard = make_guard(clock, max_calls_per_minute=2, model_test_calls_per_minute=2)
     for _ in range(2):
         call(guard, ORGAN)
     call(guard, MODEL_TEST_ORGAN)

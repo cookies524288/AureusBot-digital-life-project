@@ -1,11 +1,11 @@
 """失控拦截 runaway_guard（D39，06 号文档 12.5 节）。
 
 每个器官分开计算：
-- 最近 1 分钟放行的调用达到上限，就拒绝；
+- 最近 1 分钟放行的调用达到上限，就拒绝；没写上限表示不限流（默认，D135）；
 - 连续失败达到次数，就暂停一段时间；暂停结束后只要再失败一次就再暂停（熔断器的「半开」），
   成功一次，连续失败数清零。
 - 模型测试（`model_test`）不因连续失败暂停（D132），每分钟频率使用独立的
-  上限，不占用其它器官的频率名额（3.53）。
+  `model_test_calls_per_minute`，不占用其它器官的频率名额（D135）。
 
 状态只放在内存里，重启后清零。来源：器官调用的次数和成败；影响：拒绝调用；
 开关：`SafetyConfig.runaway_guard_enabled`（D5）。
@@ -30,8 +30,6 @@ RATE_WINDOW = timedelta(minutes=1)
 MODEL_TEST_ORGAN = "model_test"
 # D132：模型测试只受频率限制，不因连续失败暂停；其它器官照常。
 FAILURE_PAUSE_EXEMPT_ORGANS = frozenset({MODEL_TEST_ORGAN})
-# 3.53：模型测试的独立每分钟上限，不占用 max_calls_per_minute 的名额。
-MODEL_TEST_CALLS_PER_MINUTE = 60
 
 
 class RunawayGuard:
@@ -67,21 +65,27 @@ class RunawayGuard:
                 f"已暂停调用，还要等 {remaining} 秒"
             )
 
-        calls_in_window = self._calls_in_window(organ_id, now)
         limit = self._max_calls_per_minute(organ_id)
+        if limit is None:
+            # 不写上限表示不限流（D135）：不统计、不拒绝。
+            return None
+        calls_in_window = self._calls_in_window(organ_id, now)
         if calls_in_window >= limit:
             return f"最近 1 分钟已经调用 {calls_in_window} 次，达到上限 {limit} 次"
         return None
 
-    def _max_calls_per_minute(self, organ_id: str) -> int:
-        """模型测试用自己的上限，其它器官沿用 [safety] 的配置（3.53）。"""
+    def _max_calls_per_minute(self, organ_id: str) -> int | None:
+        """模型测试用自己的上限，其它器官沿用 [safety] 的配置；None 表示不限（D135）。"""
         if organ_id == MODEL_TEST_ORGAN:
-            return MODEL_TEST_CALLS_PER_MINUTE
+            return self._config.model_test_calls_per_minute
         return self._config.max_calls_per_minute
 
     def admit(self, organ_id: str) -> None:
         """记下放行了一次调用，算进频率窗口。必须在检查之后、真正调用之前马上做。"""
         if not self.enabled:
+            return
+        if self._max_calls_per_minute(organ_id) is None:
+            # 不限流时不记录调用，避免内存随调用次数增长（D135）。
             return
         self._recent_calls.setdefault(organ_id, deque()).append(self._clock.now())
 

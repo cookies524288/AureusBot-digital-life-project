@@ -140,11 +140,11 @@ def test_provider_defaults_apply_when_fields_are_omitted(tmp_path: Path) -> None
     assert config.providers[1].max_retry == 0
 
 
-def test_default_timeout_is_ninety_seconds(tmp_path: Path) -> None:
-    # D132：默认超时 90 秒；显式配置的超时继续生效。
+def test_default_timeout_is_120_seconds(tmp_path: Path) -> None:
+    # D135：默认超时 120 秒（取代 D132 的 90 秒）；显式配置的超时继续生效。
     config = load_models_config(write_models_toml(tmp_path, VALID_TOML))
-    assert DEFAULT_TIMEOUT_SECONDS == 90.0
-    assert config.providers[0].timeout_seconds == 90.0
+    assert DEFAULT_TIMEOUT_SECONDS == 120.0
+    assert config.providers[0].timeout_seconds == 120.0
     assert config.providers[1].timeout_seconds == 5.0
 
 

@@ -52,7 +52,10 @@ class SafetyConfig(BaseModel):
     monthly_token_limit: int | None = Field(default=None, gt=0)
     # 失控拦截的总开关（D5：每个内部机制都能单独关闭）。
     runaway_guard_enabled: bool = True
-    max_calls_per_minute: int = Field(default=20, ge=1)
+    # 每分钟最多放行多少次调用；不写表示不限（默认，D135）。
+    max_calls_per_minute: int | None = Field(default=None, ge=1)
+    # 模型测速的独立每分钟上限，不占用上面的名额；不写表示不限（默认，D135）。
+    model_test_calls_per_minute: int | None = Field(default=None, ge=1)
     max_consecutive_failures: int = Field(default=5, ge=1)
     failure_pause_seconds: int = Field(default=300, ge=1)
     # 网关同时放行的器官调用数（D117，修订 D48 的串行做法）。
@@ -396,9 +399,9 @@ class JudgeConfig(BaseModel):
     state_context_enabled: bool = True
     # 固定使用 models.toml 里的 judge 器官（D107）；没配时跳过判断，不报错（D68 第 7 条）。
     organ: ClassVar[str] = "judge"
-    # 判断最多等多久。判断只是回复前的参考，等太久不如直接回复，所以给一个不长的上限；
-    # 10 秒是随手挑的，没有实测依据。
-    timeout_seconds: float = Field(default=10.0, gt=0)
+    # 判断最多等多久。判断只是回复前的参考，等太久不如直接回复；默认 120 秒，
+    # 和服务商超时一致（D135，取代 D68 的 10 秒）。
+    timeout_seconds: float = Field(default=120.0, gt=0)
     # 除了这次要回复的消息，再带之前几条对话；0 表示只看这一条。
     context_messages: int = Field(default=5, ge=0)
 

@@ -392,6 +392,18 @@ async def test_a_full_model_test_round_is_not_blocked_by_the_reply_rate_limit(
     assert all(entry.organ_id == "model_test" for entry in entries)
 
 
+async def test_model_test_is_not_rate_limited_by_default(harness: Harness) -> None:
+    """D135：默认配置不限流，连续测速不会被失控拦截拒绝。"""
+
+    async def probe() -> OrganResponse:
+        return OrganResponse("model_test", "ok", attempts=[make_attempt(1, 1)])
+
+    gateway = harness.build(SafetyConfig())
+    for _ in range(100):
+        response = await gateway.test_model(probe)
+        assert response.suggestion == "ok"
+
+
 async def test_model_test_still_respects_the_monthly_budget(harness: Harness) -> None:
     async def probe() -> OrganResponse:
         return OrganResponse("model_test", "ok", attempts=[make_attempt(100, 50)])

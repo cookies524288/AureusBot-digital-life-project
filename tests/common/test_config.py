@@ -221,7 +221,8 @@ def test_safety_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert safety == SafetyConfig()
     assert safety.monthly_token_limit is None  # 默认不限额
     assert safety.runaway_guard_enabled is True  # 默认开启失控拦截
-    assert safety.max_calls_per_minute == 20
+    assert safety.max_calls_per_minute is None  # D135：默认不限流
+    assert safety.model_test_calls_per_minute is None
     assert safety.max_consecutive_failures == 5
     assert safety.failure_pause_seconds == 300
 
@@ -234,6 +235,7 @@ def test_safety_values_from_file_are_used(tmp_path: Path) -> None:
         "monthly_token_limit = 1000\n"
         "runaway_guard_enabled = false\n"
         "max_calls_per_minute = 3\n"
+        "model_test_calls_per_minute = 30\n"
         "max_consecutive_failures = 2\n"
         "failure_pause_seconds = 10\n",
     )
@@ -241,6 +243,7 @@ def test_safety_values_from_file_are_used(tmp_path: Path) -> None:
     assert safety.monthly_token_limit == 1000
     assert safety.runaway_guard_enabled is False
     assert safety.max_calls_per_minute == 3
+    assert safety.model_test_calls_per_minute == 30
     assert safety.max_consecutive_failures == 2
     assert safety.failure_pause_seconds == 10
 
@@ -272,6 +275,7 @@ def test_safety_monthly_limit_must_be_positive(tmp_path: Path, value: str) -> No
     "field",
     [
         "max_calls_per_minute",
+        "model_test_calls_per_minute",
         "max_consecutive_failures",
         "failure_pause_seconds",
         "max_concurrent_organ_calls",
@@ -296,6 +300,9 @@ def test_organ_concurrency_cannot_exceed_the_gateway_limit(tmp_path: Path) -> No
         ("monthly_token_limit", "true"),  # true 不能悄悄变成 1
         ("monthly_token_limit", '"1000"'),  # 带引号的数字不是数字
         ("max_calls_per_minute", "true"),
+        ("max_calls_per_minute", '"20"'),
+        ("model_test_calls_per_minute", "true"),
+        ("model_test_calls_per_minute", '"60"'),
         ("runaway_guard_enabled", "1"),  # 数字 1 不是 true
         ("runaway_guard_enabled", '"false"'),  # 字符串 "false" 不能当成 false
     ],
@@ -765,7 +772,7 @@ def test_judge_defaults_follow_d68(tmp_path: Path) -> None:
     # 2.3 激素读判断结果，所以默认开；没配 judge 器官时会跳过。
     assert judge.enabled is True
     assert judge.organ == "judge"
-    assert (judge.timeout_seconds, judge.context_messages) == (10.0, 5)
+    assert (judge.timeout_seconds, judge.context_messages) == (120.0, 5)  # D135
 
 
 def test_judge_example_values_equal_the_defaults(tmp_path: Path) -> None:
