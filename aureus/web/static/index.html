@@ -623,7 +623,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .dialog-shell{display:flex;flex-direction:column;max-height:calc(100dvh - 34px)}
 .drawer .dialog-shell{height:100%}
 .dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid var(--border)}
-.dialog-head h3{font-size:17px}.dialog-body{padding:20px 22px;overflow-y:auto;min-height:0;flex:1}
+.dialog-head h3{font-size:17px;min-width:0;overflow-wrap:anywhere}
+.dialog-head>button,.dialog-head>form[method=dialog]{flex-shrink:0}
+.dialog-body{padding:20px 22px;overflow-y:auto;min-height:0;flex:1}
 .dialog-foot{display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 22px;border-top:1px solid var(--border)}
 .dialog-body .hint,.dialog-body .model-editor-note{font-size:12px;color:var(--ink-secondary,var(--text-2))}
 .confirm-dialog{width:min(400px,calc(100vw - 32px))}.confirm-dialog p{padding:26px 24px;font-size:16px}

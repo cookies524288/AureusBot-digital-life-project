@@ -73,3 +73,31 @@ def test_rendered_names_badges_and_monitor_lines_keep_the_full_text() -> None:
         assert.deepEqual(lines, ['第一行', token, '状态末尾']);
         assert.ok(stateBox.children.every(n => n.classList.contains('state-line')));
     """)
+
+
+def test_dialog_title_wraps_without_shrinking_either_close_control() -> None:
+    markup = PAGE.read_text(encoding="utf-8")
+    heads = re.findall(r'<header class="dialog-head">(.*?)</header>', markup, re.S)
+    assert any(re.search(r"</h3>\s*<button\b", head) for head in heads)
+    assert any(re.search(r'</h3>\s*<form method="dialog">\s*<button\b', head) for head in heads)
+    title = _rule(".dialog-head h3")
+    assert title.get("min-width", "auto") == "0"
+    assert title.get("overflow-wrap", "normal") == "anywhere"
+    for control in (".dialog-head>button", ".dialog-head>form[method=dialog]"):
+        assert _rule(control).get("flex-shrink", "1") == "0"
+
+
+def test_edit_key_dialog_displays_the_entire_synthetic_name_without_requests() -> None:
+    run_page_script(r"""
+        let requests = 0;
+        fetch = async () => { requests++; return reply(500, {}); };
+        for (const name of ['短名', 'A'.repeat(127) + 'Z']) {
+          const entry = {id:'synthetic', kind:'api_key', name};
+          keyAction(entry, 'update', '修改密钥值', 'key').click();
+          assert.ok($('editor-dialog').open);
+          assert.equal($('editor-title').textContent, '修改密钥值 · ' + name);
+          $('editor-close').click();
+          assert.ok(!$('editor-dialog').open);
+        }
+        assert.equal(requests, 0);
+    """)
