@@ -283,6 +283,8 @@
 
 同日第二轮：活跃会话的防抖合并与规划打断按 [D116](10-decisions.md) 修复（[任务](tasks/3.15-inbox-aggregation.md)，`57e9300`–`ece9e01`）；发言快速路径按 [D117](10-decisions.md) 实现（[任务](tasks/3.15-reply-fast-path.md)、[判断并行](tasks/3.15-parallel-judge.md)，网关有界并发默认 5、表情与回复器并行、判断不再阻塞回复）；长期记忆召回条数按 [D118](10-decisions.md) 拆成自然 3、普通 6、工具 8（[任务](tasks/3.15-memory-recall-counts.md)）；表达召回按 [D119](10-decisions.md)、[D120](10-decisions.md) 对齐 MaiBot 并去掉字数上限设置（[任务](tasks/3.15-expression-recall-alignment.md)）；平台页卡死按 [D121](10-decisions.md) 修复根因并加固（[任务](tasks/3.15-platform-freeze.md)）。前端交互按维护者清单分四批重做，见[前端重做任务](tasks/3.16-frontend-redesign.md)：批次 1–4 已完成（滚动条、平台图标、消息顺序与气泡、会话固定窗口与游标加载、学习/记忆信息流、设置项与配置文件夹按钮、栏框），另有长按配置与窄屏收起列表的收尾。按维护者要求本轮未跑单项测试，待实机验收。
 
+2026-11-26：继续完成 [D122](10-decisions.md) 学习页内联工作台与长期记忆页重排（[学习页](tasks/3.17-learning-inline-workbench.md)、[记忆页](tasks/3.18-memory-page-redesign.md)）、[D123](10-decisions.md) 平台会话活动面板（[任务](tasks/3.19-inbox-activity-panel.md)）、[D124](10-decisions.md) 时间线详情中文格式化（[任务](tasks/3.20-timeline-detail-formatting.md)）、[D125](10-decisions.md) 自动建索引（[任务](tasks/3.22-auto-index-building.md)）、[D126](10-decisions.md) 账本锁重试（[任务](tasks/3.24-ledger-lock-retry.md)）、[D127](10-decisions.md) 模型流式回退（[任务](tasks/3.25-model-stream-fallback.md)）、[D128](10-decisions.md) 本地嵌入低延迟（[任务](tasks/3.26-local-embedding-latency.md)）、[D129](10-decisions.md) 网页性能收尾（[任务](tasks/3.27-web-performance.md)）、[D130](10-decisions.md) 联系人命名与记忆前缀清理（[任务](tasks/3.28-person-names-and-memory-prefix.md)）、[D131](10-decisions.md) 本地网关直连（[任务](tasks/3.29-local-gateway-direct.md)），以及滚动条悬停与学习页留白（[3.21](tasks/3.21-scrollbar-hover-expand.md)、[3.23](tasks/3.23-learning-left-gutter.md)）。全部复审通过并合入本地 main；发布前的全量检查与推送待办，维护者实机验收未进行。
+
 ### Phase 4 · 双手
 
 **目标**：在它自己的电脑上动手做事。
