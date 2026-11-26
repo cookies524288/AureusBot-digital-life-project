@@ -84,6 +84,7 @@ async def test_expression_selection_uses_fast_model(tmp_path: Path) -> None:
     """召回后交给 fast_model 按 0–5 条协议挑选。"""
     recall, call = build_recall(tmp_path, selected=[2])
     block = await recall.reference(PLAN, None)
+    assert block is not None
     [request] = call.selection_requests
     assert request.organ_id == "fast_model"
     assert request.context["task"] == "expression_selection"
@@ -105,6 +106,7 @@ async def test_expression_selection_falls_back_to_top_five(tmp_path: Path) -> No
     for failure in failures:
         recall, _call = build_recall(tmp_path, failure=failure)
         block = await recall.reference(PLAN, None)
+        assert block is not None
         assert len([line for line in block.splitlines() if line.startswith("- 当「")]) == 5
 
 
@@ -120,4 +122,5 @@ async def test_expression_selection_filters_invalid_ids(tmp_path: Path) -> None:
     """越界、重复和非整数编号被过滤，全部无效按空数组处理。"""
     recall, _call = build_recall(tmp_path, selected=[0, 1, 1, "2", 99, 2.0])
     block = await recall.reference(PLAN, None)
+    assert block is not None
     assert len([line for line in block.splitlines() if line.startswith("- 当「")]) == 1

@@ -25,7 +25,7 @@ _PORT_BYTES = 2
 _PID_BYTES = 4
 # 重启或退出时，旧内核要尽快释放单实例锁和端口。挂住的请求最多再等这么久，
 # 之后由 uvicorn 取消，不能让旧进程一直占着锁（3.49）。
-_GRACEFUL_SHUTDOWN_SECONDS = 10.0
+_GRACEFUL_SHUTDOWN_SECONDS = 10
 
 
 def _address_name(home: Path) -> str:
