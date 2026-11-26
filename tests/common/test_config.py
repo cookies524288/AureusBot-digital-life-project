@@ -253,7 +253,7 @@ def test_safety_example_config_is_valid_when_uncommented(tmp_path: Path) -> None
     example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
     uncommented = "\n".join(
         line.removeprefix("# ")
-        if line.startswith(("# monthly_", "# runaway_", "# max_", "# failure_"))
+        if line.startswith(("# monthly_", "# runaway_", "# max_", "# model_", "# failure_"))
         else line
         for line in example.read_text(encoding="utf-8").splitlines()
     )
@@ -262,6 +262,7 @@ def test_safety_example_config_is_valid_when_uncommented(tmp_path: Path) -> None
     safety = load_runtime_config(paths).safety
     assert safety.monthly_token_limit is not None
     assert safety.runaway_guard_enabled is True
+    assert safety.model_test_calls_per_minute is not None
 
 
 @pytest.mark.parametrize("value", ["0", "-5"])

@@ -20,8 +20,10 @@ config_version = 1
 
 # 失控拦截的总开关。关掉后每次启动会警告一次。
 # runaway_guard_enabled = true
-# 每个器官每分钟最多调用几次。
+# 每个器官每分钟最多调用几次。不写 = 不限（默认，D135）；要限制就取消注释并改成上限。
 # max_calls_per_minute = 20
+# 模型测速每分钟最多几次。不写 = 不限（默认，D135）；要限制就取消注释并改成上限。
+# model_test_calls_per_minute = 60
 # 同一个器官连续失败几次后暂停。
 # max_consecutive_failures = 5
 # 暂停多少秒。
