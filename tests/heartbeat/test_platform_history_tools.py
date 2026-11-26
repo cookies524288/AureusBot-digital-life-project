@@ -115,7 +115,7 @@ async def test_private_fact_reaches_group_planner_and_replyer(
                 "persona": {"immutable": "温和。"},
             }
         ),
-        config=HeartbeatConfig(inbox_debounce_enabled=False),
+        config=HeartbeatConfig(message_debounce_mode="off", planner_message_steering=False),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
         inbox_store=store,
@@ -421,7 +421,7 @@ async def test_actual_heartbeat_declares_scope_and_uses_tool_message(
                 "persona": {"immutable": "温和。"},
             }
         ),
-        config=HeartbeatConfig(inbox_debounce_enabled=False),
+        config=HeartbeatConfig(message_debounce_mode="off", planner_message_steering=False),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
         inbox_store=store,

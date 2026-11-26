@@ -1209,7 +1209,7 @@ class ConversationFlow:
             prompt=prompt,
             system_context=job.full_context,
         )
-        request = replace(request, stream=self._config.inbox_debounce_enabled)
+        request = replace(request, stream=self._config.planner_message_steering)
         run = job.planner_run if not review_reason else None
         if run is not None:
             run.is_planning = True

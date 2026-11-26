@@ -326,7 +326,7 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
         timeline=timeline,
         organs=StreamingOrgans(),
         identity=identity,
-        config=HeartbeatConfig(inbox_debounce_enabled=True, split_reply_enabled=False),
+        config=HeartbeatConfig(split_reply_enabled=False),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
         inbox_store=store,
@@ -351,7 +351,8 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
         heart.beat()
 
     async def advance_to_planner() -> None:
-        clock.advance(timedelta(seconds=4))
+        # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
+        clock.advance(timedelta(seconds=7))
         heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
@@ -369,7 +370,8 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
         assert not heart.is_replying_to(conversation=selected)
         clock.advance(timedelta(seconds=3))
         receive("second-window")
-        assert not plans and heart.seconds_until_next_beat() == 4
+        # 同批换人续发：steady 等 2 秒，从 3 秒前的第二条算起还剩 2 秒。
+        assert not plans and heart.seconds_until_next_beat() == 2
         await advance_to_planner()
         assert heart.is_replying_to(conversation=selected)
         assert not heart.is_replying_to(conversation=other)
@@ -459,7 +461,7 @@ async def test_active_conversation_merges_messages_arriving_during_debounce(
         timeline=timeline,
         organs=StreamingOrgans(),
         identity=identity,
-        config=HeartbeatConfig(inbox_debounce_enabled=True, split_reply_enabled=False),
+        config=HeartbeatConfig(split_reply_enabled=False),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
         inbox_store=store,
@@ -485,7 +487,8 @@ async def test_active_conversation_merges_messages_arriving_during_debounce(
         heart.beat()
 
     async def advance_to_planner() -> None:
-        clock.advance(timedelta(seconds=4))
+        # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
+        clock.advance(timedelta(seconds=7))
         heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
@@ -504,7 +507,8 @@ async def test_active_conversation_merges_messages_arriving_during_debounce(
 
         receive("第一条")
         assert len(plans) == 1
-        assert heart.seconds_until_next_beat() == 4
+        # 上一条暖场在 7 秒前，新批次按活跃开批等 7 秒（D142）。
+        assert heart.seconds_until_next_beat() == 7
         clock.advance(timedelta(seconds=2))
         receive("第二条")
         assert len(plans) == 1
@@ -586,7 +590,7 @@ async def test_active_conversation_interrupts_planning_and_merges_batch(
         timeline=timeline,
         organs=InterruptibleOrgans(),
         identity=identity,
-        config=HeartbeatConfig(inbox_debounce_enabled=True, split_reply_enabled=False),
+        config=HeartbeatConfig(split_reply_enabled=False),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
         inbox_store=store,
@@ -612,7 +616,8 @@ async def test_active_conversation_interrupts_planning_and_merges_batch(
         heart.beat()
 
     async def advance_to_planner() -> None:
-        clock.advance(timedelta(seconds=4))
+        # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
+        clock.advance(timedelta(seconds=7))
         heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
@@ -741,7 +746,8 @@ async def test_priority_preemption_discards_stale_selection_reply_or_segments(
         organs=PreemptedOrgans(),
         identity=identity,
         config=HeartbeatConfig(
-            inbox_debounce_enabled=False,
+            message_debounce_mode="off",
+            planner_message_steering=False,
             typing_delay_enabled=True,
             typing_jitter_min_seconds=10,
             typing_jitter_max_seconds=10,
@@ -947,7 +953,11 @@ async def test_group_mention_wakes_and_is_answered_without_autonomous_browsing(
                     "persona": {"immutable": "温和。"},
                 }
             ),
-            config=HeartbeatConfig(split_reply_enabled=False, inbox_debounce_enabled=False),
+            config=HeartbeatConfig(
+                split_reply_enabled=False,
+                message_debounce_mode="off",
+                planner_message_steering=False,
+            ),
             permissions=PermissionChecker(stop),
             emergency_stop=stop,
             people=people,
@@ -1010,7 +1020,11 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
                     "persona": {"immutable": "温和。"},
                 }
             ),
-            config=HeartbeatConfig(split_reply_enabled=False, inbox_debounce_enabled=False),
+            config=HeartbeatConfig(
+                split_reply_enabled=False,
+                message_debounce_mode="off",
+                planner_message_steering=False,
+            ),
             permissions=PermissionChecker(stop),
             emergency_stop=stop,
             people=people,
@@ -1156,7 +1170,7 @@ async def test_idle_residence_makes_room_for_a_mention_in_another_group(tmp_path
                 "persona": {"immutable": "温和。"},
             }
         ),
-        config=HeartbeatConfig(inbox_debounce_enabled=True, split_reply_enabled=False),
+        config=HeartbeatConfig(split_reply_enabled=False),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
         inbox_store=store,
@@ -1238,7 +1252,8 @@ async def test_pending_segments_survive_a_mention_from_another_group(tmp_path: P
             }
         ),
         config=HeartbeatConfig(
-            inbox_debounce_enabled=False,
+            message_debounce_mode="off",
+            planner_message_steering=False,
             split_reply_enabled=True,
             typing_delay_enabled=True,
             typing_jitter_min_seconds=10,

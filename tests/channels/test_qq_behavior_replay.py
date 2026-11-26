@@ -175,7 +175,8 @@ async def open_replay(
         paths.runtime_config_file.write_text(
             f"""[heartbeat]
 planning_enabled = true
-inbox_debounce_enabled = false
+message_debounce_mode = "off"
+planner_message_steering = false
 split_reply_enabled = {str(split_reply).lower()}
 qq_emoji_visual_enabled = {str(emoji_vlm is not None).lower()}
 recent_message_limit = {history_limit}

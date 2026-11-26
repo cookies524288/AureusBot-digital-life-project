@@ -70,6 +70,7 @@ from aureus.heartbeat.conversation import (
     _ThoughtOutcome,
 )
 from aureus.heartbeat.cortisol import CortisolTiming
+from aureus.heartbeat.debounce import MessageDebouncer
 from aureus.heartbeat.diary_runner import DiaryOutcome, DiaryTracker, write_diary
 from aureus.heartbeat.downtime import Downtime, assess_downtime
 from aureus.heartbeat.emoji_maintenance import EmojiMaintenance
@@ -526,6 +527,7 @@ class Heartbeat:
         self._pending_judgments: list[_PendingJudgment] = []
         self._planner_restarts: dict[ConversationKey, int] = {}
         self._inbox_followups: set[ConversationKey] = set()
+        self._debouncers: dict[ConversationKey, MessageDebouncer] = {}
         self._wake = asyncio.Event()
         self._phase = _Phase.NOT_STARTED
         self._stop_requested = False
@@ -704,6 +706,9 @@ class Heartbeat:
             if allowed:
                 # 只带收件箱序号：网页据此让平台页失效并重新拉取，不推正文。
                 self.live_events.publish(LiveEvent(TOPIC_INBOX, {"id": message.id}))
+            if allowed and message.direction == "incoming":
+                # 命令、通知和机器人自己不会走到这里；它们由通道直接归档（D142）。
+                self._observe_debounce(message)
             if allowed and inbox.is_priority(message.perception):
                 if inbox.preempts(message.perception):
                     self._preempt_inbox(inbox, message.conversation)
@@ -1873,10 +1878,39 @@ class Heartbeat:
         inbox = self._platform_inbox
         if inbox is not None and inbox.active_conversation is not None:
             return inbox.active_conversation
-        if self._config.inbox_debounce_enabled:
+        # 防抖开启时新来信并入同会话批次；关闭防抖但开着快速反应时仍要能打断本轮。
+        if self._config.planner_message_steering or self._config.message_debounce_mode != "off":
             batch = self._unanswered.peek_batch()
             return self._thought_conversation() or (_platform_key(batch[-1]) if batch else None)
         return None
+
+    def _debouncer_for(self, key: ConversationKey) -> MessageDebouncer:
+        """按会话取防抖状态；每个会话单独计时（D142）。"""
+        debouncer = self._debouncers.get(key)
+        if debouncer is None:
+            debouncer = MessageDebouncer()
+            self._debouncers[key] = debouncer
+        return debouncer
+
+    def _observe_debounce(self, message: InboxMessage) -> None:
+        """把一条新来信交给该会话的防抖计时；关闭档位时不等（D142）。"""
+        mode = self._config.message_debounce_mode
+        if mode == "off":
+            return
+        perception = message.perception
+        is_bare_image, is_pure_emoji = _debounce_shape(perception)
+        now = self._clock.now().timestamp()
+        received_at = message.received_at if message.received_at is not None else message.timestamp
+        self._debouncer_for(message.conversation).observe(
+            author=perception.sender_id,
+            is_bare_image=is_bare_image,
+            is_pure_emoji=is_pure_emoji,
+            at_bot=perception.mentioned,
+            received_at=received_at.timestamp(),
+            wall_time=now,
+            now=now,
+            mode=mode,
+        )
 
     def _take_inbox_priority(self, inbox: InboxAttention) -> None:
         if inbox.residence is not None and not inbox.permits(inbox.residence):
@@ -1949,7 +1983,7 @@ class Heartbeat:
                 self._submit_inbox(inbox.debounce_messages(conversation))
             self._take_in_perceptions(browsing=True)
         if (
-            not self._config.inbox_debounce_enabled
+            not self._config.planner_message_steering
             or conversation is None
             or conversation not in arrivals
             or conversation != self._thought_conversation()
@@ -1957,7 +1991,7 @@ class Heartbeat:
             return
         count = self._planner_restarts.get(conversation, 0)
         if (
-            count < self._config.inbox_debounce_max_restarts
+            count < self._config.planner_steering_max_interrupts
             and self._unanswered.peek_batch((None, conversation))
             and self._restart_planner()
         ):
@@ -2028,7 +2062,7 @@ class Heartbeat:
                 self._config.plan_organ,
                 strategy.model_preference,
                 read_limit=inbox.read_limit,
-                stream=self._config.inbox_debounce_enabled,
+                stream=self._config.planner_message_steering,
             ),
             name=SELECTION_TASK,
         )
@@ -2123,9 +2157,11 @@ class Heartbeat:
     def _enqueue_reply(self, heard: _Heard, priority: Priority) -> None:
         key = _platform_key(heard)
         inbox = self._platform_inbox
+        # 防抖或快速反应都按平台会话攒批：重开时要能找到同一会话的待回复消息（D142）。
         group_by_route = key is not None and (
             heard.record.metadata.get("inbox_browsed") is True
-            or self._config.inbox_debounce_enabled
+            or self._config.message_debounce_mode != "off"
+            or self._config.planner_message_steering
             or (inbox is not None and key == inbox.active_conversation)
         )
         self._unanswered.add(
@@ -2199,8 +2235,12 @@ class Heartbeat:
         trace = _RoundTrace(batch[0].record.id)
         job = replace(self._reply_job(batch), round_trace=trace)
         self._unanswered.remove(batch)
+        key = _platform_key(batch[-1])
+        if key is not None and (debouncer := self._debouncers.get(key)) is not None:
+            # 批次已经取走：清掉这一批的起点和截止时间，保留上一条供下一批判断（D142）。
+            debouncer.consume()
         run = None
-        if self._config.inbox_debounce_enabled and _platform_key(batch[-1]) is not None:
+        if self._config.planner_message_steering and key is not None:
             run = _PlannerRun()
             job = replace(job, planner_run=run)
         task = asyncio.create_task(
@@ -2976,21 +3016,14 @@ class Heartbeat:
         return min(interval, self._reply_outbox.seconds_until_due())
 
     def _debounce_remaining(self, batch: Sequence[_Heard]) -> float:
+        """这一批还要等多久才开始规划；关闭防抖、没有状态或已到期时是 0（D142）。"""
         key = _platform_key(batch[-1]) if batch else None
-        if not self._config.inbox_debounce_enabled or key is None:
+        if self._config.message_debounce_mode == "off" or key is None:
             return 0.0
-        latest = max(heard.record.timestamp for heard in batch)
-        waited = max(0.0, (self._clock.now() - latest).total_seconds())
-        remaining = self._config.inbox_debounce_seconds - waited
-        if key.kind == "group":
-            # D138：群聊里最近一条的 4 秒窗口和这一批最早的 20 秒上限，谁先到就按谁。
-            # 私聊保持滑动防抖，不受这个上限影响。
-            earliest = min(heard.record.timestamp for heard in batch)
-            waited_from_first = max(0.0, (self._clock.now() - earliest).total_seconds())
-            remaining = min(
-                remaining, self._config.inbox_debounce_max_wait_seconds - waited_from_first
-            )
-        return max(0.0, remaining)
+        debouncer = self._debouncers.get(key)
+        if debouncer is None or debouncer.deadline is None:
+            return 0.0
+        return max(0.0, debouncer.deadline - self._clock.now().timestamp())
 
     def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""
@@ -3280,6 +3313,26 @@ def _platform_key(heard: _Heard) -> ConversationKey | None:
     if "inbox_message_id" in heard.record.metadata and heard.perception.route is not None:
         return ConversationKey.from_perception(heard.perception)
     return None
+
+
+def _debounce_shape(perception: Perception) -> tuple[bool, bool]:
+    """按消息形状返回（裸图, 纯表情）：没有文字才算（D142）。
+
+    通道会给纯媒体消息写入「[图片]」「[表情]」这类兼容正文，所以有结构化段时只看 text 段；
+    同时有图和表情按图片处理。
+    """
+    if perception.components:
+        has_text = any(
+            item.kind == "text" and (item.text or "").strip() for item in perception.components
+        )
+    else:
+        has_text = bool(perception.content.strip())
+    images = [item for item in perception.attachments if item.kind == "image"]
+    if has_text or not images:
+        return False, False
+    is_bare_image = any(not item.is_emoji for item in images)
+    is_pure_emoji = all(item.is_emoji for item in images)
+    return is_bare_image, is_pure_emoji
 
 
 def _priority_of(perception: Perception, person: Person | None) -> Priority | None:

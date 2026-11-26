@@ -371,7 +371,8 @@ async def test_qq_chat_entry_learns_once_and_recalls_across_group_and_private(
 port = {available_port()}
 [heartbeat]
 planning_enabled = true
-inbox_debounce_enabled = false
+message_debounce_mode = "off"
+planner_message_steering = false
 working_memory_capacity = 22
 working_memory_retain = 2
 split_reply_enabled = false
@@ -475,7 +476,7 @@ async def test_qq_chat_entry_debounces_two_rapid_messages_into_one_reply(
             f"""[web]
 port = {available_port()}
 [heartbeat]
-inbox_debounce_enabled = true
+message_debounce_mode = "steady"
 split_reply_enabled = false
 tick_interval_seconds = 1
 [body]

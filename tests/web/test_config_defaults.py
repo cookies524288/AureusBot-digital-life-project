@@ -450,12 +450,14 @@ def test_web_keeps_legacy_settings_off_the_page_and_preserves_file(rig: ConfigRi
     assert response.status_code == 422
     assert path.read_bytes() == legacy_toml.encode("utf-8")
 
-    changes = {"heartbeat": {"inbox_debounce_enabled": False}}
+    changes = {"heartbeat": {"planner_message_steering": False}}
     assert rig.client.put("/api/config", json={"changes": changes}).status_code == 200
-    assert load_runtime_config(rig.paths).heartbeat.inbox_debounce_enabled is False
-    response = rig.client.post(RUNTIME_RESTORE, json={"field": "heartbeat.inbox_debounce_enabled"})
+    assert load_runtime_config(rig.paths).heartbeat.planner_message_steering is False
+    response = rig.client.post(
+        RUNTIME_RESTORE, json={"field": "heartbeat.planner_message_steering"}
+    )
     assert response.status_code == 200 and response.json()["value"] is True
-    assert load_runtime_config(rig.paths).heartbeat.inbox_debounce_enabled is True
+    assert load_runtime_config(rig.paths).heartbeat.planner_message_steering is True
     assert tomllib.loads(path.read_text(encoding="utf-8")) == tomllib.loads(legacy_toml)
 
 

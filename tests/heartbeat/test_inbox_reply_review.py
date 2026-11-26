@@ -98,8 +98,7 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
     stop = EmergencyStop(tmp_path / "halt.json", clock)
     organs = _StreamingOrgans(speak=speak)
     config = HeartbeatConfig(
-        inbox_debounce_enabled=True,
-        inbox_debounce_max_restarts=1,
+        planner_steering_max_interrupts=1,
         split_reply_enabled=False,
         working_memory_capacity=4,
         working_memory_retain=1,
@@ -143,7 +142,8 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
         heart.beat()
 
     async def start_plan(number: int) -> None:
-        clock.advance(timedelta(seconds=config.inbox_debounce_seconds))
+        # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
+        clock.advance(timedelta(seconds=7))
         heart.beat()
         assert await asyncio.wait_for(organs.started.get(), timeout=2) == number
 

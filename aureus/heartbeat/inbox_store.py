@@ -160,6 +160,8 @@ class InboxMessage:
     timestamp: datetime
     status: str
     direction: str = "incoming"
+    # 消息实际收到的时刻（D142）：防抖按它算批次起点，不用平台给的发送时间。
+    received_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +218,7 @@ def _message(row: Row) -> InboxMessage:
         datetime.fromisoformat(row["timestamp"]),
         "read" if row["is_read"] else "unread",
         row["direction"],
+        datetime.fromisoformat(row["received_at"]) if row["received_at"] else None,
     )
 
 

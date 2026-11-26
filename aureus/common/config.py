@@ -25,8 +25,6 @@ CONFIG_FORMAT_VERSION = 1
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 DEFAULT_WEB_PORT = 28976
 DEFAULT_EMOJI_REGISTRATION_LIMIT = 500
-# D138：防抖最多等这么久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口。
-DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS = 20.0
 
 
 class ConfigError(Exception):
@@ -90,14 +88,13 @@ class HeartbeatConfig(BaseModel):
     # D94：只关闭自主翻阅及规划器的特别关心调整，保留重要来信唤醒。
     inbox_attention_enabled: bool = True
     inbox_read_limit: int = Field(default=35, ge=1, le=200)
-    inbox_debounce_enabled: bool = True
-    inbox_debounce_seconds: float = Field(default=4.0, gt=0, le=60, allow_inf_nan=False)
-    # 防抖最多等这么久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口（D138）。
-    # 必须不小于 inbox_debounce_seconds。
-    inbox_debounce_max_wait_seconds: float = Field(
-        default=DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS, ge=1, le=120, allow_inf_nan=False
-    )
-    inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
+    # 消息防抖档位（D142）：off 不等待；fast/natural/steady 的等待规则见 heartbeat/debounce.py。
+    # 群聊和私聊共用一个档位。
+    message_debounce_mode: Literal["off", "fast", "natural", "steady"] = "steady"
+    # 快速反应模式（D142）：规划器使用流式请求，新消息可打断并带上新消息重来。
+    planner_message_steering: bool = True
+    # 一轮规划最多因新消息打断重来几次；0 表示从不打断（D142）。
+    planner_steering_max_interrupts: int = Field(default=4, ge=0, le=20)
     plan_organ: ClassVar[str] = "planner"
     qq_emoji_collection_enabled: bool = False
     qq_emoji_selection_enabled: bool = True
@@ -143,17 +140,26 @@ class HeartbeatConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def default_debounce_max_wait(cls, value: object) -> object:
-        """不写上限时默认 20 秒；防抖窗口更大时自动取窗口本身，旧配置照常读取（D138）。"""
-        if isinstance(value, dict) and "inbox_debounce_max_wait_seconds" not in value:
-            debounce = value.get("inbox_debounce_seconds")
-            if (
-                isinstance(debounce, (int, float))
-                and not isinstance(debounce, bool)
-                and debounce > DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS
-            ):
-                return {**value, "inbox_debounce_max_wait_seconds": float(debounce)}
-        return value
+    def map_legacy_debounce_fields(cls, value: object) -> object:
+        """旧防抖字段照常读取并映射到新字段，显式新值优先（D142）。
+
+        `inbox_debounce_enabled=false` 映射为关闭防抖且不打断；`inbox_debounce_max_restarts`
+        映射为打断上限；`inbox_debounce_seconds` 和 `inbox_debounce_max_wait_seconds` 被档位
+        与整批 8 秒上限取代，直接丢弃。旧键不报错，旧配置能启动。
+        """
+        if not isinstance(value, Mapping):
+            return value
+        data = dict(value)
+        enabled = data.pop("inbox_debounce_enabled", None)
+        restarts = data.pop("inbox_debounce_max_restarts", None)
+        data.pop("inbox_debounce_seconds", None)
+        data.pop("inbox_debounce_max_wait_seconds", None)
+        if enabled is False:
+            data.setdefault("message_debounce_mode", "off")
+            data.setdefault("planner_message_steering", False)
+        if isinstance(restarts, int) and not isinstance(restarts, bool):
+            data.setdefault("planner_steering_max_interrupts", restarts)
+        return data
 
     @model_validator(mode="after")
     def validate_typing_jitter(self) -> Self:
@@ -167,13 +173,6 @@ class HeartbeatConfig(BaseModel):
         """保留的近期焦点必须比工作记忆容量小。"""
         if self.working_memory_retain >= self.working_memory_capacity:
             raise ValueError("working_memory_retain 必须小于 working_memory_capacity")
-        return self
-
-    @model_validator(mode="after")
-    def validate_debounce_wait(self) -> Self:
-        """防抖最多等待不能比防抖窗口还短。"""
-        if self.inbox_debounce_max_wait_seconds < self.inbox_debounce_seconds:
-            raise ValueError("inbox_debounce_max_wait_seconds 不能小于 inbox_debounce_seconds")
         return self
 
 

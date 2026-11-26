@@ -896,7 +896,8 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
             heart = env.build(
                 heartbeat=HeartbeatConfig(
                     recent_message_limit=5,
-                    inbox_debounce_enabled=False,
+                    message_debounce_mode="off",
+                    planner_message_steering=False,
                     split_reply_enabled=True,
                     shutdown_grace_seconds=0,
                 )
@@ -1029,7 +1030,8 @@ async def _check_derived_recall(
                 )
             heartbeat = HeartbeatConfig(
                 recent_message_limit=5 if name == "group" else 1,
-                inbox_debounce_enabled=False,
+                message_debounce_mode="off",
+                planner_message_steering=False,
                 shutdown_grace_seconds=0,
             )
             heart = env.build(config, heartbeat)
