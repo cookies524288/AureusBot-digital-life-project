@@ -1274,7 +1274,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         await heart.wait_for_thought()
         heart.beat()
         assert sent[-1].route == priority.route
-        # D145：优先来信带出同会话最新一批，先前那条普通消息一并读入并清空，不再留成积压。
+        # D145：优先来信提交后清空同会话未读，先前那条普通消息一并标已读，不再留成积压。
         assert sum(row.unread_count for row in store.list_conversations()) == 0
         assert sum(item.route == priority.route for item in sent) == 1
         assert ordinary.route is not None
