@@ -376,7 +376,11 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 /* ---------- 人设 ---------- */
 .layer-card textarea{min-height:120px}
 .version-row{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--border);font-size:13px}
-.version-row .preview{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-2)}
+.version-row>.tag{max-width:35%;min-width:0;white-space:normal;overflow-wrap:anywhere}
+.version-reading{flex:1;min-width:0;color:var(--text-2)}
+.version-reading summary{cursor:pointer;min-height:44px;padding-block:12px;list-style-position:inside;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.version-reading p{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 8px;color:var(--text)}
+@media(max-width:640px){.version-row{flex-wrap:wrap}.version-reading{flex-basis:100%}}
 .lock-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
 .layer-card .field-label{margin-bottom:6px}
 
@@ -4407,7 +4411,9 @@ function personaLayerCard(key, title, content, history) {
   const rows = history.length ? history.map(item => el('div', { class: 'version-row' },
     el('span', { class: 'tag', text: item.source }),
     el('span', { class: 'muted', text: fmtTime(item.time, true) }),
-    el('span', { class: 'preview', text: item.content ? item.content.replace(/\s+/g, ' ').slice(0, 60) : '（空）' }),
+    item.content ? el('details', { class: 'version-reading' },
+      el('summary', { text: '读全文：' + item.content.replace(/\s+/g, ' ').slice(0, 60) }),
+      el('p', { text: item.content })) : el('span', { class: 'muted', text: '（空）' }),
     el('button', { class: 'btn small', text: '用这个版本', onclick: () =>
       confirmPersonaChange('确定要使用「' + title + '」的这个历史版本吗？', async () => {
         const res = await api('/api/settings/rollback', 'POST', { layer: key, version_id: item.id });
