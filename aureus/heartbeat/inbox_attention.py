@@ -230,7 +230,11 @@ class InboxAttention:
         return private[:_CANDIDATE_LIMIT] + groups[:_CANDIDATE_LIMIT]
 
     def read_selection(self, selection: InboxSelection) -> list[InboxMessage]:
-        """复验选择与路由权限，成功读取后才占住会话。"""
+        """复验选择与路由权限，读取最新一批并清空该会话未读后才占住会话（D145）。
+
+        入场条数仍不超过 inbox_read_limit；实际读最新 min(count, 上限) 条，
+        更早的未读一并标已读丢弃，不再逐条追赶（D145 第五条）。
+        """
         key = selection.conversation
         if (
             not self._enabled
@@ -241,25 +245,30 @@ class InboxAttention:
             or not self.allows(key)
         ):
             return []
-        messages = self.store.read_window(key, limit=selection.count)
+        messages = self.store.read_latest_and_clear(
+            key, limit=min(selection.count, self.read_limit)
+        )
         if messages:
             self.residence = InboxResidence(key, selection.count)
             self._staying = True
         return messages
 
     def active_messages(self) -> list[InboxMessage]:
-        """翻到当前停留会话的新消息，权限变化时退出会话。
+        """读取当前停留会话最新的至多 inbox_read_limit 条未读，并清空该会话未读（D145）。
 
-        入场时规划器选的条数只管「进入哪个会话」，后续补读按 inbox_read_limit 读全部新未读（D116）。
+        入场时规划器选的条数只管「进入哪个会话」，后续补读固定按 inbox_read_limit
+        取最新一批；更早没读到的直接标已读丢弃，不堆积（D145 取代 D116 第三、四条）。
         """
         residence = self.residence
         if not self._staying or residence is None or not self.permits(residence):
             return []
-        return self.store.read_window(residence.conversation, limit=self.read_limit)
+        return self.store.read_latest_and_clear(residence.conversation, limit=self.read_limit)
 
     def debounce_messages(self, key: ConversationKey) -> list[InboxMessage]:
-        """尚未驻留的优先来信沿用原来的同会话防抖。"""
-        return self.store.list_unread(key, limit=self.read_limit) if self.allows(key) else []
+        """尚未驻留的优先来信读最新一批并清空该会话未读（D145）。"""
+        return (
+            self.store.read_latest_and_clear(key, limit=self.read_limit) if self.allows(key) else []
+        )
 
     def apply_plan(self, plan: Plan, target: Perception, source: TimelineRecord) -> None:
         """采用规划器的翻阅意愿和对本轮已认出联系人的特别关心建议。"""

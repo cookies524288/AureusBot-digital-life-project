@@ -87,7 +87,8 @@ class HeartbeatConfig(BaseModel):
     planning_enabled: bool = True
     # D94：只关闭自主翻阅及规划器的特别关心调整，保留重要来信唤醒。
     inbox_attention_enabled: bool = True
-    inbox_read_limit: int = Field(default=35, ge=1, le=200)
+    # 每轮每会话最多读这么多条最新未读，其余自动标已读（D145）。
+    inbox_read_limit: int = Field(default=15, ge=1, le=200)
     # 消息防抖档位（D142）：off 不等待；fast/natural/steady 的等待规则见 heartbeat/debounce.py。
     # 群聊和私聊共用一个档位。
     message_debounce_mode: Literal["off", "fast", "natural", "steady"] = "steady"

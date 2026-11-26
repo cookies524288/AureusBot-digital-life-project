@@ -83,13 +83,12 @@ def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> No
     candidates = attention.browse(clock.now(), can_browse=True)
     assert [item.key.recipient_id for item in candidates] == ["busy", "backlog"]
     rows = attention.read_selection(InboxSelection(candidates[1].key, 35))
-    assert rows[0].perception.content == "0"
-    assert rows[-1].perception.content == "34"
+    # D145：只读最新的 35 条，更早的未读一并标已读丢弃，返回仍按时间升序。
+    assert rows[0].perception.content == "10"
+    assert rows[-1].perception.content == "44"
     assert len(rows) == 35
     assert attention.active_conversation == candidates[1].key
-    assert [row.perception.content for row in store.list_unread(candidates[1].key)] == [
-        str(number) for number in range(35, 45)
-    ]
+    assert store.list_unread(candidates[1].key) == []
     assert len(store.list_unread(candidates[0].key)) == 2
 
 
@@ -146,10 +145,9 @@ async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> N
     assert len(store.list_unread(selection.conversation)) == 2
     attention.allows = lambda key: key.account_id == "bot" and key.recipient_id == "group-two"
     rows = attention.read_selection(selection)
-    assert [row.perception.content for row in rows] == ["message-5"]
-    assert [row.perception.content for row in store.list_unread(selection.conversation)] == [
-        "message-6"
-    ]
+    # D145：count=1 表示读最新 1 条，同会话更早的未读一起清掉。
+    assert [row.perception.content for row in rows] == ["message-6"]
+    assert store.list_unread(selection.conversation) == []
     assert len(store.list_unread(candidates[1].key)) == 1
 
 
@@ -275,6 +273,83 @@ def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path
         "third",
         "fourth",
     ]
+    assert store.list_unread(key) == []
+
+
+def test_busy_group_reads_only_the_latest_limit_and_clears_the_backlog(tmp_path: Path) -> None:
+    """D145：积压 100 条时一轮只读最新 15 条，未读清零；下一轮只看到新到的。"""
+    clock = ManualClock(datetime(2026, 11, 26, tzinfo=UTC))
+    store = InboxStore(tmp_path / "aureus.db", clock)
+    attention = InboxAttention(
+        store,
+        TimelineDatabase(tmp_path / "aureus.db", clock),
+        None,
+        [],
+        enabled=True,
+        read_limit=15,
+    )
+
+    def save(message: str) -> None:
+        assert (
+            store.add(
+                Perception(
+                    "qq",
+                    "visitor",
+                    message,
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("bot", "group", "busy", message),
+                )
+            )
+            is not None
+        )
+
+    key = ConversationKey("qq", "bot", "group", "busy")
+    for number in range(100):
+        save(str(number))
+    rows = attention.read_selection(InboxSelection(key, 15))
+    assert [row.perception.content for row in rows] == [str(number) for number in range(85, 100)]
+    assert store.list_unread(key) == []
+
+    save("new-1")
+    save("new-2")
+    assert [row.perception.content for row in attention.active_messages()] == ["new-1", "new-2"]
+    assert store.list_unread(key) == []
+
+
+def test_debounce_messages_reads_latest_limit_and_clears(tmp_path: Path) -> None:
+    """D145：防抖补读只取最新一批，同会话更早未读一并清掉。"""
+    clock = ManualClock(datetime(2026, 11, 26, tzinfo=UTC))
+    store = InboxStore(tmp_path / "aureus.db", clock)
+    attention = InboxAttention(
+        store,
+        TimelineDatabase(tmp_path / "aureus.db", clock),
+        None,
+        [],
+        enabled=True,
+        read_limit=15,
+    )
+
+    def save(number: int) -> None:
+        assert (
+            store.add(
+                Perception(
+                    "qq",
+                    "visitor",
+                    str(number),
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("bot", "group", "busy", str(number)),
+                )
+            )
+            is not None
+        )
+
+    key = ConversationKey("qq", "bot", "group", "busy")
+    for number in range(40):
+        save(number)
+    rows = attention.debounce_messages(key)
+    assert [row.perception.content for row in rows] == [str(number) for number in range(25, 40)]
     assert store.list_unread(key) == []
 
 

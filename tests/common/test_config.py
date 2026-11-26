@@ -349,6 +349,7 @@ def test_heartbeat_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert heartbeat.message_debounce_mode == "steady"  # D142：本机 MaiBot 当前值
     assert heartbeat.planner_message_steering is True
     assert heartbeat.planner_steering_max_interrupts == 4
+    assert heartbeat.inbox_read_limit == 15  # D145
 
 
 def test_legacy_organ_overrides_are_ignored_and_explicit_debounce_opt_out_is_kept(
@@ -415,6 +416,19 @@ def test_heartbeat_example_values_equal_the_defaults(tmp_path: Path) -> None:
     assert load_runtime_config(paths).heartbeat == HeartbeatConfig()
 
 
+def test_explicit_inbox_read_limit_still_wins(tmp_path: Path) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[heartbeat]\ninbox_read_limit = 72\n")
+    assert load_runtime_config(paths).heartbeat.inbox_read_limit == 72
+
+
+@pytest.mark.parametrize("value", [1, 200])
+def test_inbox_read_limit_bounds_are_accepted(tmp_path: Path, value: int) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[heartbeat]\ninbox_read_limit = {value}\n")
+    assert load_runtime_config(paths).heartbeat.inbox_read_limit == value
+
+
 def test_roleplay_mode_is_off_by_default(tmp_path: Path) -> None:
     assert load_runtime_config(AureusPaths(tmp_path)).heartbeat.roleplay_mode is False
 
@@ -452,6 +466,10 @@ def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
         ("planner_steering_max_interrupts", "21"),
         ("planner_steering_max_interrupts", "true"),
         ("planner_steering_max_interrupts", '"4"'),
+        ("inbox_read_limit", "0"),
+        ("inbox_read_limit", "201"),
+        ("inbox_read_limit", "35.5"),
+        ("inbox_read_limit", '"15"'),
     ],
 )
 def test_heartbeat_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
