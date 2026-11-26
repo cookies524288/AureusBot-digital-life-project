@@ -1544,7 +1544,10 @@ async function showPage(name, onShown) {
     btn.setAttribute('aria-disabled', String(current));
   }
   const load = PAGES[name].prepare?.(images ? 'images' : undefined) ?? PAGES[name].load;
-  const entrance = startPageEntrance(page);
+  // 入场动画只在本次登录第一次进入该页时播放（D129）；再次切回不再扫描整页文字。
+  const firstVisit = !state.entranceSeen.has(name);
+  if (firstVisit) state.entranceSeen.add(name);
+  const entrance = firstVisit ? startPageEntrance(page) : null;
   navigation.loading = load?.();
   await navigation.loading;
   if (pageNavigation !== navigation) return;
