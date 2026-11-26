@@ -18,6 +18,7 @@ from aureus.heartbeat.inbox_store import ConversationKey, InboxImageNote, InboxS
 from aureus.memory import EmojiStore, HistoricalMemory, MemoryIndex, MemorySource
 from aureus.timeline import ActorType, TimelineRecord, VisibilityScope
 from aureus.timeline.platform_history import LegacyPlatformHistory, LegacyRoute
+from aureus.web.inbox_api import MEDIA_CACHE_SECONDS
 from aureus.web.inbox_history import LEGACY_SCAN_BATCHES, LEGACY_SCAN_SIZE, timeline_page
 from tests.web.config_rig import ConfigRig
 from tests.web.test_timeline_api import NOW
@@ -635,7 +636,7 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
         result = rig.client.get(f"{endpoint}/1", params=GROUP)
         assert result.content == photo
         assert result.headers["Content-Type"] == "image/png"
-        assert result.headers["Cache-Control"] == "no-store"
+        assert result.headers["Cache-Control"] == f"private, max-age={MEDIA_CACHE_SECONDS}"
         assert result.headers["Cross-Origin-Resource-Policy"] == "same-origin"
         store.save_image_note(
             visible.id, visible.perception, 2, InboxImageNote("emoji_catalog", digest)
@@ -649,6 +650,54 @@ def test_inbox_image_requires_visible_message_exact_scope_and_component(tmp_path
         assert rig.client.get(f"{endpoint}/4", params=GROUP).status_code == 404
         assert reads == ["photo", "bad-type", "revoked"]
         assert store.list_conversations(visible_to_user=True)[0].unread_count == 1
+    finally:
+        rig.close()
+
+
+def test_inbox_image_is_private_cached_and_revocation_is_not_cached(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", ManualClock(NOW))
+    route = ConversationKey(**GROUP)
+    allowed = {route}
+    encoded = BytesIO()
+    Image.new("RGB", (2, 2), "blue").save(encoded, "PNG")
+    photo = encoded.getvalue()
+
+    async def read(_perception: Perception, _reference: MediaReference) -> tuple[bytes, str]:
+        return photo, "image/png"
+
+    rig = ConfigRig(
+        tmp_path,
+        inbox_store=store,
+        allows_inbox_conversation=allowed.__contains__,
+        read_inbox_attachment=read,
+    )
+    try:
+        message = store.add(
+            Perception(
+                "qq",
+                "3",
+                "带图消息",
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("1", "group", "2", "with-image"),
+                attachments=(MediaReference("image", "photo.png"),),
+            )
+        )
+        assert message is not None
+        endpoint = f"{MESSAGES}/{message.id}/images/0"
+        rig.log_in()
+        first = rig.client.get(endpoint, params=GROUP)
+        assert first.status_code == 200 and first.content == photo
+        assert first.headers["Cache-Control"] == f"private, max-age={MEDIA_CACHE_SECONDS}"
+        assert first.headers["X-Content-Type-Options"] == "nosniff"
+        assert first.headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        denied = rig.client.get(endpoint, params={**GROUP, "account_id": "9"})
+        assert denied.status_code == 404
+        assert denied.headers["Cache-Control"] == "no-store"
+        allowed.clear()
+        revoked = rig.client.get(endpoint, params=GROUP)
+        assert revoked.status_code == 404
+        assert revoked.headers["Cache-Control"] == "no-store"
     finally:
         rig.close()
 

@@ -25,6 +25,16 @@ MAX_PAGE_NUMBER = 2**31 - 1
 IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 # 旧路由表要扫整条时间线，变化很慢；页面每次打开不必重新聚合（D121）。
 ROUTE_CACHE_SECONDS = 60.0
+# 头像与图片是私有媒体，只允许浏览器私有缓存；短 max-age 让重复进入会话命中缓存，
+# 同时保证撤权后最多 MEDIA_CACHE_SECONDS 秒内失效（3.46）。
+MEDIA_CACHE_SECONDS = 30
+_MEDIA_HEADERS = {
+    "Cache-Control": f"private, max-age={MEDIA_CACHE_SECONDS}",
+    "X-Content-Type-Options": "nosniff",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
+# 不可读或已撤权的响应不能进缓存，否则重新授权后仍会命中旧的 404（3.46）。
+_MEDIA_UNAVAILABLE = {"Cache-Control": "no-store"}
 type RouteList = list[tuple[LegacyRoute, int, datetime]]
 
 
@@ -185,7 +195,7 @@ def register_inbox_routes(
                 and allows_conversation(key)
             )
 
-        unavailable = HTTPException(404, "这个会话中的图片暂不可读取。")
+        unavailable = HTTPException(404, "这个会话中的图片暂不可读取。", headers=_MEDIA_UNAVAILABLE)
         if store is None or not authorized():
             raise unavailable
         image = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
@@ -216,15 +226,7 @@ def register_inbox_routes(
         current = await asyncio.to_thread(store.get_visible_image, key, identifier, position)
         if current is None or current[:2] != image[:2] or not authorized():
             raise unavailable
-        return Response(
-            media[0],
-            media_type=media[1],
-            headers={
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-                "Cross-Origin-Resource-Policy": "same-origin",
-            },
-        )
+        return Response(media[0], media_type=media[1], headers=_MEDIA_HEADERS)
 
     @app.get("/api/inbox/messages/{identifier}/avatar")
     async def read_avatar(
@@ -241,7 +243,9 @@ def register_inbox_routes(
                 and is_active(token)
             )
 
-        unavailable = HTTPException(404, "这条消息没有可读取的 QQ 头像。")
+        unavailable = HTTPException(
+            404, "这条消息没有可读取的 QQ 头像。", headers=_MEDIA_UNAVAILABLE
+        )
         if (
             request.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none")
             or avatars is None
@@ -252,15 +256,7 @@ def register_inbox_routes(
         message = await asyncio.to_thread(store.get_visible_message, key, identifier)
         if message is None or (avatar := await avatars.read(message, authorized)) is None:
             raise unavailable
-        return Response(
-            avatar[0],
-            media_type=avatar[1],
-            headers={
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-                "Cross-Origin-Resource-Policy": "same-origin",
-            },
-        )
+        return Response(avatar[0], media_type=avatar[1], headers=_MEDIA_HEADERS)
 
     @app.get("/api/inbox/uncategorized")
     async def list_uncategorized(

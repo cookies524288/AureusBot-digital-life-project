@@ -14,6 +14,7 @@ from aureus.channels import QQAvatars, QQChannel
 from aureus.common import ManualClock, QQConfig
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.safety import ACTION_REPLY_TO_USER, EmergencyStop, PermissionChecker
+from aureus.web.inbox_api import MEDIA_CACHE_SECONDS
 from tests.channels.test_qq_inbox import Receiver
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, event
 from tests.web.config_rig import ConfigRig
@@ -164,11 +165,16 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     page = (await client.get("/api/inbox/messages", params=SCOPE)).json()
                     anchor = page["messages"][0]["id"]
                     photo = f"/api/inbox/messages/{anchor}/avatar"
-                    assert (await client.get(photo, params=private)).status_code == 404
+                    denied = await client.get(photo, params=private)
+                    assert denied.status_code == 404
+                    assert denied.headers["cache-control"] == "no-store"
                     assert (await client.get(photo, params=other)).status_code == 404
                     assert not fetches
                     result = await client.get(photo, params=SCOPE)
-                    assert result.is_success and result.headers["cache-control"] == "no-store"
+                    assert result.is_success
+                    assert result.headers["cache-control"] == (
+                        f"private, max-age={MEDIA_CACHE_SECONDS}"
+                    )
                     assert result.headers["cross-origin-resource-policy"] == "same-origin"
                     assert (await client.get(photo, params=SCOPE)).is_success
                     assert fetches == [avatar_url]
@@ -180,7 +186,9 @@ async def test_desktop_checks_confirmation_scope_and_echo_before_receipt(tmp_pat
                     assert fetches == [avatar_url, avatar_url]
                     clock.advance(timedelta(minutes=6))
                     avatar_url = "https://unlisted.invalid/photo"
-                    assert (await client.get(photo, params=SCOPE)).status_code == 404
+                    expired = await client.get(photo, params=SCOPE)
+                    assert expired.status_code == 404
+                    assert expired.headers["cache-control"] == "no-store"
                     assert len(fetches) == 2
                     quoted = {**text, "quote": anchor}
                     assert (await submit("text", quoted, scope=private)).status_code == 404
