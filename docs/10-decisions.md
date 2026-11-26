@@ -1247,3 +1247,9 @@ QQ 在 D93 的接收范围内先保存到用户数据目录，网页可按平台
 ### D141 · 记忆保持连续，不按会话可见范围过滤（2026-11-26）
 
 维护者否决 D139 的会话可见范围过滤：那会让 bot 的记忆断裂，不能接受。决定：撤销 D139 的过滤方案；`MemoryIndex.search` 不按会话 `visibility` 过滤，迁移记忆、用户抽取事实和关系图继续对所有会话可用；保留 D136 的所有群默认和 D137 的提及唤醒。已知风险：群成员或陌生人可以诱导规划器召回日记、日程等私密记忆；这是维护者明确接受的风险。若要收紧，改为限制群范围或提及唤醒，而不是切断记忆。实现：3.58 删除隐私过滤项，其余修复继续。
+
+### D142 · 消息防抖与打断对齐 MaiBot：off/fast/natural/steady、快速反应与打断上限（2026-11-26）
+
+维护者要求把防抖和打断机制改成 MaiBot 一样，针对不同情景有不同策略，分为快速、自然、沉稳等档，默认值采用本机 MaiBot 当前值。本机 MaiBot 1.3.15（`E:\WorkShopE\XiaoDou\Profile\modules\MaiBot`）的 `[chat.reply_timing]` 当前是：`message_debounce_mode = "steady"`、`planner_message_steering = true`、`planner_steering_max_interrupts = 4`；本地源码没有 `private_message_debounce_mode`，群聊和私聊共用一个档位。
+
+决定：一，Aureus 的 `[heartbeat]` 用 `message_debounce_mode`（off/fast/natural/steady，默认 steady）替换 `inbox_debounce_enabled`、`inbox_debounce_seconds`、`inbox_debounce_max_wait_seconds`；等待规则与 MaiBot 相同：上一条有效消息超过 30 秒或没有历史按安静开批，否则按活跃开批；同人续发和换人分别计时；裸图开批至少 4 秒；批次内纯表情包不延长；整批从第一条实际收到起最多 8 秒；@或提及最多 1 秒，连续提及取最早上限。二，新增 `planner_message_steering`（默认 true）和 `planner_steering_max_interrupts`（默认 4，范围 0–20）；开启时规划器使用流式请求，新消息可打断并带上新消息重来，用尽上限后本轮不再打断，保证最终回复；关闭时规划器不被打断，只按防抖等待。三，防抖只决定等待，不改变流式/非流式；快速反应模式独立。四，`MessageDebouncer` 从 MaiBot `src/chat/debounce/controller.py` 移植（GPL-3.0，登记 THIRD_PARTY），改用 Aureus 时钟和 `InboxMessage.received_at`；按会话保存状态，批次开始时 consume。五，旧字段照常读取：`inbox_debounce_enabled=false` → `message_debounce_mode="off"` 且 `planner_message_steering=false`；`inbox_debounce_max_restarts` → `planner_steering_max_interrupts`；`inbox_debounce_seconds` 和 `inbox_debounce_max_wait_seconds` 丢弃（被档位和 8 秒上限取代）。六，D116/D138 的 4 秒/20 秒/4 次参数由本条取代；群聊和私聊共用一个档位（本机 MaiBot 没有私聊独立档）。实现见[任务](tasks/3.59-debounce-alignment.md)。
