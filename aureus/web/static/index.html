@@ -6264,7 +6264,7 @@ const CFG_FIELDS = {
   'qq.enabled': ['启用 QQ 通道', '决定启动时是否连接 QQ 网关收发消息。'],
   'qq.endpoint': ['QQ 网关地址', '程序主动连接的 QQ 网关 WebSocket 服务地址。'],
   'qq.account_id': ['QQ 机器人账号', '用于确认网关登录账号与当前配置一致的 QQ 号。'],
-  'qq.allowed_group_id': ['唯一允许的 QQ 群', '填写后限制到指定的 QQ 群，同时保留本人的普通私聊。'],
+  'qq.allowed_group_id': ['允许的 QQ 群（可选）', '不写表示允许所有群和私聊；填写后只允许该群和本人普通私聊。'],
   'web.qq_avatars_enabled': ['平台会话 QQ 头像', '只通过服务端读取获准会话的 QQ 头像；关闭后显示像素头像。'],
   'qq.action_timeout_seconds': ['QQ 操作超时（秒）', '向 QQ 网关发起一次操作后，最多等待多少秒取得响应。'],
   'qq.reconnect_seconds': ['QQ 重连等待（秒）', '与 QQ 网关断开或连接失败后，等待多久再连接。'],

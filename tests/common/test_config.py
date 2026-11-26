@@ -25,6 +25,7 @@ from aureus.common import (
     MemoryConfig,
     MoodConfig,
     PeopleConfig,
+    QQConfig,
     SafetyConfig,
     TimeConfig,
     WebConfig,
@@ -650,6 +651,33 @@ def test_web_unknown_field_is_reported(tmp_path: Path) -> None:
     message = error_message_of(paths)
     assert "allow_remot" in message
     assert "不认识" in message
+
+
+# ---------- [qq] QQ 通道配置（D136） ----------
+
+
+def test_qq_allows_all_conversations_by_default(tmp_path: Path) -> None:
+    assert QQConfig().allowed_group_id is None
+    paths = AureusPaths(tmp_path)
+    assert load_runtime_config(paths).qq.allowed_group_id is None
+    write_runtime_config(paths, '[qq]\nallowed_group_id = "123456789"\n')
+    assert load_runtime_config(paths).qq.allowed_group_id == "123456789"
+
+
+def test_qq_example_allowed_group_is_optional(tmp_path: Path) -> None:
+    example = Path(__file__).parents[2] / "config" / "aureus.example.toml"
+    lines = example.read_text(encoding="utf-8").splitlines()
+    mine = section_lines(lines, "qq")
+    assert '# allowed_group_id = "123456789"' in mine
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, NEWLINE.join(lines))
+    assert load_runtime_config(paths).qq.allowed_group_id is None
+    uncommented = [
+        line.removeprefix("# ") if line.startswith("# allowed_group_id = ") else line
+        for line in lines
+    ]
+    write_runtime_config(paths, NEWLINE.join(uncommented))
+    assert load_runtime_config(paths).qq.allowed_group_id == "123456789"
 
 
 # ---------- 合在一起 ----------

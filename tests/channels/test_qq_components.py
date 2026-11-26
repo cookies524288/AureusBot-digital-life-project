@@ -11,7 +11,7 @@ from websockets.asyncio.server import serve
 from aureus.channels.qq import QQChannel
 from aureus.common import ManualClock, QQConfig
 from aureus.heartbeat import MessageKind, MessageRoute, OutgoingMessage, VisibilityScope
-from aureus.heartbeat.inbox_store import InboxMessage, InboxStore
+from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from tests.channels.test_qq_inbox import Receiver
 from tests.channels.test_qq_runtime import ACCOUNT, GROUP, FakeOneBot, event
 from tests.web.config_rig import ConfigRig
@@ -35,6 +35,44 @@ def poke(**fields: Any) -> dict[str, Any]:
         "self_id": ACCOUNT,
         **fields,
     }
+
+
+def test_qq_scope_defaults_to_all_conversations_and_optional_group_limits() -> None:
+    """D136：不写 allowed_group_id 时允许所有群和私聊；填写后只放行该群和本人普通私聊。"""
+    account = str(ACCOUNT)
+    channel = QQChannel(
+        QQConfig(account_id=account),
+        None,
+        Receiver(),
+        lambda candidate: candidate == str(OWNER),
+    )
+    for conversation in (
+        ConversationKey("qq", account, "group", str(GROUP)),
+        ConversationKey("qq", account, "group", str(GROUP + 1)),
+        ConversationKey("qq", account, "private", str(OWNER)),
+        ConversationKey("qq", account, "private", str(FRIEND)),
+        ConversationKey("qq", account, "private", str(OWNER), str(GROUP)),
+    ):
+        assert channel.allows_inbox_conversation(conversation)
+
+    restricted = QQChannel(
+        QQConfig(account_id=account, allowed_group_id=str(GROUP)),
+        None,
+        Receiver(),
+        lambda candidate: candidate == str(OWNER),
+    )
+    assert restricted.allows_inbox_conversation(
+        ConversationKey("qq", account, "group", str(GROUP))
+    )
+    assert restricted.allows_inbox_conversation(
+        ConversationKey("qq", account, "private", str(OWNER))
+    )
+    for conversation in (
+        ConversationKey("qq", account, "group", str(GROUP + 1)),
+        ConversationKey("qq", account, "private", str(FRIEND)),
+        ConversationKey("qq", account, "private", str(OWNER), str(GROUP)),
+    ):
+        assert not restricted.allows_inbox_conversation(conversation)
 
 
 @pytest.mark.asyncio
