@@ -1805,6 +1805,7 @@ function showAuth(view, message) {
   catalogs.clear();
   state.loaded = {};
   resetPageCache();
+  clearInboxMediaCache();
   timelineRendered = null;
   prefetchedPages.clear();
   idlePrefetchScheduled = false;
@@ -3217,23 +3218,47 @@ const inbox = {view:null, enabled:false, conversations:[], archives:[], selected
 const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
 const inboxScope = key => new URLSearchParams(Object.entries(key).filter(([, value]) => value !== null));
 
-// 头像共用 3 个并发槽，避免占满浏览器同源连接；按发送者去重，同一次渲染里一个发送者只取一次（D121）。
-// 消息图片交给浏览器按 loading=lazy 取图，不再占这个队列：长会话里最早的几张图在视口外，
-// 懒加载不会触发 load/error，槽位会被它们占住，后面的图片一直拿不到 src（3.41）。
+// 头像共用 3 个并发槽，避免占满浏览器同源连接；按发送者去重（D121、3.46）。
+// 头像和图片缓存为 object URL，同一登录会话内复用；按最近使用顺序淘汰，退出登录清空。
+// 缓存 30 秒后过期，与后端私有缓存窗口一致，过期后重新请求会再走权限校验。
 const INBOX_MEDIA_CONCURRENCY = 3;
+const INBOX_MEDIA_CACHE_TTL_MS = 30000;
+const INBOX_AVATAR_CACHE_LIMIT = 128;
+const INBOX_AVATAR_CACHE_BYTES = 8 * 1024 * 1024;
+const INBOX_IMAGE_CACHE_LIMIT = 40;
+const INBOX_IMAGE_CACHE_BYTES = 32 * 1024 * 1024;
+const INBOX_IMAGE_ROOT_MARGIN = '400px';
 let inboxMediaActive = 0;
 let inboxMediaPumping = false;
 const inboxMediaQueue = [];
 let inboxMediaGeneration = 0;
 const inboxAvatarCache = new Map();
-const inboxAvatarURLs = new Set();
+const inboxAvatarPending = new Map();
+const inboxImageCache = new Map();
+const inboxImagePending = new Map();
+let inboxImageObserver = null;
+let inboxPinnedImageURL = null;
 
+// 切会话只断开当前视口的懒加载观察和预览，不动已经缓存好的 object URL。
 function resetInboxMedia() {
-  ++inboxMediaGeneration;
-  inboxAvatarCache.clear();
-  for (const url of inboxAvatarURLs) URL.revokeObjectURL(url);
-  inboxAvatarURLs.clear();
   closeInboxImageDialog();
+  inboxImageObserver?.disconnect();
+  inboxImageObserver = null;
+}
+
+// 退出登录时清空；之后到达的旧请求会因 generation 不一致而丢弃。
+function clearInboxMediaCache() {
+  ++inboxMediaGeneration;
+  resetInboxMedia();
+  for (const cache of [inboxAvatarCache, inboxImageCache]) {
+    for (const entry of cache.values()) URL.revokeObjectURL(entry.url);
+    cache.clear();
+  }
+  inboxAvatarPending.clear();
+  inboxImagePending.clear();
+  inboxMediaQueue.length = 0;
+  inboxMediaActive = 0;
+  inboxMediaPumping = false;
 }
 
 function releaseInboxMedia() {
@@ -3255,10 +3280,46 @@ function scheduleInboxMedia(start) {
   else inboxMediaQueue.push(run);
 }
 
+function readInboxMedia(cache, key) {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (performance.now() - entry.at > INBOX_MEDIA_CACHE_TTL_MS) {
+    cache.delete(key);
+    if (entry.url !== inboxPinnedImageURL) URL.revokeObjectURL(entry.url);
+    return null;
+  }
+  cache.delete(key);   // 重新插入，最近使用的排在最后
+  cache.set(key, entry);
+  return entry;
+}
+
+function writeInboxMedia(cache, key, blob) {
+  const previous = cache.get(key);
+  if (previous && previous.url !== inboxPinnedImageURL) URL.revokeObjectURL(previous.url);
+  const entry = {url:URL.createObjectURL(blob), size:blob.size, at:performance.now()};
+  cache.delete(key);
+  cache.set(key, entry);
+  return entry;
+}
+
+function evictInboxMedia(cache, limit, maxBytes, pinned) {
+  let bytes = 0;
+  for (const entry of cache.values()) bytes += entry.size;
+  for (const [key, entry] of cache) {
+    if (cache.size <= limit && bytes <= maxBytes) break;
+    if (entry.url === pinned) continue;   // 正在大图预览的那张不回收
+    cache.delete(key);
+    bytes -= entry.size;
+    URL.revokeObjectURL(entry.url);
+  }
+}
+
 function loadInboxAvatar(message) {
   const key = message.conversation.platform + '|' + message.sender_id;
-  const cached = inboxAvatarCache.get(key);
-  if (cached) return cached;
+  const cached = readInboxMedia(inboxAvatarCache, key);
+  if (cached) return Promise.resolve(cached.url);
+  const pending = inboxAvatarPending.get(key);
+  if (pending) return pending;
   const generation = inboxMediaGeneration;
   const promise = new Promise(resolve => {
     scheduleInboxMedia(release => {
@@ -3268,20 +3329,66 @@ function loadInboxAvatar(message) {
         .then(response => response.ok ? response.blob() : null)
         .then(blob => {
           if (!blob || generation !== inboxMediaGeneration) { resolve(null); return; }
-          const objectURL = URL.createObjectURL(blob);
-          inboxAvatarURLs.add(objectURL);
-          resolve(objectURL);
+          const entry = writeInboxMedia(inboxAvatarCache, key, blob);
+          evictInboxMedia(inboxAvatarCache, INBOX_AVATAR_CACHE_LIMIT, INBOX_AVATAR_CACHE_BYTES, null);
+          resolve(entry.url);
         })
         .catch(() => resolve(null))
         .finally(release);
     });
   });
-  inboxAvatarCache.set(key, promise);
+  inboxAvatarPending.set(key, promise);
+  promise.finally(() => { if (inboxAvatarPending.get(key) === promise) inboxAvatarPending.delete(key); });
   return promise;
+}
+
+function inboxImageKey(message, position) {
+  return `${message.source}:${message.id}:${position}`;
+}
+
+function loadInboxImage(message, position, sourceURL, force = false) {
+  const key = inboxImageKey(message, position);
+  if (!force) {
+    const cached = readInboxMedia(inboxImageCache, key);
+    if (cached) return Promise.resolve(cached.url);
+    const pending = inboxImagePending.get(key);
+    if (pending) return pending;
+  }
+  const generation = inboxMediaGeneration;
+  const url = force ? `${sourceURL}&retry=${Date.now()}` : sourceURL;
+  const promise = fetch(url, {credentials:'same-origin', signal: pageAbort.signal})
+    .then(response => response.ok ? response.blob() : null)
+    .then(blob => {
+      if (!blob || generation !== inboxMediaGeneration) return null;
+      const entry = writeInboxMedia(inboxImageCache, key, blob);
+      evictInboxMedia(inboxImageCache, INBOX_IMAGE_CACHE_LIMIT, INBOX_IMAGE_CACHE_BYTES, inboxPinnedImageURL);
+      return entry.url;
+    })
+    .catch(() => null);
+  inboxImagePending.set(key, promise);
+  promise.finally(() => { if (inboxImagePending.get(key) === promise) inboxImagePending.delete(key); });
+  return promise;
+}
+
+// 图片仍用懒加载：靠近消息视口才取原图，长会话不会一次下载全部图片（3.41、3.46）。
+function observeInboxImage(node, start) {
+  if (typeof IntersectionObserver !== 'function') { start(); return; }
+  if (!inboxImageObserver) {
+    inboxImageObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        inboxImageObserver.unobserve(entry.target);
+        entry.target.__inboxImageStart?.();
+      }
+    }, {root:$('inbox-messages'), rootMargin:INBOX_IMAGE_ROOT_MARGIN});
+  }
+  node.__inboxImageStart = start;
+  inboxImageObserver.observe(node);
 }
 
 function openInboxImageDialog(url, label) {
   if (!url) return;
+  inboxPinnedImageURL = url;
   const dialog = $('inbox-image-dialog');
   $('inbox-image-dialog-title').textContent = label;
   const picture = $('inbox-image-dialog-picture');
@@ -3291,9 +3398,12 @@ function openInboxImageDialog(url, label) {
 }
 
 function closeInboxImageDialog() {
+  const pinned = inboxPinnedImageURL;
+  inboxPinnedImageURL = null;
   const dialog = $('inbox-image-dialog');
   if (dialog.open) dialog.close();
   $('inbox-image-dialog-picture').removeAttribute('src');
+  if (pinned && ![...inboxImageCache.values()].some(entry => entry.url === pinned)) URL.revokeObjectURL(pinned);
 }
 
 const TYPING_REFRESH_MS = 750;
@@ -3710,15 +3820,23 @@ function renderInboxImage(message, position) {
   if (message.source === 'inbox' && message.conversation && Number.isSafeInteger(message.id)) {
     const query = inboxScope(message.conversation);
     sourceURL = `/api/inbox/messages/${message.id}/images/${position}?${query}`;
-    let attempt = 0;
-    const load = () => {
-      const url = attempt === 0 ? sourceURL : `${sourceURL}&retry=${attempt}`;
-      attempt += 1;
+    const showFailure = () => {
+      loading.classList.add('hidden');
+      picture.classList.remove('loaded');
+      picture.removeAttribute('role');
+      picture.removeAttribute('tabindex');
+      failure.classList.remove('hidden');
+      retry.classList.remove('hidden');
+    };
+    const load = (force = false) => {
       loading.classList.remove('hidden');
       failure.classList.add('hidden');
       retry.classList.add('hidden');
       picture.classList.remove('loaded');
-      picture.setAttribute('src', url);
+      loadInboxImage(message, position, sourceURL, force).then(url => {
+        if (!url) { showFailure(); return; }
+        picture.setAttribute('src', url);
+      });
     };
     picture.addEventListener('load', () => {
       loading.classList.add('hidden');
@@ -3728,14 +3846,7 @@ function renderInboxImage(message, position) {
       picture.setAttribute('tabindex', '0');
       picture.setAttribute('aria-label', `查看${label}大图`);
     });
-    picture.addEventListener('error', () => {
-      loading.classList.add('hidden');
-      picture.classList.remove('loaded');
-      picture.removeAttribute('role');
-      picture.removeAttribute('tabindex');
-      failure.classList.remove('hidden');
-      retry.classList.remove('hidden');
-    });
+    picture.addEventListener('error', showFailure);
     const open = () => openInboxImageDialog(picture.getAttribute('src'), label);
     picture.addEventListener('click', open);
     picture.addEventListener('keydown', event => {
@@ -3743,8 +3854,8 @@ function renderInboxImage(message, position) {
       event.preventDefault();
       open();
     });
-    retry.addEventListener('click', load);
-    load();
+    retry.addEventListener('click', () => load(true));
+    observeInboxImage(picture, () => load(false));
   } else {
     loading.classList.add('hidden');
     failure.classList.remove('hidden');
