@@ -290,6 +290,10 @@
 同日第五轮：按 [D136](10-decisions.md) 解除 QQ 会话限制，默认允许所有群和私聊；按 [D137](10-decisions.md) 让 @ 与名字/昵称提及必然唤醒（[任务](tasks/3.55-qq-all-conversations.md)、[任务](tasks/3.56-mention-wake.md)）。
 同日第六轮：按 [D142](10-decisions.md) 把消息防抖与打断对齐 MaiBot（off/fast/natural/steady、快速反应、打断上限，默认取本机 MaiBot 的 steady/true/4），按 [D143](10-decisions.md) 在图片嵌入前统一转 PNG 修复 GIF/WebP 500（[任务](tasks/3.59-debounce-alignment.md)、[任务](tasks/3.60-image-embedding-format.md)）。
 
+[3.61 启动器残留进程](tasks/3.61-launcher-stale-process.md)、[3.62 收件箱读取上限](tasks/3.62-inbox-read-cap.md)、[3.63 工作记忆上下文上限](tasks/3.63-working-memory-context-cap.md) 已实现，仍待各自的专项评审。
+
+[3.64 前端审查与回归](tasks/3.64-frontend-audit.md) **进行中**。收件箱后台刷新中途失败保留完整历史（`286c887`），输入状态读取失败不再提前补拉消息（`bb8e355`），两项已合入本地 `main`。实际屏幕上的分组、圆角、窄屏长文、触控和加载速度单独验收，不能用离线测试或 3.27 的历史计时替代。
+
 ### Phase 4 · 双手
 
 **目标**：在它自己的电脑上动手做事。
