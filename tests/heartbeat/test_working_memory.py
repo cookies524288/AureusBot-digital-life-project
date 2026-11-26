@@ -41,19 +41,19 @@ async def test_default_window_rolls_and_restores(tmp_path: Path) -> None:
     _append(timeline, "迁移历史")
     memory = WorkingMemory(timeline, HeartbeatConfig())
     memory.restore()
-    for index in range(79):
+    for index in range(49):
         _append(timeline, str(index))
     assert memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
-    _append(timeline, "79")
+    _append(timeline, "49")
     first = memory.prepare(clock.now(), ModelPreference.PREFERRED)
     assert first is not None
     material = json.loads(first.requests[0][1].prompt)
     assert material["旧摘要"] == ""
-    assert [entry["content"] for entry in material["经历"]] == list(map(str, range(55)))
+    assert [entry["content"] for entry in material["经历"]] == list(map(str, range(30)))
     memory.finish(await summarize(first, _summary), clock.now())
     data = json.loads(memory.context(owner=True, route=None, exclude=()).split("\n", 1)[1])
     assert data["滚动摘要"] == ["摘要：0"]
-    assert [entry["content"] for entry in data["近期焦点"]] == list(map(str, range(55, 80)))
+    assert [entry["content"] for entry in data["近期焦点"]] == list(map(str, range(30, 50)))
     timeline.close()
 
     timeline = TimelineDatabase(path, clock)
@@ -62,13 +62,13 @@ async def test_default_window_rolls_and_restores(tmp_path: Path) -> None:
         restored = WorkingMemory(timeline, HeartbeatConfig())
         restored.restore()
         assert restored.summaries() == {"用户私聊": "摘要：0"}
-        for index in range(80, 135):
+        for index in range(50, 80):
             _append(timeline, str(index))
         second = restored.prepare(clock.now(), ModelPreference.PREFERRED)
         assert second is not None
         material = json.loads(second.requests[0][1].prompt)
         assert material["旧摘要"] == "摘要：0"
-        assert [entry["content"] for entry in material["经历"]] == list(map(str, range(55, 110)))
+        assert [entry["content"] for entry in material["经历"]] == list(map(str, range(30, 60)))
     finally:
         timeline.close()
 
@@ -320,7 +320,10 @@ async def test_actual_planner_and_replyer_get_saved_summary(
 
 
 @pytest.mark.asyncio
-async def test_pending_replies_are_split_at_working_memory_capacity(tmp_path: Path) -> None:
+async def test_pending_replies_above_working_memory_capacity_drop_the_oldest(
+    tmp_path: Path,
+) -> None:
+    """D146：每轮只把最新 capacity 条放进上下文，更早的丢弃出上下文，不排队到下一轮。"""
     clock = ManualClock(NOW)
     timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
     timeline.open()
@@ -329,7 +332,7 @@ async def test_pending_replies_are_split_at_working_memory_capacity(tmp_path: Pa
     heart = _heartbeat(tmp_path, clock, timeline, config, organs)
     heart.update_available_organs(frozenset({"planner", "replyer"}))
     heart.wake_up()
-    messages = [f"排队来信{index}" for index in range(5)]
+    messages = [f"排队来信{index:02d}" for index in range(5)]
     try:
         for message in messages:
             assert heart.submit(
@@ -337,21 +340,71 @@ async def test_pending_replies_are_split_at_working_memory_capacity(tmp_path: Pa
                     "web", "user", message, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER
                 )
             )
-        for _ in range(3):
-            heart.beat()
-            await heart.wait_for_thought()
         heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        await heart.wait_for_thought()
         records = timeline.query(TimelineQuery(event_type="message"))
         message_ids = [record.id for record in records if record.content in messages]
-        assert len(message_ids) == 5
-        expected = [message_ids[:2], message_ids[2:4], message_ids[4:]]
+        assert len(message_ids) == 5  # 丢弃只针对上下文，时间线仍保留全部来信
+        expected = [message_ids[-2:]]
         for organ_id in ("planner", "replyer"):
             requests = [request for request in organs.requests if request.organ_id == organ_id]
             assert [request.context["in_reply_to"] for request in requests] == expected
             for request, batch in zip(requests, expected, strict=True):
                 text = dialogue_text(request)
                 assert all(record.content in text for record in records if record.id in batch)
-                assert sum(message in text for message in messages) <= 2
+                assert sum(message in text for message in messages) == 2
+                assert all(message not in text for message in messages[:-2])
+        # 更早的 3 条已经丢弃出上下文，下一拍不会重新开始一轮。
+        heart.beat()
+        await heart.wait_for_thought()
+        assert len([request for request in organs.requests if request.organ_id == "planner"]) == 1
+        assert len([request for request in organs.requests if request.organ_id == "replyer"]) == 1
+    finally:
+        await heart.shut_down()
+        timeline.close()
+
+
+@pytest.mark.asyncio
+async def test_context_keeps_only_the_latest_capacity_messages(tmp_path: Path) -> None:
+    """D146：一批 60 条、容量 50 时，只把最新 50 条放进本轮，更早 10 条丢弃且不留在队列。"""
+    clock = ManualClock(NOW)
+    timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
+    timeline.open()
+    config = HeartbeatConfig(working_memory_capacity=50, working_memory_retain=20)
+    organs = _Organs()
+    heart = _heartbeat(tmp_path, clock, timeline, config, organs)
+    heart.update_available_organs(frozenset({"planner", "replyer"}))
+    heart.wake_up()
+    messages = [f"积压来信{index:02d}" for index in range(60)]
+    try:
+        for message in messages:
+            assert heart.submit(
+                Perception(
+                    "web", "user", message, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER
+                )
+            )
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        await heart.wait_for_thought()
+        records = timeline.query(TimelineQuery(event_type="message"))
+        message_ids = [record.id for record in records if record.content in messages]
+        assert len(message_ids) == 60  # 丢弃不删除原件：时间线仍有全部 60 条
+        expected = [message_ids[-50:]]
+        for organ_id in ("planner", "replyer"):
+            requests = [request for request in organs.requests if request.organ_id == organ_id]
+            assert [request.context["in_reply_to"] for request in requests] == expected
+            for request in requests:
+                text = dialogue_text(request)
+                assert all(message in text for message in messages[-50:])
+                assert all(message not in text for message in messages[:10])
+        # 更早的 10 条不在下一轮队列里：再跳一拍没有新的规划。
+        heart.beat()
+        await heart.wait_for_thought()
+        assert len([request for request in organs.requests if request.organ_id == "planner"]) == 1
+        assert len([request for request in organs.requests if request.organ_id == "replyer"]) == 1
     finally:
         await heart.shut_down()
         timeline.close()

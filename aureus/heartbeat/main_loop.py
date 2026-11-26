@@ -2234,7 +2234,12 @@ class Heartbeat:
             and self._working_memory is not None
             and self._config.working_memory_enabled
         ):
-            batch = batch[: self._config.working_memory_capacity]
+            # 最新 capacity 条进本轮上下文，更早的丢弃出上下文（D146）。
+            # 丢弃只移出上下文，不删除时间线/收件箱原件，引用或 planner 查历史仍能取回。
+            capacity = self._config.working_memory_capacity
+            if len(batch) > capacity:
+                self._unanswered.remove(batch[:-capacity])
+                batch = batch[-capacity:]
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
         trace = _RoundTrace(batch[0].record.id)
         job = replace(self._reply_job(batch), round_trace=trace)
