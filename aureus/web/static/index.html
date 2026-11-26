@@ -289,6 +289,19 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 @media(min-width:821px) and (max-width:1100px){#page-overview{padding-inline:clamp(36px,9vw,105px)}}
 @media(max-width:620px){.ov-grid{grid-template-columns:minmax(0,1fr);gap:14px}.ov-face{padding:16px 17px 21px}.ov-emitter{width:128px}.ov-links{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.ov-link>.ov-face{padding:13px 12px 18px}.ov-head{margin-bottom:20px}.ov-energy>.ov-face{gap:9px}}
 @media(max-width:360px){.ov-emitter{width:96px}}
+/* 3.50 重启遮罩：覆盖整个页面等待服务恢复，期间其它操作不可点；失败时提供重试或关闭。 */
+.restart-overlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(3px)}
+.restart-overlay.hidden{display:none}
+.restart-card{width:min(100%,420px);display:grid;justify-items:center;gap:12px;padding:26px 24px;text-align:center;background:var(--surface);border:2px solid var(--border);box-shadow:6px 6px 0 var(--border)}
+.restart-card h2{font-size:20px;overflow-wrap:anywhere}
+.restart-pixels{display:inline-flex;gap:6px}
+.restart-pixels i{width:10px;height:10px;background:var(--accent);animation:restart-pulse 1.1s step-end infinite}
+.restart-pixels i:nth-child(2){animation-delay:.15s}
+.restart-pixels i:nth-child(3){animation-delay:.3s}
+.restart-pixels i:nth-child(4){animation-delay:.45s}
+.restart-actions{justify-content:center;gap:8px}
+@keyframes restart-pulse{0%,49%{opacity:1}50%,100%{opacity:.15}}
+@media(prefers-reduced-motion:reduce){.restart-pixels i{animation:none}}
 @media(prefers-reduced-motion:reduce){.ov-emitter :is(.ov-idle-arc,.ov-thought-star,.ov-unknown-arc){animation:none;transform:none}.ov-slot>.ov-face{transform:none;translate:none}}
 
 /* ---------- 私聊 ---------- */
@@ -958,6 +971,17 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </section>
 
 <section id="shutdown" class="auth hidden"><h1 id="shutdown-title" tabindex="-1">程序正在关闭</h1></section>
+<div id="restart-overlay" class="restart-overlay hidden" role="status" aria-live="polite" aria-label="程序重启中">
+<div class="restart-card">
+<div class="restart-pixels" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<h2 id="restart-overlay-title">正在重启…</h2>
+<p id="restart-overlay-text" class="muted">正在等待服务恢复，恢复后会自动重新载入。</p>
+<div class="row restart-actions">
+<button id="restart-overlay-retry" type="button" class="btn primary hidden">重试</button>
+<button id="restart-overlay-close" type="button" class="btn hidden">关闭</button>
+</div>
+</div>
+</div>
 <div id="app" class="hidden">
 <div class="nav-trigger" aria-hidden="true"></div>
 <nav class="side" aria-label="主导航">
@@ -1889,27 +1913,99 @@ $('shutdown-btn').addEventListener('click', async () => {
   if (res.ok) showAuth('shutdown');
   else fail(res);
 });
-$('restart-btn').addEventListener('click', async () => {
-  if (!await confirmAction('确定要重启程序吗')) return;
-  const button = $('restart-btn');
-  button.disabled = true;
-  const res = await api('/api/restart', 'POST');
-  button.disabled = false;
-  if (!res.ok) { fail(res); return; }
-  const title = $('shutdown-title');
-  title.textContent = '程序正在重启';
-  showAuth('shutdown');
-  for (let attempt = 0; attempt < 60; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const status = await api('/api/status');
-    if (status.status === 401 || (status.data?.restart_instance &&
-        status.data.restart_instance !== res.data.instance)) {
+// 3.50 重启：显示遮罩，按退避轮询 /api/status，恢复后自动重新载入；超时给重试。
+const RESTART_POLL_TIMEOUT_MS = 60000;
+const RESTART_POLL_MIN_MS = 500;
+const RESTART_POLL_MAX_MS = 3000;
+const RESTART_POLL_REQUEST_MS = 3000;
+let restartWaitToken = 0;
+
+function showRestartOverlay(title, text, {retry = false, close = false} = {}) {
+  $('restart-overlay').classList.remove('hidden');
+  $('restart-overlay-title').textContent = title;
+  $('restart-overlay-text').textContent = text;
+  $('restart-overlay-retry').classList.toggle('hidden', !retry);
+  $('restart-overlay-close').classList.toggle('hidden', !close);
+  $('app').inert = true;
+}
+
+function hideRestartOverlay() {
+  ++restartWaitToken;
+  $('restart-overlay').classList.add('hidden');
+  $('app').inert = false;
+  $('restart-btn').disabled = false;
+  if (state.loggedIn && !socket) openSocket();
+}
+
+// 只暂停聊天连接，不清空当前页面内容；重启成功后页面会重新载入。
+function pauseSocketForRestart() {
+  socketWanted = false;
+  socketNeedsCatchUp = true;
+  const old = socket;
+  socket = null;
+  clearTyping();
+  if (old) old.close();
+}
+
+async function pollRestart(instance, token) {
+  const deadline = performance.now() + RESTART_POLL_TIMEOUT_MS;
+  let delay = RESTART_POLL_MIN_MS;
+  while (performance.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, delay));
+    if (token !== restartWaitToken) return;
+    delay = Math.min(Math.round(delay * 1.5), RESTART_POLL_MAX_MS);
+    let status = null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), RESTART_POLL_REQUEST_MS);
+      const response = await fetch('/api/status', {credentials:'same-origin', cache:'no-store', signal:controller.signal});
+      clearTimeout(timer);
+      if (response.status === 401) { location.reload(); return; }
+      if (response.ok) status = await response.json();
+    } catch (e) { /* 旧进程已退出或新进程还没起来，继续等 */ }
+    if (token !== restartWaitToken) return;
+    if (status && status.restart_instance && status.restart_instance !== instance) {
       location.reload();
       return;
     }
   }
-  title.textContent = '暂未连上 Aureus，请稍后刷新页面';
+  if (token !== restartWaitToken) return;
+  $('restart-overlay-retry').dataset.mode = 'wait';
+  $('restart-overlay-retry').dataset.instance = instance;
+  showRestartOverlay('暂未连上 Aureus', '重启可能还没完成。可以重试等待，或关闭遮罩后稍后再试。', {retry:true, close:true});
+}
+
+function startRestartWait(instance) {
+  const token = ++restartWaitToken;
+  $('restart-overlay-retry').dataset.mode = 'wait';
+  $('restart-overlay-retry').dataset.instance = instance;
+  showRestartOverlay('正在重启…', '正在等待服务恢复，恢复后会自动重新载入。');
+  pollRestart(instance, token);
+}
+
+async function requestRestart() {
+  $('restart-btn').disabled = true;
+  showRestartOverlay('正在重启…', '正在请求重启程序，请稍候。');
+  const res = await api('/api/restart', 'POST');
+  if (!res.ok) {
+    $('restart-overlay-retry').dataset.mode = 'post';
+    showRestartOverlay('重启失败', errorText(res) || '重启请求没有成功，请稍后再试。', {retry:true, close:true});
+    return;
+  }
+  pauseSocketForRestart();
+  startRestartWait(res.data.instance);
+}
+
+$('restart-btn').addEventListener('click', async () => {
+  if (!await confirmAction('确定要重启程序吗')) return;
+  await requestRestart();
 });
+$('restart-overlay-retry').addEventListener('click', () => {
+  const button = $('restart-overlay-retry');
+  if (button.dataset.mode === 'post') requestRestart();
+  else startRestartWait(button.dataset.instance || '');
+});
+$('restart-overlay-close').addEventListener('click', hideRestartOverlay);
 $('terminal-btn').addEventListener('click', async () => {
   const button = $('terminal-btn');
   button.disabled = true;
