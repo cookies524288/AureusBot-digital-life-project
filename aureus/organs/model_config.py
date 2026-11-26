@@ -5,6 +5,7 @@
 结构参考 MaiBot 的模型配置（GPL-3.0，只参考结构，不复制代码）。
 """
 
+import json
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,6 +24,33 @@ MODELS_CONFIG_FORMAT_VERSION = 1
 # 服务商没写超时和重试次数时的默认值。超时 90 秒（D132）。
 DEFAULT_TIMEOUT_SECONDS = 90.0
 DEFAULT_MAX_RETRY = 2
+
+# 分时价格最多写这么多段（D134）：一天 24 小时按分钟切，12 段已经够用，
+# 再多的时段在网页上也看不清，多半是填错了。
+MAX_PRICE_PERIODS = 12
+# 额外参数是给个别服务商的补充设置，不是放整份请求内容的地方（D134）。
+# 8 KB 够放常见的 top_p、stop 之类，也能挡住误粘贴的大段文字。
+MAX_EXTRA_PARAMS_BYTES = 8192
+
+# 这些键决定请求发到哪个模型、发什么内容，额外参数不能覆盖（D134）。
+# 其余显式字段（温度、最大 token、思考……）只是优先级更高：额外参数不冲突时仍可补上。
+EXTRA_PARAMS_CORE_KEYS = frozenset(
+    {
+        "model",
+        "messages",
+        "tools",
+        "stream",
+        "stream_options",
+        "timeout",
+        "num_retries",
+        "api_base",
+        "api_key",
+    }
+)
+
+# 分时价格用当地时间的 “时:分”。结束时间额外允许 24:00，表示当天结束（左闭右开）。
+_CLOCK_TIME_PATTERN = r"^(?:[01]\d|2[0-3]):[0-5]\d$"
+_CLOCK_END_TIME_PATTERN = r"^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$"
 
 # 密钥的环境变量名必须以 AUREUS_KEY_ 开头：不会和别的程序的变量混在一起，
 # 也能挡住“把密钥本身粘贴进配置文件”的失误（真密钥不符合这个格式，会当场报错）。
@@ -63,6 +91,40 @@ class ProviderConfig(BaseModel):
         return self
 
 
+class PricePeriod(BaseModel):
+    """模型的分时价格：当地时间的某一段，价格单位与默认价格相同（D134）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # 当地时间 “时:分”，左闭右开：08:00–12:00 包含 08:00，不包含 12:00。
+    start: str = Field(pattern=_CLOCK_TIME_PATTERN)
+    end: str = Field(pattern=_CLOCK_END_TIME_PATTERN)
+    price_in: float = Field(ge=0)
+    price_out: float = Field(ge=0)
+    price_cache_in: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _start_before_end(self) -> Self:
+        if self.start_minutes >= self.end_minutes:
+            raise ValueError("分时价格的开始时间必须早于结束时间。")
+        return self
+
+    @property
+    def start_minutes(self) -> int:
+        """开始时刻在当天的第几分钟（0 到 1439）。"""
+        return _minutes_since_midnight(self.start)
+
+    @property
+    def end_minutes(self) -> int:
+        """结束时刻在当天的第几分钟（0 到 1440，24:00 表示当天结束）。"""
+        return _minutes_since_midnight(self.end)
+
+
+def _minutes_since_midnight(value: str) -> int:
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
 class ModelConfig(BaseModel):
     """模型：服务商提供的某个具体模型。"""
 
@@ -75,16 +137,26 @@ class ModelConfig(BaseModel):
     provider: str = Field(min_length=1)
     kind: ModelKind = "llm"
     vision: bool = False
+    # 停用的模型仍保留器官绑定，只是不进入路由（D134）；重新启用就恢复。
+    enabled: bool = True
     # 价格单位：元 / 百万 token，可选（D37）。账本和预算按 token 计，不靠价格运作；
     # 填了价格只用来显示估算费用。不写就是“费用未知”，不会被当成免费。
     price_in: float | None = Field(default=None, ge=0)
     price_out: float | None = Field(default=None, ge=0)
     # 命中缓存的输入价格。不写就按 price_in 算：宁可高估花费，也不低估。
     price_cache_in: float | None = Field(default=None, ge=0)
+    # 分时价格：命中时段时整段替换默认价格，未命中仍用默认价格（D134）。
+    price_periods: tuple[PricePeriod, ...] = ()
     temperature: float | None = Field(default=None, ge=0)
     max_tokens: int | None = Field(default=None, gt=0)
     # 没列等级表示模型不声明支持思考等级（D84）。
     reasoning_levels: tuple[ReasoningLevel, ...] = ()
+    # 为 true 时请求里写 thinking: {"type": "enabled"}（D134）。
+    thinking: bool = False
+    # 为 true 时给支持原生联网搜索的协议加搜索工具（D134）。
+    web_search: bool = False
+    # 合并进请求参数的补充设置；不能覆盖核心请求字段（D134）。
+    extra_params: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -100,6 +172,32 @@ class ModelConfig(BaseModel):
     def _validate_vision(self) -> Self:
         if self.vision and self.kind != "llm":
             raise ValueError("只有 llm 模型可以开启视觉。")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_price_periods(self) -> Self:
+        if len(self.price_periods) > MAX_PRICE_PERIODS:
+            raise ValueError(f"分时价格最多 {MAX_PRICE_PERIODS} 段。")
+        previous_end = 0
+        for period in self.price_periods:
+            if period.start_minutes < previous_end:
+                raise ValueError("分时价格要按开始时间排列，而且不能重叠。")
+            previous_end = period.end_minutes
+        return self
+
+    @model_validator(mode="after")
+    def _validate_extra_params(self) -> Self:
+        core = sorted(EXTRA_PARAMS_CORE_KEYS.intersection(self.extra_params))
+        if core:
+            raise ValueError(f"额外参数不能覆盖核心请求字段：{'、'.join(core)}")
+        try:
+            encoded = json.dumps(self.extra_params, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError):
+            raise ValueError(
+                "额外参数的值必须是 JSON 能表示的类型（文字、数字、开关、对象或数组）。"
+            ) from None
+        if len(encoded.encode("utf-8")) > MAX_EXTRA_PARAMS_BYTES:
+            raise ValueError(f"额外参数最多 {MAX_EXTRA_PARAMS_BYTES} 字节。")
         return self
 
 
@@ -165,9 +263,13 @@ class ModelsConfig(BaseModel):
             for model_name in organ.models:
                 if model_name not in model_names:
                     continue
+                model = models_by_name[model_name]
+                # 停用的模型不进入路由，思考等级也不用为它校验（D134）。
+                if not model.enabled:
+                    continue
                 if (
                     organ.reasoning_effort is not None
-                    and organ.reasoning_effort not in models_by_name[model_name].reasoning_levels
+                    and organ.reasoning_effort not in model.reasoning_levels
                 ):
                     raise ValueError(
                         f"器官 {organ_id} 的思考等级 {organ.reasoning_effort} 不是模型 "
@@ -217,6 +319,9 @@ class ModelsConfig(BaseModel):
             if model_name not in models:
                 continue
             model = models[model_name]
+            # 停用的模型保留绑定，只是不参与路由（D134）。
+            if not model.enabled:
+                continue
             routes.append(
                 ModelRoute(
                     model=model,

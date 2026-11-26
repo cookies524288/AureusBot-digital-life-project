@@ -208,3 +208,124 @@ def test_pasted_secret_is_rejected_without_echoing_it(tmp_path: Path) -> None:
     message = load_error(tmp_path, VALID_TOML.replace("AUREUS_KEY_CLOUD", pasted))
     assert "api_key_env" in message
     assert pasted not in message
+
+
+def with_periods(*periods: str) -> str:
+    """把若干 [[models.price_periods]] 表插进 big 模型，保持后面的 small 表不动。"""
+    blocks = "".join(f"\n[[models.price_periods]]\n{period}\n" for period in periods)
+    return VALID_TOML.replace("max_tokens = 2000", "max_tokens = 2000" + blocks)
+
+
+def period(start: str, end: str, price_in: float = 1.0) -> str:
+    return (
+        f"start = '{start}'\nend = '{end}'\n"
+        f"price_in = {price_in}\nprice_out = 2.0\nprice_cache_in = 0.5"
+    )
+
+
+def test_new_model_fields_have_defaults_for_old_configs(tmp_path: Path) -> None:
+    config = load_models_config(write_models_toml(tmp_path, VALID_TOML))
+    big = config.models[0]
+    assert big.enabled is True
+    assert big.price_periods == ()
+    assert big.thinking is False
+    assert big.web_search is False
+    assert big.extra_params == {}
+
+
+def test_price_periods_are_parsed_and_carried_to_routes(tmp_path: Path) -> None:
+    config = load_models_config(write_models_toml(tmp_path, with_periods(period("08:00", "12:00"))))
+    period_config = config.routes_for("replyer")[0].model.price_periods[0]
+    assert (period_config.start, period_config.end) == ("08:00", "12:00")
+    assert (
+        period_config.price_in,
+        period_config.price_out,
+        period_config.price_cache_in,
+    ) == (1.0, 2.0, 0.5)
+    assert (period_config.start_minutes, period_config.end_minutes) == (480, 720)
+
+
+@pytest.mark.parametrize(
+    ("periods", "expected"),
+    [
+        ((period("08:00", "12:00"), period("11:00", "13:00")), "不能重叠"),
+        ((period("10:00", "12:00"), period("08:00", "09:00")), "按开始时间排列"),
+        ((period("09:00", "09:00"),), "开始时间必须早于结束时间"),
+        ((period("10:00", "09:00"),), "开始时间必须早于结束时间"),
+        ((period("8:00", "09:00"),), "price_periods"),
+    ],
+)
+def test_bad_price_periods_are_rejected(
+    tmp_path: Path, periods: tuple[str, ...], expected: str
+) -> None:
+    message = load_error(tmp_path, with_periods(*periods))
+    assert expected in message
+
+
+def test_more_than_twelve_price_periods_are_rejected(tmp_path: Path) -> None:
+    periods = tuple(period(f"{hour:02d}:00", f"{hour + 1:02d}:00") for hour in range(13))
+    message = load_error(tmp_path, with_periods(*periods))
+    assert "分时价格最多 12 段" in message
+
+
+def test_extra_params_accept_nested_json_values(tmp_path: Path) -> None:
+    text = VALID_TOML.replace(
+        "max_tokens = 2000",
+        "max_tokens = 2000\n"
+        "extra_params = { top_p = 0.9, stop = ['a', 'b'], nested = { depth = 2 }, flag = true }",
+    )
+    config = load_models_config(write_models_toml(tmp_path, text))
+    assert config.models[0].extra_params == {
+        "top_p": 0.9,
+        "stop": ["a", "b"],
+        "nested": {"depth": 2},
+        "flag": True,
+    }
+
+
+@pytest.mark.parametrize("key", ["model", "messages", "tools", "stream"])
+def test_extra_params_cannot_override_core_request_keys(tmp_path: Path, key: str) -> None:
+    text = VALID_TOML.replace(
+        "max_tokens = 2000",
+        f"max_tokens = 2000\nextra_params = {{ {key} = 'x' }}",
+    )
+    message = load_error(tmp_path, text)
+    assert "核心请求字段" in message
+    assert key in message
+
+
+def test_extra_params_must_be_json_representable(tmp_path: Path) -> None:
+    text = VALID_TOML.replace(
+        "max_tokens = 2000",
+        "max_tokens = 2000\nextra_params = { when = 2026-01-01T00:00:00Z }",
+    )
+    assert "JSON 能表示的类型" in load_error(tmp_path, text)
+
+
+def test_extra_params_size_is_limited(tmp_path: Path) -> None:
+    text = VALID_TOML.replace(
+        "max_tokens = 2000",
+        f"max_tokens = 2000\nextra_params = {{ big = '{'x' * 9000}' }}",
+    )
+    assert "最多 8192 字节" in load_error(tmp_path, text)
+
+
+def test_disabled_models_skip_routes_and_reasoning_checks(tmp_path: Path) -> None:
+    text = (
+        VALID_TOML.replace(
+            "max_tokens = 2000", "max_tokens = 2000\nreasoning_levels = ['high']"
+        )
+        .replace("name = 'small'\nidentifier", "name = 'small'\nenabled = false\nidentifier")
+        .replace("max_tokens = 300", "max_tokens = 300\nreasoning_effort = 'high'")
+    )
+    config = load_models_config(write_models_toml(tmp_path, text))
+    assert config.models[1].enabled is False
+    assert [route.model.name for route in config.routes_for("replyer")] == ["big"]
+
+
+def test_disabling_every_bound_model_leaves_no_routes(tmp_path: Path) -> None:
+    text = VALID_TOML.replace(
+        "name = 'big'\nidentifier", "name = 'big'\nenabled = false\nidentifier"
+    ).replace("name = 'small'\nidentifier", "name = 'small'\nenabled = false\nidentifier")
+    config = load_models_config(write_models_toml(tmp_path, text))
+    assert config.routes_for("replyer") == ()
