@@ -168,7 +168,7 @@ class InboxAttention:
         return person is not None and (person.is_user or person.id in self._special)
 
     def priority_messages(self) -> list[InboxMessage]:
-        """先收绑定用户、特别关心和被点名的未读，重启后也会检查（D94、D137）。"""
+        """先收绑定用户、特别关心的未读，再收仅被点名的未读（D94、D137）。"""
         accounts: dict[str, set[str]] = defaultdict(set)
         users = self._people.user_accounts() if self._people is not None else self._user_accounts
         for platform, account_id in users:
@@ -177,51 +177,38 @@ class InboxAttention:
             for person_id in self._special:
                 for platform, account_id in self._people.accounts_of(person_id):
                     accounts[platform].add(account_id)
-        messages: dict[int, InboxMessage] = {}
+        identity: dict[int, InboxMessage] = {}
+        mentions: dict[int, InboxMessage] = {}
         for item in self.store.list_unread_conversations():
             if item.key == self.active_conversation or not self.allows(item.key):
                 continue
-            if senders := accounts.get(item.key.platform):
-                for row in self._priority_page(item.key, senders):
-                    messages[row.id] = row
-            for row in self._mention_page(item.key):
-                messages[row.id] = row
-        return sorted(messages.values(), key=lambda row: row.id)[:_PRIORITY_LIMIT]
+            senders = accounts.get(item.key.platform, set())
+            for row in self._attention_page(item.key, senders):
+                if row.perception.sender_id in senders:
+                    identity[row.id] = row
+                else:
+                    mentions[row.id] = row
+        ordered = [
+            *sorted(identity.values(), key=lambda row: row.id),
+            *sorted(mentions.values(), key=lambda row: row.id),
+        ]
+        return ordered[:_PRIORITY_LIMIT]
 
-    def _priority_page(self, key: ConversationKey, senders: set[str]) -> list[InboxMessage]:
-        return self._unread_page(
-            lambda after_id, limit: self.store.list_priority_unread(
-                key, senders, after_id=after_id, limit=limit
-            )
-        )
-
-    def _mention_page(self, key: ConversationKey) -> list[InboxMessage]:
-        return self._unread_page(
-            lambda after_id, limit: self.store.list_mentioned_unread(
-                key, after_id=after_id, limit=limit
-            )
-        )
-
-    def _unread_page(
-        self, fetch: Callable[[int | None, int], list[InboxMessage]]
-    ) -> list[InboxMessage]:
+    def _attention_page(self, key: ConversationKey, senders: set[str]) -> list[InboxMessage]:
+        """每页只查一次时间线，过滤掉已经处理过的未读；身份匹配的行排在最前。"""
         messages: list[InboxMessage] = []
-        after_id = None
+        after: tuple[int, int] | None = None
         while len(messages) < _PRIORITY_LIMIT:
             remaining = _PRIORITY_LIMIT - len(messages)
-            rows = fetch(after_id, remaining)
-            messages.extend(
-                row
-                for row in rows
-                if not self._timeline.query(
-                    TimelineQuery(
-                        event_type="message", metadata={"inbox_message_id": row.id}, limit=1
-                    )
-                )
-            )
+            rows = self.store.list_attention_unread(key, senders, after=after, limit=remaining)
+            if not rows:
+                break
+            known = self._timeline.inbox_message_ids(row.id for row in rows)
+            messages.extend(row for row in rows if row.id not in known)
             if len(rows) < remaining:
                 break
-            after_id = rows[-1].id
+            last = rows[-1]
+            after = (0 if last.perception.sender_id in senders else 1, last.id)
         return messages
 
     def browse(self, now: datetime, *, can_browse: bool) -> list[InboxConversation]:
@@ -287,7 +274,14 @@ class InboxAttention:
                 self._staying = True
             elif key == self.active_conversation:
                 self._staying = False
-        if target.route is None or self._people is None or plan.special_contact is None:
+        if (
+            target.route is None
+            or target.route.kind != "private"
+            or target.route.temporary_group_id is not None
+            or self._people is None
+            or plan.special_contact is None
+        ):
+            # 只有普通私聊能改特别关心，避免群成员借提示注入把自己升级（D137）。
             return
         person = self._people.find(target.channel, target.sender_id)
         if person is None or person.is_user or (person.id in self._special) == plan.special_contact:

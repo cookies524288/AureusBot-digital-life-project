@@ -79,6 +79,61 @@ def test_list_mentioned_unread_filters_verified_unread_and_paginates(tmp_path: P
     assert store.list_mentioned_unread(conversation) == [later]
 
 
+def test_list_attention_unread_combines_senders_mentions_and_paginates(tmp_path: Path) -> None:
+    """D137：绑定用户/特别关心排在仅提及之前，两档都按入箱序号分页。"""
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+
+    def save(
+        number: int,
+        *,
+        sender: str = "sender",
+        mentioned: bool = False,
+        group: str = "1",
+        verified: bool = True,
+    ):
+        entry = store.add(
+            replace(
+                _message(number, group, verified=verified),
+                sender_id=sender,
+                mentioned=mentioned,
+            )
+        )
+        assert entry is not None
+        return entry
+
+    mention_old = save(1, mentioned=True)
+    owner = save(2, sender="owner")
+    mention_later = save(3, mentioned=True)
+    unverified = save(4, mentioned=True, sender="stranger", verified=False)
+    owner_mentioned = save(5, sender="owner", mentioned=True)
+    ordinary = save(6)
+    other_group = save(7, sender="owner", mentioned=True, group="2")
+    conversation = owner.conversation
+
+    assert store.list_attention_unread(conversation, ["owner"]) == [
+        owner,
+        owner_mentioned,
+        mention_old,
+        mention_later,
+    ]
+    first = store.list_attention_unread(conversation, ["owner"], limit=2)
+    assert first == [owner, owner_mentioned]
+    assert store.list_attention_unread(
+        conversation, ["owner"], after=(0, owner_mentioned.id), limit=2
+    ) == [mention_old, mention_later]
+    assert store.list_attention_unread(
+        conversation, ["owner"], after=(0, owner.id), limit=2
+    ) == [owner_mentioned, mention_old]
+    assert store.list_attention_unread(conversation, []) == [
+        mention_old,
+        mention_later,
+        owner_mentioned,
+    ]
+    assert unverified.id not in {row.id for row in first}
+    assert ordinary.id not in {row.id for row in first}
+    assert other_group.id not in {row.id for row in first}
+
+
 def test_sparse_legacy_migration_preserves_unread_and_message_ids(tmp_path: Path) -> None:
     path = tmp_path / "inbox.db"
     store = InboxStore(path, _clock())

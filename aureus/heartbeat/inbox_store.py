@@ -44,6 +44,9 @@ ON inbox_messages (conversation_id, id);
 -- 会话列表按会话统计未读和最后一条；覆盖索引避免逐行回表，大收件箱从秒级降到百毫秒内（D129）。
 CREATE INDEX IF NOT EXISTS inbox_messages_conversation_visibility
 ON inbox_messages (conversation_id, id, direction, visibility);
+-- 优先未读按会话查被点名的来信；部分索引只收需要的行，大收件箱也快（D137）。
+CREATE INDEX IF NOT EXISTS inbox_messages_mentioned
+ON inbox_messages (conversation_id, id) WHERE direction = 'incoming' AND mentioned = 1;
 CREATE TABLE IF NOT EXISTS inbox_message_sequence (
     id INTEGER PRIMARY KEY CHECK (id = 1), high_water INTEGER NOT NULL
 );
@@ -739,6 +742,55 @@ class InboxStore:
                 f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} AND m.id > ? "
                 "AND m.trust != ? AND m.mentioned = 1 ORDER BY m.id LIMIT ?",
                 (*conversation.parameters(), after_id or 0, TrustLevel.UNVERIFIED, limit),
+            ).fetchall()
+        return [_message(row) for row in rows]
+
+    def list_attention_unread(
+        self,
+        conversation: ConversationKey,
+        sender_ids: Iterable[str],
+        *,
+        after: tuple[int, int] | None = None,
+        limit: int = 50,
+    ) -> list[InboxMessage]:
+        """一次查出绑定用户/特别关心和被点名的未读，身份优先、再按入箱顺序（D137）。
+
+        Args:
+            conversation: 完整会话路由。
+            sender_ids: 该平台上绑定用户和特别关心的账号。
+            after: 上一页最后一行的（身份档，入箱序号）；身份档 0 是发送人匹配，1 是仅提及。
+            limit: 本页最多几行。
+
+        Returns:
+            未读消息，先列发送人匹配，再列仅提及；两档内部都按入箱序号升序。
+        """
+        senders = json.dumps(tuple(sender_ids))
+        after_rank, after_id = after if after is not None else (None, None)
+        with closing(open_connection(self._path)) as database:
+            rows = database.execute(
+                f"""WITH candidates AS (
+                    SELECT m.*, c.platform, c.account_id, c.kind, c.recipient_id,
+                           c.temporary_group_id, c.name, NOT ({_UNREAD}) AS is_read,
+                           CASE WHEN m.sender_id IN (SELECT value FROM json_each(?))
+                                THEN 0 ELSE 1 END AS identity_rank
+                    FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
+                    WHERE {_KEY} AND {_UNREAD} AND m.trust != ?
+                      AND (m.sender_id IN (SELECT value FROM json_each(?)) OR m.mentioned = 1)
+                )
+                SELECT * FROM candidates
+                WHERE ? IS NULL OR identity_rank > ? OR (identity_rank = ? AND id > ?)
+                ORDER BY identity_rank, id LIMIT ?""",
+                (
+                    senders,
+                    *conversation.parameters(),
+                    TrustLevel.UNVERIFIED,
+                    senders,
+                    after_rank,
+                    after_rank,
+                    after_rank,
+                    after_id,
+                    limit,
+                ),
             ).fetchall()
         return [_message(row) for row in rows]
 

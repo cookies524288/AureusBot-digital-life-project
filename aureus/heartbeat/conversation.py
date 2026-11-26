@@ -1160,7 +1160,14 @@ class ConversationFlow:
             interests=job.with_interests,
             emoji=job.emoji_history is not None,
             inbox=job.inbox_attention,
-            special_contact=job.person_id is not None and not job.viewer_is_user,
+            # 只有非用户的普通私聊能改特别关心；群聊里不声明这个工具，避免提示注入升级（D137）。
+            special_contact=(
+                job.person_id is not None
+                and not job.viewer_is_user
+                and job.history_route is not None
+                and job.history_route.kind == "private"
+                and job.history_route.temporary_group_id is None
+            ),
             stay_in_conversation=any(
                 "inbox_message_id" in record.metadata for record in job.messages
             ),

@@ -1,6 +1,7 @@
 """D94：用假时钟和假器官检查 QQ 收件箱进入心跳的时机与回投。"""
 
 import asyncio
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from aureus.heartbeat.events import (
 from aureus.heartbeat.inbox_attention import InboxAttention, InboxSelection, select_conversations
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 from aureus.heartbeat.perception import MessageRoute
+from aureus.heartbeat.planning import Plan
 from aureus.identity import Identity
 from aureus.organs import ModelPreference, OrganRequest, OrganResponse
 from aureus.people import PeopleDirectory
@@ -1036,16 +1038,18 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
             message_id: str,
             *,
             private: bool = False,
+            contact_private: bool = False,
             attachments: tuple[MediaReference, ...] = (),
         ) -> Perception:
-            route = MessageRoute(
-                "bot", "private" if private else "group", sender if private else "group", message_id
-            )
+            kind = "private" if (private or contact_private) else "group"
+            route = MessageRoute("bot", kind, sender if kind == "private" else "group", message_id)
             perception = Perception(
                 "qq",
                 sender,
                 f"消息 {message_id}",
-                VisibilityScope.USER_ONLY if private else VisibilityScope.GROUP,
+                VisibilityScope.USER_ONLY
+                if private
+                else (VisibilityScope.PRIVATE if contact_private else VisibilityScope.GROUP),
                 TrustLevel.VERIFIED_USER if private else TrustLevel.VERIFIED_CONTACT,
                 route=route,
                 attachments=attachments,
@@ -1064,7 +1068,9 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         organs.plan = (
             '{"reply":true,"intent":"回应","special_contact":true,"stay_in_conversation":false}'
         )
-        group = receive("visitor", "group-only", attachments=(picture,))
+        contact = receive(
+            "visitor", "private-contact", contact_private=True, attachments=(picture,)
+        )
         heart.beat()
         clock.advance(timedelta(minutes=4))
         heart.beat()
@@ -1077,11 +1083,11 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         heart.beat()
         await heart.wait_for_thought()
         heart.beat()
-        assert sent[-1].route == group.route
-        assert reads == [(group, picture)]
+        assert sent[-1].route == contact.route
+        assert reads == [(contact, picture)]
         assert "识别出的内容" in organs.requests[-2].prompt
         assert "private-only" not in organs.requests[-2].prompt
-        assert store.add(group) is None
+        assert store.add(contact) is None
         changes = timeline.query(TimelineQuery(event_type="special_contact_changed"))
         assert len(changes) == 1
         assert changes[0].metadata["add"] is True
@@ -1125,4 +1131,453 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
     finally:
         people.close()
         ledger.close()
+        timeline.close()
+
+
+@pytest.mark.asyncio
+async def test_idle_residence_makes_room_for_a_mention_in_another_group(tmp_path: Path) -> None:
+    """D137/D138：驻留会话空闲时，别群的提及不必等它自己离开。"""
+    clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    organs = Organs()
+    organs.plan = '{"reply":true,"intent":"回应","stay_in_conversation":true}'
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=organs,
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+                "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
+        config=HeartbeatConfig(inbox_debounce_enabled=True, split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    sent: list[OutgoingMessage] = []
+    heart.attach_channel("qq", sent.append)
+    heart.wake_up()
+
+    def receive(
+        text: str, *, sender: str = "visitor", group: str = "one", mentioned: bool = False
+    ) -> None:
+        message = store.add(
+            Perception(
+                "qq",
+                sender,
+                text,
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_USER if sender == "owner" else TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", group, text),
+                mentioned=mentioned,
+            )
+        )
+        assert message is not None
+        heart.on_inbox_message(message)
+
+    try:
+        receive("暖场", sender="owner", group="one")
+        heart.beat()
+        clock.advance(timedelta(seconds=4))
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        inbox = heart._platform_inbox
+        assert inbox is not None
+        assert sent[-1].route is not None and sent[-1].route.recipient_id == "one"
+        assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "one")
+
+        receive("在吗", group="two", mentioned=True)
+        heart.beat()
+        clock.advance(timedelta(seconds=4))
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        assert sent[-1].route is not None and sent[-1].route.recipient_id == "two"
+        assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "two")
+    finally:
+        await heart.shut_down()
+        timeline.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_segments_survive_a_mention_from_another_group(tmp_path: Path) -> None:
+    """D137：旧驻留还有分段在打字时，提及不能把没发完的回复截断。"""
+    clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+
+    class SegmentedOrgans(Organs):
+        async def call(self, request: OrganRequest) -> OrganResponse:
+            if request.context.get("task") == "reply":
+                self.requests.append(request)
+                return OrganResponse(request.organ_id, "第一段<n>第二段")
+            return await super().call(request)
+
+    organs = SegmentedOrgans()
+    organs.plan = '{"reply":true,"intent":"回应","stay_in_conversation":true}'
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=organs,
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+                "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
+        config=HeartbeatConfig(
+            inbox_debounce_enabled=False,
+            split_reply_enabled=True,
+            typing_delay_enabled=True,
+            typing_jitter_min_seconds=10,
+            typing_jitter_max_seconds=10,
+        ),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    sent: list[OutgoingMessage] = []
+    heart.attach_channel("qq", sent.append)
+    heart.wake_up()
+
+    def receive(
+        text: str, *, sender: str = "visitor", group: str = "one", mentioned: bool = False
+    ) -> None:
+        message = store.add(
+            Perception(
+                "qq",
+                sender,
+                text,
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_USER if sender == "owner" else TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", group, text),
+                mentioned=mentioned,
+            )
+        )
+        assert message is not None
+        heart.on_inbox_message(message)
+
+    try:
+        receive("暖场", sender="owner", group="one")
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        assert [item.content for item in sent] == ["第一段"]
+        inbox = heart._platform_inbox
+        assert inbox is not None
+        assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "one")
+
+        receive("在吗", group="two", mentioned=True)
+        heart.beat()
+        await asyncio.sleep(0)
+        assert [item.content for item in sent] == ["第一段"]
+        assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "one")
+
+        clock.advance(timedelta(seconds=30))
+        heart.beat()
+        assert [item.content for item in sent] == ["第一段", "第二段"]
+        await heart.wait_for_thought()
+        heart.beat()
+        assert sent[-1].route is not None and sent[-1].route.recipient_id == "two"
+    finally:
+        await heart.shut_down()
+        timeline.close()
+
+
+def test_priority_messages_put_identity_before_old_mentions(tmp_path: Path) -> None:
+    """D137：一条用户来信不能被 20 条旧提及挤出优先名单。"""
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    store = InboxStore(database, clock)
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    try:
+        attention = InboxAttention(
+            store, timeline, None, [("qq", "owner")], enabled=True, read_limit=35
+        )
+
+        def save(number: int, sender: str, *, mentioned: bool = False) -> InboxMessage:
+            row = store.add(
+                Perception(
+                    "qq",
+                    sender,
+                    str(number),
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("bot", "group", "group", str(number)),
+                    mentioned=mentioned,
+                )
+            )
+            assert row is not None
+            return row
+
+        mentions = [save(number, "visitor", mentioned=True) for number in range(20)]
+        owner = save(99, "owner")
+        result = attention.priority_messages()
+        assert result[0].id == owner.id
+        assert len(result) == 20
+        assert {row.id for row in result[1:]} == {row.id for row in mentions[:19]}
+    finally:
+        timeline.close()
+
+
+def test_new_attention_recovers_unread_mentions_but_skips_disallowed_routes(
+    tmp_path: Path,
+) -> None:
+    """D137：重启后新实例补收未读提及；已移出范围的会话和已处理的提及不再返回。"""
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    store = InboxStore(database, clock)
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    try:
+
+        def save(group: str, content: str) -> InboxMessage:
+            row = store.add(
+                Perception(
+                    "qq",
+                    "visitor",
+                    content,
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("bot", "group", group, content),
+                    mentioned=True,
+                )
+            )
+            assert row is not None
+            return row
+
+        allowed = save("allowed", "在吗")
+        save("former", "旧群在吗")
+        attention = InboxAttention(store, timeline, None, [], enabled=True, read_limit=35)
+        attention.allows = lambda key: key.recipient_id == "allowed"
+        assert [row.id for row in attention.priority_messages()] == [allowed.id]
+
+        timeline.append(
+            "message",
+            "已处理",
+            ActorType.PERSON,
+            metadata={"inbox_message_id": allowed.id},
+        )
+        assert attention.priority_messages() == []
+    finally:
+        timeline.close()
+
+
+def test_group_member_cannot_become_a_special_contact(tmp_path: Path) -> None:
+    """D137：特别关心只在普通私聊里生效，群聊里的建议一律忽略。"""
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    people = PeopleDirectory(database, clock)
+    people.open()
+    try:
+        person = people.meet("qq", "visitor")
+        attention = InboxAttention(
+            InboxStore(database, clock), timeline, people, [], enabled=True, read_limit=35
+        )
+        source = timeline.append("message", "在吗", ActorType.PERSON)
+        plan = Plan(True, "回应", None, "", special_contact=True)
+        group = Perception(
+            "qq",
+            "visitor",
+            "在吗",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "group", "one"),
+        )
+        private = Perception(
+            "qq",
+            "visitor",
+            "在吗",
+            VisibilityScope.PRIVATE,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "private", "visitor", "two"),
+        )
+        attention.apply_plan(plan, group, source)
+        assert timeline.query(TimelineQuery(event_type="special_contact_changed")) == []
+        assert person.id not in attention._special
+
+        attention.apply_plan(plan, private, source)
+        [change] = timeline.query(TimelineQuery(event_type="special_contact_changed"))
+        assert change.metadata["person_id"] == person.id
+        assert change.metadata["add"] is True
+    finally:
+        people.close()
+        timeline.close()
+
+
+def test_take_in_perceptions_queues_mentions_before_contacts(tmp_path: Path) -> None:
+    """D137：提及排在普通消息之前，但仍排在用户和特别关心之后。"""
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=Organs(),
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+                "user": {"name": "维护者"},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
+        config=HeartbeatConfig(split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    try:
+        ordinary = Perception(
+            "qq",
+            "visitor",
+            "普通消息",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "one", "ordinary"),
+        )
+        mention = Perception(
+            "qq",
+            "visitor",
+            "被点名",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "two", "mention"),
+            mentioned=True,
+        )
+        ordinary_row = store.add(ordinary)
+        mention_row = store.add(mention)
+        assert ordinary_row is not None and mention_row is not None
+        heart._pending.extend([(ordinary, ordinary_row), (mention, mention_row)])
+        heart._take_in_perceptions()
+        [first] = heart._unanswered.peek_batch()
+        assert first.perception.content == "被点名"
+    finally:
+        timeline.close()
+
+
+def test_on_inbox_message_survives_person_lookup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """认人查库失败只记日志，不能把 OneBot 读取任务带崩。"""
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    people = PeopleDirectory(database, clock)
+    people.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=Organs(),
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+                "user": {"name": "维护者"},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
+        config=HeartbeatConfig(split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        people=people,
+        inbox_store=store,
+    )
+    heart.attach_channel("qq", lambda _message: None)
+    heart.wake_up()
+    try:
+        message = store.add(
+            Perception(
+                "qq",
+                "visitor",
+                "在吗",
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", "group", "one"),
+            )
+        )
+        assert message is not None
+
+        def broken(*_args: object, **_kwargs: object) -> None:
+            raise sqlite3.OperationalError("模拟读库失败")
+
+        monkeypatch.setattr(people, "find", broken)
+        heart.on_inbox_message(message)
+        assert not heart.is_thinking
+    finally:
+        timeline.close()
+        people.close()
+
+
+def test_on_inbox_message_does_not_preempt_for_a_mention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D137：提及只叫醒；只有绑定用户和特别关心的来信才调用抢占。"""
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=Organs(),
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+                "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
+        config=HeartbeatConfig(split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    heart.attach_channel("qq", lambda _message: None)
+    heart.wake_up()
+    preempted: list[ConversationKey] = []
+    monkeypatch.setattr(heart, "_preempt_inbox", lambda _inbox, key: preempted.append(key))
+    try:
+
+        def save(sender: str, group: str, *, mentioned: bool = False) -> InboxMessage:
+            row = store.add(
+                Perception(
+                    "qq",
+                    sender,
+                    "在吗",
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_CONTACT,
+                    route=MessageRoute("bot", "group", group, sender),
+                    mentioned=mentioned,
+                )
+            )
+            assert row is not None
+            return row
+
+        heart.on_inbox_message(save("visitor", "one", mentioned=True))
+        assert preempted == []
+        heart.on_inbox_message(save("owner", "two"))
+        assert [key.recipient_id for key in preempted] == ["two"]
+    finally:
         timeline.close()

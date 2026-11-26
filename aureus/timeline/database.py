@@ -9,7 +9,7 @@ import contextlib
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -124,6 +124,12 @@ class TimelineDatabase:
         """)
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_timeline_event_type ON timeline(event_type)
+        """)
+        # 收件箱去重按 metadata 里的入箱序号查；表达式索引让每条消息不再全表扫（D129、D137）。
+        self._conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_timeline_message_inbox_id
+            ON timeline(json_extract(metadata, '$.inbox_message_id'))
+            WHERE event_type = 'message'
         """)
 
         # 禁止 UPDATE：尝试时抛出错误
@@ -348,6 +354,19 @@ class TimelineDatabase:
             visibility=VisibilityScope(row["visibility"]),
             metadata=_decode_metadata(row["metadata"]),
         )
+
+    def inbox_message_ids(self, ids: Iterable[int]) -> set[int]:
+        """批量查出这些收件箱序号里已经记进时间线的那些，供收件箱分页去重。"""
+        if self._conn is None:
+            raise RuntimeError("Database is not open")
+        encoded = json.dumps(sorted(set(ids)))
+        rows = self._conn.execute(
+            "SELECT DISTINCT CAST(json_extract(metadata, '$.inbox_message_id') AS INTEGER) "
+            "FROM timeline WHERE event_type = 'message' "
+            "AND json_extract(metadata, '$.inbox_message_id') IN (SELECT value FROM json_each(?))",
+            (encoded,),
+        ).fetchall()
+        return {int(row[0]) for row in rows}
 
     def get_latest_id(self) -> int:
         """获取当前最大的记录 ID。

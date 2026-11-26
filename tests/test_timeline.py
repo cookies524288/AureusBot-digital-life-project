@@ -263,6 +263,18 @@ def test_query_visible_to_user(database: TimelineDatabase):
     assert VisibilityScope.PRIVATE not in visibilities
 
 
+def test_inbox_message_ids_batches_only_message_records(database: TimelineDatabase) -> None:
+    """收件箱去重一次查一批入箱序号，只认 message 记录里的整数标记。"""
+    database.append("message", "甲", ActorType.PERSON, metadata={"inbox_message_id": 5})
+    database.append("message", "乙", ActorType.PERSON, metadata={"inbox_message_id": 7})
+    database.append("state", "不是消息", ActorType.SYSTEM, metadata={"inbox_message_id": 9})
+    database.append("message", "字符串标记", ActorType.PERSON, metadata={"inbox_message_id": "5"})
+    database.append("message", "没有标记", ActorType.PERSON)
+
+    assert database.inbox_message_ids([5, 6, 7, 9, 11]) == {5, 7}
+    assert database.inbox_message_ids([]) == set()
+
+
 def test_get_latest_id(database: TimelineDatabase):
     """测试获取最大 ID。"""
     assert database.get_latest_id() == 0
