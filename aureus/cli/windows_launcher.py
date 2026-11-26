@@ -4,10 +4,14 @@ import argparse
 import asyncio
 import base64
 import ctypes
+import json
 import os
+import re
+import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Thread
 from time import monotonic, sleep
@@ -30,6 +34,15 @@ RESTART_EXIT_CODE = 75
 _STARTUP_WAIT_SECONDS = 180.0
 _STARTUP_POLL_INTERVAL = 0.1
 _HOME_POINTER = "aureus-home.txt"
+_LOCK_PID_FILE = "aureus.lock.pid"
+_LAUNCHER_COMMAND = re.compile(r"(?<!\S)-m\s+aureus\.cli\.windows_launcher(?=\s|$)")
+_PROCESS_QUERY_TIMEOUT_SECONDS = 5
+_TASKKILL_TIMEOUT_SECONDS = 10
+_TASKKILL_SETTLE_SECONDS = 1.0
+# MessageBox 的按钮和图标：是/否 + 问号；返回 6 表示点了“是”。
+_MB_YESNO = 0x4
+_MB_ICONQUESTION = 0x20
+_IDYES = 6
 
 
 def _launcher_home() -> Path:
@@ -63,6 +76,92 @@ def _open_running_web(paths: AureusPaths, *, tray: bool) -> bool:
         print(f"AUREUS_WEB_ATTACH={owner} {url}", flush=True)
     else:
         os.startfile(url)
+    return True
+
+
+def _confirm_takeover(pid: int) -> bool:
+    """让维护者确认是否结束挂住的旧启动器（D144）。"""
+    message = (
+        f"另一个 Aureus 实例（进程 {pid}）正在运行，但网页已经无响应。\n"
+        "它可能是上次重启后残留的进程。要结束这个进程树并继续启动吗？\n"
+        "未保存的网页操作会丢失。"
+    )
+    answer = ctypes.windll.user32.MessageBoxW(
+        None, message, "Aureus 启动", _MB_YESNO | _MB_ICONQUESTION
+    )
+    return answer == _IDYES
+
+
+def _launcher_process(pid: int) -> tuple[str, datetime] | None:
+    """读取 PID 对应的命令行和创建时刻；进程不存在或查询失败时返回 None。"""
+    query = (
+        "$p = Get-CimInstance Win32_Process -Filter 'ProcessId = "
+        + str(pid)
+        + "' -ErrorAction Stop; "
+        + "ConvertTo-Json -InputObject @($p | Select-Object CommandLine, "
+        + "@{Name='Started'; Expression={$_.CreationDate.ToUniversalTime().ToString('o')}}) "
+        + "-Compress"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", query],
+            capture_output=True,
+            text=True,
+            timeout=_PROCESS_QUERY_TIMEOUT_SECONDS,
+            check=True,
+        )
+        records = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if isinstance(records, dict):
+        records = [records]
+    if not isinstance(records, list) or len(records) != 1:
+        return None
+    record = records[0]
+    if not isinstance(record, dict):
+        return None
+    command_line = record.get("CommandLine")
+    started = record.get("Started")
+    if not isinstance(command_line, str) or not isinstance(started, str):
+        return None
+    try:
+        created = datetime.fromisoformat(started)
+    except ValueError:
+        return None
+    return (command_line, created) if created.tzinfo is not None else None
+
+
+def _takeover_stale_instance(paths: AureusPaths) -> bool:
+    """核对并结束挂住的旧启动器；没有核对通过或维护者取消时不碰任何进程（D144）。"""
+    pid_file = paths.home / _LOCK_PID_FILE
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+        locked_at = datetime.fromtimestamp(pid_file.stat().st_mtime, UTC)
+    except (OSError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    process = _launcher_process(pid)
+    if process is None:
+        return False
+    command_line, created = process
+    if not _LAUNCHER_COMMAND.search(command_line) or created >= locked_at:
+        return False
+    if not _confirm_takeover(pid):
+        return False
+    try:
+        completed = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            timeout=_TASKKILL_TIMEOUT_SECONDS,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if completed.returncode != 0:
+        return False
+    # taskkill 只表示结束请求已被接受；稍等再重试，让锁随进程退出释放（D144）。
+    sleep(_TASKKILL_SETTLE_SECONDS)
     return True
 
 
@@ -161,9 +260,14 @@ def _launch(
         except SingleInstanceLockError:
             # 另一个实例正在运行：可能还没发布网页地址，也可能正在重启。
             # 等它发布后附着；锁释放了就由下一轮正常启动，不另开第二个内核。
-            if monotonic() >= deadline:
+            if monotonic() < deadline:
+                sleep(_STARTUP_POLL_INTERVAL)
+                continue
+            if not _takeover_stale_instance(paths):
                 raise
-            sleep(_STARTUP_POLL_INTERVAL)
+            # 旧进程可能还要一点时间才退出并释放锁；重新给一轮等待，
+            # 避免同一次启动里反复弹出确认框（D144）。
+            deadline = monotonic() + _STARTUP_WAIT_SECONDS
 
 
 def main() -> int:
