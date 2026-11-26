@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from sqlite3 import Error as SQLiteError
 from types import TracebackType
@@ -22,6 +22,7 @@ from aureus.heartbeat import (
     Perception,
     TrustLevel,
     VisibilityScope,
+    mentions_bot,
 )
 from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxStore
 
@@ -80,6 +81,7 @@ class QQChannel:
         read_emoji: Callable[[str], bytes | None] | None = None,
         record_emoji_use: Callable[[str], None] | None = None,
         allows_emoji_delivery: Callable[[], bool] | None = None,
+        bot_names: Callable[[], Sequence[str]] = lambda: (),
     ) -> None:
         self._test_group = test_group
         self._config = config
@@ -91,6 +93,7 @@ class QQChannel:
         self._read_emoji = read_emoji
         self._record_emoji_use = record_emoji_use
         self._allows_emoji_delivery = allows_emoji_delivery
+        self._bot_names = bot_names
         self._transport = OneBotTransport(
             config, token.get_secret_value() if token else None, self._receive
         )
@@ -142,6 +145,9 @@ class QQChannel:
         if perception is None or perception.route is None:
             return
         route = perception.route
+        # D137：at 段之外，正文提到当前身份的全名或昵称也算点名；保存前写进同一个标记。
+        if not perception.mentioned and mentions_bot(perception, self._bot_names()):
+            perception = replace(perception, mentioned=True)
         # 临时来源可能没有有效群号；解码为普通回址前的原始标志也要核对。
         if (
             self._config.allowed_group_id is not None

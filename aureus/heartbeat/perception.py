@@ -5,7 +5,8 @@
 通道不用直接 import 时间线。
 """
 
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -23,6 +24,7 @@ __all__ = [
     "Perception",
     "TrustLevel",
     "VisibilityScope",
+    "mentions_bot",
 ]
 
 
@@ -96,6 +98,35 @@ class Perception:
             raise ValueError("感知必须写明来自哪个通道")
         if not self.content.strip():
             raise ValueError("感知的内容不能是空的")
+
+
+def mentions_bot(perception: Perception, names: Sequence[str]) -> bool:
+    """正文是否点名了它：at 段已标记，或包含身份全名/昵称（D137）。
+
+    英文名按词边界匹配，避免 Aureus 命中 AureusBot；中文等非 ASCII 名字按子串匹配。
+    名字两侧空白和空名字跳过；大小写不敏感。
+
+    Args:
+        perception: 通道解码出的感知。
+        names: 当前身份的全名和昵称。
+
+    Returns:
+        提到它时为 True。
+    """
+    if perception.mentioned:
+        return True
+    content = perception.content.casefold()
+    for raw_name in names:
+        name = raw_name.strip()
+        if not name:
+            continue
+        folded = name.casefold()
+        if name.isascii():
+            if re.search(rf"(?<![a-z0-9]){re.escape(folded)}(?![a-z0-9])", content):
+                return True
+        elif folded in content:
+            return True
+    return False
 
 
 class MessageKind(StrEnum):

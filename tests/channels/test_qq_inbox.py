@@ -80,6 +80,61 @@ async def test_qq_persists_allowed_conversations_before_notifying(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_qq_marks_name_mentions_before_saving(tmp_path: Path) -> None:
+    clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
+    path = tmp_path / "aureus.db"
+    store = InboxStore(path, clock)
+    notified: asyncio.Queue[InboxMessage] = asyncio.Queue()
+    fake = FakeOneBot()
+    async with asyncio.timeout(5), serve(fake.handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        config = QQConfig(
+            enabled=True,
+            account_id=str(ACCOUNT),
+            endpoint=f"ws://127.0.0.1:{port}/onebot",
+        )
+        async with QQChannel(
+            config,
+            None,
+            Receiver(),
+            lambda account: account == "2100",
+            inbox_store=store,
+            on_inbox_message=notified.put_nowait,
+            bot_names=lambda: ("Aureus Test", "小A"),
+        ):
+            remote = await fake.connections.get()
+            await fake.send(remote, **event(41, 2200, "Aureus Test 在吗", group=GROUP))
+            await fake.send(remote, **event(42, 2200, "小A 你好", group=GROUP))
+            await fake.send(remote, **event(43, 2200, "普通消息", group=GROUP))
+            await fake.send(
+                remote,
+                **event(
+                    44,
+                    2200,
+                    "",
+                    group=GROUP,
+                    message=[
+                        {"type": "at", "data": {"qq": str(ACCOUNT)}},
+                        {"type": "text", "data": {"text": "点名"}},
+                    ],
+                ),
+            )
+            rows = [await notified.get() for _ in range(4)]
+    assert [row.perception.mentioned for row in rows] == [True, True, False, True]
+    reopened = InboxStore(path, clock)
+    saved = {
+        row.perception.content: row.perception.mentioned
+        for row in reopened.list_messages(rows[0].conversation)
+    }
+    assert saved == {
+        "@9000 点名": True,
+        "普通消息": False,
+        "小A 你好": True,
+        "Aureus Test 在吗": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_qq_history_only_accepts_platform_deliveries(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     path = tmp_path / "aureus.db"

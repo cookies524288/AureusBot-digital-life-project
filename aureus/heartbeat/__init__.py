@@ -48,6 +48,7 @@ from .perception import (
     Perception,
     TrustLevel,
     VisibilityScope,
+    mentions_bot,
 )
 from .planning import Plan, ReplyLength, parse_plan
 from .prompt_preview import build_prompt_scenes, catalog_template_keys, registered_templates
@@ -101,6 +102,7 @@ __all__ = [
     "catalog_template_keys",
     "choose_strategy",
     "judge_allowed",
+    "mentions_bot",
     "parse_judgment",
     "parse_plan",
     "recent_dialogue",

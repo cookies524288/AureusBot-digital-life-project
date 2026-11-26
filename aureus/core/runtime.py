@@ -442,6 +442,7 @@ def open_core(
                 read_emoji=emoji_store.read_sendable,
                 record_emoji_use=emoji_store.record_use,
                 allows_emoji_delivery=heartbeat.allows_emoji_delivery,
+                bot_names=heartbeat.bot_names,
             )
             heartbeat.set_inbox_route_filter(qq.allows_inbox_conversation)
             inbox_images = InboxImageIndex(

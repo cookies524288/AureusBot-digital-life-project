@@ -877,6 +877,10 @@ class Heartbeat:
         """此刻生效的身份；用户在网页上改了设定后，这里就是改过之后的（D63）。"""
         return self._identity
 
+    def bot_names(self) -> tuple[str, ...]:
+        """当前身份的全名和昵称；通道据此判断正文是否点名（D137）。"""
+        return (self._identity.facts.name, *self._identity.facts.alias_names)
+
     @property
     def bot_pronoun(self) -> str:
         """显示当前身份的称谓。"""
@@ -2238,7 +2242,7 @@ class Heartbeat:
                 conversation_key=learner.scope,
                 kinds=(learner.kind,),
                 minimum=language_runner.MIN_LEARNING_MESSAGES,
-                bot_names=(self._identity.facts.name, *self._identity.facts.alias_names),
+                bot_names=self.bot_names(),
                 expression_quality=(
                     language_runner.ExpressionQuality(
                         self._language_config.expression_quality_organ, self._clock
