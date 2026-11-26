@@ -238,7 +238,12 @@ def register_config_routes(
                 try:
                     result = await run_model_test(
                         partial(
-                            probe_model, model, provider, model_runtime.key_resolver, capability
+                            probe_model,
+                            model,
+                            provider,
+                            model_runtime.key_resolver,
+                            capability,
+                            clock=model_runtime.clock,
                         )
                     )
                 except OrganCallError as error:

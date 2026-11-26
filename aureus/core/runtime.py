@@ -118,7 +118,12 @@ def open_people(
 
 
 def _build_organ_bus(
-    paths: AureusPaths, heartbeat: HeartbeatConfig, resolver: KeyResolver, *, fake_organs: bool
+    paths: AureusPaths,
+    heartbeat: HeartbeatConfig,
+    resolver: KeyResolver,
+    *,
+    fake_organs: bool,
+    clock: Clock,
 ) -> ModelRuntime:
     """注册器官。假器官模式不读 models.toml、不调用任何模型，不花钱。"""
     bus = OrganBus()
@@ -129,6 +134,7 @@ def _build_organ_bus(
         fake_reply_organ=heartbeat.reply_organ,
         fake_plan_organ=heartbeat.plan_organ,
         prompts=PromptStore(paths.home / "prompts.toml", registered_templates()),
+        clock=clock,
     )
     if fake_organs:
         if heartbeat.plan_organ != heartbeat.reply_organ:
@@ -237,7 +243,9 @@ def open_core(
                 "配置里的 [heartbeat] advance_biomodel 已不起作用（旧的生物模型在 D69 删除），"
                 "请从配置里删掉它"
             )
-        models = _build_organ_bus(paths, heartbeat_config, resolver, fake_organs=fake_organs)
+        models = _build_organ_bus(
+            paths, heartbeat_config, resolver, fake_organs=fake_organs, clock=the_clock
+        )
         bus = models.bus
         # 网关和心跳共用同一个权限检查器，两边看到的急停状态一致（D54）。
         emergency_stop = EmergencyStop(paths.halt_file, the_clock)

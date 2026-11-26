@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -11,6 +12,7 @@ import httpx
 import pytest
 from loguru import logger
 
+from aureus.common import ManualClock
 from aureus.common.config import ConfigError
 from aureus.organs import llm_adapter
 from aureus.organs.api_keys import KeyResolver
@@ -162,6 +164,7 @@ def make_config(
     thinking: bool = False,
     web_search: bool = False,
     extra_params: dict[str, Any] | None = None,
+    price_periods: list[dict[str, Any]] | None = None,
 ) -> ModelsConfig:
     organ: dict[str, Any] = {"models": list(organ_models), "max_tokens": 300}
     if reasoning_effort is not None:
@@ -192,6 +195,7 @@ def make_config(
                     "thinking": thinking,
                     "web_search": web_search,
                     "extra_params": extra_params or {},
+                    "price_periods": price_periods or [],
                 },
                 {
                     "name": "small",
@@ -1361,6 +1365,29 @@ async def test_explicit_fields_win_over_extra_params_and_warn_once(keys: KeyReso
     assert call["top_p"] == 0.8
     assert sum("temperature" in message for message in messages) == 1
     assert sum("max_tokens" in message for message in messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_organ_uses_the_clock_to_choose_period_prices(keys: KeyResolver) -> None:
+    clock = ManualClock(datetime(2026, 11, 26, 12, 0, tzinfo=UTC))
+    config = make_config(
+        price_periods=[
+            {
+                "start": "00:00",
+                "end": "24:00",
+                "price_in": 10.0,
+                "price_out": 20.0,
+                "price_cache_in": 5.0,
+            }
+        ]
+    )
+    completion = FakeCompletion(make_response("嗨", prompt=1000, completion=100))
+    organ = LLMOrgan.from_config(
+        "replyer", config, keys, completion, fixed_counter, SleepRecorder(), clock=clock
+    )
+    response = await organ.process(ask())
+
+    assert response.metadata["cost"] == pytest.approx(0.012)
 
 
 @pytest.mark.asyncio

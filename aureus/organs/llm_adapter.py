@@ -32,6 +32,7 @@ from typing import Any, Self
 import httpx
 from loguru import logger
 
+from aureus.common.clock import Clock, SystemClock
 from aureus.common.config import ConfigError
 from aureus.common.prompt_text import PromptTemplate, render_prompt
 from aureus.organs.api_keys import KeyResolver
@@ -541,7 +542,11 @@ def _probe_usage(inputs: dict[str, Any], completion_tokens: int) -> TokenUsage:
 
 
 def _probe_attempt(
-    model: ModelConfig, provider: ProviderConfig, usage: TokenUsage, failure: str | None
+    model: ModelConfig,
+    provider: ProviderConfig,
+    usage: TokenUsage,
+    failure: str | None,
+    clock: Clock,
 ) -> CallAttempt:
     return CallAttempt(
         model=model.name,
@@ -554,7 +559,7 @@ def _probe_attempt(
         failure_reason=failure,
         cost=0.0
         if usage.known and not (usage.prompt_tokens or usage.completion_tokens)
-        else compute_cost(model, usage),
+        else compute_cost(model, usage, clock.now()),
     )
 
 
@@ -904,6 +909,7 @@ async def probe_model(
     capability: str | None = None,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
+    clock: Clock | None = None,
 ) -> OrganResponse:
     """测量首段正文（或推理内容）或向量的返回时间，报告一次调用的用量。
 
@@ -913,14 +919,17 @@ async def probe_model(
         resolver: 密钥解析器。
         capability: 要测的能力；不给就按模型类型推断。
         transport: 测试用的假网络；正式运行传 None。
+        clock: 计时和分时计费用的时钟；不给就用真实时钟。
     """
     organ_id = "model_test"
+    the_clock = clock or SystemClock()
     if model.kind == "image_embedding":
         organ = EmbeddingOrgan(
             organ_id,
             [ModelRoute(model, provider, None, None)],
             resolver,
             transport=transport,
+            clock=the_clock,
         )
         image = base64.b64decode(_PROBE_IMAGE.split(",", 1)[1])
         measured: list[float] = []
@@ -934,7 +943,9 @@ async def probe_model(
     route = ModelRoute(model, provider, None, None)
     if model.kind == "embedding" and local_expression_endpoint(route) is not None:
         # 回环免费的嵌入直连，不导入也不经过 litellm（D128）。
-        organ = EmbeddingOrgan(organ_id, [route], resolver, transport=transport)
+        organ = EmbeddingOrgan(
+            organ_id, [route], resolver, transport=transport, clock=the_clock
+        )
         measured = []
         response = await organ.process(
             OrganRequest(organ_id, "", embedding_inputs=(_MODEL_TEST_INPUT,)),
@@ -1098,6 +1109,7 @@ async def probe_model(
                         provider,
                         _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS),
                         "超时",
+                        the_clock,
                     )
                 )
                 usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
@@ -1131,6 +1143,7 @@ async def probe_model(
                             provider,
                             usage,
                             REASONING_ONLY_REASON if reasoning else EMPTY_REPLY_REASON,
+                            the_clock,
                         )
                     )
                     usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
@@ -1192,7 +1205,7 @@ async def probe_model(
         and reply.strip().rstrip(".!").casefold() != "red"
     ):
         failure = failure or "未识别出测试图片的红色。"
-    attempts.append(_probe_attempt(model, provider, usage, failure))
+    attempts.append(_probe_attempt(model, provider, usage, failure, the_clock))
     if failure is not None:
         raise ModelProbeError(failure, attempts, reply)
     assert latency is not None
@@ -1222,11 +1235,13 @@ class EmbeddingOrgan:
         resolver: KeyResolver,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.organ_id = organ_id
         self._routes = routes
         self._resolver = resolver
         self._transport = transport
+        self._clock = clock or SystemClock()
 
     @property
     def local_expression_space(self) -> str | None:
@@ -1328,7 +1343,7 @@ class EmbeddingOrgan:
                     failure_reason=failure,
                     cost=0.0
                     if local_space or usage == TokenUsage()
-                    else compute_cost(route.model, usage),
+                    else compute_cost(route.model, usage, self._clock.now()),
                 )
             )
             if failure is None:
@@ -1563,6 +1578,7 @@ class LLMOrgan:
         *,
         prompts: PromptStore | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        clock: Clock | None = None,
     ) -> None:
         llm_routes = conversational_routes(organ_id, routes)
         if routes and not llm_routes:
@@ -1589,6 +1605,8 @@ class LLMOrgan:
         self._prompts = prompts
         # 测试用的假网络；本地回环对话直连时传给共享客户端（D131）。
         self._transport = transport
+        # 分时计费按请求时刻取价格（D134），时间一律从时钟对象取（D26）。
+        self._clock = clock or SystemClock()
 
     @classmethod
     def from_config(
@@ -1601,6 +1619,7 @@ class LLMOrgan:
         sleep: SleepFunction | None = None,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        clock: Clock | None = None,
     ) -> Self:
         """按 models.toml 的配置创建某个器官。
 
@@ -1612,6 +1631,7 @@ class LLMOrgan:
             token_counter: 估算输入 token 数的函数；不传就用 litellm 的计数工具。
             sleep: 重试之间的等待函数；不传就用 asyncio.sleep。
             transport: 测试用的假网络；正式运行不传。
+            clock: 分时计费用的时钟；不给就用真实时钟。
 
         Returns:
             这个器官的 LLMOrgan。
@@ -1627,6 +1647,7 @@ class LLMOrgan:
             token_counter,
             sleep,
             transport=transport,
+            clock=clock,
         )
 
     async def process(self, request: OrganRequest) -> OrganResponse:
@@ -1719,7 +1740,7 @@ class LLMOrgan:
             estimated=not usage.known,
             succeeded=failure_reason is None,
             failure_reason=failure_reason,
-            cost=0.0 if nothing_used else compute_cost(route.model, usage),
+            cost=0.0 if nothing_used else compute_cost(route.model, usage, self._clock.now()),
         )
 
     async def _call(

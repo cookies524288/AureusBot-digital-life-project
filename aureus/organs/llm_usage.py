@@ -6,9 +6,11 @@
 """
 
 from dataclasses import dataclass
+from datetime import datetime, tzinfo
 from typing import Any
 
-from aureus.organs.model_config import ModelConfig
+from aureus.common.clock import ensure_aware
+from aureus.organs.model_config import ModelConfig, PricePeriod
 
 # 价格的单位是“元 / 百万 token”。
 TOKENS_PER_PRICE_UNIT = 1_000_000
@@ -64,25 +66,65 @@ def extract_usage(response: Any) -> TokenUsage:
     return TokenUsage(prompt, completion, min(cached, prompt))
 
 
-def compute_cost(model: ModelConfig, usage: TokenUsage) -> float | None:
+def _local_minutes(moment: datetime, timezone: tzinfo | None) -> int:
+    """把时刻换成当地墙上时间的“第几分钟”，用来匹配分时价格（D134）。"""
+    local = ensure_aware(moment).astimezone(timezone)
+    return local.hour * 60 + local.minute
+
+
+def _price_period_at(
+    model: ModelConfig, moment: datetime, timezone: tzinfo | None
+) -> PricePeriod | None:
+    """找出这个时刻所在的时段；没有分时价格或没命中时返回 None（D134）。"""
+    if not model.price_periods:
+        return None
+    minute = _local_minutes(moment, timezone)
+    for period in model.price_periods:
+        if period.start_minutes <= minute < period.end_minutes:
+            return period
+    return None
+
+
+def compute_cost(
+    model: ModelConfig,
+    usage: TokenUsage,
+    moment: datetime,
+    *,
+    timezone: tzinfo | None = None,
+) -> float | None:
     """按模型的价格算一次调用的费用（元）。
 
     命中缓存的输入按 price_cache_in 算；没写这个价格就按 price_in 算，宁可高估也不低估。
     价格没写全、或者服务商没返回用量时，费用算不出来，返回 None 而不是 0：
-    0 会被当成“免费”（D37）。
+    0 会被当成“免费”（D37）。分时价格按请求时刻所在的当地时段取，未命中用默认价格（D134）。
 
     Args:
-        model: 模型配置，带三个价格（都是可选的）。
+        model: 模型配置，带默认价格和可选的分时价格。
         usage: 这次调用的 token 用量。
+        moment: 请求发生的时刻，必须带时区；按它匹配分时价格。
+        timezone: 按哪个时区算“当地时段”；不给就用这台电脑设置的时区。
 
     Returns:
         费用，单位元；算不出来时为 None。
     """
-    price_in = model.price_in
-    price_out = model.price_out
-    if price_in is None or price_out is None or not usage.known:
+    if not usage.known:
         return None
-    cache_price = model.price_cache_in if model.price_cache_in is not None else price_in
+    period = _price_period_at(model, moment, timezone)
+    if period is not None:
+        price_in, price_out, price_cache_in = (
+            period.price_in,
+            period.price_out,
+            period.price_cache_in,
+        )
+    else:
+        price_in, price_out, price_cache_in = (
+            model.price_in,
+            model.price_out,
+            model.price_cache_in,
+        )
+    if price_in is None or price_out is None:
+        return None
+    cache_price = price_cache_in if price_cache_in is not None else price_in
     fresh_tokens = max(0, usage.prompt_tokens - usage.cached_tokens)
     total = (
         fresh_tokens * price_in

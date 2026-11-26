@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from aureus.common.clock import Clock, SystemClock
 from aureus.organs import (
     LOCAL_EXPRESSION_EMBEDDING,
     FakePlanner,
@@ -52,10 +53,13 @@ class ModelRuntime:
         fake_reply_organ: str | None = None,
         fake_plan_organ: str | None = None,
         prompts: PromptStore | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.bus = bus
         self._resolver = resolver
         self.prompts = prompts
+        # 分时计费按请求时刻取价格（D134），时间一律从时钟对象取（D26）。
+        self._clock = clock or SystemClock()
         # 来源是启动参数 --fake；热重载不能把假器官切换成真实调用。
         self._fake_organs = fake_organs
         self.embedding_spaces = EmbeddingSpaces()
@@ -69,6 +73,11 @@ class ModelRuntime:
     def key_resolver(self) -> KeyResolver:
         """所有运行中器官共用的内存解析器，供网页刷新密钥快照。"""
         return self._resolver
+
+    @property
+    def clock(self) -> Clock:
+        """所有运行中器官共用的时钟，网页测速也用它算分时费用。"""
+        return self._clock
 
     @property
     def can_test_models(self) -> bool:
@@ -92,7 +101,11 @@ class ModelRuntime:
             if kind is not None:
                 embedding_routes = tuple(route for route in routes if route.model.kind == kind)
                 if embedding_routes and not self._fake_organs:
-                    organs.append(EmbeddingOrgan(name, embedding_routes, self._resolver))
+                    organs.append(
+                        EmbeddingOrgan(
+                            name, embedding_routes, self._resolver, clock=self._clock
+                        )
+                    )
                     available.add(name)
                     if name == "text_embedding":
                         local = next(
@@ -105,7 +118,12 @@ class ModelRuntime:
                         )
                         if local is not None:
                             organs.append(
-                                EmbeddingOrgan(LOCAL_EXPRESSION_EMBEDDING, (local,), self._resolver)
+                                EmbeddingOrgan(
+                                    LOCAL_EXPRESSION_EMBEDDING,
+                                    (local,),
+                                    self._resolver,
+                                    clock=self._clock,
+                                )
                             )
                 continue
             supported = conversational_routes(name, routes)
@@ -119,7 +137,9 @@ class ModelRuntime:
             organs.append(
                 FakeReplyer(organ_id=name)
                 if self._fake_organs
-                else LLMOrgan(name, routes, self._resolver, prompts=self.prompts)
+                else LLMOrgan(
+                    name, routes, self._resolver, prompts=self.prompts, clock=self._clock
+                )
             )
         # 启动时的假回复器来自心跳配置，models.toml 可以没有同名条目。
         if (
