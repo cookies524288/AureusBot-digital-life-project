@@ -23,6 +23,9 @@ LOOPBACK_HOST = "127.0.0.1"
 ALL_INTERFACES_HOST = "0.0.0.0"
 _PORT_BYTES = 2
 _PID_BYTES = 4
+# 重启或退出时，旧内核要尽快释放单实例锁和端口。挂住的请求最多再等这么久，
+# 之后由 uvicorn 取消，不能让旧进程一直占着锁（3.49）。
+_GRACEFUL_SHUTDOWN_SECONDS = 10.0
 
 
 def _address_name(home: Path) -> str:
@@ -108,6 +111,7 @@ class WebServer:
                 log_config=None,  # 不让 uvicorn 重设日志
                 access_log=False,  # 访问日志会把每次请求的路径都写进日志文件
                 lifespan="off",  # 应用没有启动和关闭时要做的事
+                timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_SECONDS,
             )
         )
 
