@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS inbox_messages (
 );
 CREATE INDEX IF NOT EXISTS inbox_messages_by_conversation
 ON inbox_messages (conversation_id, id);
+-- 会话列表按会话统计未读和最后一条；覆盖索引避免逐行回表，大收件箱从秒级降到百毫秒内（D129）。
+CREATE INDEX IF NOT EXISTS inbox_messages_conversation_visibility
+ON inbox_messages (conversation_id, id, direction, visibility);
 CREATE TABLE IF NOT EXISTS inbox_message_sequence (
     id INTEGER PRIMARY KEY CHECK (id = 1), high_water INTEGER NOT NULL
 );
