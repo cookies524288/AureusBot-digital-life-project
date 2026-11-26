@@ -27,7 +27,9 @@ from aureus.organs.interface import (
     ToolResult,
 )
 from aureus.organs.llm_adapter import (
+    _MODEL_TEST_IMAGE_BASE64,
     _MODEL_TEST_INPUT,
+    _MODEL_TEST_TOOL_NAME,
     ASSUMED_COMPLETION_TOKENS,
     EMPTY_REPLY_REASON,
     EMPTY_SYSTEM_MESSAGE,
@@ -36,6 +38,8 @@ from aureus.organs.llm_adapter import (
     RETRY_BACKOFF_SECONDS,
     EmbeddingOrgan,
     LLMOrgan,
+    _model_test_prompt,
+    _model_test_tool,
     close_shared_clients,
     count_prompt_tokens,
     probe_model,
@@ -425,6 +429,64 @@ async def test_cancelling_organ_stream_closes_it_and_accounts_for_attempt(
         assert attempt.prompt_tokens > COUNTED_PROMPT_TOKENS
     else:
         assert attempt.prompt_tokens == COUNTED_PROMPT_TOKENS
+
+
+def test_model_test_resources_match_maibot_snapshot() -> None:
+    """提示词、工具和图片与固定提交 062d45c 的 MaiBot 源码一致（3.53）。"""
+    assert _MODEL_TEST_IMAGE_BASE64 == (
+        "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARn"
+        "QU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABBSURBVFhH7c6hDQAgDEXB"
+        "DstKjMkM4GsQBIq4Js9U/Fy0PmZlkR+vAwAA2AJOL+/lAAAAAAAAAP4H3A4AAKAcsAB+"
+        "y6u1cyDAxAAAAABJRU5ErkJggg=="
+    )
+    without_image = (
+        "你正在执行 MaiBot WebUI 的单模型能力测试。\n"
+        "测试目标：确认模型可以读取普通文本，并可以按工具定义发起 tool call。\n"
+        "本次消息没有附带图片，请在工具参数 saw_image 中填 false。\n"
+        "请必须调用工具 maibot_model_test_report，不要只用普通文本回答。\n"
+        "工具参数要求：status 填 ok，echo 填 maibot model test。"
+    )
+    with_image = (
+        "你正在执行 MaiBot WebUI 的单模型能力测试。\n"
+        "测试目标：确认模型可以读取普通文本，并可以按工具定义发起 tool call。\n"
+        "本次消息还附带了一张测试图片，请在工具参数 saw_image 中填 true，"
+        "并简要描述图片。\n"
+        "请必须调用工具 maibot_model_test_report，不要只用普通文本回答。\n"
+        "工具参数要求：status 填 ok，echo 填 maibot model test。"
+    )
+    assert _model_test_prompt(with_image=False) == without_image
+    assert _model_test_prompt(with_image=True) == with_image
+    assert _model_test_tool() == {
+        "type": "function",
+        "function": {
+            "name": "maibot_model_test_report",
+            "description": "回报 MaiBot WebUI 模型测试结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "测试状态，成功时填 ok。",
+                        "enum": ["ok"],
+                    },
+                    "echo": {
+                        "type": "string",
+                        "description": "文本回显，固定填 maibot model test。",
+                    },
+                    "saw_image": {
+                        "type": "boolean",
+                        "description": "本次请求中是否包含并识别了测试图片。",
+                    },
+                    "image_summary": {
+                        "type": "string",
+                        "description": "如果包含图片，简短描述图片内容；未包含图片时留空。",
+                    },
+                },
+                "required": ["status", "echo", "saw_image"],
+            },
+        },
+    }
+    assert _MODEL_TEST_TOOL_NAME == "maibot_model_test_report"
 
 
 @pytest.mark.asyncio

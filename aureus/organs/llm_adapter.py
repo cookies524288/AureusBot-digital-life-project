@@ -12,6 +12,9 @@
 的几句话；每一次真正发出去的请求（含失败的）都放进 attempts，交给安全网关记账（D39）。
 """
 
+# 模型测速的提示词、工具定义与测试图片移植自 MaiBot 1.3.15（GPL-3.0），
+# 固定提交 062d45c 的 src/webui/routers/model.py；来源与改动见 THIRD_PARTY.md。
+
 import asyncio
 import atexit
 import base64
@@ -478,6 +481,73 @@ _MODEL_TEST_INPUT = "Reply OK."
 _MODEL_TEST_MAX_TOKENS = 32
 # 测速的流式请求最多等这么久要第一个数据块（D131）：本地网关可能既不返回数据也不结束。
 PROBE_FIRST_CHUNK_TIMEOUT_SECONDS = 20.0
+
+# MaiBot 1.3.15 模型测试使用的 32×32 PNG（固定提交 062d45c 的
+# src/webui/routers/model.py）。原样移植，来源与许可见 THIRD_PARTY.md。
+_MODEL_TEST_IMAGE_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARn"
+    "QU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABBSURBVFhH7c6hDQAgDEXB"
+    "DstKjMkM4GsQBIq4Js9U/Fy0PmZlkR+vAwAA2AJOL+/lAAAAAAAAAP4H3A4AAKAcsAB+"
+    "y6u1cyDAxAAAAABJRU5ErkJggg=="
+)
+_MODEL_TEST_IMAGE_URL = "data:image/png;base64," + _MODEL_TEST_IMAGE_BASE64
+_MODEL_TEST_TOOL_NAME = "maibot_model_test_report"
+_MODEL_TEST_PROMPT_HEADER = (
+    "你正在执行 MaiBot WebUI 的单模型能力测试。\n"
+    "测试目标：确认模型可以读取普通文本，并可以按工具定义发起 tool call。\n"
+)
+_MODEL_TEST_IMAGE_INSTRUCTION = (
+    "本次消息还附带了一张测试图片，请在工具参数 saw_image 中填 true，"
+    "并简要描述图片。"
+)
+_MODEL_TEST_NO_IMAGE_INSTRUCTION = "本次消息没有附带图片，请在工具参数 saw_image 中填 false。"
+_MODEL_TEST_PROMPT_FOOTER = (
+    "请必须调用工具 maibot_model_test_report，不要只用普通文本回答。\n"
+    "工具参数要求：status 填 ok，echo 填 maibot model test。"
+)
+
+
+def _model_test_prompt(*, with_image: bool) -> str:
+    """按 MaiBot 的模型测试提示词生成文本；视觉测试附带图片说明。"""
+    instruction = (
+        _MODEL_TEST_IMAGE_INSTRUCTION if with_image else _MODEL_TEST_NO_IMAGE_INSTRUCTION
+    )
+    return _MODEL_TEST_PROMPT_HEADER + instruction + "\n" + _MODEL_TEST_PROMPT_FOOTER
+
+
+def _model_test_tool() -> dict[str, Any]:
+    """MaiBot 的模型测试工具，转成 OpenAI 的工具声明格式。"""
+    return {
+        "type": "function",
+        "function": {
+            "name": _MODEL_TEST_TOOL_NAME,
+            "description": "回报 MaiBot WebUI 模型测试结果。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "测试状态，成功时填 ok。",
+                        "enum": ["ok"],
+                    },
+                    "echo": {
+                        "type": "string",
+                        "description": "文本回显，固定填 maibot model test。",
+                    },
+                    "saw_image": {
+                        "type": "boolean",
+                        "description": "本次请求中是否包含并识别了测试图片。",
+                    },
+                    "image_summary": {
+                        "type": "string",
+                        "description": "如果包含图片，简短描述图片内容；未包含图片时留空。",
+                    },
+                },
+                "required": ["status", "echo", "saw_image"],
+            },
+        },
+    }
+
 
 # 固定的红色 PNG，测速不需要读取用户图片。
 _PROBE_IMAGE = (
