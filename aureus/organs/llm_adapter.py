@@ -353,6 +353,73 @@ def _read_reasoning(response: Any) -> bool:
     return _has_reasoning(message)
 
 
+def _chat_kwargs(
+    route: ModelRoute,
+    params: dict[str, Any],
+    messages: list[dict[str, Any]],
+    *,
+    stream: bool = False,
+    tools: list[dict[str, Any]] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
+) -> dict[str, Any]:
+    """组装一次对话请求的参数，模型测试与普通调用共用（D132）。
+
+    Args:
+        route: 这次走的模型路线，决定模型前缀和协议。
+        params: 服务商参数（超时、地址、密钥），来自 `_provider_arguments`。
+        messages: 发出去的消息。
+        stream: 是否流式请求；只有确实需要首包观察的调用才开（D132）。
+        tools: 已编码的工具声明；没有工具时为 None。
+        temperature: 采样温度；None 表示不传。
+        max_tokens: 输出上限；None 表示不传。
+        reasoning_effort: 思考等级；None 表示不传。
+
+    Returns:
+        litellm 风格的请求参数；直连时由 `_send_chat` 从中取出请求体。
+    """
+    kwargs: dict[str, Any] = {
+        **params,
+        "model": LITELLM_PREFIX_BY_PROTOCOL[route.provider.protocol] + route.model.identifier,
+        "messages": messages,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    if stream:
+        kwargs["stream"] = True
+        # 只有 OpenAI 协议的流式响应带用量；其它协议不开这个选项。
+        if route.provider.protocol == "openai":
+            kwargs["stream_options"] = {"include_usage": True}
+    if tools is not None:
+        kwargs["tools"] = tools
+    return kwargs
+
+
+def _read_completion(
+    response: Any, tools: ToolCallCollector | None = None
+) -> tuple[str | None, TokenUsage, bool, tuple[ToolCall, ...] | None]:
+    """读取非流式响应：正文、用量、是否只有推理内容、工具调用（D127、D132）。
+
+    模型测试与普通调用共用这一套解析。正文只取 `choices[0].message.content`，
+    推理内容不当正文；工具调用交给同一个收集器，声明和校验与流式路径一致。
+    """
+    usage = extract_usage(response)
+    text = _read_text(response)
+    reasoning_only = _read_reasoning(response)
+    tool_calls: tuple[ToolCall, ...] | None = None
+    if tools is not None:
+        choices = getattr(response, "choices", None)
+        if choices:
+            tools.read_choice(choices[0], stream=False)
+        tool_calls = tools.finish()
+    return text, usage, reasoning_only, tool_calls
+
+
 def _load_litellm_completion() -> CompletionFunction:
     # 创建真实器官发生在启动阶段，不在心跳循环里，导入慢一点不要紧。
     return _import_litellm().acompletion
@@ -900,55 +967,63 @@ async def probe_model(
                 usage = actual
         elif capability == "tools":
             measured: list[float] = []
+            kwargs = _chat_kwargs(
+                route,
+                params,
+                inputs["messages"],
+                tools=inputs["tools"],
+                max_tokens=_MODEL_TEST_MAX_TOKENS,
+            )
+            collector = ToolCallCollector({"echo"})
             async with asyncio.timeout(provider.timeout_seconds):
                 result = await _send_chat(
                     route,
                     completion,
-                    {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                    kwargs,
                     library=library,
                     transport=transport,
                     on_request=measured.append,
                 )
             latency = measured[-1] if measured else loop.time() - started
-            actual = extract_usage(result)
+            text, actual, _, tool_calls = _read_completion(result, collector)
             if actual.known:
                 usage = actual
-            message = result.choices[0].message
-            calls = getattr(message, "tool_calls", None) or []
+            calls = tool_calls or ()
             reply = (
                 json.dumps(
-                    [
-                        {"name": call.function.name, "arguments": call.function.arguments}
-                        for call in calls
-                    ],
+                    [{"name": call.name, "arguments": call.arguments} for call in calls],
                     ensure_ascii=False,
                 )
                 if calls
-                else (message.content or "")
+                else (text or "")
             )
             if (
                 len(calls) != 1
-                or calls[0].function.name != "echo"
-                or json.loads(calls[0].function.arguments) != {"value": "OK"}
+                or calls[0].name != "echo"
+                or calls[0].arguments != {"value": "OK"}
             ):
                 failure = "工具调用名称或参数与测试要求不符。"
         else:
+            # 文本、视觉和思考等级沿用流式请求，首包超时后回退非流式（D131）。
             first_timeout = min(provider.timeout_seconds, PROBE_FIRST_CHUNK_TIMEOUT_SECONDS)
             progress = _StreamProgress()
             first_chunk_timed_out = False
             text: str | None = None
             reasoning = False
+            stream_kwargs = _chat_kwargs(
+                route,
+                params,
+                inputs["messages"],
+                stream=True,
+                max_tokens=_MODEL_TEST_MAX_TOKENS,
+                reasoning_effort=inputs.get("reasoning_effort"),
+            )
             try:
                 async with asyncio.timeout(provider.timeout_seconds):
                     stream = await _send_chat(
                         route,
                         completion,
-                        {
-                            **params,
-                            **inputs,
-                            "stream": True,
-                            "max_tokens": _MODEL_TEST_MAX_TOKENS,
-                        },
+                        stream_kwargs,
                         library=library,
                         transport=transport,
                     )
@@ -965,6 +1040,13 @@ async def probe_model(
                     raise
                 # 服务商超时不超过 20 秒时首包超时与总超时同时到期，同样按首包超时处理。
                 first_chunk_timed_out = True
+            fallback_kwargs = _chat_kwargs(
+                route,
+                params,
+                inputs["messages"],
+                max_tokens=_MODEL_TEST_MAX_TOKENS,
+                reasoning_effort=inputs.get("reasoning_effort"),
+            )
             if first_chunk_timed_out:
                 # 首包超时且没有任何数据：取消这次流式请求，按非流式重试一次（D131）。
                 attempts.append(
@@ -980,15 +1062,13 @@ async def probe_model(
                     result = await _send_chat(
                         route,
                         completion,
-                        {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                        fallback_kwargs,
                         library=library,
                         transport=transport,
                     )
-                actual = extract_usage(result)
+                text, actual, reasoning, _ = _read_completion(result)
                 if actual.known:
                     usage = actual
-                text = _read_text(result)
-                reasoning = _read_reasoning(result)
                 if text is not None:
                     reply = text
                     latency = loop.time() - started
@@ -1015,15 +1095,13 @@ async def probe_model(
                         result = await _send_chat(
                             route,
                             completion,
-                            {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                            fallback_kwargs,
                             library=library,
                             transport=transport,
                         )
-                    actual = extract_usage(result)
+                    text, actual, reasoning, _ = _read_completion(result)
                     if actual.known:
                         usage = actual
-                    text = _read_text(result)
-                    reasoning = reasoning or _read_reasoning(result)
                     if text is not None:
                         reply = text
                         latency = loop.time() - started
@@ -1599,40 +1677,40 @@ class LLMOrgan:
         provider = route.provider
         media = request.media_bytes
         media_type = request.media_type
-        kwargs: dict[str, Any] = {
-            **_provider_arguments(provider, self._key_resolver),
-            "model": LITELLM_PREFIX_BY_PROTOCOL[provider.protocol] + route.model.identifier,
-            "messages": messages,
-        }
-        if self.organ_id == "voice":
-            assert media is not None
-            kwargs["model"] = "openai/" + route.model.identifier
-            del kwargs["messages"]
-        elif self.organ_id == "vlm":
-            assert media is not None and media_type is not None
-            data_url = f"data:{media_type};base64,{base64.b64encode(media).decode('ascii')}"
-            kwargs["messages"] = assemble_image_messages(
-                messages, {"type": "image_url", "image_url": {"url": data_url}}
-            )
-        if route.temperature is not None and self.organ_id != "voice":
-            kwargs["temperature"] = route.temperature
-        if route.max_tokens is not None and self.organ_id != "voice":
-            kwargs["max_tokens"] = route.max_tokens
-        if route.reasoning_effort is not None and self.organ_id != "voice":
-            kwargs["reasoning_effort"] = route.reasoning_effort
-        if request.stream:
-            kwargs["stream"] = True
-            if provider.protocol == "openai":
-                kwargs["stream_options"] = {"include_usage": True}
+        params = _provider_arguments(provider, self._key_resolver)
+        messages_for_call: list[dict[str, Any]] = messages
+        tools: list[dict[str, Any]] | None = None
         tool_names: set[str] = set()
         extra_bytes = len(media or b"")
-        if request.tools and self.organ_id != "voice":
-            tools = encode_tools(request.tools)
-            history = encode_tool_history(request.tool_history)
-            kwargs["tools"] = tools
-            kwargs["messages"] = [*kwargs["messages"], *history]
-            tool_names = {tool.name for tool in request.tools}
-            extra_bytes += len(json.dumps((tools, history), ensure_ascii=False).encode("utf-8"))
+        kwargs: dict[str, Any]
+        if self.organ_id == "voice":
+            assert media is not None
+            kwargs = {**params, "model": "openai/" + route.model.identifier}
+        else:
+            if self.organ_id == "vlm":
+                assert media is not None and media_type is not None
+                data_url = f"data:{media_type};base64,{base64.b64encode(media).decode('ascii')}"
+                messages_for_call = assemble_image_messages(
+                    messages, {"type": "image_url", "image_url": {"url": data_url}}
+                )
+            if request.tools:
+                tools = encode_tools(request.tools)
+                history = encode_tool_history(request.tool_history)
+                messages_for_call = [*messages_for_call, *history]
+                tool_names = {tool.name for tool in request.tools}
+                extra_bytes += len(
+                    json.dumps((tools, history), ensure_ascii=False).encode("utf-8")
+                )
+            kwargs = _chat_kwargs(
+                route,
+                params,
+                messages_for_call,
+                stream=request.stream,
+                tools=tools,
+                temperature=route.temperature,
+                max_tokens=route.max_tokens,
+                reasoning_effort=route.reasoning_effort,
+            )
         # D132：瞬时失败只重试一次；max_retry=0 仍然表示不重试。
         requests = 2 if provider.max_retry > 0 else 1
         for number in range(1, requests + 1):
@@ -1674,11 +1752,9 @@ class LLMOrgan:
         reasoning_only = False
         fallback_used = False
         try:
-            completion = self._completion
-            assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
             response = await _send_chat(
                 route,
-                completion,
+                self._completion,
                 kwargs,
                 library=self._library,
                 transport=self._transport,
@@ -1705,26 +1781,28 @@ class LLMOrgan:
                     fallback_used = True
                     response = await _send_chat(
                         route,
-                        completion,
+                        self._completion,
                         retry_kwargs,
                         library=self._library,
                         transport=self._transport,
                     )
-                    usage = extract_usage(response)
-                    text = _read_text(response)
-                    reasoning_only = reasoning_only or _read_reasoning(response)
-                    if tools is not None and (choices := getattr(response, "choices", None)):
-                        tools.read_choice(choices[0], stream=False)
-            else:
-                usage = extract_usage(response)
-                if self.organ_id == "voice":
-                    value = getattr(response, "text", None)
-                    text = value.strip() if isinstance(value, str) and value.strip() else None
+                    text, usage, fallback_reasoning, tool_calls = _read_completion(
+                        response, tools
+                    )
+                    reasoning_only = reasoning_only or fallback_reasoning
+                    if tools is None:
+                        tool_calls = ()
                 else:
-                    text = _read_text(response)
-                    reasoning_only = _read_reasoning(response)
-                    if tools is not None and (choices := getattr(response, "choices", None)):
-                        tools.read_choice(choices[0], stream=False)
+                    tool_calls = tools.finish() if tools is not None else ()
+            elif self.organ_id == "voice":
+                usage = extract_usage(response)
+                value = getattr(response, "text", None)
+                text = value.strip() if isinstance(value, str) and value.strip() else None
+                tool_calls = ()
+            else:
+                text, usage, reasoning_only, tool_calls = _read_completion(response, tools)
+                if tools is None:
+                    tool_calls = ()
         except asyncio.CancelledError:
             if kwargs.get("stream"):
                 usage = self._estimate_usage(route, messages, 1, extra_bytes)
@@ -1748,7 +1826,6 @@ class LLMOrgan:
             ) from None
         if not usage.known:
             usage = self._estimate_usage(route, messages, 1, extra_bytes)
-        tool_calls = tools.finish() if tools is not None else ()
         if text is None and tool_calls == ():
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
             # 思考上），这次请求照样要记账。D132：非流式空响应重试一次。

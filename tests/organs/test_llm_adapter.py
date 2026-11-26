@@ -810,9 +810,33 @@ async def test_local_chat_probe_uses_direct_http(
             "messages": [{"role": "user", "content": _MODEL_TEST_INPUT}],
             "max_tokens": 32,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
     ]
     await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_tool_probe_uses_the_shared_tool_parsing(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 模型测试和普通调用共用同一套工具解析（D132）。
+    raw = make_response(None, 10, 5)
+    raw.choices[0].message.tool_calls = [
+        make_tool_fragment('{"value": "OK"}', call_id="call_echo", name="echo")
+    ]
+    completion = FakeCompletion(raw)
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    result = await probe_model(
+        config.models[0], config.providers[0], keys, capability="tools"
+    )
+
+    assert json.loads(result.suggestion) == [{"name": "echo", "arguments": {"value": "OK"}}]
+    assert result.attempts[0].succeeded is True
+    assert result.attempts[0].budget_tokens == 15
 
 
 class HangingStream(httpx.AsyncByteStream):
