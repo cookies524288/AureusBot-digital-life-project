@@ -1391,6 +1391,7 @@ function el(tag, props, ...kids) {
 }
 
 // 请求默认最多等这么久。切页时下面这个控制器整页取消，晚到的响应不再影响新页面（D121）。
+// 模型测速等少数请求会传入更长的 timeoutMs（D135）。
 const API_TIMEOUT_MS = 10000;
 const API_TIMEOUT_TEXT = '请求超时，请稍后再试。';
 let pageAbort = new AbortController();
@@ -1429,14 +1430,14 @@ function resetPageCache() {
 
 // 同一 GET 在途时不重复发（D129）；预取传 detached=true，切页不取消它。
 const inFlightGets = new Map();
-function api(path, method, body, headers = {}, signal, detached = false) {
+function api(path, method, body, headers = {}, signal, detached = false, timeoutMs = API_TIMEOUT_MS) {
   const dedupe = (method || 'GET').toUpperCase() === 'GET' && !signal && body === undefined
     && !Object.keys(headers).length;
   if (dedupe) {
     const pending = inFlightGets.get(path);
     if (pending) return pending.request;
   }
-  const request = apiRequest(path, method, body, headers, signal, detached);
+  const request = apiRequest(path, method, body, headers, signal, detached, timeoutMs);
   if (dedupe) {
     inFlightGets.set(path, {request, detached});
     const clear = () => { if (inFlightGets.get(path)?.request === request) inFlightGets.delete(path); };
@@ -1446,11 +1447,11 @@ function api(path, method, body, headers = {}, signal, detached = false) {
 }
 
 // 所有接口都走这里。返回 {ok, status, data, retryAfter, aborted, timeout}；网络断了 status 是 0。
-async function apiRequest(path, method, body, headers, signal, detached) {
+async function apiRequest(path, method, body, headers, signal, detached, timeoutMs = API_TIMEOUT_MS) {
   const session = state.loaded;
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, API_TIMEOUT_MS);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   const cancel = () => controller.abort();
   const pageSignal = pageAbort.signal;
   if (signal?.aborted || (!detached && pageSignal.aborted)) controller.abort();
@@ -4835,6 +4836,19 @@ function probeNotice(title, summary, details) {
   $('model-test-status').append(notice);
   setTimeout(() => notice.remove(), NOTICE_DURATION_MS);
 }
+// 模型测速要依次探测多项能力，每项都可能等满服务商超时；文本探测还可能先流式等首包
+// （最多 20 秒）再非流式等一次完整超时。按“所有项各一次完整超时 + 文本额外一次”估算，
+// 再加 30 秒余量。只决定网页等多久，不改变后端超时（D135）。
+const PROBE_TIMEOUT_MARGIN_MS = 30000;
+function probeRequestTimeoutMs(model) {
+  const provider = mdl.cfg?.providers.find(item => item.name === model.provider);
+  const timeoutSeconds = provider?.timeout_seconds ?? 120;
+  const kind = model.kind || 'llm';
+  const probes = kind === 'llm'
+    ? 2 + (model.vision ? 1 : 0) + (model.reasoning_levels || []).length
+    : 1;
+  return (probes + (kind === 'llm' ? 1 : 0)) * timeoutSeconds * 1000 + PROBE_TIMEOUT_MARGIN_MS;
+}
 async function testModel(model) {
   const savedModel = clone(model);
   await runProbe('model', savedModel.name, async () => {
@@ -4845,7 +4859,8 @@ async function testModel(model) {
       toast('请先保存模型配置，再测速。', 'error');
       return;
     }
-    const res = await api('/api/models/test', 'POST', {model: savedModel.name});
+    const res = await api('/api/models/test', 'POST', {model: savedModel.name},
+      {}, undefined, false, probeRequestTimeoutMs(savedModel));
     if (!res.ok) { probeNotice('模型测试失败', savedModel.name + ' · ' + errorText(res)); return; }
     const data = res.data, passed = data.checks.filter(check => !check.error).length;
     const labels = { llm: '首字延迟', embedding: '向量响应耗时', image_embedding: '向量响应耗时', transcription: '转写响应耗时' };
@@ -4892,9 +4907,11 @@ function probeReplyText(check) {
 }
 $('md-test-provider').addEventListener('click', async () => {
   const provider = mdl.provider;
+  const providerConfig = mdl.cfg?.providers.find(item => item.name === provider);
+  const timeoutMs = ((providerConfig?.timeout_seconds ?? 120) + 30) * 1000;
   await runProbe('provider', provider, async () => {
     await mdl.queue;
-    const res = await api('/api/models/provider-test', 'POST', {provider});
+    const res = await api('/api/models/provider-test', 'POST', {provider}, {}, undefined, false, timeoutMs);
     probeNotice('', provider + ' · ' + (res.ok ? res.data.latency_ms + ' ms' : errorText(res)));
   });
 });
@@ -6061,7 +6078,8 @@ const CFG_FIELDS = {
   'config_version': ['配置版本', '标记程序应按哪个版本的格式读取这份配置。'],
   'safety.monthly_token_limit': ['月度Token额度', '每月能用多少模型额度。用完后暂停新的模型调用。'],
   'safety.runaway_guard_enabled': ['失控保护', '调用过密或连续失败时，暂停新的调用。'],
-  'safety.max_calls_per_minute': ['每分钟调用上限', '一分钟内最多允许发起多少次模型调用。'],
+  'safety.max_calls_per_minute': ['每分钟调用上限', '一分钟内最多允许发起多少次模型调用。不写表示不限。'],
+  'safety.model_test_calls_per_minute': ['测速每分钟上限', '一分钟内最多允许发起多少次模型测速。不写表示不限。'],
   'safety.max_consecutive_failures': ['连续失败上限', '连续失败达到多少次后暂停调用。'],
   'safety.failure_pause_seconds': ['失败暂停时长（秒）', '触发失败保护后，等多少秒才允许再试。'],
   'safety.max_concurrent_organ_calls': ['器官并发上限', '同时最多放行多少个器官调用，范围 1–8。保存后重启生效。'],
