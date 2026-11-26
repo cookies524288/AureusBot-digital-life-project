@@ -287,6 +287,7 @@
 
 同日第三轮：模型调用按 [D132](10-decisions.md) 对齐 MaiBot（90 秒超时、默认非流式、共享连接、一次重试），[D134](10-decisions.md) 补齐模型启用/分时价格/思考/联网/额外参数字段并重做[模型配置页](tasks/3.36-model-page-redesign.md)；模型测速按 [3.53](tasks/3.53-model-test-align-mai.md) 移植 MaiBot 的提示词、测试工具与图片并使用独立限流；[D133](10-decisions.md) 完成滚动条边缘触发与切页过渡动画；[3.52](tasks/3.52-model-test-and-reply-latency.md) 调查了测速失败与回复延迟并记录后续建议（分段/打字提速、按会话并发、首包超时暂未做）。平台会话完成活动面板、图片预览、媒体缓存、两栏等高、圆形头像、输入中气泡与 WebSocket 实时同步；时间线完成详情中文化、吸顶标题与筛选滚动保持；网页性能切页 0–13ms；重启遮罩与启动器附着修复。发布前全量检查与推送待办。
 同日第四轮：按 [D135](10-decisions.md) 把服务商默认超时改为 120 秒、判断超时改为 120 秒，失控拦截的每分钟限流默认关闭（模型测速使用独立的 `model_test_calls_per_minute`，同样默认不限），并让网页模型测速与供应商测速的请求超时按服务商超时推算（[任务](tasks/3.54-model-timeout-and-rate-limit-defaults.md)）。
+同日第五轮：按 [D136](10-decisions.md) 解除 QQ 会话限制，默认允许所有群和私聊；按 [D137](10-decisions.md) 让 @ 与名字/昵称提及必然唤醒（[任务](tasks/3.55-qq-all-conversations.md)、[任务](tasks/3.56-mention-wake.md)）。
 
 ### Phase 4 · 双手
 
