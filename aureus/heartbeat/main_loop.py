@@ -1921,6 +1921,10 @@ class Heartbeat:
             if inbox.preempts(message.perception):
                 self._preempt_inbox(inbox, message.conversation)
         self._submit_inbox(messages)
+        # D145：优先来信单独处理，提交后按会话把未读水位推到最大入站消息；
+        # 同会话更早或同时段的普通未读不再逐条追赶，也不会混进这一批优先回复。
+        for conversation in dict.fromkeys(message.conversation for message in messages):
+            inbox.store.read_latest_and_clear(conversation, limit=inbox.read_limit)
 
     def _preempt_inbox(self, inbox: InboxAttention, conversation: ConversationKey) -> None:
         reason = "绑定用户或特别关心的来信抢占了会话，未投递。"

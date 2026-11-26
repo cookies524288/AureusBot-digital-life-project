@@ -353,6 +353,87 @@ def test_debounce_messages_reads_latest_limit_and_clears(tmp_path: Path) -> None
     assert store.list_unread(key) == []
 
 
+def test_priority_path_submits_priority_and_clears_same_conversation_backlog(
+    tmp_path: Path,
+) -> None:
+    """D145：优先来信单独回复；同会话更早的未读提交后一并清掉，不堆积。"""
+    clock = ManualClock(datetime(2026, 11, 26, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=Organs(),
+        identity=Identity.model_validate(
+            {
+                "facts": {"name": "测试助手", "birthday": "2026-11-23"},
+                "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
+                "persona": {"immutable": "温和。"},
+            }
+        ),
+        config=HeartbeatConfig(split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    heart.attach_channel("qq", lambda _message: None)
+    heart.wake_up()
+    try:
+        key = ConversationKey("qq", "bot", "group", "busy")
+        for number in range(20):
+            assert (
+                store.add(
+                    Perception(
+                        "qq",
+                        "visitor",
+                        f"第 {number} 条",
+                        VisibilityScope.GROUP,
+                        TrustLevel.VERIFIED_CONTACT,
+                        route=MessageRoute("bot", "group", "busy", f"visitor-{number}"),
+                    )
+                )
+                is not None
+            )
+        assert (
+            store.add(
+                Perception(
+                    "qq",
+                    "owner",
+                    "紧急",
+                    VisibilityScope.GROUP,
+                    TrustLevel.VERIFIED_USER,
+                    route=MessageRoute("bot", "group", "busy", "owner"),
+                )
+            )
+            is not None
+        )
+        inbox = heart._platform_inbox
+        assert inbox is not None
+        heart._take_inbox_priority(inbox)
+        submitted = [perception.content for perception, _ in heart._pending]
+        assert submitted == ["紧急"]
+        assert store.list_unread(key) == []
+        heart._take_in_perceptions()
+        assert store.list_unread(key) == []
+        later = store.add(
+            Perception(
+                "qq",
+                "visitor",
+                "后来",
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", "busy", "later"),
+            )
+        )
+        assert later is not None
+        assert store.list_unread(key) == [later]
+    finally:
+        timeline.close()
+
+
 @pytest.mark.asyncio
 async def test_active_conversation_merges_during_planning_and_handles_priority(
     tmp_path: Path,
@@ -1193,7 +1274,8 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         await heart.wait_for_thought()
         heart.beat()
         assert sent[-1].route == priority.route
-        assert sum(row.unread_count for row in store.list_conversations()) == 2
+        # D145：优先来信带出同会话最新一批，先前那条普通消息一并读入并清空，不再留成积压。
+        assert sum(row.unread_count for row in store.list_conversations()) == 0
         assert sum(item.route == priority.route for item in sent) == 1
         assert ordinary.route is not None
         assert not any(item.route == ordinary.route for item in sent)
@@ -1203,7 +1285,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         heart.beat()
         assert heart.maintenance_paused and not heart.is_thinking
         assert not any(item.route == buffered.route for item in sent)
-        assert sum(row.unread_count for row in store.list_conversations()) == 3
+        assert sum(row.unread_count for row in store.list_conversations()) == 1
 
         heart.set_maintenance_paused(False)
         heart.beat()

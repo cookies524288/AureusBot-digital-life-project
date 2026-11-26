@@ -106,6 +106,83 @@ async def test_busy_group_starts_planning_at_the_eight_second_batch_limit(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_busy_group_replies_to_the_latest_batch_without_chasing_the_backlog(
+    tmp_path: Path,
+) -> None:
+    """D145：大群连发时一轮只回复最新一批，不逐条追最老，也不留下积压。"""
+    clock = ManualClock(datetime(2026, 11, 26, 10, tzinfo=UTC))
+    database = tmp_path / "aureus.db"
+    timeline = TimelineDatabase(database, clock)
+    timeline.open()
+    store = InboxStore(database, clock)
+    stop = EmergencyStop(tmp_path / "halt.json", clock)
+    organs = Organs()
+    organs.plan = '{"reply":true,"intent":"回应","stay_in_conversation":true}'
+    heart = Heartbeat(
+        clock=clock,
+        timeline=timeline,
+        organs=organs,
+        identity=Identity.model_validate(_IDENTITY),
+        config=HeartbeatConfig(split_reply_enabled=False),
+        permissions=PermissionChecker(stop),
+        emergency_stop=stop,
+        inbox_store=store,
+    )
+    sent = []
+    heart.attach_channel("qq", sent.append)
+    heart.wake_up()
+
+    def receive(
+        text: str, *, sender: str = "visitor", message_id: str | None = None, beat: bool = True
+    ) -> None:
+        result = store.add(
+            Perception(
+                "qq",
+                sender,
+                text,
+                VisibilityScope.GROUP,
+                TrustLevel.VERIFIED_USER if sender == "owner" else TrustLevel.VERIFIED_CONTACT,
+                route=MessageRoute("bot", "group", "busy", message_id or text),
+            )
+        )
+        assert result is not None
+        heart.on_inbox_message(result)
+        if beat:
+            heart.beat()
+
+    try:
+        receive("暖场", sender="owner")
+        clock.advance(timedelta(seconds=4))
+        heart.beat()
+        await heart.wait_for_thought()
+        heart.beat()
+        assert len(sent) == 1
+        sent.clear()
+
+        key = ConversationKey("qq", "bot", "group", "busy")
+        for number in range(100):
+            receive(f"第{number}条", message_id=f"busy-{number}", beat=False)
+        clock.advance(timedelta(seconds=10))
+        heart.beat()
+        # 只读最新 15 条；更早的未读在读取时一并标已读，不逐条追最老。
+        assert store.list_unread(key) == []
+
+        await heart.wait_for_thought()
+        heart.beat()
+        plans = [request for request in organs.requests if request.context.get("task") == "plan"]
+        assert len(plans[-1].context["in_reply_to"]) == 15
+        assert all(f"第{number}条" in plans[-1].prompt for number in range(85, 100))
+        assert all(f"第{number}条" not in plans[-1].prompt for number in range(0, 85))
+        assert sent and sent[-1].route is not None
+        assert sent[-1].route.recipient_id == "busy"
+        assert len(sent) == 1
+        assert store.list_unread(key) == []
+    finally:
+        await heart.shut_down()
+        timeline.close()
+
+
+@pytest.mark.asyncio
 async def test_a_mention_starts_within_one_second(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 26, 10, tzinfo=UTC))
     database = tmp_path / "aureus.db"
