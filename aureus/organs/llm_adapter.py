@@ -1474,17 +1474,20 @@ class EmbeddingOrgan:
                 **params,
             )
         base = (route.provider.base_url or "https://api.jina.ai/v1").rstrip("/")
+        images = tuple(value for value in inputs if isinstance(value, bytes))
+        encoded = await asyncio.to_thread(_embedding_images, images)
         payload = {
             "model": route.model.identifier,
             "embedding_type": "float",
-            "input": [
-                {"image": base64.b64encode(value).decode("ascii")}
-                for value in inputs
-                if isinstance(value, bytes)
-            ],
+            "input": [{"image": item} for item in encoded],
         }
         return await _post_embeddings(
-            base, payload, params, transport=self._transport, on_request=on_request
+            base,
+            payload,
+            params,
+            transport=self._transport,
+            local=_loopback_endpoint(route.provider.base_url) is not None,
+            on_request=on_request,
         )
 
 

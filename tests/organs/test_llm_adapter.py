@@ -3,7 +3,8 @@
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -126,16 +127,30 @@ def test_embedding_images_rejects_broken_bytes() -> None:
         _embedding_images((b"not an image",))
 
 
+def image_embedding_route(
+    *,
+    provider_name: str = "jina",
+    identifier: str = "jina-embeddings-v4",
+    base_url: str | None = None,
+) -> ModelRoute:
+    """一条图片嵌入路线；base_url 为空时按 Jina 默认地址发送。"""
+    provider = ProviderConfig(name=provider_name, protocol="openai", base_url=base_url)
+    model = ModelConfig(
+        name="picture", identifier=identifier, provider=provider_name, kind="image_embedding"
+    )
+    return ModelRoute(model, provider, None, None)
+
+
 @pytest.mark.asyncio
 async def test_image_embedding_uses_jina_protocol_and_reports_usage(tmp_path: Path) -> None:
-    provider = ProviderConfig(name="jina", protocol="openai")
-    model = ModelConfig(
-        name="picture", identifier="jina-embeddings-v4", provider="jina", kind="image_embedding"
-    )
+    image = make_image_bytes("PNG")
 
     def respond(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "https://api.jina.ai/v1/embeddings"
-        assert b'"image":"YWJj"' in request.content
+        body = json.loads(request.content)
+        assert body["model"] == "jina-embeddings-v4"
+        assert body["embedding_type"] == "float"
+        assert base64.b64decode(body["input"][0]["image"]) == image
         return httpx.Response(
             200,
             json={"data": [{"index": 0, "embedding": [3, 4]}], "usage": {"total_tokens": 7}},
@@ -143,13 +158,184 @@ async def test_image_embedding_uses_jina_protocol_and_reports_usage(tmp_path: Pa
 
     organ = EmbeddingOrgan(
         "image_embedding",
-        [ModelRoute(model, provider, None, None)],
+        [image_embedding_route()],
         KeyResolver(tmp_path / "test.env"),
         transport=httpx.MockTransport(respond),
     )
-    response = await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(b"abc",)))
+    response = await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(image,)))
     assert response.embeddings == ((3.0, 4.0),)
     assert response.attempts == [CallAttempt("picture", "jina", 7, 0)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("format_name", ["GIF", "WEBP"])
+async def test_image_embedding_converts_gif_and_webp_before_sending(
+    tmp_path: Path, format_name: str
+) -> None:
+    sent: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [image_embedding_route()],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    await organ.process(
+        OrganRequest("image_embedding", "", embedding_inputs=(make_image_bytes(format_name),))
+    )
+
+    with Image.open(BytesIO(base64.b64decode(sent[0]["input"][0]["image"]))) as image:
+        assert image.format == "PNG"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("format_name", "mode"), [("PNG", "RGBA"), ("JPEG", "RGB")])
+async def test_image_embedding_keeps_png_and_jpeg_bytes(
+    tmp_path: Path, format_name: str, mode: str
+) -> None:
+    original = make_image_bytes(format_name, mode)
+    sent: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [image_embedding_route()],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(original,)))
+
+    assert base64.b64decode(sent[0]["input"][0]["image"]) == original
+
+
+@pytest.mark.asyncio
+async def test_image_embedding_preserves_input_order(tmp_path: Path) -> None:
+    png = make_image_bytes("PNG")
+    gif = make_animated_gif_bytes()
+    sent: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": 0, "embedding": [1.0]},
+                    {"index": 1, "embedding": [2.0]},
+                ]
+            },
+        )
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [image_embedding_route()],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(png, gif)))
+
+    images = sent[0]["input"]
+    assert base64.b64decode(images[0]["image"]) == png
+    with Image.open(BytesIO(base64.b64decode(images[1]["image"]))) as image:
+        assert image.format == "PNG"
+        assert image.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_image_embedding_broken_bytes_fail_without_request(tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [image_embedding_route()],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    with pytest.raises(OrganCallError) as caught:
+        await organ.process(
+            OrganRequest("image_embedding", "", embedding_inputs=(b"not an image",))
+        )
+
+    assert "图片格式不支持" in caught.value.failures[0]
+    assert requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "expected_local"),
+    [("http://127.0.0.1:9988/v1", True), ("https://api.jina.ai/v1", False)],
+)
+async def test_image_embedding_passes_loopback_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    base_url: str,
+    expected_local: bool,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_post(
+        base: str, payload: dict[str, Any], params: dict[str, Any], **kwargs: Any
+    ) -> Any:
+        calls.append({"base": base, "payload": payload, "params": params, **kwargs})
+        return SimpleNamespace(
+            data=[{"index": 0, "embedding": [1.0, 2.0]}],
+            usage=SimpleNamespace(prompt_tokens=4, completion_tokens=0),
+        )
+
+    monkeypatch.setattr(llm_adapter, "_post_embeddings", fake_post)
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [image_embedding_route(base_url=base_url)],
+        KeyResolver(tmp_path / "test.env"),
+    )
+    response = await organ.process(
+        OrganRequest("image_embedding", "", embedding_inputs=(make_image_bytes("PNG"),))
+    )
+
+    assert response.embeddings == ((1.0, 2.0),)
+    assert calls[0]["base"] == base_url.rstrip("/")
+    assert calls[0]["local"] is expected_local
+    assert calls[0]["transport"] is None
+
+
+@pytest.mark.asyncio
+async def test_image_embedding_converts_in_worker_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    threads: list[threading.Thread] = []
+
+    def fake_images(inputs: Sequence[bytes]) -> tuple[str, ...]:
+        threads.append(threading.current_thread())
+        return tuple(base64.b64encode(value).decode("ascii") for value in inputs)
+
+    monkeypatch.setattr(llm_adapter, "_embedding_images", fake_images)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [image_embedding_route()],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    await organ.process(
+        OrganRequest("image_embedding", "", embedding_inputs=(make_image_bytes("PNG"),))
+    )
+
+    assert len(threads) == 1
+    assert threads[0] is not threading.main_thread()
 
 
 CLOUD_SECRET = "sk-cloud-secret"
