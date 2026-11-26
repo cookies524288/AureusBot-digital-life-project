@@ -131,6 +131,7 @@ def open_web(
             embedding_progress=core.embedding_progress,
             expression_recall=core.heartbeat.expression_recall,
             learning_call=learning_call,
+            live_events=core.heartbeat.live_events,
             expression_cluster_display=(
                 ExpressionClusterDisplay(core.paths.database_file, core.language)
                 if core.language is not None

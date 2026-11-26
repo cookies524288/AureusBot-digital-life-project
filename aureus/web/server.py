@@ -43,6 +43,7 @@ from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
+from aureus.heartbeat.live import TOPIC_TIMELINE, LiveEvent, LiveEventHub
 from aureus.heartbeat.memory_summary_source import VISIBLE_SUMMARY_SCOPES, WEB_PRIVATE_SCOPE
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
@@ -56,7 +57,13 @@ from aureus.memory import (
 from aureus.memory.imported_messages import ImportedPlatformHistory
 from aureus.organs import OrganRequest, OrganResponse, ToolDefinition
 from aureus.people import LINK_COMMAND, LINK_LIFETIME, AccountLink, PeopleDirectory, PeopleError
-from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from aureus.timeline import (
+    ActorType,
+    TimelineDatabase,
+    TimelineQuery,
+    TimelineRecord,
+    VisibilityScope,
+)
 
 from .auth import (
     MAX_PASSWORD_LENGTH,
@@ -113,6 +120,8 @@ MAX_HISTORY_LIMIT = 200
 WS_POLICY_VIOLATION = 1008
 # 每个连着的网页最多攒多少条待推送的消息；网页收得太慢就丢掉新消息并记日志，不拖住心跳。
 OUTBOX_LIMIT = 256
+# 实时事件最多占用待推送队列的尾部这么多格，前面的留给聊天消息；网页收得太慢时先丢事件。
+LIVE_OUTBOX_RESERVE = 64
 # 连着期间，隔多久核对一次登录是否还有效（退出所有设备、改密码后要把已连上的踢掉）。
 SESSION_RECHECK_SECONDS = 30.0
 # 网页本身是随代码放在 static 目录里的一个静态文件，登录页、聊天页和设置页都在里面；
@@ -186,38 +195,48 @@ async def _send_error(socket: WebSocket, detail: str) -> None:
 
 async def _push(
     socket: WebSocket,
-    outbox: "asyncio.Queue[OutgoingMessage]",
+    outbox: "asyncio.Queue[OutgoingMessage | LiveEvent]",
     sessions: SessionStore,
     token: str,
+    live_events: LiveEventHub,
 ) -> None:
-    """把心跳交回的消息推给这个网页；登录失效了就把它踢下线。"""
+    """把心跳交回的消息和实时事件推给这个网页；登录失效了就把它踢下线。
+
+    实时事件只带类型和最小标识，网页收到后按需重新拉取。急停或关闭后暂停中的事件
+    直接丢掉，已经排在队列里的也不再发送。
+    """
     try:
         while True:
             try:
-                message = await asyncio.wait_for(outbox.get(), timeout=SESSION_RECHECK_SECONDS)
+                item = await asyncio.wait_for(outbox.get(), timeout=SESSION_RECHECK_SECONDS)
             except TimeoutError:
-                message = None
+                item = None
             if not await sessions.touch(token):
                 await socket.close(code=WS_POLICY_VIOLATION)
                 return
-            if message is not None:
+            if isinstance(item, LiveEvent):
+                if not live_events.paused:
+                    await socket.send_json(
+                        {"type": "event", "topic": item.topic, "data": dict(item.data)}
+                    )
+            elif item is not None:
                 await socket.send_json(
                     {
-                        "type": message.kind.value,
-                        "sender": message.sender_name,
-                        "content": message.content,
-                        "channel": message.channel,
-                        **({"id": message.timeline_id} if message.timeline_id is not None else {}),
+                        "type": item.kind.value,
+                        "sender": item.sender_name,
+                        "content": item.content,
+                        "channel": item.channel,
+                        **({"id": item.timeline_id} if item.timeline_id is not None else {}),
                         **(
-                            {"delivery_key": f"{message.timeline_id}:{message.reply_segment}"}
-                            if message.timeline_id is not None and message.reply_segment is not None
+                            {"delivery_key": f"{item.timeline_id}:{item.reply_segment}"}
+                            if item.timeline_id is not None and item.reply_segment is not None
                             else {}
                         ),
-                        **({"time": message.timestamp.isoformat()} if message.timestamp else {}),
+                        **({"time": item.timestamp.isoformat()} if item.timestamp else {}),
                     }
                 )
-                if message.confirm_delivery is not None:
-                    message.confirm_delivery()
+                if item.confirm_delivery is not None:
+                    item.confirm_delivery()
     except Exception:
         # 连接已经断了或发不出去：这个网页的推送结束，不影响别的网页和心跳。
         logger.debug("网页连接的推送结束", exc_info=True)
@@ -296,12 +315,20 @@ def create_app(
     embedding_progress: EmbeddingProgress | None = None,
     expression_recall: ExpressionRecall | None = None,
     learning_call: Callable[[OrganRequest], Awaitable[OrganResponse]] | None = None,
+    live_events: LiveEventHub | None = None,
 ) -> FastAPI:
     """建网页服务的 FastAPI 应用。依赖都由核心组装时传进来，这里不自己打开任何东西。"""
     # 接口文档会把所有接口列给没登录的人看，关掉。
     app = FastAPI(title="AureusBot", docs_url=None, redoc_url=None, openapi_url=None)
     max_age = config.session_days * SECONDS_PER_DAY
     instance = uuid4().hex
+    live = live_events if live_events is not None else LiveEventHub()
+
+    def publish_timeline_event(record: TimelineRecord) -> None:
+        """时间线追加了就通知网页；只带序号和事件类型，正文不经过推送（3.43）。"""
+        live.publish(LiveEvent(TOPIC_TIMELINE, {"id": record.id, "event_type": record.event_type}))
+
+    timeline.add_append_listener(publish_timeline_event)
 
     # 同步依赖会被 FastAPI 放进工作线程，不能和事件循环并发使用同一个 SQLite 连接。
     async def require_session(request: Request) -> str:
@@ -551,15 +578,30 @@ def create_app(
             await socket.close(code=WS_POLICY_VIOLATION)
             return
         await socket.accept()
-        outbox: asyncio.Queue[OutgoingMessage] = asyncio.Queue(maxsize=OUTBOX_LIMIT)
+        outbox: asyncio.Queue[OutgoingMessage | LiveEvent] = asyncio.Queue(maxsize=OUTBOX_LIMIT)
         unsubscribe = channel.subscribe(outbox.put_nowait)
-        pusher = asyncio.create_task(_push(socket, outbox, sessions, token))
+        unsubscribe_live: Callable[[], None] | None = None
+        if socket.query_params.get("events") == "1":
+            # 新网页显式订阅实时事件；旧页面不带这个参数，照旧只收聊天消息（3.43）。
+            def enqueue_live(event: LiveEvent) -> None:
+                if outbox.qsize() >= OUTBOX_LIMIT - LIVE_OUTBOX_RESERVE:
+                    logger.debug("网页收得太慢，丢掉一条实时事件")
+                    return
+                try:
+                    outbox.put_nowait(event)
+                except asyncio.QueueFull:
+                    logger.debug("网页收得太慢，丢掉一条实时事件")
+
+            unsubscribe_live = live.subscribe(enqueue_live)
+        pusher = asyncio.create_task(_push(socket, outbox, sessions, token, live))
         try:
             await _listen(socket, channel, sessions, token)
         except (WebSocketDisconnect, RuntimeError):
             pass  # 网页断开，或者已经被踢下线
         finally:
             unsubscribe()
+            if unsubscribe_live is not None:
+                unsubscribe_live()
             pusher.cancel()
 
     # ---------- 设置页接口 ----------
