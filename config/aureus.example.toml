@@ -48,13 +48,13 @@ config_version = 1
 # inbox_attention_enabled = true
 # 每次自主翻阅在所有选中会话合计读取的条数，范围 1–200。
 # inbox_read_limit = 35
-# 开启后合并同会话来信，规划器用流式请求。思考期间新来信可重开本轮规划。
-# inbox_debounce_enabled = true
-# inbox_debounce_seconds = 4.0
-# 防抖最多等多久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口。
-# 必须不小于 inbox_debounce_seconds。
-# inbox_debounce_max_wait_seconds = 20.0
-# inbox_debounce_max_restarts = 4
+# 消息防抖档位：off / fast / natural / steady。合并同一会话连续来信；
+# 沉稳档安静 4 秒、活跃 7 秒、同人续发 4 秒、换人 2 秒；裸图至少 4 秒、整批最多 8 秒、@或提及最多 1 秒。
+# message_debounce_mode = "steady"
+# 快速反应模式：规划器用流式请求，思考期间的新消息可打断并带上新消息重来。
+# planner_message_steering = true
+# 一轮规划最多被打断重来几次，范围 0–20；0 表示从不打断。
+# planner_steering_max_interrupts = 4
 # QQ 表情收集与回复选择。配置 [organs.emoji] 可使用专门的文字模型。
 # qq_emoji_collection_enabled = false
 # qq_emoji_selection_enabled = true

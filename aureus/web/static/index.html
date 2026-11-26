@@ -6099,10 +6099,9 @@ const CFG_FIELDS = {
   'heartbeat.working_memory_retain': ['保留近期经历条数', '每次整理后保留在工作记忆中的原始经历条数。保存后重启生效。'],
   'heartbeat.inbox_attention_enabled': ['自主翻阅和特别关心调整', '允许自主翻阅收件箱，并由规划器调整特别关心；关闭后仍会因重要来信唤醒。'],
   'heartbeat.inbox_read_limit': ['自主翻阅条数上限', '每次自主翻阅从所有选中会话合计读取的消息条数。优先唤醒的来信单独处理。保存后重启生效。'],
-  'heartbeat.inbox_debounce_max_wait_seconds': ['防抖最多等待（秒）', '人多的群里消息不断时，从这一批最早的一条消息算起，最多等这么久就开始规划；必须不小于防抖窗口。保存后重启生效。'],
-  'heartbeat.inbox_debounce_enabled': ['会话消息防抖', '默认开启：合并短时间内同一会话的新消息，规划使用流式请求。关闭后保存，重启生效。'],
-  'heartbeat.inbox_debounce_seconds': ['防抖窗口秒数', '同一会话的每条新消息都会重新开始计时。保存后重启生效。'],
-  'heartbeat.inbox_debounce_max_restarts': ['规划重开次数上限', '同一轮规划最多可被新消息打断并重开的次数。保存后重启生效。'],
+  'heartbeat.message_debounce_mode': ['消息防抖档位', '合并同一会话短时间内连续来信的等待档位：关闭不等待；快速安静 1 秒、活跃 3 秒、同人 1 秒、换人 0.5 秒；自然 2/5/2/0.5 秒；沉稳 4/7/4/2 秒。三档共用规则：裸图开批至少 4 秒，批次内纯表情包不延长，整批最多 8 秒，@或提及最多 1 秒。群聊和私聊共用一个档位。保存后重启生效。'],
+  'heartbeat.planner_message_steering': ['快速反应模式', '开启时规划器使用流式请求，思考期间的新消息可以打断并带上新消息重来；关闭后规划器不被打断，只按防抖等待。保存后重启生效。'],
+  'heartbeat.planner_steering_max_interrupts': ['打断重来上限', '一轮规划最多因新消息打断重来几次，范围 0–20；0 表示从不打断。用尽后本轮不再打断，保证最终回复。保存后重启生效。'],
   'heartbeat.qq_emoji_collection_enabled': ['QQ 表情收集', '允许从收到的 QQ 消息收集表情，并识别表情内容。'],
   'heartbeat.qq_emoji_selection_enabled': ['QQ 回复表情选择', '回复计划需要表情时，允许从可发送的候选中选取。'],
   'heartbeat.qq_emoji_maintenance_enabled': ['QQ 表情定期复查', '定期检查表情库候选的可用状态，更新可发送的候选。'],
@@ -6270,6 +6269,10 @@ const CFG_FIELDS = {
   'qq.action_timeout_seconds': ['QQ 操作超时（秒）', '向 QQ 网关发起一次操作后，最多等待多少秒取得响应。'],
   'qq.reconnect_seconds': ['QQ 重连等待（秒）', '与 QQ 网关断开或连接失败后，等待多久再连接。'],
 };
+// 少数 enum 字段的选项在页面上显示中文，值仍是配置里的英文；只影响标签，不改控件语义。
+const CFG_CHOICE_LABELS = {
+  'heartbeat.message_debounce_mode': {off:'关闭', fast:'快速', natural:'自然', steady:'沉稳'},
+};
 const CFG_FONT = {key:'aureus-font', id:'cf-font', name:'界面字体', hint:'选择这台浏览器显示 Aureus 时使用的字体，切换后立即生效。'};
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
 const cf = { data: null, schema: null, session: null, readonly: new Set(), biochemicalSources: {}, noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
@@ -6332,7 +6335,8 @@ function cfControl(sec, field, info, attributes) {
     return el('label', { class: 'switch' }, box, el('span', { class: 'track' }));
   }
   if (info.choices) {
-    const select = el('select', attributes, info.choices.map(choice => el('option', { value: choice, text: choice, selected: choice === current })));
+    const labels = CFG_CHOICE_LABELS[key] || {};
+    const select = el('select', attributes, info.choices.map(choice => el('option', { value: choice, text: labels[choice] || choice, selected: choice === current })));
     select.addEventListener('change', () => cfSet(key, select.value, original));
     return select;
   }
