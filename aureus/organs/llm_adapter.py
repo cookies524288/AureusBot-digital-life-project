@@ -17,6 +17,7 @@ import atexit
 import base64
 import json
 import os
+import sys
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import aclosing
@@ -195,22 +196,25 @@ REJECTED_BEFORE_PROCESSING_ERROR_NAMES = frozenset(
     }
 )
 
-# 值得重试的错误：临时性的（超时、断线、限流、服务商那边出问题），过一会可能就好了。
-# 其余错误（认证失败、请求被拒、不认识的错误）重试也不会成功，只会多花钱，直接换下一个模型。
-# 按类名匹配，沿继承链找，理由同上。
+# 值得重试的错误：临时性的（超时、断线、服务商那边出问题），过一会可能就好了（D132）。
+# 限流、认证失败、请求被拒和不认识的错误重试也不会成功，只会多花钱，直接换下一个模型。
+# 按类名匹配，沿继承链找，理由同上。httpx 的 TimeoutException、NetworkError、ProtocolError
+# 覆盖了直连路径的 ReadTimeout、ConnectError、RemoteProtocolError 等子类。
 RETRYABLE_ERROR_NAMES = frozenset(
     {
         "Timeout",
         "TimeoutError",
-        "RateLimitError",
+        "TimeoutException",
         "APIConnectionError",
+        "ConnectError",
+        "NetworkError",
+        "ProtocolError",
         "ServiceUnavailableError",
         "InternalServerError",
     }
 )
-# 重试前等待：第 n 次重试等 RETRY_BACKOFF_SECONDS * 2^(n-1) 秒，最多 MAX_BACKOFF_SECONDS 秒。
+# 重试前等待。D132 起瞬时失败只重试一次，所以只有这一档。
 RETRY_BACKOFF_SECONDS = 1.0
-MAX_BACKOFF_SECONDS = 30.0
 
 # 没配置 max_tokens、又没返回用量时，输出按这么多 token 记。
 # 宁可多记（D37）：常见对话模型默认的最大输出长度，大多不超过它。
@@ -288,6 +292,9 @@ def _provider_arguments(provider: ProviderConfig, resolver: KeyResolver) -> dict
 
 
 def _retryable(error: Exception) -> bool:
+    # 直连路径的 5xx 是 HTTPStatusError，按状态码判断；4xx（含限流）不重试。
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code >= 500
     return any(error_class.__name__ in RETRYABLE_ERROR_NAMES for error_class in type(error).__mro__)
 
 
@@ -721,11 +728,22 @@ async def _direct_chat_stream(
             yield _stream_chunk(result)
 
 
+def _share_remote_client(library: Any | None, transport: httpx.AsyncBaseTransport | None) -> None:
+    """让 litellm 的 OpenAI 兼容调用复用同一个带连接池的远程客户端（D132）。
+
+    远程客户端沿用环境里的代理设置（trust_env=True）；本地回环另走直连，不经过这里。
+    litellm 的其它协议由它自己按服务商缓存连接池。
+    """
+    if library is not None and getattr(library, "__name__", "") == "litellm":
+        library.aclient_session = _shared_client(transport, trust_env=True)
+
+
 async def _send_chat(
     route: ModelRoute,
     completion: CompletionFunction | None,
     kwargs: dict[str, Any],
     *,
+    library: Any | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     on_request: Callable[[float], None] | None = None,
 ) -> Any:
@@ -735,6 +753,7 @@ async def _send_chat(
         route: 这次走的模型路线。
         completion: litellm 的调用函数；本地直连时用不到，可以是 None。
         kwargs: litellm 风格的请求参数（模型、消息、超时等）。
+        library: 已导入的 litellm 模块，用来设置共享的远程客户端；测试的假模块不算。
         transport: 测试用的假网络；正式运行传 None。
         on_request: 直连非流式请求的耗时回调，测速用。
 
@@ -744,6 +763,7 @@ async def _send_chat(
     endpoint = local_chat_endpoint(route)
     if endpoint is None:
         assert completion is not None  # 远程路线在构造器官时已加载 litellm。
+        _share_remote_client(library, transport)
         return await completion(**kwargs)
     payload = {"model": route.model.identifier}
     for key in (
@@ -885,6 +905,7 @@ async def probe_model(
                     route,
                     completion,
                     {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                    library=library,
                     transport=transport,
                     on_request=measured.append,
                 )
@@ -928,6 +949,7 @@ async def probe_model(
                             "stream": True,
                             "max_tokens": _MODEL_TEST_MAX_TOKENS,
                         },
+                        library=library,
                         transport=transport,
                     )
                     text, usage, reasoning = await _read_stream(
@@ -959,6 +981,7 @@ async def probe_model(
                         route,
                         completion,
                         {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                        library=library,
                         transport=transport,
                     )
                 actual = extract_usage(result)
@@ -993,6 +1016,7 @@ async def probe_model(
                             route,
                             completion,
                             {**params, **inputs, "max_tokens": _MODEL_TEST_MAX_TOKENS},
+                            library=library,
                             transport=transport,
                         )
                     actual = extract_usage(result)
@@ -1398,12 +1422,17 @@ class LLMOrgan:
         self._key_resolver = key_resolver
         # 非空真实器官在 prepare 工作线程加载，不能把首次导入留到事件循环。
         self._completion = completion
+        # 远程调用要让 litellm 复用同一个带连接池的客户端（D132）；测试换成假的加载函数时
+        # 这里可能拿不到真正的模块，就不设置。
+        self._library: Any | None = None
         if self._completion is None and llm_routes:
-            self._completion = (
-                _import_litellm().atranscription
-                if organ_id == "voice"
-                else _load_litellm_completion()
-            )
+            if organ_id == "voice":
+                library = _import_litellm()
+                self._library = library
+                self._completion = library.atranscription
+            else:
+                self._completion = _load_litellm_completion()
+                self._library = sys.modules.get("litellm")
         self._token_counter = token_counter or count_prompt_tokens
         self._sleep = sleep or asyncio.sleep
         self._prompts = prompts
@@ -1549,11 +1578,11 @@ class LLMOrgan:
         attempts: list[CallAttempt],
         request: OrganRequest,
     ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
-        """对一条路线发请求，临时性的失败按 max_retry 重试。
+        """对一条路线发请求；瞬时失败只重试一次（D132）。
 
         重试由这里自己做，不交给 litellm（num_retries 固定为 0）：litellm 内部重试了
         几次看不到，账本只能按最多次估算；自己重试，每一次真正发出去的请求都有一条
-        独立的记录（审查 H4）。
+        独立的记录（审查 H4）。D132 起瞬时失败只重试一次；max_retry=0 仍然表示不重试。
 
         Args:
             route: 这次走的模型路线。
@@ -1604,7 +1633,8 @@ class LLMOrgan:
             kwargs["messages"] = [*kwargs["messages"], *history]
             tool_names = {tool.name for tool in request.tools}
             extra_bytes += len(json.dumps((tools, history), ensure_ascii=False).encode("utf-8"))
-        requests = 1 + provider.max_retry
+        # D132：瞬时失败只重试一次；max_retry=0 仍然表示不重试。
+        requests = 2 if provider.max_retry > 0 else 1
         for number in range(1, requests + 1):
             try:
                 if self.organ_id == "voice":
@@ -1623,8 +1653,7 @@ class LLMOrgan:
                     number,
                     failure.reason,
                 )
-                delay = min(RETRY_BACKOFF_SECONDS * 2 ** (number - 1), MAX_BACKOFF_SECONDS)
-                await self._sleep(delay)
+                await self._sleep(RETRY_BACKOFF_SECONDS)
         raise AssertionError("max_retry 不会是负数，循环至少执行一次")  # pragma: no cover
 
     async def _request(
@@ -1638,15 +1667,21 @@ class LLMOrgan:
     ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
         """真正发出一次请求；流式没有正文时再发一次非流式重试（D127）。
 
-        失败的请求先记进 attempts，再抛出。
+        失败的请求先记进 attempts，再抛出。D132 起非流式的空响应也重试一次；
+        流式已经用非流式回退过，就不再额外重试。
         """
         tools = ToolCallCollector(tool_names) if tool_names else None
         reasoning_only = False
+        fallback_used = False
         try:
             completion = self._completion
             assert completion is not None  # 无可用路线时 process 已拒绝，不会走到这里。
             response = await _send_chat(
-                route, completion, kwargs, transport=self._transport
+                route,
+                completion,
+                kwargs,
+                library=self._library,
+                transport=self._transport,
             )
             if kwargs.get("stream"):
                 text, usage, reasoning_only = await _read_stream(response, tools)
@@ -1667,8 +1702,13 @@ class LLMOrgan:
                         for key, value in kwargs.items()
                         if key not in ("stream", "stream_options")
                     }
+                    fallback_used = True
                     response = await _send_chat(
-                        route, completion, retry_kwargs, transport=self._transport
+                        route,
+                        completion,
+                        retry_kwargs,
+                        library=self._library,
+                        transport=self._transport,
                     )
                     usage = extract_usage(response)
                     text = _read_text(response)
@@ -1702,16 +1742,19 @@ class LLMOrgan:
                 )
             attempts.append(attempt)
             # from None：不带上原始异常，免得追踪信息里带出请求头里的密钥。
-            raise _RouteFailureError(reason, retryable=_retryable(error)) from None
+            # 流式已经用非流式回退过，这次失败不再触发第二次重试（D132）。
+            raise _RouteFailureError(
+                reason, retryable=_retryable(error) and not fallback_used
+            ) from None
         if not usage.known:
             usage = self._estimate_usage(route, messages, 1, extra_bytes)
         tool_calls = tools.finish() if tools is not None else ()
         if text is None and tool_calls == ():
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
-            # 思考上），这次请求照样要记账。重试只会再花一次钱，所以不重试。
+            # 思考上），这次请求照样要记账。D132：非流式空响应重试一次。
             reason = REASONING_ONLY_REASON if reasoning_only else EMPTY_REPLY_REASON
             attempts.append(self._attempt(route, usage, reason))
-            raise _RouteFailureError(reason)
+            raise _RouteFailureError(reason, retryable=not fallback_used)
         suggestion = (text or "") if tool_calls is not None else ""
         return suggestion, tool_calls, self._attempt(route, usage)
 

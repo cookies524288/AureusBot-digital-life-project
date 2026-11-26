@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import httpx
@@ -768,6 +768,7 @@ def local_chat_organ(
         keys,
         FakeCompletion(),
         fixed_counter,
+        SleepRecorder(),
         transport=transport,
     )
 
@@ -1011,10 +1012,10 @@ async def test_local_chat_usage_and_failures_match_litellm_mapping(keys: KeyReso
     assert stream_bodies[0]["stream"] is True
     assert stream_bodies[0]["stream_options"] == {"include_usage": True}
 
-    for status, reason, rejected in (
-        (401, "认证失败（密钥无效？）", True),
-        (429, "被限流", True),
-        (500, "服务商内部错误", False),
+    for status, reason, rejected, attempts in (
+        (401, "认证失败（密钥无效？）", True, 1),
+        (429, "被限流", True, 1),
+        (500, "服务商内部错误", False, 2),
     ):
 
         def fail(request: httpx.Request, status: int = status) -> httpx.Response:
@@ -1023,11 +1024,58 @@ async def test_local_chat_usage_and_failures_match_litellm_mapping(keys: KeyReso
         failing = local_chat_organ(keys, httpx.MockTransport(fail))
         with pytest.raises(OrganCallError, match=reason) as error:
             await failing.process(ask())
-        [attempt] = error.value.attempts
-        assert attempt.failure_reason == reason
-        assert attempt.estimated is (not rejected)
-        if rejected:
-            assert attempt.budget_tokens == 0
+        assert len(error.value.attempts) == attempts
+        for attempt in error.value.attempts:
+            assert attempt.failure_reason == reason
+            assert attempt.estimated is (not rejected)
+            if rejected:
+                assert attempt.budget_tokens == 0
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_local_calls_stay_direct_and_proxy_free(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 本地回环直连：不走 litellm、不读环境代理，并复用同一个客户端（D131、D132）。
+    requests: list[httpx.Request] = []
+    created: list[tuple[httpx.AsyncClient, bool]] = []
+
+    class RecordingClient(httpx.AsyncClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            created.append((self, bool(kwargs.get("trust_env"))))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(llm_adapter.httpx, "AsyncClient", RecordingClient)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "嗨"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+            },
+        )
+
+    completion = FakeCompletion()
+    organ = LLMOrgan(
+        "replyer",
+        [local_chat_route()],
+        keys,
+        completion,
+        fixed_counter,
+        transport=httpx.MockTransport(respond),
+    )
+    await organ.process(ask())
+    await organ.process(ask())
+
+    assert completion.calls == []  # 本地直连不经过 litellm
+    assert len(created) == 1  # 两次调用复用同一个客户端
+    assert created[0][1] is False  # trust_env=False：不读环境代理
+    assert {str(request.url) for request in requests} == {
+        LOCAL_CHAT_URL + "/chat/completions"
+    }
     await close_shared_clients()
 
 
@@ -1063,6 +1111,38 @@ async def test_local_chat_stream_empty_reply_falls_back_to_non_streaming(
 
 
 @pytest.mark.asyncio
+async def test_remote_calls_reuse_one_client(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 远程服务商共用同一个带连接池的客户端，沿用环境代理设置（D132）。
+    created: list[tuple[httpx.AsyncClient, bool]] = []
+
+    class RecordingClient(httpx.AsyncClient):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            created.append((self, bool(kwargs.get("trust_env"))))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(llm_adapter.httpx, "AsyncClient", RecordingClient)
+
+    async def chunks() -> AsyncIterator[Any]:
+        yield make_stream_chunk(content="远程")
+
+    library = ModuleType("litellm")
+    library.acompletion = FakeCompletion(chunks(), chunks())  # type: ignore[attr-defined]
+    monkeypatch.setattr(llm_adapter, "_import_litellm", lambda: library)
+    config = make_config()
+    route = ModelRoute(config.models[0], config.providers[0], None, None)
+
+    await probe_model(route.model, route.provider, keys)
+    await probe_model(route.model, route.provider, keys)
+
+    assert len(created) == 1  # 两次远程调用复用同一个客户端
+    assert created[0][1] is True  # trust_env=True：沿用环境代理设置
+    assert library.aclient_session is created[0][0]  # type: ignore[attr-defined]
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
 async def test_remote_chat_still_uses_litellm(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1093,7 +1173,7 @@ async def test_first_model_success_passes_the_configured_call_arguments(keys: Ke
     assert call["model"] == "openai/big-model"
     assert call["api_base"] == "https://api.example.com/v1"
     assert call["api_key"] == CLOUD_SECRET
-    assert call["timeout"] == 60.0
+    assert call["timeout"] == 90.0
     assert call["num_retries"] == 0  # 重试由适配器自己做，每次请求都记账（审查 H4）
     assert call["temperature"] == 0.9  # 模型自己的
     assert call["max_tokens"] == 300  # 器官上的，优先于模型的 2000
@@ -1125,22 +1205,22 @@ async def test_protocol_selects_the_litellm_model_prefix(keys: KeyResolver, prot
 
 @pytest.mark.asyncio
 async def test_failed_model_falls_through_to_the_next(keys: KeyResolver) -> None:
-    # 大模型重试用完（1 次加 2 次重试）仍被限流，才顺延到小模型。
-    limited = [RateLimitError(f"限流 {CLOUD_SECRET}")] * 3
-    completion = FakeCompletion(*limited, make_response("备用"))
+    # 限流不重试（D132），大模型失败一次就顺延到小模型。
+    completion = FakeCompletion(RateLimitError(f"限流 {CLOUD_SECRET}"), make_response("备用"))
     response = await make_organ(completion, keys).process(ask())
 
     assert response.suggestion == "备用"
     assert response.metadata["model"] == "small"
     assert response.metadata["failures_before_success"] == ["big：被限流"]
     # 本地服务商不需要密钥：不带 api_key，也不带云端的地址。
-    assert "api_key" not in completion.calls[3]
-    assert "api_base" not in completion.calls[3]
+    assert "api_key" not in completion.calls[1]
+    assert "api_base" not in completion.calls[1]
 
 
 @pytest.mark.asyncio
 async def test_all_models_failing_raises_without_leaking_the_secret(keys: KeyResolver) -> None:
-    completion = FakeCompletion(*[RateLimitError(CLOUD_SECRET)] * 3, *[Timeout("x")] * 3)
+    # 限流不重试，超时重试一次（D132）：大模型 1 次、小模型 2 次。
+    completion = FakeCompletion(RateLimitError(CLOUD_SECRET), *[Timeout("x")] * 2)
     with pytest.raises(OrganCallError) as info:
         await make_organ(completion, keys).process(ask())
 
@@ -1174,11 +1254,12 @@ async def test_missing_key_skips_the_model_without_sending_a_request(tmp_path: P
 @pytest.mark.asyncio
 async def test_empty_reply_still_records_the_cost_it_incurred(keys: KeyResolver) -> None:
     # 推理模型把 token 都花在思考上，内容为空，但这笔钱已经花了。
+    # 空响应重试一次（D132），两次都失败才顺延到小模型。
     wasted = make_response("  ", prompt=1000, completion=500)
-    completion = FakeCompletion(wasted, make_response("备用"))
+    completion = FakeCompletion(wasted, wasted, make_response("备用"))
     response = await make_organ(completion, keys).process(ask())
 
-    assert response.metadata["wasted_cost"] == pytest.approx(0.008)
+    assert response.metadata["wasted_cost"] == pytest.approx(0.016)
     assert response.metadata["cost"] == 0.0
     assert EMPTY_REPLY_REASON in response.metadata["failures_before_success"][0]
 
@@ -1193,7 +1274,8 @@ async def test_empty_reply_still_records_the_cost_it_incurred(keys: KeyResolver)
 )
 @pytest.mark.asyncio
 async def test_malformed_replies_count_as_failures(keys: KeyResolver, bad: Any) -> None:
-    completion = FakeCompletion(bad, bad)
+    # 两个模型各重试一次空响应（D132）。
+    completion = FakeCompletion(bad, bad, bad, bad)
     with pytest.raises(OrganCallError, match=EMPTY_REPLY_REASON):
         await make_organ(completion, keys).process(ask())
 
@@ -1202,8 +1284,8 @@ async def test_malformed_replies_count_as_failures(keys: KeyResolver, bad: Any) 
 async def test_wasted_cost_is_carried_by_the_final_error(keys: KeyResolver) -> None:
     wasted = make_response(None, prompt=1000, completion=500)
     with pytest.raises(OrganCallError) as info:
-        await make_organ(FakeCompletion(wasted, wasted), keys).process(ask())
-    assert info.value.wasted_cost == pytest.approx(0.008)
+        await make_organ(FakeCompletion(wasted, wasted, wasted, wasted), keys).process(ask())
+    assert info.value.wasted_cost == pytest.approx(0.016)
 
 
 @pytest.mark.parametrize("bad", [None, 12.0, True, -3])
@@ -1321,7 +1403,7 @@ async def test_unpriced_model_reports_unknown_cost_but_still_counts_tokens(
 async def test_unpriced_empty_reply_makes_the_wasted_cost_unknown(keys: KeyResolver) -> None:
     wasted = make_response(None, prompt=1000, completion=500)
     with pytest.raises(OrganCallError) as info:
-        await make_unpriced_organ(FakeCompletion(wasted), keys).process(ask())
+        await make_unpriced_organ(FakeCompletion(wasted, wasted), keys).process(ask())
     assert info.value.wasted_cost is None
 
 
@@ -1330,10 +1412,10 @@ async def test_rejected_request_records_zero_tokens_and_zero_cost_even_when_unpr
     keys: KeyResolver,
 ) -> None:
     # 服务商明确拒绝，没有处理请求：用量确实是 0，费用也确实是 0，不是“未知”（12.3 节）。
-    completion = FakeCompletion(*[RateLimitError("x")] * 3)
+    completion = FakeCompletion(RateLimitError("x"))
     with pytest.raises(OrganCallError) as info:
         await make_unpriced_organ(completion, keys).process(ask())
-    assert len(info.value.attempts) == 3  # 限流值得重试：1 次加 2 次重试，每次都是一条记录
+    assert len(info.value.attempts) == 1  # 限流不重试（D132）
     for attempt in info.value.attempts:
         assert (attempt.prompt_tokens, attempt.completion_tokens) == (0, 0)
         assert attempt.estimated is False
@@ -1354,21 +1436,81 @@ async def test_rejection_is_recognised_through_the_class_hierarchy(keys: KeyReso
 
 
 @pytest.mark.asyncio
-async def test_every_timed_out_request_is_estimated_as_used_and_recorded_separately(
-    keys: KeyResolver,
-) -> None:
-    # 超时不能当成免费：对方可能已经算完了（12.3 节）。重试的每一次都是一条独立的记录。
-    completion = FakeCompletion(*[Timeout("x")] * 3)
+async def test_usage_records_both_attempts(keys: KeyResolver) -> None:
+    # 超时不能当成免费：对方可能已经算完了（12.3 节）。D132 只重试一次，两次尝试各记一条。
+    completion = FakeCompletion(*[Timeout("x")] * 2)
     with pytest.raises(OrganCallError) as info:
         await make_unpriced_organ(completion, keys).process(ask())
-    assert len(completion.calls) == 3  # 1 次加上默认的 2 次重试
-    assert len(info.value.attempts) == 3
+    assert len(completion.calls) == 2
+    assert len(info.value.attempts) == 2
     for attempt in info.value.attempts:
         assert attempt.prompt_tokens == COUNTED_PROMPT_TOKENS
         assert attempt.completion_tokens == ASSUMED_COMPLETION_TOKENS
         assert attempt.estimated is True
         assert attempt.cost is None  # 用量是估算的，费用算不出来
     assert info.value.wasted_cost is None
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_retries_once(keys: KeyResolver) -> None:
+    # 超时重试一次（D132）：同一模型、同一请求，第二次成功。
+    sleep = SleepRecorder()
+    completion = FakeCompletion(Timeout("x"), make_response("嗨", prompt=10, completion=5))
+    response = await make_unpriced_organ(completion, keys, sleep).process(ask())
+
+    assert response.suggestion == "嗨"
+    assert len(completion.calls) == 2
+    assert [attempt.succeeded for attempt in response.attempts] == [False, True]
+    assert sleep.delays == [RETRY_BACKOFF_SECONDS]
+
+    # 直连路径的 5xx 同样重试一次。
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(500, json={"error": "x"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "嗨"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+            },
+        )
+
+    direct = local_chat_organ(keys, httpx.MockTransport(respond))
+    result = await direct.process(ask())
+    assert result.suggestion == "嗨"
+    assert len(requests) == 2
+    assert [attempt.succeeded for attempt in result.attempts] == [False, True]
+    await close_shared_clients()
+
+
+@pytest.mark.parametrize(
+    "error_name", ["RateLimitError", "AuthenticationError", "BadRequestError"]
+)
+@pytest.mark.asyncio
+async def test_client_errors_do_not_retry(keys: KeyResolver, error_name: str) -> None:
+    # 4xx / 认证失败 / 限流不重试（D132）。
+    sleep = SleepRecorder()
+    error_type = type(error_name, (Exception,), {})
+    completion = FakeCompletion(error_type("x"))
+    with pytest.raises(OrganCallError):
+        await make_unpriced_organ(completion, keys, sleep).process(ask())
+    assert len(completion.calls) == 1
+    assert sleep.delays == []
+
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(429, json={"error": "x"})
+
+    direct = local_chat_organ(keys, httpx.MockTransport(respond))
+    with pytest.raises(OrganCallError, match="被限流"):
+        await direct.process(ask())
+    assert len(requests) == 1
+    await close_shared_clients()
 
 
 @pytest.mark.asyncio
@@ -1389,15 +1531,12 @@ async def test_retry_after_a_failure_records_both_requests(keys: KeyResolver) ->
 
 
 @pytest.mark.asyncio
-async def test_retry_waits_longer_each_time(keys: KeyResolver) -> None:
+async def test_retry_waits_before_the_second_attempt(keys: KeyResolver) -> None:
     sleep = SleepRecorder()
-    completion = FakeCompletion(*[Timeout("x")] * 3)
+    completion = FakeCompletion(*[Timeout("x")] * 2)
     with pytest.raises(OrganCallError):
         await make_unpriced_organ(completion, keys, sleep).process(ask())
-    assert sleep.delays == [
-        RETRY_BACKOFF_SECONDS,
-        RETRY_BACKOFF_SECONDS * 2,
-    ]  # 最后一次失败后不再等
+    assert sleep.delays == [RETRY_BACKOFF_SECONDS]  # 最后一次失败后不再等
 
 
 @pytest.mark.parametrize("error_name", ["AuthenticationError", "BadRequestError"])
@@ -1415,13 +1554,15 @@ async def test_errors_that_cannot_succeed_are_not_retried(
 
 
 @pytest.mark.asyncio
-async def test_empty_reply_is_not_retried(keys: KeyResolver) -> None:
-    # 空回复已经花了 token，再试一次只会再花一次。
-    completion = FakeCompletion(make_response(None, prompt=10, completion=5))
+async def test_empty_reply_retries_once(keys: KeyResolver) -> None:
+    # 空响应属于瞬时失败，重试一次（D132）；两次都空才报错。
+    empty = make_response(None, prompt=10, completion=5)
+    completion = FakeCompletion(empty, empty)
     with pytest.raises(OrganCallError) as info:
         await make_unpriced_organ(completion, keys).process(ask())
-    assert len(completion.calls) == 1
-    assert len(info.value.attempts) == 1
+    assert len(completion.calls) == 2
+    assert len(info.value.attempts) == 2
+    assert all(attempt.failure_reason == EMPTY_REPLY_REASON for attempt in info.value.attempts)
 
 
 @pytest.mark.asyncio
@@ -1466,16 +1607,20 @@ async def test_missing_key_reports_no_attempt(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_success_reports_every_attempt_in_order(keys: KeyResolver) -> None:
     wasted = make_response(None, prompt=1000, completion=500)
-    completion = FakeCompletion(wasted, make_response("备用", prompt=10, completion=5))
+    completion = FakeCompletion(
+        wasted, wasted, make_response("备用", prompt=10, completion=5)
+    )
     response = await make_organ(completion, keys).process(ask())
 
     assert [(a.model, a.provider, a.succeeded) for a in response.attempts] == [
+        ("big", "cloud", False),
         ("big", "cloud", False),
         ("small", "local", True),
     ]
     assert response.attempts[0].failure_reason == EMPTY_REPLY_REASON
     assert response.attempts[0].budget_tokens == 1500
-    assert response.attempts[1].budget_tokens == 15
+    assert response.attempts[1].budget_tokens == 1500
+    assert response.attempts[2].budget_tokens == 15
 
 
 @pytest.mark.parametrize("bad_count", [RuntimeError("坏了"), 0, -5, True, "12"])
@@ -1580,7 +1725,7 @@ async def test_reasoning_only_reply_is_not_sent_as_content(
         setattr(reply.choices[0].message, field, "内心推理")
         return reply
 
-    outcomes: list[Any] = [reasoning_reply()]
+    outcomes: list[Any] = [reasoning_reply(), reasoning_reply()]
     if stream:
 
         async def chunks() -> AsyncIterator[Any]:
@@ -1596,12 +1741,13 @@ async def test_reasoning_only_reply_is_not_sent_as_content(
         )
 
     assert "内心推理" not in str(error.value)
-    assert len(completion.calls) == (2 if stream else 1)
+    assert len(completion.calls) == 2
     if stream:
         assert completion.calls[0]["stream"] is True
         assert "stream" not in completion.calls[1]
     else:
         assert "stream" not in completion.calls[0]
+        assert "stream" not in completion.calls[1]
     assert all(not attempt.succeeded for attempt in error.value.attempts)
     assert error.value.attempts[-1].failure_reason == REASONING_ONLY_REASON
 
@@ -1633,7 +1779,8 @@ async def test_errors_do_not_trigger_fallback(
     keys: KeyResolver, error_name: str, during_stream: bool
 ) -> None:
     error_type = type(error_name, (Exception,), {})
-    calls = 3 if error_name in ("Timeout", "RateLimitError") else 1
+    # 超时重试一次；限流和认证失败不重试（D132）。
+    calls = 2 if error_name == "Timeout" else 1
 
     def outcome() -> Any:
         if not during_stream:
