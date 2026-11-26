@@ -27,7 +27,7 @@ color-scheme:light;
 :root[data-theme='dark']{
 --frame:#25292b;
 --bg:#2e3436;--surface:#373d3f;--surface-2:#414749;--border:#555753;
---text:#eeeeec;--text-2:#babdb6;
+--text:#eeeeec;--text-2:#babdb6;--ink-on-faded:#fff;--delete-glyph:var(--on-accent);
 --accent:#edd400;--accent-strong:#fce94f;--accent-soft:#48421f;--on-accent:#2e3436;
 --danger:#ef7676;--danger-soft:#4d2828;--ok:#8ae234;--ok-soft:#303f23;--warn:#fcaf3e;--warn-soft:#493521;
 --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 16px rgba(0,0,0,.35);
@@ -35,7 +35,7 @@ color-scheme:light;
 color-scheme:dark;}
 
 /* 浅色主题只加深主按钮和导航的金色，不改变共用强调色。 */
-:root:not([data-theme='dark']){--control-gold-deep:#755800;--ink-secondary:#556970;--ink-accent:#805f00;--ink-ok:#596900;--ink-warn:#aa3e12;--ink-danger:#b62927}
+:root:not([data-theme='dark']){--control-gold-deep:#755800;--ink-secondary:#556970;--ink-accent:#805f00;--ink-ok:#596900;--ink-warn:#aa3e12;--ink-danger:#b62927;--ink-on-faded:#000;--user-bubble-ink:#25292b}
 :root:not([data-theme='dark']) .btn.primary{background:var(--accent-strong);border-color:var(--accent-strong)}
 :root:not([data-theme='dark']) .btn.primary:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--control-gold-deep);border-color:var(--control-gold-deep)}
 :root:not([data-theme='dark']) :is(.nav-item,.nav-group){--text-2:var(--text);--accent-strong:var(--control-gold-deep)}
@@ -156,7 +156,7 @@ section.page{padding:18px 16px 24px}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
 .btn.primary:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--accent-strong);border-color:var(--accent-strong)}
-.btn.danger{color:var(--danger);border-color:var(--danger)}
+.btn.danger{color:var(--ink-danger,color-mix(in srgb,var(--danger) 80%,var(--text)));border-color:var(--danger)}
 .btn.danger:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--danger-soft)}
 .btn.small{padding:4px 10px;font-size:13px}
 .btn.ghost{border-color:transparent;background:none}
@@ -320,7 +320,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .msg .bubble{padding:9px 14px;border-radius:20px;white-space:pre-wrap;word-break:break-word}
 .msg .meta{font-size:11px;color:var(--text-2);padding:0 6px}
 .msg.user{align-self:flex-end;align-items:flex-end}
-.msg.user .bubble{background:var(--accent);color:var(--on-accent);border-bottom-right-radius:8px}
+.msg.user .bubble{background:var(--accent);color:var(--user-bubble-ink,var(--on-accent));border-bottom-right-radius:8px}
 .msg.me{align-self:flex-start}
 .msg.me .bubble{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:8px}
 .msg.person .bubble,.msg.system .bubble{background:var(--surface-2);border-bottom-left-radius:8px}
@@ -333,7 +333,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .composer textarea::-webkit-scrollbar{display:none}
 .composer .btn{flex:none;height:44px;border-radius:22px;padding:0 20px}
 .chat-log .empty{margin:auto;border:0;background:none}
-.typing-status{display:inline-block;margin:0 14px 8px;padding:5px 8px;border:1px solid var(--stitch);box-shadow:2px 2px var(--border);background:var(--surface);color:var(--text-2);font-size:12px}
+.typing-status{display:inline-block;margin:0 14px 8px;padding:5px 8px;border:1px solid var(--stitch);box-shadow:2px 2px var(--border);background:var(--surface);color:var(--ink-secondary,var(--text-2));font-size:12px}
 @media(min-width:821px){#chat-typing{padding-left:calc(var(--gutter) + 10px)}}
 #inbox-typing .msg{margin-top:8px}
 .typing-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -352,8 +352,8 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .tl-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .tl-toolbar select{width:auto}
 .tl-toolbar-bottom{margin-top:18px;padding-top:14px;border-top:1px dashed var(--stitch)}
-.chip{padding:3px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--text-2);font-size:13px;cursor:pointer}
-.chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-strong)}
+.chip{padding:3px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface);color:var(--ink-secondary,var(--text-2));font-size:13px;cursor:pointer}
+.chip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--ink-accent,var(--accent-strong))}
 .summary-card{border-left:4px solid var(--accent);margin-top:16px}
 .tl-list{position:relative;display:flex;flex-direction:column;gap:2px;padding-left:22px}
 .tl-list:empty{display:none}
@@ -482,10 +482,11 @@ nav.side .nav-label{text-align:center}
 .provider-list{display:flex;flex-direction:column;gap:2px;padding:8px;min-height:0;max-height:calc(100dvh - 230px);overflow:auto}
 .provider-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;align-items:center;border:0;border-radius:var(--radius-sm);padding:9px 10px;color:var(--text-2);background:transparent;cursor:pointer;text-align:left;overflow-wrap:anywhere}
 .provider-row .provider-name{grid-column:1;font-weight:600;color:var(--text);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.provider-row .provider-base{grid-column:1;font-size:11px;color:var(--text-2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.provider-row .provider-count{grid-column:2;grid-row:1/span 2;font-size:12px;color:var(--text-2);min-width:20px;text-align:right}
+.provider-row .provider-base{grid-column:1;font-size:11px;color:var(--ink-secondary,var(--text-2));min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.provider-row .provider-count{grid-column:2;grid-row:1/span 2;font-size:12px;color:var(--ink-secondary,var(--text-2));min-width:20px;text-align:right}
 .provider-row.active{background:var(--accent-soft);color:var(--accent-strong)}
-.provider-row.active .provider-name,.provider-row.active .provider-base,.provider-row.active .provider-count{color:var(--accent-strong)}
+.provider-row.active .provider-name{color:var(--accent-strong)}
+.provider-row.active .provider-base,.provider-row.active .provider-count{color:var(--ink-accent,var(--accent-strong))}
 .provider-row:not([aria-disabled=true]):hover{background:var(--surface-2)}
 .model-main{min-width:0;display:flex;flex-direction:column;gap:14px}
 .model-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -521,13 +522,14 @@ nav.side .nav-label{text-align:center}
 .model-cards{display:none;gap:12px}.model-compact{display:flex;flex-direction:column;gap:10px}
 .model-compact-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .model-compact-head h3{margin:0;font-size:15px;overflow-wrap:anywhere}
-.model-compact-meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--text-2)}
+.model-compact-meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px}
+.model-compact-meta,.model-compact .model-id,.model-use-toggle>span,.model-vision-status>span[aria-hidden]{color:var(--ink-secondary,var(--text-2))}
 .model-compact-prices{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;font-variant-numeric:tabular-nums}
 .model-actions{display:flex;gap:5px;flex:none;justify-content:flex-end}
 .model-action.btn{width:30px;height:30px;padding:0;border-radius:7px}
 .model-action .ico{width:16px;height:16px}
-.model-action.delete{background:var(--danger);border-color:var(--danger);color:#fff}
-.model-action.delete:hover{background:var(--danger);border-color:var(--danger);color:#fff;filter:brightness(.92)}
+.model-action.delete{background:var(--danger);border-color:var(--danger);color:var(--delete-glyph,#fff)}
+.model-action.delete:hover{background:var(--danger);border-color:var(--danger);filter:brightness(.92)}
 .model-editor-dialog{width:min(960px,calc(100vw - 32px))}
 .model-editor-dialog .dialog-body{padding-top:16px}
 .model-form{display:grid;gap:16px}
@@ -542,8 +544,9 @@ nav.side .nav-label{text-align:center}
 .model-switch-row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface-2)}
 .model-switch-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
 .model-switch-copy strong{font-size:13px}
-.model-switch-copy small{color:var(--text-2);font-size:12px;line-height:1.4}
+.model-switch-copy small{color:var(--ink-secondary,var(--text-2));font-size:12px;line-height:1.4}
 .model-switch-disabled{opacity:.6}
+.model-switch-disabled .model-switch-copy small{color:var(--ink-on-faded)}
 .model-price-periods{display:grid;gap:8px}
 .model-price-period{display:grid;grid-template-columns:78px 78px repeat(3,minmax(0,1fr)) 32px;gap:8px;align-items:end;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
 .model-price-period .field{gap:2px;min-width:0}
@@ -620,9 +623,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .dialog-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid var(--border)}
 .dialog-head h3{font-size:17px}.dialog-body{padding:20px 22px;overflow-y:auto;min-height:0;flex:1}
 .dialog-foot{display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 22px;border-top:1px solid var(--border)}
-.dialog-body .hint{font-size:12px;color:var(--text-2)}
+.dialog-body .hint,.dialog-body .model-editor-note{font-size:12px;color:var(--ink-secondary,var(--text-2))}
 .confirm-dialog{width:min(400px,calc(100vw - 32px))}.confirm-dialog p{padding:26px 24px;font-size:16px}
 .key-card{min-width:0;overflow-wrap:anywhere}.key-card .row{justify-content:space-between}.key-card h3{min-width:0}.key-card .key-actions{justify-content:flex-end;margin-top:20px}
+.key-actions .btn.danger{color:var(--danger)}
 .key-actions .btn{display:grid;place-items:center;min-width:34px;min-height:34px;padding:6px}
 .inbox-platforms{display:flex;gap:16px;flex-wrap:wrap}
 .inbox-platform{display:grid;justify-items:stretch;min-width:min(160px,100%)}
@@ -661,6 +665,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-msg .meta{display:flex;gap:4px 10px;align-items:baseline;flex-wrap:wrap;font-size:12px}
 .inbox-msg .bubble p,.inbox-msg .inbox-component{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
 .inbox-msg .inbox-component.event{display:block}
+/* 引用、提及和图片说明在金底上；预览占位块有自己的底色。 */
+.msg.user .inbox-component.muted,.msg.user .inbox-image>p.muted{color:inherit}
 /* 3.47 输入中气泡在消息列表末尾，右侧、金色，与 Bot 已发出的回复同款。 */
 .inbox-messages>.inbox-typing{align-self:flex-end}
 .inbox-typing .bubble{display:inline-flex;align-items:center;min-height:1.5em}
@@ -806,9 +812,10 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .memory-type-profile,.memory-type-person_profile_snapshots{--badge:var(--accent-strong)}
 .memory-type-person{--badge:var(--text-2)}
 .memory-card-status{flex:none;color:var(--warn);font-size:12px}
-.memory-card-summary{margin:0;color:var(--text-2);font-size:13px;line-height:1.55;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.memory-card-summary{margin:0;color:var(--ink-secondary,var(--text-2));font-size:13px;line-height:1.55;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 .memory-card-meta{display:flex;align-items:center;gap:5px 12px;flex-wrap:wrap;color:var(--text-2);font-size:12px;line-height:1.5}
-.memory-source-tag{max-width:100%;padding:0 8px;border:1px solid var(--border);border-radius:999px;background:var(--surface-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.memory-source-tag{max-width:100%;color:var(--ink-secondary,var(--text-2));padding:0 8px;border:1px solid var(--border);border-radius:999px;background:var(--surface-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.memory-card.is-removed .memory-card-summary,.memory-card.is-removed .memory-source-tag{color:var(--ink-on-faded)}
 .memory-detail-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .memory-detail-section{display:grid;gap:4px;padding-top:10px;border-top:1px dashed var(--border)}
 .memory-detail-section h4{font-size:14px;color:var(--text)}
