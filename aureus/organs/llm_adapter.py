@@ -353,6 +353,46 @@ def _read_reasoning(response: Any) -> bool:
     return _has_reasoning(message)
 
 
+# 只有 OpenAI Responses 协议有原生联网搜索工具（D134）。
+NATIVE_WEB_SEARCH_TOOL = {"type": "web_search"}
+# 这些参数只交给 litellm 或直连客户端，不属于请求体。
+LITELLM_ONLY_KWARGS = frozenset({"model", "timeout", "num_retries", "api_base", "api_key"})
+
+# 同一条配置只提醒一次，避免每次请求都刷同一条日志（D134）。
+_WARNED_WEB_SEARCH_MODELS: set[str] = set()
+_WARNED_EXTRA_PARAM_CONFLICTS: set[tuple[str, str]] = set()
+
+
+def _warn_web_search_ignored(route: ModelRoute) -> None:
+    """协议不支持原生联网搜索时说明一次，不改变请求（D134）。"""
+    if route.model.name in _WARNED_WEB_SEARCH_MODELS:
+        return
+    _WARNED_WEB_SEARCH_MODELS.add(route.model.name)
+    logger.warning(
+        "模型 {} 开启了联网搜索，但协议 {} 没有原生搜索工具，已忽略（D134）。",
+        route.model.name,
+        route.provider.protocol,
+    )
+
+
+def _merge_extra_params(kwargs: dict[str, Any], model: ModelConfig) -> None:
+    """把额外参数合并进请求；和显式字段冲突时保留显式字段（D134）。"""
+    for key, value in model.extra_params.items():
+        if key in kwargs:
+            if kwargs[key] == value:
+                continue
+            token = (model.name, key)
+            if token not in _WARNED_EXTRA_PARAM_CONFLICTS:
+                _WARNED_EXTRA_PARAM_CONFLICTS.add(token)
+                logger.warning(
+                    "模型 {} 的额外参数 {} 和显式请求字段冲突，按显式字段发送（D134）。",
+                    model.name,
+                    key,
+                )
+            continue
+        kwargs[key] = value
+
+
 def _chat_kwargs(
     route: ModelRoute,
     params: dict[str, Any],
@@ -390,13 +430,21 @@ def _chat_kwargs(
         kwargs["max_tokens"] = max_tokens
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
+    if route.model.thinking:
+        kwargs["thinking"] = {"type": "enabled"}
     if stream:
         kwargs["stream"] = True
         # 只有 OpenAI 协议的流式响应带用量；其它协议不开这个选项。
         if route.provider.protocol == "openai":
             kwargs["stream_options"] = {"include_usage": True}
+    if route.model.web_search:
+        if route.provider.protocol == "openai_responses":
+            tools = [*(tools or []), dict(NATIVE_WEB_SEARCH_TOOL)]
+        else:
+            _warn_web_search_ignored(route)
     if tools is not None:
         kwargs["tools"] = tools
+    _merge_extra_params(kwargs, route.model)
     return kwargs
 
 
@@ -832,18 +880,12 @@ async def _send_chat(
         assert completion is not None  # 远程路线在构造器官时已加载 litellm。
         _share_remote_client(library, transport)
         return await completion(**kwargs)
-    payload = {"model": route.model.identifier}
-    for key in (
-        "messages",
-        "temperature",
-        "max_tokens",
-        "reasoning_effort",
-        "tools",
-        "stream",
-        "stream_options",
-    ):
-        if key in kwargs:
-            payload[key] = kwargs[key]
+    # 除了只给客户端用的参数，其余都进请求体：额外参数、思考开关等新字段
+    # 不需要在这里逐个登记（D134）。
+    payload = {
+        key: value for key, value in kwargs.items() if key not in LITELLM_ONLY_KWARGS
+    }
+    payload["model"] = route.model.identifier
     timeout = kwargs["timeout"]
     api_key = kwargs.get("api_key")
     if payload.get("stream"):

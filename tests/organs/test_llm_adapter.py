@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+from loguru import logger
 
 from aureus.common.config import ConfigError
 from aureus.organs import llm_adapter
@@ -157,6 +158,10 @@ def make_config(
     big_kind: str = "llm",
     organ_models: tuple[str, ...] = ("big", "small"),
     reasoning_effort: str | None = None,
+    *,
+    thinking: bool = False,
+    web_search: bool = False,
+    extra_params: dict[str, Any] | None = None,
 ) -> ModelsConfig:
     organ: dict[str, Any] = {"models": list(organ_models), "max_tokens": 300}
     if reasoning_effort is not None:
@@ -184,6 +189,9 @@ def make_config(
                     "temperature": 0.9,
                     "max_tokens": 2000,
                     "reasoning_levels": ["high"],
+                    "thinking": thinking,
+                    "web_search": web_search,
+                    "extra_params": extra_params or {},
                 },
                 {
                     "name": "small",
@@ -740,6 +748,8 @@ def local_chat_route(
     temperature: float | None = None,
     max_tokens: int | None = None,
     reasoning_effort: ReasoningLevel | None = None,
+    thinking: bool = False,
+    extra_params: dict[str, Any] | None = None,
 ) -> ModelRoute:
     provider = ProviderConfig(name="local-chat", protocol="openai", base_url=LOCAL_CHAT_URL)
     model = ModelConfig(
@@ -751,6 +761,8 @@ def local_chat_route(
         price_out=8.0 if prices else None,
         price_cache_in=1.0 if prices else None,
         reasoning_levels=("high",) if reasoning else (),
+        thinking=thinking,
+        extra_params=extra_params or {},
     )
     return ModelRoute(model, provider, temperature, max_tokens, reasoning_effort)
 
@@ -1021,6 +1033,40 @@ async def test_local_chat_supports_tools_and_vision(keys: KeyResolver) -> None:
 
 
 @pytest.mark.asyncio
+async def test_local_chat_sends_thinking_and_extra_params_but_not_client_options(
+    keys: KeyResolver,
+) -> None:
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "嗨"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+            },
+        )
+
+    organ = local_chat_organ(
+        keys,
+        httpx.MockTransport(respond),
+        thinking=True,
+        extra_params={"top_p": 0.8},
+    )
+    response = await organ.process(ask())
+
+    assert response.suggestion == "嗨"
+    body = bodies[0]
+    assert body["thinking"] == {"type": "enabled"}
+    assert body["top_p"] == 0.8
+    assert "timeout" not in body
+    assert "num_retries" not in body
+    assert "api_key" not in body
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
 async def test_local_chat_usage_and_failures_match_litellm_mapping(keys: KeyResolver) -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -1272,6 +1318,73 @@ async def test_configured_reasoning_effort_is_passed_to_litellm(keys: KeyResolve
     assert completion.calls[0]["reasoning_effort"] == "high"
     assert completion.calls[0]["temperature"] == 0.9
     assert completion.calls[0]["max_tokens"] == 300
+
+
+@pytest.mark.asyncio
+async def test_thinking_and_extra_params_are_passed_to_litellm(keys: KeyResolver) -> None:
+    completion = FakeCompletion(make_response("嗨"))
+    organ = make_organ(
+        completion,
+        keys,
+        thinking=True,
+        extra_params={"top_p": 0.8, "stop": ["再见"]},
+    )
+    await organ.process(ask())
+
+    call = completion.calls[0]
+    assert call["thinking"] == {"type": "enabled"}
+    assert call["top_p"] == 0.8
+    assert call["stop"] == ["再见"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_fields_win_over_extra_params_and_warn_once(keys: KeyResolver) -> None:
+    completion = FakeCompletion(make_response("嗨"), make_response("嗨"))
+    organ = make_organ(
+        completion,
+        keys,
+        extra_params={"temperature": 0.1, "max_tokens": 1, "top_p": 0.8},
+    )
+    messages: list[str] = []
+    sink_id = logger.add(
+        lambda message: messages.append(str(message)), level="WARNING", format="{message}"
+    )
+    try:
+        await organ.process(ask())
+        await organ.process(ask())
+    finally:
+        logger.remove(sink_id)
+
+    call = completion.calls[0]
+    assert call["temperature"] == 0.9
+    assert call["max_tokens"] == 300
+    assert call["top_p"] == 0.8
+    assert sum("temperature" in message for message in messages) == 1
+    assert sum("max_tokens" in message for message in messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_web_search_is_added_only_for_the_responses_protocol(keys: KeyResolver) -> None:
+    supported = FakeCompletion(make_response("嗨"))
+    await make_organ(
+        supported, keys, protocol="openai_responses", web_search=True
+    ).process(ask())
+    assert supported.calls[0]["tools"] == [{"type": "web_search"}]
+
+    unsupported = FakeCompletion(make_response("嗨"), make_response("嗨"))
+    organ = make_organ(unsupported, keys, protocol="openai", web_search=True)
+    messages: list[str] = []
+    sink_id = logger.add(
+        lambda message: messages.append(str(message)), level="WARNING", format="{message}"
+    )
+    try:
+        await organ.process(ask())
+        await organ.process(ask())
+    finally:
+        logger.remove(sink_id)
+
+    assert "tools" not in unsupported.calls[0]
+    assert sum("联网搜索" in message for message in messages) == 1
 
 
 @pytest.mark.parametrize("protocol", list(LITELLM_PREFIX_BY_PROTOCOL))
