@@ -38,6 +38,7 @@ from aureus.safety import (
     RunawayBlockedError,
     SafetyGateway,
 )
+from aureus.safety.gateway import MODEL_TEST_PERMITS
 from aureus.timeline import (
     ActorType,
     TimelineDatabase,
@@ -374,6 +375,89 @@ async def test_cancelled_call_releases_the_permit_for_the_next_one(harness: Harn
         await slow_call
     response = await asyncio.wait_for(gateway.call(harness.request()), timeout=5)
     assert response.organ_id == ORGAN
+
+
+async def test_a_full_model_test_round_is_not_blocked_by_the_reply_rate_limit(
+    harness: Harness,
+) -> None:
+    async def probe() -> OrganResponse:
+        return OrganResponse("model_test", "ok", attempts=[make_attempt(1, 1)])
+
+    gateway = harness.build(SafetyConfig(max_calls_per_minute=20))
+    for _ in range(34):  # 8 个对话模型 × 4 项能力 + 2 个嵌入
+        response = await gateway.test_model(probe)
+        assert response.suggestion == "ok"
+    assert len(harness.ledger.entries()) == 34
+
+
+async def test_model_test_does_not_take_a_reply_permit(harness: Harness) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_probe() -> OrganResponse:
+        started.set()
+        await release.wait()
+        return OrganResponse("model_test", "ok", attempts=[make_attempt(1, 1)])
+
+    gateway = harness.build(SafetyConfig(max_concurrent_organ_calls=1))
+    probe_task = asyncio.create_task(gateway.test_model(slow_probe))
+    await started.wait()
+
+    harness.add_organ([ok(make_attempt(1, 1))])
+    response = await asyncio.wait_for(gateway.call(harness.request()), timeout=5)
+    assert response.suggestion == "好的"
+
+    release.set()
+    await probe_task
+
+
+async def test_reply_calls_do_not_take_model_test_permits(harness: Harness) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_reply() -> None:
+        started.set()
+        await release.wait()
+
+    harness.add_organ([ok(make_attempt(1, 1))], during_call=hold_reply)
+    gateway = harness.build(SafetyConfig(max_concurrent_organ_calls=1))
+    reply_task = asyncio.create_task(gateway.call(harness.request()))
+    await started.wait()
+
+    async def probe() -> OrganResponse:
+        return OrganResponse("model_test", "ok", attempts=[make_attempt(1, 1)])
+
+    response = await asyncio.wait_for(gateway.test_model(probe), timeout=5)
+    assert response.suggestion == "ok"
+
+    release.set()
+    await reply_task
+
+
+async def test_model_test_has_its_own_concurrency_limit(harness: Harness) -> None:
+    started = 0
+    release = asyncio.Event()
+    two_started = asyncio.Event()
+
+    async def probe() -> OrganResponse:
+        nonlocal started
+        started += 1
+        if started == MODEL_TEST_PERMITS:
+            two_started.set()
+        await release.wait()
+        return OrganResponse("model_test", "ok", attempts=[make_attempt(1, 1)])
+
+    gateway = harness.build(SafetyConfig(max_concurrent_organ_calls=5))
+    tasks = [asyncio.create_task(gateway.test_model(probe)) for _ in range(3)]
+    await asyncio.wait_for(two_started.wait(), timeout=5)
+    for _ in range(100):
+        await asyncio.sleep(0)
+    assert started == MODEL_TEST_PERMITS
+    assert not tasks[-1].done()
+
+    release.set()
+    await asyncio.gather(*tasks)
+    assert started == 3
 
 
 async def test_failed_and_estimated_usage_counts_toward_the_budget(harness: Harness) -> None:

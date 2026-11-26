@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 EVENT_CALL_REJECTED = "organ_call_rejected"
 EVENT_CALL_FAILED = "organ_call_failed"
 
+# 3.53：模型测试的独立并发许可，不占用器官调用的 max_concurrent_organ_calls。
+MODEL_TEST_PERMITS = 2
+
 
 class EnergyGate(Protocol):
     """精力闸门：身体（body）实现它，网关只认这个接口，不依赖身体（D56）。"""
@@ -81,6 +84,8 @@ class SafetyGateway:
         # 让「检查预算 → 调用器官 → 记账」整段占一个许可，见 call()。许可数大于 1 时，
         # 多个器官可以真正同时在途（D117，修订 D48 第 2 条的串行做法）。
         self._call_permits = asyncio.Semaphore(config.max_concurrent_organ_calls)
+        # 模型测试用自己的许可，测速排队时不挤占回复（3.53）。
+        self._test_permits = asyncio.Semaphore(MODEL_TEST_PERMITS)
         if config.monthly_token_limit is None:
             logger.warning(
                 "月度 token 上限没有设置，用量不受限制。在 [safety] 里写 monthly_token_limit。"
@@ -116,9 +121,9 @@ class SafetyGateway:
             return await self._call_admitted(request, lambda: self._bus.send(request))
 
     async def test_model(self, probe: Callable[[], Awaitable[OrganResponse]]) -> OrganResponse:
-        """手动测试走同一套预算和记账，独立于后台器官的失败计数。"""
+        """手动测试走同一套预算和记账，独立于后台器官的失败计数和并发许可（3.53）。"""
         request = OrganRequest(organ_id="model_test", prompt="", purpose=CallPurpose.USER_REPLY)
-        async with self._call_permits:
+        async with self._test_permits:
             return await self._call_admitted(request, probe)
 
     async def _call_admitted(

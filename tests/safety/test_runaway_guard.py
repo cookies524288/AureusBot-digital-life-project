@@ -9,6 +9,7 @@ import pytest
 
 from aureus.common import ManualClock, SafetyConfig
 from aureus.safety import RunawayGuard
+from aureus.safety.runaway_guard import MODEL_TEST_CALLS_PER_MINUTE, MODEL_TEST_ORGAN
 
 START = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
 ORGAN = "replyer"
@@ -156,32 +157,50 @@ def test_failures_are_counted_per_organ(clock: ManualClock) -> None:
     assert guard.blocked_reason("planner") is None
 
 
-# ---------- 模型测试的失败暂停豁免（D132） ----------
+# ---------- 模型测试的失败暂停豁免与独立限流（D132、3.53） ----------
 
 
 def test_model_test_is_not_paused_by_consecutive_failures(clock: ManualClock) -> None:
     guard = make_guard(clock, max_consecutive_failures=1, max_calls_per_minute=100)
-    fail_times(guard, 10, "model_test")
-    assert guard.blocked_reason("model_test") is None
+    fail_times(guard, 10, MODEL_TEST_ORGAN)
+    assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
 
 
-def test_model_test_still_rate_limited(clock: ManualClock) -> None:
+def test_model_test_has_its_own_rate_limit(clock: ManualClock) -> None:
     guard = make_guard(clock, max_calls_per_minute=2, max_consecutive_failures=1)
-    fail_times(guard, 2, "model_test")
-    reason = guard.blocked_reason("model_test")
+    for _ in range(MODEL_TEST_CALLS_PER_MINUTE):
+        call(guard, MODEL_TEST_ORGAN)
+    reason = guard.blocked_reason(MODEL_TEST_ORGAN)
     assert reason is not None
-    assert "2" in reason  # 每分钟上限照常生效
+    assert str(MODEL_TEST_CALLS_PER_MINUTE) in reason  # 独立上限照常生效
     clock.advance(timedelta(minutes=1))
-    assert guard.blocked_reason("model_test") is None
+    assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
+
+
+def test_model_test_does_not_use_the_reply_rate_limit(clock: ManualClock) -> None:
+    guard = make_guard(clock, max_calls_per_minute=2, max_consecutive_failures=1)
+    for _ in range(MODEL_TEST_CALLS_PER_MINUTE):
+        call(guard, MODEL_TEST_ORGAN)
+    call(guard, ORGAN)
+    call(guard, ORGAN)
+    assert guard.blocked_reason(ORGAN) is not None
+
+
+def test_reply_calls_do_not_use_the_model_test_rate_limit(clock: ManualClock) -> None:
+    guard = make_guard(clock, max_calls_per_minute=2, max_consecutive_failures=1)
+    for _ in range(2):
+        call(guard, ORGAN)
+    call(guard, MODEL_TEST_ORGAN)
+    assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
 
 
 def test_other_organs_still_pause_after_failures(clock: ManualClock) -> None:
     guard = make_guard(clock, max_consecutive_failures=1, max_calls_per_minute=100)
-    fail_times(guard, 5, "model_test")  # 模型测试失败不影响别的器官
+    fail_times(guard, 5, MODEL_TEST_ORGAN)  # 模型测试失败不影响别的器官
     assert guard.blocked_reason(ORGAN) is None
     fail_times(guard, 1, ORGAN)
     assert guard.blocked_reason(ORGAN) is not None
-    assert guard.blocked_reason("model_test") is None
+    assert guard.blocked_reason(MODEL_TEST_ORGAN) is None
 
 
 # ---------- 开关 ----------
