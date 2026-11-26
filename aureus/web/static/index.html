@@ -368,8 +368,7 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 .tl-event{color:var(--text);font-size:15px;font-weight:700;overflow-wrap:anywhere}
 .tl-meta{display:flex;min-width:0;gap:3px 9px;align-items:baseline;flex-wrap:wrap;color:var(--text-2);font-size:12px;overflow-wrap:anywhere}
 @media(max-width:680px){.tl-meta{flex-basis:100%}}
-.tl-content{margin-top:2px;white-space:pre-wrap;word-break:break-word}
-.tl-content.clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.tl-content{margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere}
 .tl-details{font-size:12px}.tl-details :is(dl,ul){margin:4px 0}.tl-details dt{font-weight:600}.tl-details dd{margin:0 0 6px 12px;overflow-wrap:anywhere;white-space:pre-wrap}
 .tl-divider{display:flex;align-items:center;gap:10px;margin:10px 0 10px -22px;color:var(--accent-strong);font-size:12px;font-weight:600}
 .tl-divider::before,.tl-divider::after{content:'';flex:1;height:0;border-top:2px dashed var(--accent)}
@@ -3104,21 +3103,32 @@ function timelineItem(rec, inContext, {
       rec.channel ? el('span', { text: CHANNEL_NAMES[rec.channel] || rec.channel }) : null,
       el('span', { class: 'mono', text: '#' + rec.id })));
   const {actions, ...metadata} = rec.metadata || {};
-  const text = rec.event_type === 'reply_reference' && Array.isArray(actions) ? '本轮行动记录' : rec.content;
-  const content = el('div', { class: 'tl-content clamp', text: text || '（没有正文）' });
-  content.addEventListener('click', () => content.classList.toggle('clamp'));
-  const actionList = Array.isArray(actions) && actions.length ? el('ol', {class:'tl-actions'},
+  const hasActions = Array.isArray(actions) && actions.length > 0;
+  const showPlan = rec.event_type === 'reply_reference' && hasActions;
+  const text = showPlan ? '本轮行动记录' : rec.content || '（没有正文）';
+  // 按内容生成摘要，不按屏宽裁行；短文即使在窄屏换行也能直接读完。
+  const previewLimit = 160;
+  const prefix = text.slice(0, previewLimit).split('\n', 3).join('\n').replace(/[\uD800-\uDBFF]$/, '');
+  const preview = prefix === text ? text : prefix + '…';
+  const content = el('div', { class: 'tl-content', text: preview });
+  const toggle = preview === text ? null : el('button', {type:'button', class:'btn small', text:'展开正文', 'aria-expanded':'false', onclick:() => {
+    const expand = toggle.getAttribute('aria-expanded') === 'false';
+    content.textContent = expand ? text : preview;
+    toggle.textContent = expand ? '收起正文' : '展开正文';
+    toggle.setAttribute('aria-expanded', String(expand));
+  }});
+  const actionList = hasActions ? el('ol', {class:'tl-actions'},
     actions.map(({action, status, reason, reference}) => el('li', {},
       el('strong', {text: `${PLANNER_ACTION_NAMES[action] || '行动'} · ${PLANNER_ACTION_STATES[status] || '未知状态'}`}),
       reason ? el('div', {text:`依据或结果：${reason}`}) : null,
       reference ? el('div', {text:`回复参考（不是已发正文）：${reference}`}) : null))) : null;
   const detailRows = timelineDetailRows(metadata, rec.event_type, rec.time);
   // 有行动记录时正文让给「本轮行动记录」，规划方向、篇幅和依据仍在详情里保留一份（3.20 验收第 4 条）。
-  if (rec.event_type === 'reply_reference' && Array.isArray(actions) && actions.length && rec.content) {
+  if (showPlan && rec.content) {
     detailRows.unshift({label:'规划内容', node:rec.content});
   }
   const meta = detailRows.length ? el('details', { class: 'muted tl-details' }, el('summary', { text: '详细信息（' + detailRows.length + ' 项）' }), tlDetailList(detailRows)) : null;
-  return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, actionList, meta,
+  return el('div', { class: 'tl-item' + (inContext ? ' in-context' : '') }, top, content, toggle, actionList, meta,
     feedbackId ? recallFeedback(feedbackId) : null);
 }
 
