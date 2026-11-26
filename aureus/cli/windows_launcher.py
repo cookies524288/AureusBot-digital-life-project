@@ -12,6 +12,8 @@ from pathlib import Path
 from threading import Thread
 from time import monotonic, sleep
 
+import httpx
+
 from aureus.common import AureusPaths, ConfigError, SystemClock, home_is_default, resolve_home
 from aureus.common.paths import PROJECT_ROOT, HomePathError
 from aureus.common.vault import VaultError
@@ -24,8 +26,8 @@ from .windows_terminal import WindowsTerminal
 
 RESTART_EXIT_CODE = 75
 # 双击时另一个实例可能正在启动或重启：旧进程释放单实例锁、新进程发布网页地址都要时间。
-# 这段时间里反复尝试附着或接手启动，最多等这么久（3.49）。
-_STARTUP_WAIT_SECONDS = 30.0
+# 正常关闭可能超过 100 秒，等待要覆盖它，期间不另起内核（3.49、D144）。
+_STARTUP_WAIT_SECONDS = 180.0
 _STARTUP_POLL_INTERVAL = 0.1
 _HOME_POINTER = "aureus-home.txt"
 
@@ -50,6 +52,13 @@ def _open_running_web(paths: AureusPaths, *, tray: bool) -> bool:
     if instance is None:
         return False
     url, owner = instance
+    # 共享内存里的地址可能属于已经挂住的旧内核：根地址 1 秒内没有 200 就不附着（D144）。
+    try:
+        healthy = httpx.get(url, trust_env=False, timeout=1).status_code == 200
+    except (httpx.HTTPError, httpx.InvalidURL):
+        healthy = False
+    if not healthy:
+        return False
     if tray:
         print(f"AUREUS_WEB_ATTACH={owner} {url}", flush=True)
     else:
