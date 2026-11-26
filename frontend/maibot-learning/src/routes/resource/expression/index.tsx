@@ -318,7 +318,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden p-3 pb-4 sm:p-4">
-      <p className="text-muted-foreground mb-2 shrink-0 text-xs">表达与有释义的黑话无需人工批准即可用于回复，仍遵守来源授权和可逆移除规则。</p>
       {activeView !== 'list' && (
         <div className="mb-4 flex shrink-0 justify-end gap-2 sm:mb-3">
           {/* 手机上由页头的「列表模式」返回，这里不再重复 */}
@@ -341,7 +340,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
         }
       >
         <DataBrowserHeader
-          title="学习"
           navigation={browserHeader}
           summary={
             <>

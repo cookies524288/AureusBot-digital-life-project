@@ -53,8 +53,9 @@ function LearningHost() {
     <MobileNavContext.Provider value={{ menuSections: [], openSearch: () => {},
       setTabBarHidden: () => {}, headerActionsElement, setTitleOverride }}>
       <div className="flex h-full min-h-0 flex-col">
-        <header className="flex min-h-10 shrink-0 items-center justify-between px-3 lg:hidden">
-          <strong>{title ?? '学习'}</strong><div ref={setHeaderActionsElement} className="flex gap-2" />
+        <header className={`flex min-h-10 shrink-0 items-center justify-between px-3 lg:hidden${title ? '' : ' has-[>div:empty]:hidden'}`}>
+          {title && <strong>{title}</strong>}
+          <div ref={setHeaderActionsElement} className="ml-auto flex gap-2" />
         </header>
         <main className="min-h-0 flex-1"><LearningPage /></main>
       </div>

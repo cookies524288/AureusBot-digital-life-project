@@ -7,20 +7,17 @@ import { Separator } from './separator'
 import { cn } from '@/lib/utils'
 import { StatusLight, type LightStatus } from './status-light'
 
-/** 标题、页签和摘要分开布局，窄屏允许摘要换行。 */
+/** 页签和摘要分开布局，窄屏允许摘要换行。工作台只以内联方式使用，页面标题由 Aureus 页面头部提供（3.38）。 */
 export function DataBrowserHeader({
-  title,
   navigation,
   summary,
 }: {
-  title: string
   navigation?: ReactNode
   summary?: ReactNode
 }) {
   return (
     <header data-browser-header="true">
       <div className="flex min-w-0 flex-wrap items-center gap-4">
-        <h1 className="text-xl font-normal">{title}</h1>
         {navigation}
       </div>
       {summary && <div data-browser-summary="true">{summary}</div>}
