@@ -356,8 +356,8 @@ def _read_reasoning(response: Any) -> bool:
 
 # 只有 OpenAI Responses 协议有原生联网搜索工具（D134）。
 NATIVE_WEB_SEARCH_TOOL = {"type": "web_search"}
-# 这些参数只交给 litellm 或直连客户端，不属于请求体。
-LITELLM_ONLY_KWARGS = frozenset({"model", "timeout", "num_retries", "api_base", "api_key"})
+# 这些参数不直接进请求体：model 要换成服务商的标识，其余只给客户端。
+NON_BODY_KWARGS = frozenset({"model", "timeout", "num_retries", "api_base", "api_key"})
 
 # 同一条配置只提醒一次，避免每次请求都刷同一条日志（D134）。
 _WARNED_WEB_SEARCH_MODELS: set[str] = set()
@@ -885,11 +885,9 @@ async def _send_chat(
         assert completion is not None  # 远程路线在构造器官时已加载 litellm。
         _share_remote_client(library, transport)
         return await completion(**kwargs)
-    # 除了只给客户端用的参数，其余都进请求体：额外参数、思考开关等新字段
+    # 除了不进请求体的参数，其余都原样带上：额外参数、思考开关等新字段
     # 不需要在这里逐个登记（D134）。
-    payload = {
-        key: value for key, value in kwargs.items() if key not in LITELLM_ONLY_KWARGS
-    }
+    payload = {key: value for key, value in kwargs.items() if key not in NON_BODY_KWARGS}
     payload["model"] = route.model.identifier
     timeout = kwargs["timeout"]
     api_key = kwargs.get("api_key")
