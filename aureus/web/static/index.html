@@ -2858,10 +2858,18 @@ function restoreTimelineScrollRatio(anchor) {
   const range = page.scrollHeight - page.clientHeight;
   page.scrollTop = range > 0 ? Math.round(anchor.ratio * range) : anchor.top;
 }
+// 筛选后的列表可能比视口还短，页面暂时不能滚动，scrollTop 会被压到 0。
+// 记住最近一次页面还能滚动时的位置，等内容重新变长后再补回；否则连续切换会把位置丢在顶部（3.35）。
+function timelineScrollablePosition() {
+  const page = $('page-timeline');
+  const range = page.scrollHeight - page.clientHeight;
+  return range > 0 ? {ratio: page.scrollTop / range, top: page.scrollTop} : null;
+}
 
 let timelineRequest = 0;
 let timelineQuery = '';
 let timelineRendered = null;   // 当前 DOM 是根据哪一份第一页数据渲染的
+let timelineScrollMemory = null;   // 最近一次页面还能滚动时的位置，列表太短时保留（3.35）
 const TIMELINE_CACHE_MS = 15000;
 // 把一页时间线数据放进页面；scroll 决定渲染后停在哪里：
 // latest 停在最新一条，preserve 按整页比例保留当前位置，anchor 用列表高度差补回。
@@ -2893,12 +2901,15 @@ function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
     updateLiveRegion(list, () => { renderTimeline(); restoreTimelineScroll(anchor); });
   } else if (scroll === 'preserve') {
     updateLiveRegion(list, () => {
-      const position = timelineScrollRatio();
+      const current = timelineScrollablePosition();
+      if (current) timelineScrollMemory = current;
+      const position = timelineScrollMemory ?? timelineScrollRatio();
       renderTimeline();
       restoreTimelineScrollRatio(position);
     });
   } else {
     updateLiveRegion(list, () => { renderTimeline(); scrollTimelineToLatest(); });
+    timelineScrollMemory = null;   // 首次进入和刷新回最新，不沿用上次筛选的位置
   }
   list.removeAttribute('aria-busy');
 }
