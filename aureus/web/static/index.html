@@ -3065,15 +3065,23 @@ function timelineDetailRows(metadata, eventType, recordTime) {
 
 function renderTimelineChips() {
   const box = $('tl-chips');
+  const focusIndex = [...box.children].indexOf(document.activeElement);
+  function setPressed(button, pressed) {
+    button.classList.toggle('on', pressed);
+    button.setAttribute('aria-pressed', String(pressed));
+  }
   box.textContent = '';
   for (const [label, types] of TL_FILTERS) {
-    box.append(el('button', { class: 'chip' + (tl.filter === types ? ' on' : ''), text: label, onclick: event => {
+    const button = el('button', { type: 'button', class: 'chip', text: label, onclick: () => {
       if (tl.filter === types) return;
       tl.filter = types;
-      for (const chip of box.children) chip.classList.toggle('on', chip === event.currentTarget);
+      for (const chip of box.children) setPressed(chip, chip === button);
       loadTimeline(false, true);
-    } }));
+    } });
+    setPressed(button, tl.filter === types);
+    box.append(button);
   }
+  if (focusIndex !== -1) box.children[focusIndex]?.focus({preventScroll:true});
 }
 
 function recallFeedback(replyId) {
