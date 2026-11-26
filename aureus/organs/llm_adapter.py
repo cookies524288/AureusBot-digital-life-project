@@ -923,6 +923,9 @@ async def probe_model(
     endpoint = None if embedding or transcription else local_chat_endpoint(route)
     # 回环 OpenAI 兼容对话直连，不导入 litellm（D131）；其余能力照旧走 litellm。
     library = None if endpoint is not None else await asyncio.to_thread(_import_litellm)
+    if library is not None:
+        # 嵌入、转写和远程对话都复用同一个远程客户端（D132）。
+        _share_remote_client(library, transport)
     completion: CompletionFunction | None = None
     if not embedding and not transcription and library is not None:
         completion = library.acompletion
@@ -1324,6 +1327,7 @@ class EmbeddingOrgan:
             if protocol == "openai_responses":
                 protocol = "openai"
             library = await asyncio.to_thread(_import_litellm)
+            _share_remote_client(library, self._transport)
             return await library.aembedding(
                 model=LITELLM_PREFIX_BY_PROTOCOL[protocol] + route.model.identifier,
                 input=list(inputs),
