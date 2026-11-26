@@ -140,6 +140,14 @@ def test_provider_defaults_apply_when_fields_are_omitted(tmp_path: Path) -> None
     assert config.providers[1].max_retry == 0
 
 
+def test_default_timeout_is_ninety_seconds(tmp_path: Path) -> None:
+    # D132：默认超时 90 秒；显式配置的超时继续生效。
+    config = load_models_config(write_models_toml(tmp_path, VALID_TOML))
+    assert DEFAULT_TIMEOUT_SECONDS == 90.0
+    assert config.providers[0].timeout_seconds == 90.0
+    assert config.providers[1].timeout_seconds == 5.0
+
+
 def test_prices_are_optional(tmp_path: Path) -> None:
     # D37：账本和预算按 token 计，价格不是必填；不写就是“费用未知”。
     text = VALID_TOML.replace("price_in = 4.0\nprice_out = 8.0\n", "")

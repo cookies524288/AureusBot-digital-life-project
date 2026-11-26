@@ -20,8 +20,8 @@ from aureus.organs.topology import BUILTIN_ORGANS as BUILTIN_ORGANS
 # 当前软件认识的模型配置格式版本。以后改了格式就加一，并写迁移说明。
 MODELS_CONFIG_FORMAT_VERSION = 1
 
-# 服务商没写超时和重试次数时的默认值。
-DEFAULT_TIMEOUT_SECONDS = 60.0
+# 服务商没写超时和重试次数时的默认值。超时 90 秒（D132）。
+DEFAULT_TIMEOUT_SECONDS = 90.0
 DEFAULT_MAX_RETRY = 2
 
 # 密钥的环境变量名必须以 AUREUS_KEY_ 开头：不会和别的程序的变量混在一起，
