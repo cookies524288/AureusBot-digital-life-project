@@ -1003,8 +1003,8 @@ async def probe_model(
                 or calls[0].arguments != {"value": "OK"}
             ):
                 failure = "工具调用名称或参数与测试要求不符。"
-        else:
-            # 文本、视觉和思考等级沿用流式请求，首包超时后回退非流式（D131）。
+        elif capability == "text":
+            # 只有测速的首包观察需要流式；视觉和思考等级默认非流式（D132）。
             first_timeout = min(provider.timeout_seconds, PROBE_FIRST_CHUNK_TIMEOUT_SECONDS)
             progress = _StreamProgress()
             first_chunk_timed_out = False
@@ -1016,7 +1016,6 @@ async def probe_model(
                 inputs["messages"],
                 stream=True,
                 max_tokens=_MODEL_TEST_MAX_TOKENS,
-                reasoning_effort=inputs.get("reasoning_effort"),
             )
             try:
                 async with asyncio.timeout(provider.timeout_seconds):
@@ -1045,7 +1044,6 @@ async def probe_model(
                 params,
                 inputs["messages"],
                 max_tokens=_MODEL_TEST_MAX_TOKENS,
-                reasoning_effort=inputs.get("reasoning_effort"),
             )
             if first_chunk_timed_out:
                 # 首包超时且没有任何数据：取消这次流式请求，按非流式重试一次（D131）。
@@ -1108,6 +1106,35 @@ async def probe_model(
                     elif reasoning:
                         reply = REASONING_ONLY_REASON
                         latency = loop.time() - started
+        else:
+            # 视觉和思考等级不需要首包观察，默认非流式（D132）。
+            measured = []
+            kwargs = _chat_kwargs(
+                route,
+                params,
+                inputs["messages"],
+                max_tokens=_MODEL_TEST_MAX_TOKENS,
+                reasoning_effort=inputs.get("reasoning_effort"),
+            )
+            async with asyncio.timeout(provider.timeout_seconds):
+                result = await _send_chat(
+                    route,
+                    completion,
+                    kwargs,
+                    library=library,
+                    transport=transport,
+                    on_request=measured.append,
+                )
+            elapsed = measured[-1] if measured else loop.time() - started
+            text, actual, reasoning, _ = _read_completion(result)
+            if actual.known:
+                usage = actual
+            if text is not None:
+                reply = text
+                latency = elapsed
+            elif reasoning:
+                reply = REASONING_ONLY_REASON
+                latency = elapsed
     except Exception as error:
         failure = _failure_reason(error)
         if _rejected_before_processing(error):

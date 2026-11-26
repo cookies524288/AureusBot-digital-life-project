@@ -817,6 +817,36 @@ async def test_local_chat_probe_uses_direct_http(
 
 
 @pytest.mark.asyncio
+async def test_vision_probe_defaults_to_non_streaming(keys: KeyResolver) -> None:
+    # 视觉不需要首包观察，默认非流式（D132）。
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "red"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+            },
+        )
+
+    route = local_chat_route(vision=True)
+    result = await probe_model(
+        route.model,
+        route.provider,
+        keys,
+        capability="vision",
+        transport=httpx.MockTransport(respond),
+    )
+
+    assert result.suggestion == "red"
+    assert result.attempts[0].succeeded is True
+    assert "stream" not in bodies[0]
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
 async def test_tool_probe_uses_the_shared_tool_parsing(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1054,6 +1084,31 @@ async def test_local_chat_usage_and_failures_match_litellm_mapping(keys: KeyReso
             assert attempt.estimated is (not rejected)
             if rejected:
                 assert attempt.budget_tokens == 0
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_chat_defaults_to_non_streaming(keys: KeyResolver) -> None:
+    # 普通对话默认非流式（D132），请求体里没有 stream / stream_options。
+    bodies: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "嗨"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+            },
+        )
+
+    organ = local_chat_organ(keys, httpx.MockTransport(respond))
+    response = await organ.process(ask())
+
+    assert response.suggestion == "嗨"
+    assert len(bodies) == 1
+    assert "stream" not in bodies[0]
+    assert "stream_options" not in bodies[0]
     await close_shared_clients()
 
 
