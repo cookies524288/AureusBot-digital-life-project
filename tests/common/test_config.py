@@ -33,7 +33,10 @@ from aureus.common import (
     load_settings,
     validate_runtime_config,
 )
-from aureus.common.config import CONFIG_FORMAT_VERSION
+from aureus.common.config import (
+    CONFIG_FORMAT_VERSION,
+    DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS,
+)
 
 
 def write_runtime_config(paths: AureusPaths, text: str) -> None:
@@ -364,6 +367,14 @@ def test_legacy_organ_overrides_are_ignored_and_explicit_debounce_opt_out_is_kep
     assert heartbeat.reply_organ == "replyer"
     assert heartbeat.plan_organ == "planner"
     assert heartbeat.inbox_debounce_enabled is False
+
+
+def test_heartbeat_debounce_max_wait_default_is_shared_with_validation() -> None:
+    # 默认值和旧配置兼容判断用同一个常量，改一处不会让两处对不上（D138）。
+    assert DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS == 20.0
+    assert HeartbeatConfig().inbox_debounce_max_wait_seconds == (
+        DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS
+    )
 
 
 def test_heartbeat_debounce_max_wait_must_not_be_shorter_than_the_window(

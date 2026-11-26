@@ -887,3 +887,21 @@ async def test_private_memory_and_disclosure_reminder_reach_group_replyer(
         for item in restricted:
             assert item.text not in planner_text
             assert all(item.text not in row["content"] for row in call["messages"])
+
+
+async def test_open_core_marks_the_real_identity_name_as_a_mention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D137：open_core 用身份全名识别名字提及，保存进收件箱并写进时间线。"""
+    async with open_replay(tmp_path, monkeypatch, ManualClock(START)) as replay:
+        replay.planner.plan = {"reply": False}
+        await replay.receive(event(901, 2100, "Aureus Test 在吗", group=GROUP))
+        await replay.step()
+
+        [heard] = replay.records()
+        assert heard.metadata["mentioned"] is True
+        store = replay.core.inbox_store
+        assert store is not None
+        conversation = ConversationKey("qq", str(ACCOUNT), "group", str(GROUP))
+        [saved] = store.list_messages(conversation)
+        assert saved.perception.mentioned is True

@@ -99,6 +99,10 @@ class ReplyOutbox:
         """查看目标会话是否还在投递之前的回复。"""
         return _address(target) in self._conversations
 
+    def has_pending_conversation(self, key: ConversationKey) -> bool:
+        """查看这个平台会话是否还有没发完的分段。"""
+        return key in self._conversations
+
     def enqueue(
         self,
         target: Perception,

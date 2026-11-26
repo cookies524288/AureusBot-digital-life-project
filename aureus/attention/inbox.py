@@ -17,6 +17,7 @@ class Priority(IntEnum):
 
     USER = 0  # 用户本人的消息
     SPECIAL = 10  # 平台上特别关心的来信
+    MENTION = 15  # 被点名的来信（D137）：排在特别关心之后、普通消息之前
     CONTACT = 20  # 其他人的消息
 
 

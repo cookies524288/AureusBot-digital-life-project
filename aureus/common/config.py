@@ -25,6 +25,8 @@ CONFIG_FORMAT_VERSION = 1
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 DEFAULT_WEB_PORT = 28976
 DEFAULT_EMOJI_REGISTRATION_LIMIT = 500
+# D138：防抖最多等这么久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口。
+DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS = 20.0
 
 
 class ConfigError(Exception):
@@ -92,7 +94,9 @@ class HeartbeatConfig(BaseModel):
     inbox_debounce_seconds: float = Field(default=4.0, gt=0, le=60, allow_inf_nan=False)
     # 防抖最多等这么久（从这一批最早的消息算），避免人多的群里一直等不到安静窗口（D138）。
     # 必须不小于 inbox_debounce_seconds。
-    inbox_debounce_max_wait_seconds: float = Field(default=20.0, ge=1, le=120, allow_inf_nan=False)
+    inbox_debounce_max_wait_seconds: float = Field(
+        default=DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS, ge=1, le=120, allow_inf_nan=False
+    )
     inbox_debounce_max_restarts: int = Field(default=4, ge=0, le=20)
     plan_organ: ClassVar[str] = "planner"
     qq_emoji_collection_enabled: bool = False
@@ -146,7 +150,7 @@ class HeartbeatConfig(BaseModel):
             if (
                 isinstance(debounce, (int, float))
                 and not isinstance(debounce, bool)
-                and debounce > 20.0
+                and debounce > DEFAULT_INBOX_DEBOUNCE_MAX_WAIT_SECONDS
             ):
                 return {**value, "inbox_debounce_max_wait_seconds": float(debounce)}
         return value

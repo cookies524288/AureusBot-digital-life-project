@@ -73,6 +73,16 @@ def test_qq_scope_defaults_to_all_conversations_and_optional_group_limits() -> N
         assert not restricted.allows_inbox_conversation(conversation)
 
 
+def test_qq_route_for_another_account_is_rejected_without_a_group_limit() -> None:
+    """D136：默认允许所有会话时，仍只能收发本账号的路由。"""
+    account = str(ACCOUNT)
+    channel = QQChannel(QQConfig(account_id=account), None, Receiver(), lambda _candidate: True)
+    assert not channel._allows_route(MessageRoute(str(ACCOUNT + 1), "group", str(GROUP), "1"))
+    assert not channel._allows_route(MessageRoute(str(ACCOUNT + 1), "private", str(OWNER), "2"))
+    assert channel._allows_route(MessageRoute(account, "group", str(GROUP), "3"))
+    assert channel._allows_route(MessageRoute(account, "private", str(FRIEND), "4"))
+
+
 @pytest.mark.asyncio
 async def test_snowluma_components_are_scoped_archived_and_replayed(tmp_path: Path) -> None:
     clock = ManualClock(NOW)

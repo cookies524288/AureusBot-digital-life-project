@@ -130,9 +130,11 @@ class QQChannel:
             route.kind != "group" or route.recipient_id != self._test_group
         ):
             return False
+        if route.account_id != self._config.account_id:
+            return False
         if group is None:
             return True
-        if route.account_id != self._config.account_id or route.temporary_group_id is not None:
+        if route.temporary_group_id is not None:
             return False
         if route.kind == "group":
             return route.recipient_id == group

@@ -692,21 +692,27 @@ class Heartbeat:
         self._conversation.inbox_media.index_image = indexer.index
 
     def on_inbox_message(self, message: InboxMessage) -> None:
-        """来信已保存，重要来信立即叫醒心跳；提及只唤醒，不抢占（D94、D137）。"""
+        """来信已保存，重要来信立即叫醒心跳；提及只唤醒，不抢占（D94、D137）。
+
+        这个回调由 OneBot 读取任务直接调用；查库或认人失败只记日志，不能让它把读取任务带崩。
+        """
         inbox = self._platform_inbox
         if self._maintenance_paused or inbox is None:
             return
-        allowed = inbox.allows(message.conversation)
-        if allowed:
-            # 只带收件箱序号：网页据此让平台页失效并重新拉取，不推正文。
-            self.live_events.publish(LiveEvent(TOPIC_INBOX, {"id": message.id}))
-        if allowed and inbox.is_priority(message.perception):
-            if inbox.preempts(message.perception):
-                self._preempt_inbox(inbox, message.conversation)
-            self._wake.set()
-        if message.conversation == self._inbox_followup_key():
-            self._inbox_followups.add(message.conversation)
-            self._wake.set()
+        try:
+            allowed = inbox.allows(message.conversation)
+            if allowed:
+                # 只带收件箱序号：网页据此让平台页失效并重新拉取，不推正文。
+                self.live_events.publish(LiveEvent(TOPIC_INBOX, {"id": message.id}))
+            if allowed and inbox.is_priority(message.perception):
+                if inbox.preempts(message.perception):
+                    self._preempt_inbox(inbox, message.conversation)
+                self._wake.set()
+            if message.conversation == self._inbox_followup_key():
+                self._inbox_followups.add(message.conversation)
+                self._wake.set()
+        except (sqlite3.Error, RuntimeError):
+            logger.exception("处理收件箱来信时读库失败，消息已保存，下一拍照常处理")
 
     def apply_identity_edit(
         self,
@@ -1268,9 +1274,10 @@ class Heartbeat:
         self._thought = None
         inbox = self._platform_inbox
         residence = thought.replying_to[-1].residence if thought.replying_to else None
-        if thought.inbox_discard_reason is not None or (
-            residence is not None and (inbox is None or not inbox.permits(residence))
-        ):
+        lost_permission = residence is not None and (inbox is None or not inbox.permits(residence))
+        if thought.inbox_discard_reason is not None or lost_permission:
+            if lost_permission:
+                self._clear_planner_restarts(self._thought_conversation(thought))
             self._record_interrupted_round(
                 thought, thought.inbox_discard_reason or "会话已失去阅读权限，未投递。"
             )
@@ -1284,11 +1291,12 @@ class Heartbeat:
             if not thought.task.cancelled():
                 thought.task.exception()
             return
-        if (conversation := self._thought_conversation(thought)) is not None:
-            self._planner_restarts.pop(conversation, None)
         if thought.task.cancelled():
+            # 先看是不是被取消的：急停取消不该清掉重开上限（D138）。
             self._record_abandoned(thought, halted=self._halt_status.halted)
             return
+        if (conversation := self._thought_conversation(thought)) is not None:
+            self._planner_restarts.pop(conversation, None)
         if thought.task.get_name() == language_runner.TASK_NAME:
             return
         outcome = thought.task.result()
@@ -1332,6 +1340,7 @@ class Heartbeat:
         target = thought.replying_to[-1].perception
         target_key = self._thought_conversation(thought)
         if target_key is not None and inbox is not None and not inbox.allows(target_key):
+            self._clear_planner_restarts(target_key)
             self._record_interrupted_round(thought, "会话已失去阅读权限，未投递。")
             return
         trace, retention = thought.round_trace, self.history_retention
@@ -1871,6 +1880,7 @@ class Heartbeat:
 
     def _take_inbox_priority(self, inbox: InboxAttention) -> None:
         if inbox.residence is not None and not inbox.permits(inbox.residence):
+            self._clear_planner_restarts(inbox.residence.conversation)
             self._interrupt_inbox(inbox, "会话已失去阅读权限，未投递。")
         messages = inbox.priority_messages()
         for message in messages:
@@ -1879,7 +1889,7 @@ class Heartbeat:
         self._submit_inbox(messages)
 
     def _preempt_inbox(self, inbox: InboxAttention, conversation: ConversationKey) -> None:
-        reason = "绑定用户、特别关心或被点名的来信抢占了会话，未投递。"
+        reason = "绑定用户或特别关心的来信抢占了会话，未投递。"
         if inbox.residence is not None and conversation != inbox.residence.conversation:
             self._interrupt_inbox(inbox, reason)
         thought = self._thought
@@ -1887,6 +1897,8 @@ class Heartbeat:
             self._discard_inbox_thought(thought, reason)
 
     def _interrupt_inbox(self, inbox: InboxAttention, reason: str) -> None:
+        # 这里不清 _planner_restarts：抢占、切换、急停打断都不该重置重开上限，
+        # 只有正常完成一轮才清零（D138）。失去阅读权限时由调用方单独清。
         residence = inbox.residence
         if residence is None:
             return
@@ -1978,15 +1990,19 @@ class Heartbeat:
     def _requeue_reply(self, thought: _Thought) -> None:
         for heard in thought.replying_to:
             priority = Priority.USER if heard.is_user else Priority.CONTACT
-            # 绑定用户、特别关心或被点名的来信优先排队；抢占仍只由用户和特别关心触发（D137）。
-            if (
-                priority == Priority.CONTACT
-                and _platform_key(heard) is not None
-                and self._platform_inbox is not None
-                and self._platform_inbox.is_priority(heard.perception)
-            ):
-                priority = Priority.SPECIAL
+            # 特别关心排在仅提及之前，两者都排在普通消息之前；抢占仍只由用户和特别关心触发（D137）。
+            if priority == Priority.CONTACT and _platform_key(heard) is not None:
+                inbox = self._platform_inbox
+                if inbox is not None and inbox.preempts(heard.perception):
+                    priority = Priority.SPECIAL
+                elif inbox is not None and inbox.is_priority(heard.perception):
+                    priority = Priority.MENTION
             self._enqueue_reply(heard, priority)
+
+    def _clear_planner_restarts(self, conversation: ConversationKey | None) -> None:
+        """会话失去阅读权限后忘掉它的重开计数，重新获准后从头计算（D138）。"""
+        if conversation is not None:
+            self._planner_restarts.pop(conversation, None)
 
     def _maybe_select_inbox(self, inbox: InboxAttention, *, had_thought: bool) -> None:
         reading = self._reading
@@ -2081,14 +2097,12 @@ class Heartbeat:
             if inbox_message is not None and inbox is not None and residence is None:
                 inbox.store.mark_read([inbox_message.id])
             priority = _priority_of(perception, person)
-            # 绑定用户、特别关心或被点名的来信按特别关心排队；抢占仍只由用户和特别关心触发（D137）。
-            if (
-                priority is Priority.CONTACT
-                and inbox_message is not None
-                and inbox is not None
-                and inbox.is_priority(perception)
-            ):
-                priority = Priority.SPECIAL
+            # 特别关心排在仅提及之前，两者都排在普通消息之前；抢占仍只由用户和特别关心触发（D137）。
+            if priority is Priority.CONTACT and inbox_message is not None and inbox is not None:
+                if inbox.preempts(perception):
+                    priority = Priority.SPECIAL
+                elif inbox.is_priority(perception):
+                    priority = Priority.MENTION
             if priority is None:
                 # 确认不了身份（或通道和档案对不上）就不回，朝安全方向倒。
                 logger.info(
@@ -2140,17 +2154,40 @@ class Heartbeat:
             return
         if self._batch_wait_remaining() > 0:
             return  # 疲劳偏高：再等等，攒几条一起回（到点后下一拍会开始）
-        active = self._platform_inbox.active_conversation if self._platform_inbox else None
+        inbox = self._platform_inbox
+        active = inbox.active_conversation if inbox is not None else None
+        if (
+            inbox is not None
+            and active is not None
+            and not self._unanswered.peek_batch((None, active))
+            and not self._reply_outbox.has_pending_conversation(active)
+        ):
+            waiting = next(
+                (
+                    heard
+                    for heard in self._unanswered
+                    if _platform_key(heard) not in (None, active)
+                    and inbox.is_priority(heard.perception)
+                ),
+                None,
+            )
+            if waiting is not None:
+                # 驻留会话空闲、也没有分段在打字：结束驻留，让别的会话的优先来信开始（D137、D138）。
+                inbox.interrupt()
+                active = None
         address = (None, active) if active is not None else None
         batch = sorted(self._unanswered.peek_batch(address), key=lambda heard: heard.record.id)
         if not batch or self._debounce_remaining(batch) > 0:
             return
         residence = batch[-1].residence
-        inbox = self._platform_inbox
         if residence is not None and (inbox is None or not inbox.permits(residence)):
+            self._clear_planner_restarts(residence.conversation)
             self._unanswered.remove(batch)
             return
         if inbox is not None and inbox.residence is not None and residence is None:
+            if self._reply_outbox.has_pending_conversation(inbox.residence.conversation):
+                # 旧驻留还有分段在打字：先让它发完，下一拍再切换，别丢掉正在投递的回复。
+                return
             self._interrupt_inbox(inbox, "会话已切换，原批次未投递。")
         if (
             residence is None
@@ -2939,20 +2976,21 @@ class Heartbeat:
         return min(interval, self._reply_outbox.seconds_until_due())
 
     def _debounce_remaining(self, batch: Sequence[_Heard]) -> float:
-        if not self._config.inbox_debounce_enabled or not batch or _platform_key(batch[-1]) is None:
+        key = _platform_key(batch[-1]) if batch else None
+        if not self._config.inbox_debounce_enabled or key is None:
             return 0.0
         latest = max(heard.record.timestamp for heard in batch)
-        earliest = min(heard.record.timestamp for heard in batch)
         waited = max(0.0, (self._clock.now() - latest).total_seconds())
-        waited_from_first = max(0.0, (self._clock.now() - earliest).total_seconds())
-        # D138：最近一条消息的 4 秒窗口和这一批最早的 20 秒上限，谁先到就按谁。
-        return max(
-            0.0,
-            min(
-                self._config.inbox_debounce_seconds - waited,
-                self._config.inbox_debounce_max_wait_seconds - waited_from_first,
-            ),
-        )
+        remaining = self._config.inbox_debounce_seconds - waited
+        if key.kind == "group":
+            # D138：群聊里最近一条的 4 秒窗口和这一批最早的 20 秒上限，谁先到就按谁。
+            # 私聊保持滑动防抖，不受这个上限影响。
+            earliest = min(heard.record.timestamp for heard in batch)
+            waited_from_first = max(0.0, (self._clock.now() - earliest).total_seconds())
+            remaining = min(
+                remaining, self._config.inbox_debounce_max_wait_seconds - waited_from_first
+            )
+        return max(0.0, remaining)
 
     def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""
