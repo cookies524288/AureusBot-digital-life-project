@@ -1788,6 +1788,7 @@ async function showPage(name, onShown) {
   pendingLiveUpdates.clear();
   clearScrollbarEdge();
   PAGES[state.page]?.leave?.();
+  clearLiveTimers();
   state.page = name;
   const navigation = pageNavigation = {};
   for (const sec of document.querySelectorAll('section.page')) sec.classList.toggle('active', sec === page);
@@ -2360,24 +2361,36 @@ function refreshCurrentPage() {
   }
 }
 
-function refreshLiveTopic(topic) {
-  if (!state.loggedIn || document.hidden) return;
-  if (state.page === 'overview' && ['timeline', 'inbox', 'round'].includes(topic)) loadOverview();
-  else if (state.page === 'timeline' && topic === 'timeline') loadTimeline(false);
-  else if (state.page === 'monitor' && (topic === 'timeline' || topic === 'inbox')) loadMonitor(true);
-  else if (state.page === 'inbox' && topic === 'inbox') refreshInboxLive();
-  else if (state.page === 'memory' && topic === 'resources') PAGES.memory.refresh?.();
-}
+const LIVE_PAGE_TOPICS = {
+  overview: ['timeline', 'inbox', 'round'], timeline: ['timeline'], monitor: ['timeline', 'inbox'],
+  inbox: ['inbox'], memory: ['resources'],
+};
+let liveRefreshPending = false;
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (liveRefreshTimers.size) {
+      clearLiveTimers();
+      liveRefreshPending = true;
+    }
+  } else if (liveRefreshPending) {
+    liveRefreshPending = false;
+    if (state.loggedIn) refreshCurrentPage();
+  }
+});
 
 function handleLiveEvent(event) {
   const topic = event.topic;
   if (!LIVE_TOPIC_CACHE_PREFIXES[topic]) return;
   invalidateLiveTopic(topic);
+  if (!state.loggedIn || !LIVE_PAGE_TOPICS[state.page]?.includes(topic)) return;
+  if (document.hidden) { liveRefreshPending = true; return; }
   const previous = liveRefreshTimers.get(topic);
   if (previous) clearTimeout(previous);
   liveRefreshTimers.set(topic, setTimeout(() => {
     liveRefreshTimers.delete(topic);
-    refreshLiveTopic(topic);
+    if (document.hidden) liveRefreshPending = true;
+    else refreshCurrentPage();
   }, LIVE_REFRESH_DELAY_MS));
 }
 
@@ -2390,6 +2403,7 @@ function catchUpLiveUpdates() {
 function clearLiveTimers() {
   for (const timer of liveRefreshTimers.values()) clearTimeout(timer);
   liveRefreshTimers.clear();
+  liveRefreshPending = false;
 }
 
 function openSocket() {
@@ -6822,7 +6836,11 @@ async function loadMonitor(force = false) {
   renderMonitorResponses(data);
 }
 PAGES.monitor = { load: loadMonitor };
-setInterval(() => { if (state.loggedIn && state.page === 'monitor') loadMonitor(true); }, MONITOR_REFRESH_MS);
+setInterval(() => {
+  if (!state.loggedIn || state.page !== 'monitor') return;
+  if (document.hidden) liveRefreshPending = true;
+  else loadMonitor(true);
+}, MONITOR_REFRESH_MS);
 
 // ---------- 预取（D129）：悬停或键盘聚焦导航时先取目标页数据；空闲时按顺序补几页 ----------
 // 学习页的大块 CSS/JS 仍只在进入时按需加载，不放进预取；长期记忆按筛选和可视高度分页，进入时再取。
