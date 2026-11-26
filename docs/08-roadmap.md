@@ -285,6 +285,8 @@
 
 2026-11-26：继续完成 [D122](10-decisions.md) 学习页内联工作台与长期记忆页重排（[学习页](tasks/3.17-learning-inline-workbench.md)、[记忆页](tasks/3.18-memory-page-redesign.md)）、[D123](10-decisions.md) 平台会话活动面板（[任务](tasks/3.19-inbox-activity-panel.md)）、[D124](10-decisions.md) 时间线详情中文格式化（[任务](tasks/3.20-timeline-detail-formatting.md)）、[D125](10-decisions.md) 自动建索引（[任务](tasks/3.22-auto-index-building.md)）、[D126](10-decisions.md) 账本锁重试（[任务](tasks/3.24-ledger-lock-retry.md)）、[D127](10-decisions.md) 模型流式回退（[任务](tasks/3.25-model-stream-fallback.md)）、[D128](10-decisions.md) 本地嵌入低延迟（[任务](tasks/3.26-local-embedding-latency.md)）、[D129](10-decisions.md) 网页性能收尾（[任务](tasks/3.27-web-performance.md)）、[D130](10-decisions.md) 联系人命名与记忆前缀清理（[任务](tasks/3.28-person-names-and-memory-prefix.md)）、[D131](10-decisions.md) 本地网关直连（[任务](tasks/3.29-local-gateway-direct.md)），以及滚动条悬停与学习页留白（[3.21](tasks/3.21-scrollbar-hover-expand.md)、[3.23](tasks/3.23-learning-left-gutter.md)）。全部复审通过并合入本地 main；发布前的全量检查与推送待办，维护者实机验收未进行。
 
+同日第三轮：模型调用按 [D132](10-decisions.md) 对齐 MaiBot（90 秒超时、默认非流式、共享连接、一次重试），[D134](10-decisions.md) 补齐模型启用/分时价格/思考/联网/额外参数字段并重做[模型配置页](tasks/3.36-model-page-redesign.md)；模型测速按 [3.53](tasks/3.53-model-test-align-mai.md) 移植 MaiBot 的提示词、测试工具与图片并使用独立限流；[D133](10-decisions.md) 完成滚动条边缘触发与切页过渡动画；[3.52](tasks/3.52-model-test-and-reply-latency.md) 调查了测速失败与回复延迟并记录后续建议（分段/打字提速、按会话并发、首包超时暂未做）。平台会话完成活动面板、图片预览、媒体缓存、两栏等高、圆形头像、输入中气泡与 WebSocket 实时同步；时间线完成详情中文化、吸顶标题与筛选滚动保持；网页性能切页 0–13ms；重启遮罩与启动器附着修复。发布前全量检查与推送待办。
+
 ### Phase 4 · 双手
 
 **目标**：在它自己的电脑上动手做事。
