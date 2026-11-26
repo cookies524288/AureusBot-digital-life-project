@@ -753,6 +753,47 @@ async def _post_embeddings(
     )
 
 
+def _embedding_image_bytes(value: bytes) -> bytes:
+    """把图片转成嵌入服务能处理的格式：GIF/WebP 等转 PNG，PNG/JPEG 原样（D143）。
+
+    Args:
+        value: 原始图片字节。
+
+    Returns:
+        可以直接发送的图片字节。
+
+    Raises:
+        _RouteFailureError: 图片损坏、无法识别或超过 Pillow 的解压限制。
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(value)) as image:
+            if image.format in ("PNG", "JPEG") and image.mode in ("RGB", "RGBA", "L"):
+                return value
+            # 动图只取第一帧；P、CMYK、LA 等模式统一转成 RGB。
+            image.seek(0)
+            output = BytesIO()
+            image.convert("RGB").save(output, format="PNG")
+            return output.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as error:
+        raise _RouteFailureError("图片格式不支持") from error
+
+
+def _embedding_images(inputs: Sequence[bytes]) -> tuple[str, ...]:
+    """按输入顺序把图片转成可发送的字节并 base64 编码（D143）。
+
+    Args:
+        inputs: 原始图片字节，顺序与调用方的输入一致。
+
+    Returns:
+        每张图片的 base64 文本，顺序不变。
+    """
+    return tuple(
+        base64.b64encode(_embedding_image_bytes(value)).decode("ascii") for value in inputs
+    )
+
+
 def _tool_call_object(raw: Any) -> Any:
     """把 OpenAI 的 tool_calls 转成 litellm 那样的属性形状（D131）。"""
     if not isinstance(raw, dict):

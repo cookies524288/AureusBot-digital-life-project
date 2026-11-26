@@ -1,9 +1,11 @@
 """LLMOrgan（真实器官）的测试：全部用假的调用函数，不联网、不花钱。"""
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -11,6 +13,7 @@ from typing import Any
 import httpx
 import pytest
 from loguru import logger
+from PIL import Image
 
 from aureus.common import ManualClock
 from aureus.common.config import ConfigError
@@ -40,8 +43,11 @@ from aureus.organs.llm_adapter import (
     EmbeddingOrgan,
     LLMOrgan,
     ModelProbeError,
+    _embedding_image_bytes,
+    _embedding_images,
     _model_test_prompt,
     _model_test_tool,
+    _RouteFailureError,
     close_shared_clients,
     count_prompt_tokens,
     model_probe_inputs,
@@ -54,6 +60,70 @@ from aureus.organs.model_config import (
     ProviderConfig,
     ReasoningLevel,
 )
+
+
+def make_image_bytes(format_name: str, mode: str = "RGB") -> bytes:
+    """合成一张测试图片，不读用户的图片文件。"""
+    color: str | int = 255 if mode == "L" else "white"
+    image = Image.new(mode, (2, 2), color)
+    output = BytesIO()
+    image.save(output, format=format_name)
+    return output.getvalue()
+
+
+def make_animated_gif_bytes() -> bytes:
+    """合成两帧 GIF：第一帧红、第二帧蓝，用来确认只取第一帧。"""
+    frames = [Image.new("RGB", (2, 2), color) for color in ("red", "blue")]
+    output = BytesIO()
+    frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:])
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("format_name", ["GIF", "WEBP"])
+def test_embedding_image_bytes_converts_gif_and_webp_to_png(format_name: str) -> None:
+    converted = _embedding_image_bytes(make_image_bytes(format_name))
+    with Image.open(BytesIO(converted)) as image:
+        assert image.format == "PNG"
+        assert image.mode == "RGB"
+
+
+def test_embedding_image_bytes_takes_first_frame_of_animated_gif() -> None:
+    converted = _embedding_image_bytes(make_animated_gif_bytes())
+    with Image.open(BytesIO(converted)) as image:
+        assert image.format == "PNG"
+        assert image.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("format_name", "mode"),
+    [("PNG", "RGB"), ("PNG", "RGBA"), ("PNG", "L"), ("JPEG", "RGB"), ("JPEG", "L")],
+)
+def test_embedding_image_bytes_keeps_png_and_jpeg(format_name: str, mode: str) -> None:
+    original = make_image_bytes(format_name, mode)
+    assert _embedding_image_bytes(original) == original
+
+
+def test_embedding_image_bytes_converts_palette_png_to_rgb_png() -> None:
+    converted = _embedding_image_bytes(make_image_bytes("PNG", "P"))
+    with Image.open(BytesIO(converted)) as image:
+        assert image.format == "PNG"
+        assert image.mode == "RGB"
+
+
+def test_embedding_images_preserves_order_and_encodes_base64() -> None:
+    png = make_image_bytes("PNG")
+    gif = make_image_bytes("GIF")
+
+    encoded = _embedding_images((png, gif))
+
+    assert base64.b64decode(encoded[0]) == png
+    with Image.open(BytesIO(base64.b64decode(encoded[1]))) as image:
+        assert image.format == "PNG"
+
+
+def test_embedding_images_rejects_broken_bytes() -> None:
+    with pytest.raises(_RouteFailureError, match="图片格式不支持"):
+        _embedding_images((b"not an image",))
 
 
 @pytest.mark.asyncio
