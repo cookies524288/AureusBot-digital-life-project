@@ -638,6 +638,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 .inbox-msg .meta{display:flex;gap:4px 10px;align-items:baseline;flex-wrap:wrap;font-size:12px}
 .inbox-msg .bubble p,.inbox-msg .inbox-component{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
 .inbox-msg .inbox-component.event{display:block}
+/* 3.47 输入中气泡在消息列表末尾，右侧、金色，与 Bot 已发出的回复同款。 */
+.inbox-messages>.inbox-typing{align-self:flex-end}
+.inbox-typing .bubble{display:inline-flex;align-items:center;min-height:1.5em}
 .inbox-avatar{position:relative;display:grid;flex:none;place-items:center;width:28px;height:28px;background:var(--bg);border:1px solid var(--border)}
 .inbox-avatar .ico{width:18px;height:18px;shape-rendering:crispEdges}
 .inbox-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0}
@@ -2256,8 +2259,6 @@ function refreshLiveTopic(topic) {
   else if (state.page === 'timeline' && topic === 'timeline') loadTimeline(false);
   else if (state.page === 'monitor' && (topic === 'timeline' || topic === 'inbox')) loadMonitor(true);
   else if (state.page === 'inbox' && topic === 'inbox') refreshInboxLive();
-  else if (state.page === 'inbox' && topic === 'round') followConversationTyping();
-  else if (state.page === 'chat' && topic === 'round') followConversationTyping();
   else if (state.page === 'memory' && topic === 'resources') PAGES.memory.refresh?.();
 }
 
@@ -3415,15 +3416,28 @@ function clearTyping() {
   current.controller?.abort();
   clearTimeout(current.timer);
   current.status.replaceChildren();
+  removeInboxTypingBubble();
 }
 
-// 平台会话的输入提示按批次 1 的来信气泡显示；私聊页仍用原来的小方框。
+function removeInboxTypingBubble() {
+  $('inbox-messages')?.querySelector(':scope > .inbox-typing')?.remove();
+}
+
+// 平台会话的输入中气泡放在消息列表末尾，和 Bot 已发出的回复同款（3.47）；私聊页仍用原来的小方框。
 function typingIndicator(chat) {
   const dots = el('span', {class:'typing-dots', 'aria-hidden':'true'});
   if (chat) return el('span', {class:'typing-status'}, '输入中', dots);
-  return el('article', {class:'msg inbox-msg person'},
-    el('div', {class:'msg-line'},
+  return el('article', {class:'msg inbox-msg user inbox-typing', role:'status', 'aria-label':'Bot 正在输入'},
+    el('div', {class:'msg-line'}, inboxAvatarPlaceholder(),
       el('div', {class:'bubble'}, el('span', {class:'typing-label', text:'输入中'}), dots)));
+}
+
+function showInboxTypingBubble() {
+  const list = $('inbox-messages');
+  if (!list || list.querySelector(':scope > .inbox-typing')) return;
+  const stick = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  list.append(typingIndicator(false));
+  if (stick) list.scrollTop = list.scrollHeight;
 }
 
 function followConversationTyping() {
@@ -3434,7 +3448,8 @@ function followConversationTyping() {
   if (!chat && !key) return;
   if (chat && socket?.readyState !== WebSocket.OPEN) return;
   const path = chat ? '/api/chat/typing' : `/api/inbox/typing?${inboxScope(key)}`;
-  const current = typingSession = {status:$(chat ? 'chat-typing' : 'inbox-typing')};
+  const current = typingSession = {status:$(chat ? 'chat-typing' : 'inbox-typing'),
+    wasActive:false, bubbleReplaced:false};
   async function refresh() {
     const controller = current.controller = new AbortController();
     current.timer = setTimeout(() => controller.abort(), TYPING_REFRESH_MS);
@@ -3442,8 +3457,18 @@ function followConversationTyping() {
     if (typingSession !== current) return;
     clearTimeout(current.timer);
     const active = !controller.signal.aborted && result.ok && result.data?.typing === true;
-    if (!active) current.status.replaceChildren();
-    else if (!current.status.firstChild) current.status.append(typingIndicator(chat));
+    if (chat) {
+      if (!active) current.status.replaceChildren();
+      else if (!current.status.firstChild) current.status.append(typingIndicator(true));
+    } else if (!active) {
+      removeInboxTypingBubble();
+      // 输入结束再补拉一次最新一页，回复即使没等到推送也会出现在原位（3.43、3.47）。
+      if (current.wasActive) refreshInboxMessages();
+    } else {
+      if (!current.wasActive) current.bubbleReplaced = false;
+      if (!current.bubbleReplaced) showInboxTypingBubble();
+    }
+    current.wasActive = active;
     current.timer = setTimeout(refresh, TYPING_REFRESH_MS);
   }
   refresh();
@@ -3927,9 +3952,7 @@ function renderInboxContents(message) {
   ];
 }
 
-function renderInboxMessage(message) {
-  const timestamp = message.timestamp;
-  const direction = message.direction === 'incoming' || message.direction === 'outgoing' ? message.direction : 'unknown';
+function inboxAvatarPlaceholder() {
   const avatar = el('span', {class:'inbox-avatar', 'aria-hidden':'true'});
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   icon.setAttribute('class', 'ico');
@@ -3937,11 +3960,18 @@ function renderInboxMessage(message) {
   glyph.setAttribute('href', '#i-inbox-person');
   icon.append(glyph);
   avatar.append(icon);
+  return avatar;
+}
+
+function renderInboxMessage(message) {
+  const timestamp = message.timestamp;
+  const direction = message.direction === 'incoming' || message.direction === 'outgoing' ? message.direction : 'unknown';
+  const avatar = inboxAvatarPlaceholder();
   if (message.source === 'inbox' && message.conversation?.platform === 'qq' && message.sender_id
       && message.event_type !== 'poke_notice' && !message.conversation.temporary_group_id
       && Number.isSafeInteger(message.id)) {
     const picture = el('img', {alt:'', loading:'lazy', referrerpolicy:'no-referrer',
-      onload:() => { icon.classList.add('hidden'); picture.classList.add('loaded'); },
+      onload:() => { avatar.querySelector('.ico')?.classList.add('hidden'); picture.classList.add('loaded'); },
       onerror:() => picture.remove(),
     });
     loadInboxAvatar(message).then(url => {
