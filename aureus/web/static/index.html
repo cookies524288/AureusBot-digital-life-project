@@ -641,9 +641,9 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 /* 3.47 输入中气泡在消息列表末尾，右侧、金色，与 Bot 已发出的回复同款。 */
 .inbox-messages>.inbox-typing{align-self:flex-end}
 .inbox-typing .bubble{display:inline-flex;align-items:center;min-height:1.5em}
-.inbox-avatar{position:relative;display:grid;flex:none;place-items:center;width:28px;height:28px;background:var(--bg);border:1px solid var(--border)}
+.inbox-avatar{position:relative;display:grid;flex:none;place-items:center;width:28px;height:28px;background:var(--bg);border:1px solid var(--border);border-radius:50%;overflow:hidden}
 .inbox-avatar .ico{width:18px;height:18px;shape-rendering:crispEdges}
-.inbox-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0}
+.inbox-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;opacity:0}
 .inbox-avatar img.loaded{opacity:1}
 .inbox-image{display:grid;justify-content:start;justify-items:end;gap:5px;margin:6px 0 0}
 /* 缩略图交给浏览器按 loading=lazy 取图；占位块保留最小尺寸，加载中和失败都不会把消息列表挤动。 */
