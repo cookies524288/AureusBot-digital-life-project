@@ -1312,7 +1312,7 @@ async function apiRequest(path, method, body, headers, signal, detached) {
   } catch (e) {
     settle();
     const aborted = !timedOut && controller.signal.aborted;
-    if (timedOut) toast(API_TIMEOUT_TEXT, 'error');
+    if (timedOut && !detached) toast(API_TIMEOUT_TEXT, 'error');   // 预取超时静默
     return { ok: false, status: 0, data: null, aborted, timeout: timedOut };
   }
   settle();
@@ -1963,13 +1963,13 @@ function mergeChatHistory(items) {
   if (!selectionTouches(log)) log.scrollTop = log.scrollHeight;
 }
 
-function loadChatHistory(detached = false) {
+function loadChatHistory(detached = false, quiet = false) {
   const loaded = state.loaded;
   if (!loaded.chat) $('chat-send').disabled = true;
   loaded.chat ??= api('/api/history', undefined, undefined, {}, undefined, detached).then(res => {
     if (state.loaded !== loaded) return;
+    if (!res.ok) { delete loaded.chat; $('chat-send').disabled = true; if (!quiet) fail(res); return; }
     $('chat-send').disabled = false;
-    if (!res.ok) { delete loaded.chat; fail(res); return; }
     mergeChatHistory(res.data);
     loaded.chatCursor = res.data.at(-1)?.id ?? 0;
   });
@@ -5618,7 +5618,7 @@ const PAGE_PREFETCH = {
         if (activity.ok) cacheWrite('overview-activity', activity.data, OVERVIEW_CACHE_MS);
       });
   },
-  chat: () => state.loaded.chat ? Promise.resolve() : loadChatHistory(true),
+  chat: () => state.loaded.chat ? Promise.resolve() : loadChatHistory(true, true),
   monitor() {
     if (freshCache('monitor', MONITOR_CACHE_MS)) return Promise.resolve();
     const session = state.loaded;
