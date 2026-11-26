@@ -14,11 +14,13 @@
 
 | 层 | 管什么 | 主要字段 |
 |---|---|---|
-| 服务商 `providers` | 去哪里调用、怎么认证 | `name`、`base_url`、`protocol`、`api_key_ref` / `api_key_env`、`timeout_seconds`、`max_retry` |
+| 服务商 `providers` | 去哪里调用、怎么认证 | `name`、`base_url`、`protocol`、`api_key_ref` / `api_key_env`、`timeout_seconds`（默认 120 秒，D135）、`max_retry` |
 | 模型 `models` | API供应商提供的某个具体模型 | `name`（自己起的名字）、`identifier`（API供应商给的模型标识）、`provider`、`kind`（`llm` / `embedding`）、`vision`（仅 `llm` 可开启，默认关闭）、`price_in`、`price_out`、`price_cache_in`（元 / 百万 token，可选，只用来显示估算费用，D37）、`temperature`、`max_tokens`、`reasoning_levels`（该模型支持的思考等级） |
 | 器官 `organs` | 每个器官用哪些模型 | 器官名（`planner`、`replyer`、`judge`、`summarizer`、`vision`……）、`models`（按名字引用，有顺序）、`strategy`（`sequential` / `balance` / `random`）、`max_tokens`、`temperature`、`reasoning_effort`（可选的思考等级） |
 
 旧配置中的 `kind = "vision"` 会读成 `kind = "llm"` 加 `vision = true`。视觉字段记录模型能力，当前测速始终发送纯文本。
+
+服务商不写 `timeout_seconds` 时默认 120 秒（D135，取代 D132 的 90 秒），显式配置优先；判断器官的超时默认也是 120 秒。
 
 换模型：只改 `organs` 里引用的名字。加新服务商：在 `providers` 加一项，并用 `aureus keys set` 录入密钥（D36）。
 
