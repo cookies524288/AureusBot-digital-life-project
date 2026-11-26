@@ -2355,6 +2355,7 @@ const LIVE_TOPIC_CACHE_PREFIXES = {
 const liveRefreshTimers = new Map();
 let socketNeedsCatchUp = false;
 let timelineGeneration = 0;
+let inboxListGeneration = 0;
 
 function invalidateLiveTopic(topic) {
   if (topic === 'timeline') {
@@ -2363,6 +2364,9 @@ function invalidateLiveTopic(topic) {
     for (const path of inFlightGets.keys()) {
       if (path.startsWith('/api/timeline?')) inFlightGets.delete(path);
     }
+  } else if (topic === 'inbox') {
+    inboxListGeneration++;
+    inFlightGets.delete('/api/inbox/conversations');
   }
   for (const prefix of LIVE_TOPIC_CACHE_PREFIXES[topic] || []) clearPageCache(prefix);
 }
@@ -2417,6 +2421,7 @@ function handleLiveEvent(event) {
 // 断线期间后端不重放事件；重连后清空页面缓存，当前页重新取一次（3.43）。
 function catchUpLiveUpdates() {
   invalidateLiveTopic('timeline');
+  invalidateLiveTopic('inbox');
   clearPageCache();
   refreshCurrentPage();
 }
@@ -3951,7 +3956,7 @@ function renderInboxView({keepSelection = false} = {}) {
 const INBOX_CACHE_MS = 15000;
 const INBOX_MESSAGE_CACHE_MS = 10000;
 async function loadInbox() {
-  const request = ++inbox.conversationRequest, session = state.loaded;
+  const request = ++inbox.conversationRequest, session = state.loaded, generation = inboxListGeneration;
   const cached = cacheRead('inbox-conversations', INBOX_CACHE_MS);
   let refresh = null;
   if (cached) {
@@ -3965,7 +3970,7 @@ async function loadInbox() {
     await rendered;
   }
   const res = await (refresh || api('/api/inbox/conversations'));
-  if (request !== inbox.conversationRequest || session !== state.loaded) return;
+  if (request !== inbox.conversationRequest || session !== state.loaded || generation !== inboxListGeneration) return;
   if (!res.ok) {
     if (cached) fail(res);   // 刷新失败保留缓存内容
     else inboxStatus('inbox-empty', errorText(res));
@@ -3981,7 +3986,9 @@ async function loadInbox() {
 // 收到 inbox 事件：先刷新会话列表，再只取当前会话最新一页并追加新消息（3.43、3.47）。
 async function refreshInboxLive() {
   if (!state.loggedIn || state.page !== 'inbox' || document.hidden) return;
+  const generation = inboxListGeneration;
   await loadInbox();
+  if (generation !== inboxListGeneration) return;
   await refreshInboxMessages();
 }
 
@@ -6986,7 +6993,14 @@ const PAGE_PREFETCH = {
       cacheWrite(key, res.data, TIMELINE_CACHE_MS);
     });
   },
-  inbox: () => prefetchInto('/api/inbox/conversations', 'inbox-conversations', INBOX_CACHE_MS),
+  inbox() {
+    if (freshCache('inbox-conversations', INBOX_CACHE_MS)) return Promise.resolve();
+    const session = state.loaded, generation = inboxListGeneration;
+    return prefetchRequest('/api/inbox/conversations').then(res => {
+      if (session === state.loaded && generation === inboxListGeneration && res.ok)
+        cacheWrite('inbox-conversations', res.data, INBOX_CACHE_MS);
+    });
+  },
   persona: () => prefetchInto('/api/settings', 'settings', CONFIG_CACHE_TTL_MS),
   models: () => prefetchInto('/api/models', 'models', CONFIG_CACHE_TTL_MS),
   keys: () => prefetchInto('/api/keys', 'keys', CONFIG_CACHE_TTL_MS),
