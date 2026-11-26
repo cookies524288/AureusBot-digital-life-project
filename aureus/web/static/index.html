@@ -2416,6 +2416,7 @@ function handleLiveEvent(event) {
 
 // 断线期间后端不重放事件；重连后清空页面缓存，当前页重新取一次（3.43）。
 function catchUpLiveUpdates() {
+  invalidateLiveTopic('timeline');
   clearPageCache();
   refreshCurrentPage();
 }
