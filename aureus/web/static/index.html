@@ -34,6 +34,12 @@ color-scheme:light;
 --thread-warp:rgb(211 215 207 / 3.5%);--thread-weft:rgb(0 0 0 / 7%);--thread-glint:rgb(211 215 207 / 4%);
 color-scheme:dark;}
 
+/* 浅色主题只加深主按钮和导航的金色，不改变共用强调色。 */
+:root:not([data-theme='dark']){--control-gold-deep:#755800}
+:root:not([data-theme='dark']) .btn.primary{background:var(--accent-strong);border-color:var(--accent-strong)}
+:root:not([data-theme='dark']) .btn.primary:where(:not(:disabled,[aria-disabled=true])):hover{background:var(--control-gold-deep);border-color:var(--control-gold-deep)}
+:root:not([data-theme='dark']) :is(.nav-item,.nav-group){--text-2:var(--text);--accent-strong:var(--control-gold-deep)}
+
 @font-face{font-family:'Ark Pixel';src:url('/assets/ark-pixel.woff2') format('woff2');font-display:swap}
 :root:not([data-font='system']){--font:'Ark Pixel','Microsoft YaHei',sans-serif}
 
