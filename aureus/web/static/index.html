@@ -5689,9 +5689,10 @@ async function loadKeysPage(force = false) {
 function keyValueField(label, kind, value = '') {
   const field = secretEditorField(label, value, {required:true});
   if (kind === 'other') {
-    field.input = el('textarea', {rows:5, 'data-secret':'', 'aria-label':label, autocomplete:'off', spellcheck:'false', required:true});
-    field.input.value = value;
-    field.node.lastChild.replaceWith(field.input);
+    const textarea = el('textarea', {rows:5, 'data-secret':'', 'aria-label':label, autocomplete:'off', spellcheck:'false', required:true});
+    textarea.value = value;
+    field.input.replaceWith(textarea);
+    field.input = textarea;
   }
   field.input.setAttribute('maxlength', '4096');
   return field;
