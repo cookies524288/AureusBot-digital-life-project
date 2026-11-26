@@ -52,10 +52,11 @@ h1,h2,h3,h4,p{margin:0}
 @supports selector(::-webkit-scrollbar){
 ::-webkit-scrollbar{width:12px;height:12px}
 ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
-/* 胶囊滑块用透明边框把可视宽度收窄：轨道固定 12px，平时只露 6px，鼠标靠近时变粗但不挤动布局。 */
+/* 胶囊滑块用透明边框把可视宽度收窄：轨道固定 12px，平时只露 6px，指针靠近时变粗但不挤动布局。 */
 ::-webkit-scrollbar-thumb{background-color:var(--text-2);border:3px solid transparent;border-radius:999px;background-clip:content-box}
-/* 鼠标进入可滚动区域时吸附变粗到 10px；停在滑块上时满宽并加深（3.21）。 */
-*:hover::-webkit-scrollbar-thumb{border-width:1px}
+/* 指针进入可滚动区域右边缘或底部 24px 内时，脚本给该元素加 scrollbar-edge，滑块变粗到 10px；
+   停在滑块上时满宽并加深（D133、3.21）。 */
+.scrollbar-edge::-webkit-scrollbar-thumb{border-width:1px}
 ::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{border-width:0;background-color:var(--text)}
 }
 @supports not selector(::-webkit-scrollbar){
@@ -1407,6 +1408,46 @@ function fmtTime(iso, full) {
   return full ? (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + clock : clock;
 }
 
+// ---------- 滚动条：指针靠近右边缘或底部时才变粗（D133） ----------
+// 原来的 *:hover 规则只要指针在可滚动区域里就加粗，切页后停在页面中间也一直粗；
+// 改为只在边缘 24px 内给该元素加类，同一时刻只留一个，离开、滚动、切页和窗口尺寸变化都清空。
+const SCROLLBAR_EDGE_ZONE = 24;
+let scrollbarEdgeElement = null;
+
+function setScrollbarEdge(element) {
+  if (element === scrollbarEdgeElement) return;
+  scrollbarEdgeElement?.classList.remove('scrollbar-edge');
+  scrollbarEdgeElement = element;
+  element?.classList.add('scrollbar-edge');
+}
+
+function clearScrollbarEdge() {
+  setScrollbarEdge(null);
+}
+
+function updateScrollbarEdge(event) {
+  for (let node = event.target; node instanceof Element; node = node.parentElement) {
+    const scrollsVertically = node.scrollHeight > node.clientHeight;
+    const scrollsHorizontally = node.scrollWidth > node.clientWidth;
+    if (!scrollsVertically && !scrollsHorizontally) continue;
+    const rect = node.getBoundingClientRect();
+    const nearRight = scrollsVertically && event.clientX >= rect.right - SCROLLBAR_EDGE_ZONE &&
+      event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+    const nearBottom = scrollsHorizontally && event.clientY >= rect.bottom - SCROLLBAR_EDGE_ZONE &&
+      event.clientY <= rect.bottom && event.clientX >= rect.left && event.clientX <= rect.right;
+    if (nearRight || nearBottom) {
+      setScrollbarEdge(node);
+      return;
+    }
+  }
+  setScrollbarEdge(null);
+}
+
+document.addEventListener('pointermove', updateScrollbarEdge, {passive: true});
+document.addEventListener('pointerleave', clearScrollbarEdge);
+document.addEventListener('scroll', clearScrollbarEdge, {capture: true, passive: true});
+window.addEventListener('resize', clearScrollbarEdge);
+
 // ---------- 页面切换 ----------
 const PAGES = {};   // 页面名 -> {prepare, load, leave}。prepare 同步选中子页并返回加载函数。
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -1533,6 +1574,7 @@ async function showPage(name, onShown) {
   }
   abortPageRequests();
   pendingLiveUpdates.clear();
+  clearScrollbarEdge();
   PAGES[state.page]?.leave?.();
   state.page = name;
   const navigation = pageNavigation = {};
