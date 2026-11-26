@@ -46,8 +46,8 @@ config_version = 1
 # 各精力档位固定先调用 [organs.planner]，需要回复时使用 [organs.replyer]；在 models.toml 中配置它们的模型。
 # 自主翻阅和规划器调整特别关心的总开关。
 # inbox_attention_enabled = true
-# 每次自主翻阅在所有选中会话合计读取的条数，范围 1–200。
-# inbox_read_limit = 35
+# 每轮每会话最多读这么多条最新未读，更早没读到的自动标已读，不堆积，范围 1–200（D145）。
+# inbox_read_limit = 15
 # 消息防抖档位：off / fast / natural / steady。合并同一会话连续来信；
 # 沉稳档安静 4 秒、活跃 7 秒、同人续发 4 秒、换人 2 秒；裸图至少 4 秒、整批最多 8 秒、@或提及最多 1 秒。
 # message_debounce_mode = "steady"
