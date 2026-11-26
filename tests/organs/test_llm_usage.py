@@ -11,7 +11,10 @@ from aureus.organs.model_config import ModelConfig, PricePeriod
 MOMENT = datetime(2026, 11, 26, 9, 0, tzinfo=UTC)
 
 
-def make_model(price_cache_in: float | None = None, **fields: object) -> ModelConfig:
+def make_model(
+    price_cache_in: float | None = None,
+    price_periods: tuple[PricePeriod, ...] = (),
+) -> ModelConfig:
     return ModelConfig(
         name="m",
         identifier="m-id",
@@ -19,7 +22,7 @@ def make_model(price_cache_in: float | None = None, **fields: object) -> ModelCo
         price_in=4.0,
         price_out=8.0,
         price_cache_in=price_cache_in,
-        **fields,
+        price_periods=price_periods,
     )
 
 
