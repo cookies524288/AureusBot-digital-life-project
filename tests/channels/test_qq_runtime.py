@@ -199,6 +199,7 @@ def capture_language_requests(log_file: str, browse_inbox: bool = False) -> None
         resolver: KeyResolver,
         *,
         fake_organs: bool,
+        **_kwargs: object,
     ) -> ModelRuntime:
         assert not fake_organs
         bus = OrganBus()

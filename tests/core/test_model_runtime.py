@@ -91,6 +91,69 @@ async def test_unconfigured_routes_never_load_or_call_a_model(
 
 
 @pytest.mark.asyncio
+async def test_all_disabled_models_make_the_organ_call_fail_with_a_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_loading() -> None:
+        raise AssertionError("停用的模型不应加载真实调用函数")
+
+    monkeypatch.setattr("aureus.organs.llm_adapter._load_litellm_completion", reject_loading)
+    raw = config_for("chosen").model_dump(mode="json")
+    raw["models"][0]["enabled"] = False
+    runtime = ModelRuntime(
+        OrganBus(), KeyResolver(tmp_path / "absent.env", environ={}), fake_organs=False
+    )
+    runtime.apply(runtime.prepare(ModelsConfig.model_validate(raw)))
+    assert runtime.available_organs == frozenset()
+    with pytest.raises(OrganCallError, match="未配置可用的模型") as error:
+        await runtime.bus.send(OrganRequest(organ_id="replyer", prompt="测试"))
+    assert error.value.attempts == []
+
+
+@pytest.mark.asyncio
+async def test_disabled_model_is_skipped_and_reenabling_restores_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fail_first = False
+    calls: list[str] = []
+
+    async def complete(**kwargs: Any) -> Any:
+        calls.append(kwargs["model"])
+        if fail_first and kwargs["model"] == "openai/first":
+            raise RuntimeError("仅供测试的模型失败")
+        return make_response(kwargs["model"])
+
+    monkeypatch.setattr("aureus.organs.llm_adapter._load_litellm_completion", lambda: complete)
+    monkeypatch.setattr("aureus.organs.llm_adapter.count_prompt_tokens", lambda _: 4)
+    raw = config_for("first").model_dump(mode="json")
+    raw["models"][0]["name"] = "first"
+    raw["models"].append(
+        {
+            "name": "second",
+            "identifier": "second-id",
+            "provider": "local",
+            "enabled": False,
+        }
+    )
+    raw["organs"]["replyer"]["models"] = ["first", "second"]
+    runtime = ModelRuntime(
+        OrganBus(), KeyResolver(tmp_path / "absent.env", environ={}), fake_organs=False
+    )
+    runtime.apply(runtime.prepare(ModelsConfig.model_validate(raw)))
+
+    response = await runtime.bus.send(OrganRequest(organ_id="replyer", prompt="测试"))
+    assert response.suggestion == "openai/first"
+    assert calls == ["openai/first"]
+
+    raw["models"][1]["enabled"] = True
+    runtime.apply(runtime.prepare(ModelsConfig.model_validate(raw)))
+    fail_first = True
+    response = await runtime.bus.send(OrganRequest(organ_id="replyer", prompt="测试"))
+    assert response.suggestion == "openai/second-id"
+    assert calls[-2:] == ["openai/first", "openai/second-id"]
+
+
+@pytest.mark.asyncio
 async def test_fake_mode_stays_fake_after_reload(tmp_path: Path) -> None:
     runtime = ModelRuntime(
         OrganBus(), KeyResolver(tmp_path / "absent.env", environ={}), fake_organs=True

@@ -581,3 +581,88 @@ def test_web_cannot_register_an_unknown_organ(rig: ConfigRig) -> None:
     assert rig.client.put("/api/models", json={"config": config}).status_code == 422
     assert rig.paths.models_config_file.read_bytes() == before
     assert not rig.models.bus.is_registered("invented")
+
+
+def test_new_model_fields_round_trip_and_old_files_use_defaults(rig: ConfigRig) -> None:
+    config = saved_config(rig)
+    first = config["models"][0]
+    assert (first["enabled"], first["price_periods"]) == (True, [])
+    assert (first["thinking"], first["web_search"], first["extra_params"]) == (False, False, {})
+    first.update(
+        enabled=False,
+        price_periods=[
+            {
+                "start": "08:00",
+                "end": "12:00",
+                "price_in": 1.0,
+                "price_out": 2.0,
+                "price_cache_in": 0.5,
+            }
+        ],
+        thinking=True,
+        web_search=True,
+        extra_params={"top_p": 0.8, "stop": ["再见"]},
+    )
+    response = rig.client.put("/api/models", json={"config": config})
+    assert response.status_code == 200
+
+    saved = rig.client.get("/api/models").json()["config"]["models"][0]
+    assert saved["enabled"] is False
+    assert saved["price_periods"] == first["price_periods"]
+    assert saved["thinking"] is True
+    assert saved["web_search"] is True
+    assert saved["extra_params"] == {"top_p": 0.8, "stop": ["再见"]}
+
+    raw = tomllib.loads(rig.paths.models_config_file.read_text(encoding="utf-8"))
+    assert raw["models"][0]["enabled"] is False
+    assert raw["models"][0]["price_periods"][0]["start"] == "08:00"
+    assert raw["models"][0]["extra_params"] == {"top_p": 0.8, "stop": ["再见"]}
+    # 没改的模型保持旧文件的样子，默认值不写进文件。
+    assert "enabled" not in raw["models"][1]
+    assert "price_periods" not in raw["models"][1]
+    assert "thinking" not in raw["models"][1]
+    assert "web_search" not in raw["models"][1]
+    assert "extra_params" not in raw["models"][1]
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("overlap", "不能重叠"),
+        ("core", "核心请求字段"),
+        ("size", "最多 8192 字节"),
+        ("type", "thinking"),
+    ],
+)
+def test_invalid_new_model_fields_are_rejected_without_writing(
+    rig: ConfigRig, change: str, expected: str
+) -> None:
+    config = saved_config(rig)
+    model = config["models"][0]
+    if change == "overlap":
+        model["price_periods"] = [
+            {
+                "start": "08:00",
+                "end": "12:00",
+                "price_in": 1.0,
+                "price_out": 2.0,
+                "price_cache_in": 0.5,
+            },
+            {
+                "start": "11:00",
+                "end": "13:00",
+                "price_in": 1.0,
+                "price_out": 2.0,
+                "price_cache_in": 0.5,
+            },
+        ]
+    elif change == "core":
+        model["extra_params"] = {"messages": []}
+    elif change == "size":
+        model["extra_params"] = {"big": "x" * 9000}
+    else:
+        model["thinking"] = "maybe"
+    response = rig.client.put("/api/models", json={"config": config})
+    assert response.status_code == 422
+    assert expected in response.json()["detail"]
+    assert rig.paths.models_config_file.read_bytes() == ORIGINAL.encode("utf-8")
