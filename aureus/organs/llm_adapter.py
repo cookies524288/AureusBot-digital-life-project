@@ -139,6 +139,9 @@ async def _read_stream(
                 if isinstance(content, str):
                     pieces.append(content)
                 visible = isinstance(content, str) and bool(content.strip())
+                if getattr(delta, "tool_calls", None):
+                    # 工具调用也是第一段输出，测速要把它算进首包延迟（3.53）。
+                    visible = True
                 if _has_reasoning(delta):
                     reasoning = True
                     visible = True
@@ -478,7 +481,8 @@ def _load_litellm_completion() -> CompletionFunction:
 
 
 _MODEL_TEST_INPUT = "Reply OK."
-_MODEL_TEST_MAX_TOKENS = 32
+# 与 MaiBot 的模型测试一致（512）：给思考等级留出输出测试工具调用的空间。
+_MODEL_TEST_MAX_TOKENS = 512
 # 测速的流式请求最多等这么久要第一个数据块（D131）：本地网关可能既不返回数据也不结束。
 PROBE_FIRST_CHUNK_TIMEOUT_SECONDS = 20.0
 
@@ -492,6 +496,8 @@ _MODEL_TEST_IMAGE_BASE64 = (
 )
 _MODEL_TEST_IMAGE_URL = "data:image/png;base64," + _MODEL_TEST_IMAGE_BASE64
 _MODEL_TEST_TOOL_NAME = "maibot_model_test_report"
+# 与 MaiBot 的模型测试判定一致：没有名为测试工具的调用就算失败，不校验参数。
+MODEL_TEST_TOOL_MISSING_REASON = f"模型未按要求调用测试工具 {_MODEL_TEST_TOOL_NAME}"
 _MODEL_TEST_PROMPT_HEADER = (
     "你正在执行 MaiBot WebUI 的单模型能力测试。\n"
     "测试目标：确认模型可以读取普通文本，并可以按工具定义发起 tool call。\n"
@@ -549,56 +555,38 @@ def _model_test_tool() -> dict[str, Any]:
     }
 
 
-# 固定的红色 PNG，测速不需要读取用户图片。
-_PROBE_IMAGE = (
-    "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
-)
-
-
 def model_probe_inputs(model: ModelConfig) -> dict[str, dict[str, Any]]:
-    """列出已声明的每项能力及其实际测试输入。"""
+    """列出已声明的每项能力及其实际测试输入（提示词与图片按 MaiBot 移植，3.53）。"""
     if model.kind == "embedding":
         return {"embedding": {"input": [_MODEL_TEST_INPUT]}}
     if model.kind == "image_embedding":
-        return {"image_embedding": {"input": [{"image": _PROBE_IMAGE.split(",", 1)[1]}]}}
+        return {"image_embedding": {"input": [{"image": _MODEL_TEST_IMAGE_BASE64}]}}
     if model.kind == "transcription":
         return {"transcription": {"file": "一秒静音 WAV"}}
-    message = {"role": "user", "content": _MODEL_TEST_INPUT}
-    probes: dict[str, dict[str, Any]] = {"text": {"messages": [message]}}
+    message = {"role": "user", "content": _model_test_prompt(with_image=False)}
+    probes: dict[str, dict[str, Any]] = {
+        "text": {"messages": [message], "tools": [_model_test_tool()]}
+    }
     if model.vision:
         probes["vision"] = {
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": "Name the color of this image in one English word.",
-                        },
-                        {"type": "image_url", "image_url": {"url": _PROBE_IMAGE}},
+                        {"type": "text", "text": _model_test_prompt(with_image=True)},
+                        {"type": "image_url", "image_url": {"url": _MODEL_TEST_IMAGE_URL}},
                     ],
                 }
-            ]
+            ],
+            "tools": [_model_test_tool()],
         }
-    probes["tools"] = {
-        "messages": [{"role": "user", "content": "Call echo with value OK."}],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "echo",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"value": {"type": "string"}},
-                        "required": ["value"],
-                    },
-                },
-            }
-        ],
-    }
+    probes["tools"] = {"messages": [message], "tools": [_model_test_tool()]}
     for level in model.reasoning_levels:
-        probes["reasoning/" + level] = {"messages": [message], "reasoning_effort": level}
+        probes["reasoning/" + level] = {
+            "messages": [message],
+            "tools": [_model_test_tool()],
+            "reasoning_effort": level,
+        }
     return probes
 
 
@@ -609,6 +597,18 @@ def _probe_usage(inputs: dict[str, Any], completion_tokens: int) -> TokenUsage:
         completion_tokens=completion_tokens,
         known=False,
     )
+
+
+def _probe_reply(text: str | None, calls: Sequence[ToolCall], reasoning: bool) -> str:
+    """测速结果里给人看的回复：优先列出工具调用，其次正文，最后推理内容说明。"""
+    if calls:
+        return json.dumps(
+            [{"name": call.name, "arguments": call.arguments} for call in calls],
+            ensure_ascii=False,
+        )
+    if text is not None:
+        return text
+    return REASONING_ONLY_REASON if reasoning else ""
 
 
 def _probe_attempt(
@@ -999,7 +999,7 @@ async def probe_model(
             transport=transport,
             clock=the_clock,
         )
-        image = base64.b64decode(_PROBE_IMAGE.split(",", 1)[1])
+        image = base64.b64decode(_MODEL_TEST_IMAGE_BASE64)
         measured: list[float] = []
         response = await organ.process(
             OrganRequest(organ_id, "", embedding_inputs=(image,)),
@@ -1089,44 +1089,6 @@ async def probe_model(
             actual = extract_usage(result)
             if actual.known:
                 usage = actual
-        elif capability == "tools":
-            measured: list[float] = []
-            kwargs = _chat_kwargs(
-                route,
-                params,
-                inputs["messages"],
-                tools=inputs["tools"],
-                max_tokens=_MODEL_TEST_MAX_TOKENS,
-            )
-            collector = ToolCallCollector({"echo"})
-            async with asyncio.timeout(provider.timeout_seconds):
-                result = await _send_chat(
-                    route,
-                    completion,
-                    kwargs,
-                    library=library,
-                    transport=transport,
-                    on_request=measured.append,
-                )
-            latency = measured[-1] if measured else loop.time() - started
-            text, actual, _, tool_calls = _read_completion(result, collector)
-            if actual.known:
-                usage = actual
-            calls = tool_calls or ()
-            reply = (
-                json.dumps(
-                    [{"name": call.name, "arguments": call.arguments} for call in calls],
-                    ensure_ascii=False,
-                )
-                if calls
-                else (text or "")
-            )
-            if (
-                len(calls) != 1
-                or calls[0].name != "echo"
-                or calls[0].arguments != {"value": "OK"}
-            ):
-                failure = "工具调用名称或参数与测试要求不符。"
         elif capability == "text":
             # 只有测速的首包观察需要流式；视觉和思考等级默认非流式（D132）。
             first_timeout = min(provider.timeout_seconds, PROBE_FIRST_CHUNK_TIMEOUT_SECONDS)
@@ -1134,11 +1096,17 @@ async def probe_model(
             first_chunk_timed_out = False
             text: str | None = None
             reasoning = False
+            tool_calls: tuple[ToolCall, ...] | None = None
+            tool_specs = inputs.get("tools")
+            collector = (
+                ToolCallCollector({_MODEL_TEST_TOOL_NAME}) if tool_specs is not None else None
+            )
             stream_kwargs = _chat_kwargs(
                 route,
                 params,
                 inputs["messages"],
                 stream=True,
+                tools=tool_specs,
                 max_tokens=_MODEL_TEST_MAX_TOKENS,
             )
             try:
@@ -1152,6 +1120,7 @@ async def probe_model(
                     )
                     text, usage, reasoning = await _read_stream(
                         stream,
+                        collector,
                         on_first_output=mark_latency,
                         first_chunk_timeout=first_timeout,
                         progress=progress,
@@ -1167,7 +1136,12 @@ async def probe_model(
                 route,
                 params,
                 inputs["messages"],
+                tools=tool_specs,
                 max_tokens=_MODEL_TEST_MAX_TOKENS,
+            )
+            # 回退用新的收集器：流式那次即使留下了无效片段，也不影响非流式结果。
+            fallback_collector = (
+                ToolCallCollector({_MODEL_TEST_TOOL_NAME}) if tool_specs is not None else None
             )
             if first_chunk_timed_out:
                 # 首包超时且没有任何数据：取消这次流式请求，按非流式重试一次（D131）。
@@ -1189,20 +1163,21 @@ async def probe_model(
                         library=library,
                         transport=transport,
                     )
-                text, actual, reasoning, _ = _read_completion(result)
+                text, actual, reasoning, tool_calls = _read_completion(
+                    result, fallback_collector
+                )
+                tool_calls = tool_calls or ()
                 if actual.known:
                     usage = actual
-                if text is not None:
-                    reply = text
-                    latency = loop.time() - started
-                elif reasoning:
-                    reply = REASONING_ONLY_REASON
+                if text is not None or tool_calls or reasoning:
+                    reply = _probe_reply(text, tool_calls, reasoning)
                     latency = loop.time() - started
             else:
-                reply = text or ""
-                if text is None:
-                    # 流式没有正文：同一请求去掉 stream 再试一次（D127）。这次重试先按
-                    # 一次请求估算，拿到非流式响应的真实用量再覆盖（用量以非流式为准）。
+                tool_calls = collector.finish() if collector is not None else ()
+                reply = _probe_reply(text, tool_calls or (), reasoning)
+                if text is None and not tool_calls:
+                    # 流式没有正文和工具调用：同一请求去掉 stream 再试一次（D127）。
+                    # 这次重试先按一次请求估算，拿到非流式响应的真实用量再覆盖。
                     if not usage.known:
                         usage = _probe_usage(inputs, _MODEL_TEST_MAX_TOKENS)
                     attempts.append(
@@ -1223,22 +1198,24 @@ async def probe_model(
                             library=library,
                             transport=transport,
                         )
-                    text, actual, reasoning, _ = _read_completion(result)
+                    text, actual, reasoning, tool_calls = _read_completion(
+                        result, fallback_collector
+                    )
+                    tool_calls = tool_calls or ()
                     if actual.known:
                         usage = actual
-                    if text is not None:
-                        reply = text
-                        latency = loop.time() - started
-                    elif reasoning:
-                        reply = REASONING_ONLY_REASON
+                    if text is not None or tool_calls or reasoning:
+                        reply = _probe_reply(text, tool_calls, reasoning)
                         latency = loop.time() - started
         else:
-            # 视觉和思考等级不需要首包观察，默认非流式（D132）。
-            measured = []
+            # 工具、视觉和思考等级按 MaiBot 的测试工具判定，默认非流式（D132）。
+            measured: list[float] = []
+            collector = ToolCallCollector({_MODEL_TEST_TOOL_NAME})
             kwargs = _chat_kwargs(
                 route,
                 params,
                 inputs["messages"],
+                tools=inputs.get("tools"),
                 max_tokens=_MODEL_TEST_MAX_TOKENS,
                 reasoning_effort=inputs.get("reasoning_effort"),
             )
@@ -1252,27 +1229,21 @@ async def probe_model(
                     on_request=measured.append,
                 )
             elapsed = measured[-1] if measured else loop.time() - started
-            text, actual, reasoning, _ = _read_completion(result)
+            text, actual, reasoning, tool_calls = _read_completion(result, collector)
             if actual.known:
                 usage = actual
-            if text is not None:
-                reply = text
+            calls = tool_calls or ()
+            reply = _probe_reply(text, calls, reasoning)
+            if text is not None or calls or reasoning:
                 latency = elapsed
-            elif reasoning:
-                reply = REASONING_ONLY_REASON
-                latency = elapsed
+            if not any(call.name == _MODEL_TEST_TOOL_NAME for call in calls):
+                failure = MODEL_TEST_TOOL_MISSING_REASON
     except Exception as error:
         failure = _failure_reason(error)
         if _rejected_before_processing(error):
             usage = TokenUsage()
     if latency is None and failure is None:
         failure = EMPTY_REPLY_REASON
-    if (
-        capability == "vision"
-        and latency is not None
-        and reply.strip().rstrip(".!").casefold() != "red"
-    ):
-        failure = failure or "未识别出测试图片的红色。"
     attempts.append(_probe_attempt(model, provider, usage, failure, the_clock))
     if failure is not None:
         raise ModelProbeError(failure, attempts, reply)

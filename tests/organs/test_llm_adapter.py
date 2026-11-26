@@ -34,14 +34,17 @@ from aureus.organs.llm_adapter import (
     EMPTY_REPLY_REASON,
     EMPTY_SYSTEM_MESSAGE,
     LITELLM_PREFIX_BY_PROTOCOL,
+    MODEL_TEST_TOOL_MISSING_REASON,
     REASONING_ONLY_REASON,
     RETRY_BACKOFF_SECONDS,
     EmbeddingOrgan,
     LLMOrgan,
+    ModelProbeError,
     _model_test_prompt,
     _model_test_tool,
     close_shared_clients,
     count_prompt_tokens,
+    model_probe_inputs,
     probe_model,
 )
 from aureus.organs.model_config import (
@@ -489,6 +492,51 @@ def test_model_test_resources_match_maibot_snapshot() -> None:
     assert _MODEL_TEST_TOOL_NAME == "maibot_model_test_report"
 
 
+def test_model_probe_inputs_use_maibot_prompt_image_and_tool() -> None:
+    model = ModelConfig(
+        name="vision",
+        identifier="vision",
+        provider="test",
+        vision=True,
+        reasoning_levels=("high",),
+    )
+    probes = model_probe_inputs(model)
+    message = {"role": "user", "content": _model_test_prompt(with_image=False)}
+    assert probes["text"] == {"messages": [message], "tools": [_model_test_tool()]}
+    assert probes["tools"] == {"messages": [message], "tools": [_model_test_tool()]}
+    assert probes["vision"] == {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _model_test_prompt(with_image=True)},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64," + _MODEL_TEST_IMAGE_BASE64
+                        },
+                    },
+                ],
+            }
+        ],
+        "tools": [_model_test_tool()],
+    }
+    assert probes["reasoning/high"] == {
+        "messages": [message],
+        "tools": [_model_test_tool()],
+        "reasoning_effort": "high",
+    }
+    image_model = ModelConfig(
+        name="picture",
+        identifier="picture",
+        provider="test",
+        kind="image_embedding",
+    )
+    assert model_probe_inputs(image_model)["image_embedding"]["input"] == [
+        {"image": _MODEL_TEST_IMAGE_BASE64}
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", LITELLM_PREFIX_BY_PROTOCOL)
 async def test_model_probe_stream_records_visible_text_and_final_usage(
@@ -516,6 +564,45 @@ async def test_model_probe_stream_records_visible_text_and_final_usage(
         completion.calls[0]["model"]
         == LITELLM_PREFIX_BY_PROTOCOL[config.providers[0].protocol] + "big-model"
     )
+    assert len(completion.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_text_probe_accepts_a_streamed_test_tool_call(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def chunks() -> AsyncIterator[Any]:
+        delta = SimpleNamespace(
+            content=None,
+            tool_calls=[
+                make_tool_fragment(
+                    '{"status": "ok", "echo": "maibot model test", "saw_image": false}',
+                    call_id="call_test",
+                    name=_MODEL_TEST_TOOL_NAME,
+                )
+            ],
+        )
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+        yield SimpleNamespace(choices=[])
+
+    completion = FakeCompletion(chunks())
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    result = await probe_model(config.models[0], config.providers[0], keys)
+
+    assert json.loads(result.suggestion) == [
+        {
+            "name": _MODEL_TEST_TOOL_NAME,
+            "arguments": {
+                "status": "ok",
+                "echo": "maibot model test",
+                "saw_image": False,
+            },
+        }
+    ]
+    assert result.metadata["latency_ms"] >= 0
     assert len(completion.calls) == 1
 
 
@@ -885,8 +972,11 @@ async def test_local_chat_probe_uses_direct_http(
     assert bodies == [
         {
             "model": "magpie-chat",
-            "messages": [{"role": "user", "content": _MODEL_TEST_INPUT}],
-            "max_tokens": 32,
+            "messages": [
+                {"role": "user", "content": _model_test_prompt(with_image=False)}
+            ],
+            "tools": [_model_test_tool()],
+            "max_tokens": 512,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -896,7 +986,7 @@ async def test_local_chat_probe_uses_direct_http(
 
 @pytest.mark.asyncio
 async def test_vision_probe_defaults_to_non_streaming(keys: KeyResolver) -> None:
-    # 视觉不需要首包观察，默认非流式（D132）。
+    # 视觉不需要首包观察，默认非流式（D132）；提示词、图片和判定按 MaiBot（3.53）。
     bodies: list[dict[str, Any]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -904,7 +994,26 @@ async def test_vision_probe_defaults_to_non_streaming(keys: KeyResolver) -> None
         return httpx.Response(
             200,
             json={
-                "choices": [{"message": {"content": "red"}}],
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_test",
+                                    "type": "function",
+                                    "function": {
+                                        "name": _MODEL_TEST_TOOL_NAME,
+                                        "arguments": (
+                                            '{"status": "ok", "echo": "maibot model test",'
+                                            ' "saw_image": true}'
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 2},
             },
         )
@@ -918,9 +1027,53 @@ async def test_vision_probe_defaults_to_non_streaming(keys: KeyResolver) -> None
         transport=httpx.MockTransport(respond),
     )
 
-    assert result.suggestion == "red"
     assert result.attempts[0].succeeded is True
-    assert "stream" not in bodies[0]
+    assert json.loads(result.suggestion) == [
+        {
+            "name": _MODEL_TEST_TOOL_NAME,
+            "arguments": {
+                "status": "ok",
+                "echo": "maibot model test",
+                "saw_image": True,
+            },
+        }
+    ]
+    body = bodies[0]
+    assert "stream" not in body
+    assert body["tools"] == [_model_test_tool()]
+    assert body["messages"][0]["content"][0] == {
+        "type": "text",
+        "text": _model_test_prompt(with_image=True),
+    }
+    assert body["messages"][0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + _MODEL_TEST_IMAGE_BASE64},
+    }
+    await close_shared_clients()
+
+
+@pytest.mark.asyncio
+async def test_vision_probe_requires_the_maibot_test_tool(keys: KeyResolver) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "一张蓝色图片"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+            },
+        )
+
+    route = local_chat_route(vision=True)
+    with pytest.raises(ModelProbeError, match=MODEL_TEST_TOOL_MISSING_REASON) as error:
+        await probe_model(
+            route.model,
+            route.provider,
+            keys,
+            capability="vision",
+            transport=httpx.MockTransport(respond),
+        )
+
+    assert error.value.reply == "一张蓝色图片"
     await close_shared_clients()
 
 
@@ -928,10 +1081,14 @@ async def test_vision_probe_defaults_to_non_streaming(keys: KeyResolver) -> None
 async def test_tool_probe_uses_the_shared_tool_parsing(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # 模型测试和普通调用共用同一套工具解析（D132）。
+    # 模型测试和普通调用共用同一套工具解析（D132）；参数不校验（3.53）。
     raw = make_response(None, 10, 5)
     raw.choices[0].message.tool_calls = [
-        make_tool_fragment('{"value": "OK"}', call_id="call_echo", name="echo")
+        make_tool_fragment(
+            '{"status": "ok", "echo": "maibot model test", "saw_image": false, "extra": 1}',
+            call_id="call_test",
+            name=_MODEL_TEST_TOOL_NAME,
+        )
     ]
     completion = FakeCompletion(raw)
     monkeypatch.setattr(
@@ -942,9 +1099,86 @@ async def test_tool_probe_uses_the_shared_tool_parsing(
         config.models[0], config.providers[0], keys, capability="tools"
     )
 
-    assert json.loads(result.suggestion) == [{"name": "echo", "arguments": {"value": "OK"}}]
+    assert json.loads(result.suggestion) == [
+        {
+            "name": _MODEL_TEST_TOOL_NAME,
+            "arguments": {
+                "status": "ok",
+                "echo": "maibot model test",
+                "saw_image": False,
+                "extra": 1,
+            },
+        }
+    ]
     assert result.attempts[0].succeeded is True
     assert result.attempts[0].budget_tokens == 15
+    assert completion.calls[0]["tools"] == [_model_test_tool()]
+
+
+@pytest.mark.asyncio
+async def test_tool_probe_requires_the_maibot_test_tool(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = make_response(None, 10, 5)
+    raw.choices[0].message.tool_calls = [
+        make_tool_fragment('{"value": "OK"}', call_id="call_echo", name="echo")
+    ]
+    completion = FakeCompletion(raw)
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    with pytest.raises(ModelProbeError, match=MODEL_TEST_TOOL_MISSING_REASON):
+        await probe_model(
+            config.models[0], config.providers[0], keys, capability="tools"
+        )
+
+
+@pytest.mark.asyncio
+async def test_reasoning_probe_requires_the_maibot_test_tool(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = make_response(None, 10, 5)
+    raw.choices[0].message.tool_calls = [
+        make_tool_fragment(
+            '{"status": "ok", "echo": "maibot model test", "saw_image": false}',
+            call_id="call_test",
+            name=_MODEL_TEST_TOOL_NAME,
+        )
+    ]
+    raw.choices[0].message.reasoning_content = "先想一想"
+    completion = FakeCompletion(raw)
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    result = await probe_model(
+        config.models[0], config.providers[0], keys, capability="reasoning/high"
+    )
+
+    assert result.attempts[0].succeeded is True
+    assert completion.calls[0]["reasoning_effort"] == "high"
+    assert completion.calls[0]["tools"] == [_model_test_tool()]
+    assert "stream" not in completion.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_probe_rejects_reasoning_without_tool_call(
+    keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = make_response(None, 10, 5)
+    raw.choices[0].message.reasoning_content = "只想不做"
+    completion = FakeCompletion(raw)
+    monkeypatch.setattr(
+        llm_adapter, "_import_litellm", lambda: SimpleNamespace(acompletion=completion)
+    )
+    config = make_config()
+    with pytest.raises(ModelProbeError, match=MODEL_TEST_TOOL_MISSING_REASON) as error:
+        await probe_model(
+            config.models[0], config.providers[0], keys, capability="reasoning/high"
+        )
+
+    assert error.value.reply == REASONING_ONLY_REASON
 
 
 class HangingStream(httpx.AsyncByteStream):
