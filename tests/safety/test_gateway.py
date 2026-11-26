@@ -387,7 +387,20 @@ async def test_a_full_model_test_round_is_not_blocked_by_the_reply_rate_limit(
     for _ in range(34):  # 8 个对话模型 × 4 项能力 + 2 个嵌入
         response = await gateway.test_model(probe)
         assert response.suggestion == "ok"
-    assert len(harness.ledger.entries()) == 34
+    entries = harness.ledger.entries()
+    assert len(entries) == 34
+    assert all(entry.organ_id == "model_test" for entry in entries)
+
+
+async def test_model_test_still_respects_the_monthly_budget(harness: Harness) -> None:
+    async def probe() -> OrganResponse:
+        return OrganResponse("model_test", "ok", attempts=[make_attempt(100, 50)])
+
+    gateway = harness.build(SafetyConfig(monthly_token_limit=150))
+    await gateway.test_model(probe)
+    with pytest.raises(BudgetExceededError):
+        await gateway.test_model(probe)
+    assert len(harness.ledger.entries()) == 1
 
 
 async def test_model_test_does_not_take_a_reply_permit(harness: Harness) -> None:
