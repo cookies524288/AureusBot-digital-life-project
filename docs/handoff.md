@@ -1,50 +1,51 @@
-# Aureus 交接 · 2026-11-25（第二轮）
-
-## 2026-11-26 续接现场（第二轮全部任务完成）
-
-D116–D134 与 3.16–3.53 的全部任务已完成并复审通过，合入本地 main：模型调用对齐（90 秒超时、默认非流式、共享连接、瞬时失败重试一次、本地网关直连、测速按 MaiBot 移植并独立限流）、模型配置页与后端字段、学习页内联工作台与标题、长期记忆页重排、平台会话活动面板与图片预览/媒体缓存/两栏等高/圆形头像/输入中气泡/实时同步、时间线详情与吸顶标题、网页性能与过渡动画、重启遮罩与启动器附着、密码自动填充限制等。静态检查：ruff、lint-imports、pyright 全部通过。
-
-**发布前检查**：ruff、lint-imports、pyright 全部通过；全量 pytest 结果见 `E:/Temp/release-full.log`。全量 pytest 为 122 失败、3223 通过、2 跳过；其中 2 项表达式向量运行时用例已随测试替身修复（`clock`/`transport` 参数），其余为 109 项 `tests/web` 旧页面脚本测试（与新 DOM 不一致）和 11 项 QQ/迁移既有基线。**维护者 2026-11-26 决定：滞后的测试暂不更新**，作为已知基线保留。已按维护者授权普通推送 `origin/main`（`38fbd7f..c165904`，187 个提交）。
-
-**之后**：正式实例当前由源码直接启动在 28976（无托盘），要改用 `Aureus.exe` 先停掉它。维护者实机验收仍未进行。
+# Aureus 交接 · 2026-11-26
 
 ## 当前状态
 
-本地 `main` 已完成 D116–D121 和前端交互重做（3.16），已普通推送 `origin/main`（2026-11-25，`1037df7..5edb42c`，55 个提交）。维护者尚未实机验收本轮改动。
+D116–D134 与 3.16–3.53 的全部任务已完成、复审通过并合入本地 `main`，已普通推送 `origin/main`（最新 `86d4688`，本地与远程同步）。静态检查 ruff、lint-imports、pyright 全部通过。维护者实机验收尚未进行。
 
-## 本轮完成（均已在本地 main，复审意见见各任务文档）
+## 新会话从这里开始
 
-| 事项 | 决定 | 任务文档 | 主要提交 |
-|---|---|---|---|
-| 活跃会话合并防抖消息并可打断规划 | D116 | [3.15-inbox-aggregation](tasks/3.15-inbox-aggregation.md) | `57e9300`、`ac66642`、`ece9e01` |
-| 发言快速路径：网关有界并发 5、表情与 replyer 并行、judge 不阻塞回复 | D117 | [3.15-reply-fast-path](tasks/3.15-reply-fast-path.md)、[3.15-parallel-judge](tasks/3.15-parallel-judge.md) | `8ab9711`、`7b1d2cf`、`1c13854` |
-| 长期记忆召回三档：自然 3、普通 6、工具 8、人物历史 5 | D118 | [3.15-memory-recall-counts](tasks/3.15-memory-recall-counts.md) | `635ba92`、`80d103b` |
-| 表达召回对齐 MaiBot：候选 50、fast_model 选择器、注入不裁剪 | D119 | [3.15-expression-recall-alignment](tasks/3.15-expression-recall-alignment.md) | `50122c4`、`b32b5b9` |
-| 去掉语言参考字数上限和设置项，只保留条数 | D120 | 同上 | `7ce4df7` |
-| 平台页卡死：根因是两个静态脚本未注册路由；加固含超时、头像去重、接口缓存、WAL、扫描上限 | D121 | [3.15-platform-freeze](tasks/3.15-platform-freeze.md) | `7d88561`、`2915885`、`673613a`、`5319f80`、`ec4a832` |
-| 前端交互重做（滚动条、平台图标、消息顺序、气泡、固定窗口、游标加载、学习/记忆信息流、设置项、配置文件夹按钮、栏框、长按配置、窄屏收起列表） | 维护者清单 | [3.16-frontend-redesign](tasks/3.16-frontend-redesign.md) | 批次 1–4 及收尾 |
+1. **实机验收**：用根目录 `Aureus.exe` 重启，按下面「观察点」逐项看。
+2. **可选后续**（按优先级，均未批准实施）：
+   - [3.52](tasks/3.52-model-test-and-reply-latency.md) 调查里未做的三项：短回复跳过 LLM 分段并降低打字延迟、按会话并发或投递与下一轮规划并行、流式首包超时 + 阶段计时 + 上下文瘦身。
+   - 学习工作台的实时刷新（3.43 遗留：工作台使用自己的 React Query 缓存，`resources` 事件目前只刷新长期记忆页）。
+   - 预取开关做进设置页（3.27 遗留，目前只有 `localStorage` 与 `__aureusSetPagePrefetch`）。
+   - 滞后页面脚本测试（维护者 2026-11-26 决定暂不更新）。
+3. 推送已完成，无待推送。
 
-## 维护者实机验收
+## 本轮完成（分组，详情见各任务文档）
 
-用根目录 `Aureus.exe` 重启。观察点：
+- **模型调用**：D132/[3.30](tasks/3.30-model-timeout-and-test-policy.md)/[3.31](tasks/3.31-model-calling-alignment.md)（90 秒超时、默认非流式、共享连接、瞬时失败重试一次、本地网关直连）、[3.53](tasks/3.53-model-test-align-mai.md)（测速按 MaiBot 移植提示词/工具/图片，独立许可 2 与限流 60）、[3.51](tasks/3.51-model-config-backend-fields.md)（启用/分时价格/思考/联网/额外参数）与 [3.36](tasks/3.36-model-page-redesign.md)（模型配置页按 MaiBot 布局）。
+- **学习与记忆**：D122/[3.17](tasks/3.17-learning-inline-workbench.md)（学习页内联工作台）、[3.18](tasks/3.18-memory-page-redesign.md)（长期记忆页重排）、[3.37](tasks/3.37-memory-title-cleanup.md)、[3.38](tasks/3.38-learning-title-unify.md)、D130/[3.28](tasks/3.28-person-names-and-memory-prefix.md)（联系人命名与记忆前缀清理）。
+- **平台会话**：D123/[3.19](tasks/3.19-inbox-activity-panel.md)（活动面板、去人工输入区、加宽）、[3.41](tasks/3.41-inbox-image-preview.md)（图片预览）、[3.42](tasks/3.42-pixel-back-icon.md)、[3.44](tasks/3.44-inbox-list-height.md)、[3.46](tasks/3.46-inbox-media-cache.md)、[3.47](tasks/3.47-typing-becomes-message.md)、[3.48](tasks/3.48-circular-avatars.md)、[3.43](tasks/3.43-live-updates-no-refresh.md)（WebSocket 实时同步、删除刷新图标）。
+- **时间线**：D124/[3.20](tasks/3.20-timeline-detail-formatting.md)（详情中文化、筛选条移到底部）、[3.35](tasks/3.35-timeline-filter-scroll.md)（切换筛选不跳顶部）、[3.39](tasks/3.39-timeline-title-bottom.md)（标题吸顶）。
+- **性能与动效**：D129/[3.27](tasks/3.27-web-performance.md)（二次进入 0–13ms、收件箱索引 2.7s→110ms）、D133/[3.33](tasks/3.33-page-transition.md)/[3.21](tasks/3.21-scrollbar-hover-expand.md)/[3.34](tasks/3.34-learning-fixed-gutter.md)。
+- **其它**：D126/[3.24](tasks/3.24-ledger-lock-retry.md)（账本锁重试）、D127/[3.25](tasks/3.25-model-stream-fallback.md)、D128/[3.26](tasks/3.26-local-embedding-latency.md)、D125/[3.22](tasks/3.22-auto-index-building.md)、[3.49](tasks/3.49-restart-and-launcher-attach.md)/[3.50](tasks/3.50-web-restart-overlay.md)（重启与启动器附着）、[3.40](tasks/3.40-disable-password-autofill.md)、默认提示词开头改为三行数字生命声明。
 
-- **平台页**：点击「平台」后能正常切换其它页面、进入 QQ 会话；不再出现点不动但能滚动。
-- **消息聚合**：群里连发多条只回一次；规划期间的新消息合入同一轮。
-- **回复速度**：回复先出，情绪变化下一轮才体现；表情慢时只发文字。
-- **前端**：私聊输入框无滚动条；平台图标无外框、右键/长按打开配置；会话固定高度内部滚动、滚到顶部加载更早；消息旧上新下；时间线同样旧上新下；学习与长期记忆页字段更清楚、内部编号已隐藏；设置页有「打开配置文件夹」按钮。
-- 手机窄屏：进入会话后列表收起，有返回按钮。
+## 测试基线
 
-## 测试与未验证项
+- 全量 pytest（2026-11-26，`E:/Temp/release-full.log`）：122 失败、3223 通过、2 跳过。其中 2 项表达式向量运行时用例已随测试替身修复；剩余 120 项为已知基线：109 项 `tests/web` 旧页面脚本测试（与新 DOM 不一致，维护者决定暂不更新）、11 项 QQ 通道/迁移既有基线。
+- 静态检查：`ruff check .`、`lint-imports`、`pyright` 全部通过。
+- 前端改动按维护者要求未跑单项 pytest，用隔离实例浏览器手测与截图（`E:/Temp/ui-shots/`）；真实 QQ 会话未验证。
 
-- 按维护者要求，本轮前端改动**没有跑单项 pytest**；平台、记忆、表达三项由实现者跑过相关测试（平台 641 项 `tests/web`、记忆 374 项、表达 399+22+127 项）。
-- 页面脚本测试已按新 DOM 更新，但**没有运行**；全量 pytest 自 2026-11-25 上一轮后未再跑（当时为 11 失败、3107 通过、5 跳过，11 项均为 QQ 通道/启动器既有基线）。
-- 前端只做了隔离实例的浏览器手测与截图（`E:/Temp/ui-shots/`），未在真实 QQ 会话上验证。
+## 环境与坑
 
-## 环境
-
-- 项目 `.venv` 已重建，基础 Python 在 `E:\Tools\uv-python\cpython-3.13.18-windows-x86_64-none`；`Aureus.exe` 可正常启动（2026-11-25 维护者确认）。
-- 隔离 UI 实例：数据根 `E:/Temp/aureus-ui-review`，端口 18770，假器官；`.claude/launch.json` 是临时文件，收尾时删除。
+- 项目 `.venv` 已重建，基础 Python 在 `E:\Tools\uv-python\cpython-3.13.18-windows-x86_64-none`。
+- 正式实例当前由源码直接启动在 28976（无托盘）。要改用 `Aureus.exe`，先停掉它，否则单实例锁会拒绝；新启动器会附着已运行实例。
+- 多个隔离测试实例可能遗留在临时数据根（`E:/Temp/aureus-ui-review*`，端口 1877x）；与正式实例无关，可随时停止。
+- `.claude/launch.json` 有多个临时配置（未跟踪）。
 - `E:\Temp\pytest-of-cooki\pytest-current` 是无权访问的联接，跑 pytest 用 `PYTEST_DEBUG_TEMPROOT` 指到独立目录。
+- 推送 GitHub 需要本机代理：`git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push origin main`。
+
+## 维护者实机验收观察点
+
+- **模型**：模型测速不再大面积失败；MAGPIE 本地网关测速不超时；模型配置页可按厂商筛选、启用、编辑分时价格/思考/联网/额外参数。
+- **回复**：群里连发消息只回一次；回复先出；判断不阻塞。
+- **平台会话**：图片显示缩略图并可点开大图；输入中显示右侧 Bot 气泡、完成后原地变文字；头像圆形；左右两栏等高；不再有刷新图标，新消息自动出现。
+- **时间线**：标题吸顶；详情是中文可读信息；底部筛选切换不跳顶部。
+- **学习/记忆**：学习页是内联工作台、只有一层标题；长期记忆页无小字说明、无「未命名人物」与内部序号。
+- **其它**：切页有过渡动画且很快；设置页可打开配置文件夹；点重启有遮罩并自动恢复。
 
 ## 正式实例与回退
 
