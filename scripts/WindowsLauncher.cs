@@ -10,6 +10,9 @@ using System.Windows.Forms;
 internal static class WindowsLauncher
 {
     private const int RestartExitCode = 75;
+    // 托盘点了重启/退出后，子进程超过宽限还没退出就结束它（D144）。
+    private const int RestartGraceSeconds = 180;
+    private const int ExitGraceSeconds = 30;
 
     [STAThread]
     private static int Main(string[] args)
@@ -71,9 +74,15 @@ internal static class WindowsLauncher
                         }
                         return 0;
                     }
-                    if (process.ExitCode != 0 && process.ExitCode != RestartExitCode && status.Url == null)
+                    if (status.KilledForExit)
+                    {
+                        window.Exited();
+                        return 0;
+                    }
+                    if (process.ExitCode != 0 && process.ExitCode != RestartExitCode && status.Url == null
+                        && !status.KilledForRestart)
                         window.Failure(status.Error ?? ("网页服务启动失败，退出码 " + process.ExitCode + "。"));
-                    if (process.ExitCode != RestartExitCode)
+                    if (process.ExitCode != RestartExitCode && !status.KilledForRestart)
                     {
                         if (process.ExitCode == 0 || status.Url != null)
                             window.Exited();
@@ -96,6 +105,8 @@ internal static class WindowsLauncher
         public string Error;
         public int Owner;
         public bool Attached;
+        public bool KilledForRestart;
+        public bool KilledForExit;
     }
 
     private static string LocalUrl(string value)
@@ -103,6 +114,21 @@ internal static class WindowsLauncher
         Uri url;
         return Uri.TryCreate(value, UriKind.Absolute, out url)
             && url.Scheme == Uri.UriSchemeHttp && url.Host == "127.0.0.1" ? url.AbsoluteUri : null;
+    }
+
+    private static void KillProcessTree(Process process)
+    {
+        try
+        {
+            var info = new ProcessStartInfo("taskkill", "/T /F /PID " + process.Id)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using (Process.Start(info)) { }
+        }
+        catch (InvalidOperationException) { }
+        catch (System.ComponentModel.Win32Exception) { }
     }
 
     private static void RunTray(Process process, LauncherWindow window, ChildStatus status)
@@ -119,6 +145,8 @@ internal static class WindowsLauncher
         using (var menu = new ContextMenuStrip())
         using (var timer = new System.Windows.Forms.Timer { Interval = 200 })
         {
+            Stopwatch restartRequestedAt = null;
+            Stopwatch exitRequestedAt = null;
             Action openPage = delegate
             {
                 string url = Volatile.Read(ref status.Url);
@@ -134,6 +162,7 @@ internal static class WindowsLauncher
                 restart.Enabled = false;
                 exit.Enabled = false;
                 open.Enabled = false;
+                restartRequestedAt = Stopwatch.StartNew();
                 if (!process.HasExited)
                 {
                     process.StandardInput.BaseStream.WriteByte((byte)'R');
@@ -145,6 +174,7 @@ internal static class WindowsLauncher
                 exit.Enabled = false;
                 restart.Enabled = false;
                 open.Enabled = false;
+                exitRequestedAt = Stopwatch.StartNew();
                 process.StandardInput.Close();
             };
             tray.Icon = smallIcon;
@@ -179,8 +209,25 @@ internal static class WindowsLauncher
             timer.Tick += delegate
             {
                 if (process.HasExited)
+                {
                     context.ExitThread();
-                else if (!tray.Visible && Volatile.Read(ref status.Url) != null && !status.Attached)
+                    return;
+                }
+                if (restartRequestedAt != null
+                    && restartRequestedAt.Elapsed.TotalSeconds >= RestartGraceSeconds)
+                {
+                    restartRequestedAt = null;
+                    status.KilledForRestart = true;
+                    KillProcessTree(process);
+                }
+                else if (exitRequestedAt != null
+                    && exitRequestedAt.Elapsed.TotalSeconds >= ExitGraceSeconds)
+                {
+                    exitRequestedAt = null;
+                    status.KilledForExit = true;
+                    KillProcessTree(process);
+                }
+                if (!tray.Visible && Volatile.Read(ref status.Url) != null && !status.Attached)
                 {
                     window.Ready(status.Url);
                     tray.Visible = true;
