@@ -3553,19 +3553,21 @@ function followConversationTyping() {
     const result = await api(path, undefined, undefined, {}, controller.signal);
     if (typingSession !== current) return;
     clearTimeout(current.timer);
-    const active = !controller.signal.aborted && result.ok && result.data?.typing === true;
+    const active = !controller.signal.aborted && result.ok && typeof result.data?.typing === 'boolean'
+      ? result.data.typing : null;
     if (chat) {
       if (!active) current.status.replaceChildren();
       else if (!current.status.firstChild) current.status.append(typingIndicator(true));
     } else if (!active) {
       removeInboxTypingBubble();
       // 输入结束再补拉一次最新一页，回复即使没等到推送也会出现在原位（3.43、3.47）。
-      if (current.wasActive) refreshInboxMessages();
+      if (active === false && current.wasActive) refreshInboxMessages();
     } else {
       if (!current.wasActive) current.bubbleReplaced = false;
       if (!current.bubbleReplaced) showInboxTypingBubble();
     }
-    current.wasActive = active;
+    if (result.status === 403) current.wasActive = false;
+    else if (active !== null) current.wasActive = active;
     current.timer = setTimeout(refresh, TYPING_REFRESH_MS);
   }
   refresh();
