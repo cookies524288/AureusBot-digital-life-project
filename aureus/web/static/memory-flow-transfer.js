@@ -95,6 +95,8 @@
     });
     panel.replaceChildren(sectionHead('记忆流', '查看全局记忆事件，按事件类型和时间范围筛选；不区分聊天范围。'), filters);
     const pager = createResourcePager({el, panel, id:'memory-flow', render:renderEntry, error:fail,
+      cacheKey: ({offset, limit}) => offset === 0
+        ? 'memory-flow:' + new URLSearchParams(applied) + ':' + limit : null,
       empty:() => '没有符合条件的记忆事件。调整时间范围或事件类型后再试。', request:({offset, limit, signal}) => {
         const params = new URLSearchParams(applied);
         params.set('offset', offset);
@@ -179,6 +181,7 @@
       input.disabled = true;
       result.textContent = '导入中…';
       const response = await api(transferPath, 'POST', file);
+      if (response.ok) { clearPageCache('memory'); clearPageCache('memory-flow'); }
       result.textContent = response.ok
         ? `新增 ${response.data.added} 条，跳过相同记录 ${response.data.skipped} 条。`
         : '导入未确认成功：' + errorText(response);

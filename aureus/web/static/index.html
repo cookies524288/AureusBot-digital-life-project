@@ -1201,7 +1201,8 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
 const $ = id => document.getElementById(id);
-const state = { loggedIn: false, qqLink: false, page: '', loaded: {}, botPronoun: 'Ta' };
+const state = { loggedIn: false, qqLink: false, page: '', loaded: {}, botPronoun: 'Ta',
+  entranceSeen: new Set() };
 let editorGeneration = 0;
 
 for (const control of document.querySelectorAll('input, textarea, select, form')) control.setAttribute('autocomplete', 'off');
@@ -1228,25 +1229,71 @@ let pageAbort = new AbortController();
 function abortPageRequests() {
   pageAbort.abort();
   pageAbort = new AbortController();
+  // 已中止的请求不能让新页面复用；预取请求不绑页面，继续留在去重表里（D129）。
+  for (const [path, entry] of inFlightGets) if (!entry.detached) inFlightGets.delete(path);
+}
+
+// ---------- 页面数据缓存（D129） ----------
+// 只在当前登录会话的内存里保存；退出登录立即清空，不写 localStorage，也不跨账号。
+// 再次进入页面先渲染缓存；缓存没过期就不再请求，过期了先渲染再在后台刷新。
+const PAGE_CACHE_TTL_MS = 15000;
+const CONFIG_CACHE_TTL_MS = 60000;
+const pageCache = new Map();
+let pageCacheSession = null;
+function cacheRead(key, ttl = PAGE_CACHE_TTL_MS) {
+  if (pageCacheSession !== state.loaded) return null;
+  const entry = pageCache.get(key);
+  if (!entry) return null;
+  return {data: entry.data, fresh: performance.now() - entry.at <= (entry.ttl ?? ttl)};
+}
+function cacheWrite(key, data, ttl = PAGE_CACHE_TTL_MS) {
+  pageCacheSession = state.loaded;
+  pageCache.set(key, {data, at: performance.now(), ttl});
+}
+function clearPageCache(prefix = '') {
+  if (!prefix) { pageCache.clear(); return; }
+  for (const key of pageCache.keys()) if (key.startsWith(prefix)) pageCache.delete(key);
+}
+function resetPageCache() {
+  pageCache.clear();
+  pageCacheSession = null;
+}
+
+// 同一 GET 在途时不重复发（D129）；预取传 detached=true，切页不取消它。
+const inFlightGets = new Map();
+function api(path, method, body, headers = {}, signal, detached = false) {
+  const dedupe = (method || 'GET').toUpperCase() === 'GET' && !signal && body === undefined
+    && !Object.keys(headers).length;
+  if (dedupe) {
+    const pending = inFlightGets.get(path);
+    if (pending) return pending.request;
+  }
+  const request = apiRequest(path, method, body, headers, signal, detached);
+  if (dedupe) {
+    inFlightGets.set(path, {request, detached});
+    const clear = () => { if (inFlightGets.get(path)?.request === request) inFlightGets.delete(path); };
+    request.then(clear, clear);
+  }
+  return request;
 }
 
 // 所有接口都走这里。返回 {ok, status, data, retryAfter, aborted, timeout}；网络断了 status 是 0。
-async function api(path, method, body, headers = {}, signal) {
+async function apiRequest(path, method, body, headers, signal, detached) {
   const session = state.loaded;
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, API_TIMEOUT_MS);
   const cancel = () => controller.abort();
   const pageSignal = pageAbort.signal;
-  if (signal?.aborted || pageSignal.aborted) controller.abort();
+  if (signal?.aborted || (!detached && pageSignal.aborted)) controller.abort();
   signal?.addEventListener?.('abort', cancel);
-  pageSignal.addEventListener('abort', cancel);
+  if (!detached) pageSignal.addEventListener('abort', cancel);
   const opt = { method: method || 'GET', headers: {...headers}, credentials: 'same-origin',
     signal: controller.signal };
   function settle() {
     clearTimeout(timer);
     signal?.removeEventListener?.('abort', cancel);
-    pageSignal.removeEventListener('abort', cancel);
+    if (!detached) pageSignal.removeEventListener('abort', cancel);
   }
   if (path.startsWith('/api/inbox/operations/file?') && method === 'POST' && body instanceof Blob) {
     opt.body = body;
@@ -1540,6 +1587,8 @@ function showAuth(view, message) {
   pendingLiveUpdates.clear();
   catalogs.clear();
   state.loaded = {};
+  state.entranceSeen.clear();
+  resetPageCache();
   pageNavigation = null;
   stopPageEntrance();
   $('page-' + state.page)?.classList.remove('active');
@@ -1708,6 +1757,7 @@ function showOverviewReference(snapshot) {
 
 // 只在登录后的总览前台采样；每次读完再计时，以免慢响应叠加或重播整页动效。
 const OVERVIEW_SIGNAL_INTERVAL_MS = 2000;
+const OVERVIEW_CACHE_MS = 5000;
 let overviewSignalTimer;
 function renderOverview(d) {
   $('ov-content').classList.remove('hidden', 'ov-status-only');
@@ -1739,15 +1789,33 @@ function renderOverview(d) {
   overviewField ??= attachOverviewField();
   if (overviewField.pointer) overviewField.refresh();
 }
+function renderOverviewActivity(recent) {
+  const activity = $('ov-activity');
+  const records = recent.ok ? recent.data.records.slice().reverse() : [];
+  updateLiveRegion(activity, () => {
+    activity.replaceChildren(...records.map(record => el('li', {},
+      el('span', {text:EVENT_NAMES[record.event_type] || record.event_type}),
+      el('time', {datetime:record.time, text:fmtTime(record.time, true)}))));
+    if (!records.length) activity.append(el('li', {class:'ov-empty', text:recent.ok ? '近 24 小时没有动态' : '暂时无法读取动态'}));
+  });
+}
 function loadOverview() {
   clearTimeout(overviewSignalTimer);
   const request = ++overviewRequest;
+  const cached = cacheRead('overview', OVERVIEW_CACHE_MS);
+  const cachedActivity = cacheRead('overview-activity', OVERVIEW_CACHE_MS);
   let needsSnapshot = true;
+  let activityFresh = false;
+  if (cached) renderOverview(cached.data);   // 先显示缓存，第一次采样仍会整体刷新
+  if (cachedActivity) { renderOverviewActivity(cachedActivity.data); activityFresh = cachedActivity.fresh; }
   const current = () => request === overviewRequest && state.loggedIn && state.page === 'overview';
   const schedule = () => { overviewSignalTimer = setTimeout(sample, OVERVIEW_SIGNAL_INTERVAL_MS); };
   async function sample(reportFailure = false) {
     if (!current()) return;
     if (document.hidden) { schedule(); return; }
+    // 总览和最近动态互不依赖，同时发出（D129）；动态晚到不影响主卡片先出现。
+    const activityRequest = activityFresh ? null : api('/api/timeline?hours=24&limit=3');
+    activityFresh = true;
     const res = await api('/api/overview');
     if (!current()) return;
     if (notBuilt(res)) {
@@ -1759,33 +1827,32 @@ function loadOverview() {
     schedule();
     if (document.hidden) return;
     if (!res.ok) {
-      $('ov-content').classList.replace('hidden', 'ov-status-only');
-      $('ov-missing').classList.add('hidden');
-      showOverviewSignal(null);
-      if (reportFailure) fail(res);
+      if (cached) {
+        if (reportFailure) fail(res);   // 有缓存时保留旧内容，只提示刷新失败
+      } else {
+        $('ov-content').classList.replace('hidden', 'ov-status-only');
+        $('ov-missing').classList.add('hidden');
+        showOverviewSignal(null);
+        if (reportFailure) fail(res);
+      }
     } else if (needsSnapshot) {
       needsSnapshot = false;
+      cacheWrite('overview', res.data, OVERVIEW_CACHE_MS);
       renderOverview(res.data);
-      await loadOverviewActivity(request);
     } else {
+      cacheWrite('overview', res.data, OVERVIEW_CACHE_MS);
       showOverviewSignal(res.data);
       showOverviewReference(res.data);
     }
+    if (activityRequest) {
+      activityRequest.then(recent => {
+        if (!current()) return;
+        if (recent.ok) cacheWrite('overview-activity', recent.data, OVERVIEW_CACHE_MS);
+        renderOverviewActivity(recent);
+      });
+    }
   }
   return sample(true);
-}
-async function loadOverviewActivity(request) {
-  const activity = $('ov-activity');
-  if (!activity.childElementCount) activity.append(el('li', {class:'ov-empty', text:'读取中…'}));
-  const recent = await api('/api/timeline?hours=24&limit=3');
-  if (request !== overviewRequest || !state.loggedIn || state.page !== 'overview') return;
-  const records = recent.ok ? recent.data.records.slice().reverse() : [];
-  updateLiveRegion(activity, () => {
-    activity.replaceChildren(...records.map(record => el('li', {},
-      el('span', {text:EVENT_NAMES[record.event_type] || record.event_type}),
-      el('time', {datetime:record.time, text:fmtTime(record.time, true)}))));
-    if (!records.length) activity.append(el('li', {class:'ov-empty', text:recent.ok ? '近 24 小时没有动态' : '暂时无法读取动态'}));
-  });
 }
 $('ov-refresh').addEventListener('click', loadOverview);
 $('ov-power').addEventListener('click', async (event) => {
@@ -1793,7 +1860,7 @@ $('ov-power').addEventListener('click', async (event) => {
   button.disabled = true;
   try {
     const res = await api('/api/power/' + button.dataset.action, 'POST');
-    if (res.ok) await loadOverview();
+    if (res.ok) { clearPageCache('overview'); await loadOverview(); }
     else fail(res);
   } finally {
     button.disabled = false;
@@ -2591,7 +2658,7 @@ function recallFeedback(replyId) {
           busy = true;
           update();
           const result = await api(path, 'PATCH', {evidence_key:item.key, rating});
-          if (result.ok) item.rating = result.data.rating;
+          if (result.ok) { item.rating = result.data.rating; clearPageCache('timeline'); }
           else fail(result);
           busy = false;
           update();
@@ -2720,17 +2787,70 @@ function restoreTimelineScrollRatio(anchor) {
 
 let timelineRequest = 0;
 let timelineQuery = '';
-async function loadTimeline(more, switching = false) {
+const TIMELINE_CACHE_MS = 15000;
+// 把一页时间线数据放进页面；scroll 决定渲染后停在哪里：
+// latest 停在最新一条，preserve 按整页比例保留当前位置，anchor 用列表高度差补回。
+function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
+  const summary = $('tl-summary');
+  const entries = Object.entries(data.summary || {});
+  summary.replaceChildren(...entries.map(([source, text]) => {
+    const row = el('div');
+    let title = source;
+    if (source.startsWith('[')) {
+      const [, platform, account, kind, recipient, temporaryGroup] = JSON.parse(source);
+      const type = kind === 'group' ? '群聊' : '私聊';
+      title = [platform, account, type + ' ' + recipient, temporaryGroup].filter(Boolean).join(' · ');
+    }
+    row.append(el('h4', {text: title}), el('p', {text}));
+    return row;
+  }));
+  if (!entries.length) summary.textContent = '暂无滚动摘要。';
+  tl.records = more ? [...new Map(data.records.concat(tl.records).map(record => [record.id, record])).values()] : data.records;
+  tl.next = data.next_before_id;
+  tl.context = data.context;
+  const button = $('tl-more');
+  button.disabled = !tl.next;
+  button.classList.toggle('hidden', !tl.next);
+  const list = $('tl-list');
+  const anchor = more ? timelineScrollAnchor() : null;
+  if (more) {
+    updateLiveRegion(list, () => { renderTimeline(); restoreTimelineScroll(anchor); });
+  } else if (scroll === 'preserve') {
+    updateLiveRegion(list, () => {
+      const position = timelineScrollRatio();
+      renderTimeline();
+      restoreTimelineScrollRatio(position);
+    });
+  } else {
+    updateLiveRegion(list, () => { renderTimeline(); scrollTimelineToLatest(); });
+  }
+  list.removeAttribute('aria-busy');
+}
+async function loadTimeline(more, switching = false, force = false) {
   const button = $('tl-more');
   const query = new URLSearchParams({ hours: $('tl-hours').value, limit: '100' });
   if (tl.filter) query.set('types', tl.filter);
   const base = String(query);
   if (more && (button.disabled || !tl.next || base !== timelineQuery)) return;
   if (more) query.set('before_id', String(tl.next));
-  button.disabled = true;
   const list = $('tl-list');
   const replacesFilter = !more && base !== timelineQuery;
-  if (replacesFilter) {
+  const request = ++timelineRequest, session = state.loaded;
+  let shownFromCache = false;
+  if (!more) {
+    const cached = force ? null : cacheRead('timeline:' + base, TIMELINE_CACHE_MS);
+    if (cached) {
+      // 同一筛选的列表还留在页面上，缓存也没过期，直接显示，不重新生成 DOM（D129）。
+      if (cached.fresh && !replacesFilter && list.childElementCount) return;
+      timelineQuery = base;
+      $('tl-missing').classList.add('hidden');
+      applyTimelineData(cached.data, {scroll: switching ? 'preserve' : 'latest'});
+      shownFromCache = true;
+      if (cached.fresh) return;
+    }
+  }
+  button.disabled = true;
+  if (replacesFilter && !shownFromCache) {
     timelineQuery = '';
     tl.next = null;
     pendingLiveUpdates.delete(list);
@@ -2739,7 +2859,6 @@ async function loadTimeline(more, switching = false) {
     else list.setAttribute('aria-busy', 'true');
     button.classList.add('hidden');
   }
-  const request = ++timelineRequest, session = state.loaded;
   const res = await api('/api/timeline?' + query);
   if (request !== timelineRequest || session !== state.loaded) return;
   const missing = $('tl-missing');
@@ -2756,46 +2875,17 @@ async function loadTimeline(more, switching = false) {
   if (!res.ok) {
     list.removeAttribute('aria-busy');
     button.disabled = !tl.next || base !== timelineQuery;
+    if (shownFromCache) { fail(res); return; }   // 刷新失败保留缓存内容
     if (replacesFilter) list.textContent = errorText(res);
     else fail(res);
     return;
   }
-  const summary = $('tl-summary');
-  const entries = Object.entries(res.data.summary || {});
-  summary.replaceChildren(...entries.map(([source, text]) => {
-    const row = el('div');
-    let title = source;
-    if (source.startsWith('[')) {
-      const [, platform, account, kind, recipient, temporaryGroup] = JSON.parse(source);
-      const type = kind === 'group' ? '群聊' : '私聊';
-      title = [platform, account, type + ' ' + recipient, temporaryGroup].filter(Boolean).join(' · ');
-    }
-    row.append(el('h4', {text: title}), el('p', {text}));
-    return row;
-  }));
-  if (!entries.length) summary.textContent = '暂无滚动摘要。';
-  tl.records = more ? [...new Map(res.data.records.concat(tl.records).map(record => [record.id, record])).values()] : res.data.records;
-  tl.next = res.data.next_before_id;
-  tl.context = res.data.context;
+  if (!more) cacheWrite('timeline:' + base, res.data, TIMELINE_CACHE_MS);
   timelineQuery = base;
-  button.disabled = !tl.next;
-  button.classList.toggle('hidden', !tl.next);
-  const anchor = more ? timelineScrollAnchor() : null;
-  if (more) {
-    updateLiveRegion(list, () => { renderTimeline(); restoreTimelineScroll(anchor); });
-  } else if (switching) {
-    updateLiveRegion(list, () => {
-      const position = timelineScrollRatio();
-      renderTimeline();
-      restoreTimelineScrollRatio(position);
-    });
-  } else {
-    updateLiveRegion(list, () => { renderTimeline(); scrollTimelineToLatest(); });
-  }
-  list.removeAttribute('aria-busy');
+  applyTimelineData(res.data, {more, scroll: more || shownFromCache || switching ? 'preserve' : 'latest'});
 }
 $('tl-hours').addEventListener('change', () => loadTimeline(false, true));
-$('tl-refresh').addEventListener('click', () => loadTimeline(false));
+$('tl-refresh').addEventListener('click', () => loadTimeline(false, false, true));
 $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
 PAGES.timeline = { load: () => loadTimeline(false) };
@@ -3165,7 +3255,7 @@ document.addEventListener('visibilitychange', followInboxActivity);
 window.addEventListener('offline', stopInboxActivity);
 window.addEventListener('online', followInboxActivity);
 
-function renderInboxView() {
+function renderInboxView({keepSelection = false} = {}) {
   const isDesktop = !inbox.view;
   const entries = isDesktop ? [] : inbox.view === 'archive' ? inbox.archives :
     inbox.conversations.filter(item => item.key.platform === inbox.view);
@@ -3193,19 +3283,42 @@ function renderInboxView() {
     }) : null)));
   }
   const previous = inbox.selected && entries.find(item => inboxKey(item) === inboxKey(inbox.selected));
-  if (entries.length) return selectInboxConversation(previous || entries[0]);
+  if (entries.length) {
+    // 后台刷新会话列表时，选中项还在就只更新列表，不重载消息和活动（D129）。
+    if (keepSelection && previous && inbox.selected) return Promise.resolve();
+    return selectInboxConversation(previous || entries[0]);
+  }
   clearInboxThread();
 }
 
+const INBOX_CACHE_MS = 15000;
+const INBOX_MESSAGE_CACHE_MS = 10000;
 async function loadInbox() {
   const request = ++inbox.conversationRequest, session = state.loaded;
-  const res = await api('/api/inbox/conversations');
+  const cached = cacheRead('inbox-conversations', INBOX_CACHE_MS);
+  let refresh = null;
+  if (cached) {
+    inbox.enabled = cached.data.enabled;
+    inbox.conversations = cached.data.conversations;
+    inbox.archives = cached.data.archives || [];
+    const rendered = renderInboxView({keepSelection: true});
+    if (cached.fresh) return rendered;
+    // 会话列表和缓存里的消息同时刷新，不互相等待（D129）。
+    refresh = api('/api/inbox/conversations');
+    await rendered;
+  }
+  const res = await (refresh || api('/api/inbox/conversations'));
   if (request !== inbox.conversationRequest || session !== state.loaded) return;
-  if (!res.ok) { inboxStatus('inbox-empty', errorText(res)); return; }
+  if (!res.ok) {
+    if (cached) fail(res);   // 刷新失败保留缓存内容
+    else inboxStatus('inbox-empty', errorText(res));
+    return;
+  }
   inbox.enabled = res.data.enabled;
   inbox.conversations = res.data.conversations;
   inbox.archives = res.data.archives || [];
-  await renderInboxView();
+  cacheWrite('inbox-conversations', res.data, INBOX_CACHE_MS);
+  await renderInboxView({keepSelection: true});
 }
 
 function openInboxView(view) {
@@ -3378,36 +3491,10 @@ function inboxHistoryStatus(text, retry = false) {
   $('inbox-history-retry').classList.toggle('hidden', !text || !retry);
 }
 
-// 进入会话先取最新一页，再向前预取一页；两页合起来直接渲染，首屏停在最新处（批次 2）。
-async function loadInboxMessages() {
-  if (!inbox.selected) return;
-  const request = ++inbox.messageRequest, session = state.loaded;
-  ++inbox.olderRequest;
-  resetInboxMedia();
-  inbox.loadingOlder = false;
-  inbox.historyError = false;
-  inbox.nextBefore = null;
-  inbox.nextBeforeSource = null;
-  inbox.messageKeys.clear();
-  inboxHistoryStatus('');
+function renderInboxMessages(pages, before, source, failure) {
   const list = $('inbox-messages');
-  list.replaceChildren();
-  list.setAttribute('aria-busy', 'true');
-  inboxStatus('inbox-message-status', '正在加载消息…');
-  const pages = [];
-  let before = null, source = null, failure = null;
-  for (let index = 0; index < INBOX_PREFETCH_PAGES; ++index) {
-    const res = await api(`${inboxMessageURL()}?${inboxPageQuery(before, source)}`);
-    if (request !== inbox.messageRequest || session !== state.loaded) return;
-    if (!res.ok) { failure = res; break; }
-    pages.push(res.data.messages || []);
-    before = res.data.next_before_id ?? null;
-    source = res.data.next_before_source || null;
-    if (before === null) break;
-  }
-  list.removeAttribute('aria-busy');
-  if (!pages.length) { inboxStatus('inbox-message-status', errorText(failure)); return; }
   const rendered = [];
+  inbox.messageKeys.clear();
   for (const page of pages.slice().reverse()) {
     for (const message of page.slice().reverse()) {
       const key = inboxMessageKey(message);
@@ -3427,6 +3514,52 @@ async function loadInboxMessages() {
   } else {
     maybeLoadOlderInboxMessages();
   }
+}
+
+// 进入会话先取最新一页，再向前预取一页；两页合起来直接渲染，首屏停在最新处（批次 2）。
+async function loadInboxMessages() {
+  if (!inbox.selected) return;
+  const request = ++inbox.messageRequest, session = state.loaded;
+  ++inbox.olderRequest;
+  resetInboxMedia();
+  inbox.loadingOlder = false;
+  inbox.historyError = false;
+  inbox.nextBefore = null;
+  inbox.nextBeforeSource = null;
+  inbox.messageKeys.clear();
+  inboxHistoryStatus('');
+  const list = $('inbox-messages');
+  list.replaceChildren();
+  const cacheKey = 'inbox-messages:' + inboxKey(inbox.selected);
+  const cached = cacheRead(cacheKey, INBOX_MESSAGE_CACHE_MS);
+  if (cached) {
+    list.removeAttribute('aria-busy');
+    renderInboxMessages(cached.data.pages, cached.data.nextBefore, cached.data.nextBeforeSource, null);
+    if (cached.fresh) return;
+  } else {
+    list.setAttribute('aria-busy', 'true');
+    inboxStatus('inbox-message-status', '正在加载消息…');
+  }
+  const pages = [];
+  let before = null, source = null, failure = null;
+  for (let index = 0; index < INBOX_PREFETCH_PAGES; ++index) {
+    const res = await api(`${inboxMessageURL()}?${inboxPageQuery(before, source)}`);
+    if (request !== inbox.messageRequest || session !== state.loaded) return;
+    if (!res.ok) { failure = res; break; }
+    pages.push(res.data.messages || []);
+    before = res.data.next_before_id ?? null;
+    source = res.data.next_before_source || null;
+    if (before === null) break;
+  }
+  list.removeAttribute('aria-busy');
+  if (!pages.length) {
+    if (cached) { if (failure) fail(failure); return; }   // 刷新失败保留缓存内容
+    inboxStatus('inbox-message-status', errorText(failure));
+    return;
+  }
+  cacheWrite(cacheKey, {pages, nextBefore: before, nextBeforeSource: source}, INBOX_MESSAGE_CACHE_MS);
+  list.replaceChildren();
+  renderInboxMessages(pages, before, source, failure);
 }
 
 // 滚到接近顶部时自动向前加载；失败后停下等用户点「重试」，避免反复请求（批次 2）。
@@ -3589,7 +3722,8 @@ async function savePersona(body, okText) {
   if (session !== state.loaded) return false;
   if (!res.ok) { fail(res); return false; }
   toast(okText, 'ok');
-  await loadPersona();
+  clearPageCache('settings');
+  await loadPersona(true);
   return true;
 }
 
@@ -3613,7 +3747,8 @@ function personaLayerCard(key, title, content, history) {
         const res = await api('/api/settings/rollback', 'POST', { layer: key, version_id: item.id });
         if (!res.ok) { fail(res); return; }
         toast(title + '已回退：所选内容存成了一个新版本。', 'ok');
-        await loadPersona();
+        clearPageCache('settings');
+        await loadPersona(true);
       }) }))) : [el('p', { class: 'muted', style: 'font-size:13px', text: '还没有历史版本。' })];
   return el('div', { class: 'card layer-card' },
     el('div', { class: 'card-head' }, el('div', {}, el('h3', { text: title }))),
@@ -3624,12 +3759,11 @@ function personaLayerCard(key, title, content, history) {
 }
 
 let personaLoadRevision = 0;
-async function loadPersona() {
-  const revision = ++personaLoadRevision, session = state.loaded;
-  const res = await api('/api/settings');
-  if (revision !== personaLoadRevision || session !== state.loaded) return;
-  if (!res.ok) { fail(res); return; }
-  const v = res.data;
+function personaHasDraft() {
+  return Boolean(personaBaseline) && (!readPersonaBaseline().every((value, index) => value === personaBaseline[index])
+    || FREE_LAYERS.some(([key]) => $('ps-lock-' + key).checked !== personaLocks[key]));
+}
+function applyPersona(v) {
   setBotPronoun(v.bot_pronoun);
   const free = $('ps-free');
   const locks = $('ps-locks');
@@ -3656,6 +3790,20 @@ async function loadPersona() {
   personaLocks = readPersonaLocks();
   refreshPersonaSaveButtons();
 }
+async function loadPersona(force = false) {
+  const revision = ++personaLoadRevision, session = state.loaded;
+  const cached = force ? null : cacheRead('settings', CONFIG_CACHE_TTL_MS);
+  if (cached) {
+    applyPersona(cached.data);
+    if (cached.fresh) return;
+  }
+  const res = await api('/api/settings');
+  if (revision !== personaLoadRevision || session !== state.loaded) return;
+  if (!res.ok) { fail(res); return; }
+  cacheWrite('settings', res.data, CONFIG_CACHE_TTL_MS);
+  if (!force && personaHasDraft()) return;   // 后台刷新回来前用户已经改了内容，不覆盖
+  applyPersona(res.data);
+}
 
 async function restorePersonaLock(key, input, button) {
   await confirmPersonaChange(null, async () => {
@@ -3663,6 +3811,7 @@ async function restorePersonaLock(key, input, button) {
     if (!res.ok) { fail(res); return; }
     input.checked = personaLocks[key] = res.data.value;
     refreshPersonaSaveButtons();
+    clearPageCache('settings');
     toast('已恢复默认。', 'ok');
   });
   button.focus();
@@ -3740,6 +3889,7 @@ function markDirty(rename) {
       const res = await api('/api/models', 'PUT', { config, rename });
       if (!res.ok) { failApi(res); return false; }
       mdl.baseline = config; mdl.saved = revision;
+      clearPageCache('models');
       if (res.data.restart_required) showRestart();
       return true;
     } finally {
@@ -3749,23 +3899,32 @@ function markDirty(rename) {
   return mdl.queue;
 }
 let modelLoadRevision = 0;
-async function loadModelsConfig() {
+function applyModelsConfig(data) {
+  mdl.cfg = clone(data.config); mdl.baseline = clone(mdl.cfg);
+  mdl.defaults = data.defaults;
+  mdl.choices = data.choices || {}; mdl.keys = data.key_status || {}; mdl.entries = data.key_entries || [];
+  mdl.builtin = data.builtin_organs || [];
+  mdl.connections = data.organ_connections || [];
+  mdl.plannerOrgan = data.planner_organ || '';
+  refreshDirty();
+}
+async function loadModelsConfig(force = false) {
   const editing = () => $('editor-dialog').open || $('confirm-dialog').open;
   const request = ++modelLoadRevision, session = state.loaded;
   if (mdl.pending || mdl.dirty || (mdl.cfg && editing())) return true;
+  const cached = force ? null : cacheRead('models', CONFIG_CACHE_TTL_MS);
   const revision = mdl.revision;
+  if (cached) {
+    applyModelsConfig(cached.data);
+    if (cached.fresh) return true;
+  }
   const res = await api('/api/models');
   if (request !== modelLoadRevision || session !== state.loaded) return;
   if (mdl.cfg && (mdl.revision !== revision || editing())) return true;
   if (notBuilt(res)) return 'missing';
   if (!res.ok) { fail(res); return false; }
-  mdl.cfg = clone(res.data.config); mdl.baseline = clone(mdl.cfg);
-  mdl.defaults = res.data.defaults;
-  mdl.choices = res.data.choices || {}; mdl.keys = res.data.key_status || {}; mdl.entries = res.data.key_entries || [];
-  mdl.builtin = res.data.builtin_organs || [];
-  mdl.connections = res.data.organ_connections || [];
-  mdl.plannerOrgan = res.data.planner_organ || '';
-  refreshDirty();
+  cacheWrite('models', res.data, CONFIG_CACHE_TTL_MS);
+  applyModelsConfig(res.data);
   return true;
 }
 function failApi(res) { if (notBuilt(res)) toast(NOT_BUILT_TEXT, 'error'); else fail(res); }
@@ -4200,18 +4359,8 @@ function keyAction(entry, action, label, icon) {
   button.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#i-' + icon + '"/></svg>';
   return button;
 }
-async function loadKeysPage() {
-  const revision = ++keyLoadRevision, session = state.loaded;
-  $('ky-add').disabled = true;
-  const res = await api('/api/keys');
-  if (revision !== keyLoadRevision || session !== state.loaded) return;
-  if (!res.ok) {
-    $('ky-empty').classList.add('hidden');
-    $('ky-list').replaceChildren();
-    showBanner('ky-status', notBuilt(res) ? NOT_BUILT_TEXT : errorText(res));
-    return;
-  }
-  const entries = res.data.entries || [], unreadable = res.data.vault === 'unreadable';
+function applyKeysPage(data) {
+  const entries = data.entries || [], unreadable = data.vault === 'unreadable';
   mdl.entries = entries;
   $('ky-add').disabled = unreadable;
   showBanner('ky-status', unreadable ? '密钥库无法解锁，请检查主密钥和容器文件。' : '');
@@ -4222,6 +4371,25 @@ async function loadKeysPage() {
       keyAction(entry, 'rename', '改名', 'pencil'),
       keyAction(entry, 'update', '修改密钥值', 'key'),
       keyAction(entry, 'remove', '删除', 'trash')))));
+}
+async function loadKeysPage(force = false) {
+  const revision = ++keyLoadRevision, session = state.loaded;
+  const cached = force ? null : cacheRead('keys', CONFIG_CACHE_TTL_MS);
+  if (cached) {
+    applyKeysPage(cached.data);
+    if (cached.fresh) return;
+  } else $('ky-add').disabled = true;
+  const res = await api('/api/keys');
+  if (revision !== keyLoadRevision || session !== state.loaded) return;
+  if (!res.ok) {
+    if (cached) { fail(res); return; }   // 刷新失败保留缓存内容
+    $('ky-empty').classList.add('hidden');
+    $('ky-list').replaceChildren();
+    showBanner('ky-status', notBuilt(res) ? NOT_BUILT_TEXT : errorText(res));
+    return;
+  }
+  cacheWrite('keys', res.data, CONFIG_CACHE_TTL_MS);
+  applyKeysPage(res.data);
 }
 function keyValueField(label, kind, value = '') {
   const field = editorField(label, value, {type:'password', required:true});
@@ -4291,12 +4459,14 @@ function openKeyEditor(entry, action = 'create', onProviderKey) {
     } else if (generation === editorGeneration) dialog.close();
     toast(success, 'ok');
     if (res.data.restart_required) showRestart();
-    await loadKeysPage();
+    clearPageCache('keys');
+    clearPageCache('models');   // /api/models 也带密钥状态和可引用列表
+    await loadKeysPage(true);
   });
   return body;
 }
 $('ky-add').addEventListener('click', () => openKeyEditor(null));
-$('ky-refresh').addEventListener('click', loadKeysPage);
+$('ky-refresh').addEventListener('click', () => loadKeysPage(true));
 PAGES.keys = {load:loadKeysPage};
 
 // ---------- 器官工作卡片：选择卡片后，在右侧抽屉里编辑；模型选择立即自动保存 ----------
@@ -4556,6 +4726,7 @@ function renderPromptEditor(entry, focus = false) {
     save.disabled = reset.disabled = false;
     if (response.ok) {
       promptCatalog.templates = promptCatalog.templates.map(item => item.key === entry.key ? response.data : item);
+      clearPageCache('prompts');
     }
     if (!editor.contains(source)) return;
     if (!response.ok) { showBanner('prompt-banner', errorText(response)); return; }
@@ -4570,13 +4741,8 @@ function renderPromptEditor(entry, focus = false) {
   if (focus) source.focus();
 }
 let promptLoadRevision = 0;
-async function loadPromptPage() {
-  const revision = ++promptLoadRevision, session = state.loaded;
-  showBanner('prompt-banner', '');
-  const response = await api('/api/prompts');
-  if (revision !== promptLoadRevision || session !== state.loaded) return false;
-  if (!response.ok) { showBanner('prompt-banner', errorText(response)); return false; }
-  Object.assign(promptCatalog, response.data);
+function applyPromptCatalog(data) {
+  Object.assign(promptCatalog, data);
   const filter = $('prompt-organ');
   const previous = filter.value;
   filter.replaceChildren(el('option', { value: '', text: '全部器官' }),
@@ -4588,6 +4754,24 @@ async function loadPromptPage() {
     renderPromptEditor(entry);
   } else $('prompt-editor').replaceChildren();
   renderPromptDirectory();
+}
+async function loadPromptPage(force = false) {
+  const revision = ++promptLoadRevision, session = state.loaded;
+  showBanner('prompt-banner', '');
+  const cached = force ? null : cacheRead('prompts', CONFIG_CACHE_TTL_MS);
+  if (cached) {
+    applyPromptCatalog(cached.data);
+    if (cached.fresh) return true;
+  }
+  const response = await api('/api/prompts');
+  if (revision !== promptLoadRevision || session !== state.loaded) return false;
+  if (!response.ok) {
+    if (cached) fail(response);   // 刷新失败保留缓存内容
+    else showBanner('prompt-banner', errorText(response));
+    return false;
+  }
+  cacheWrite('prompts', response.data, CONFIG_CACHE_TTL_MS);
+  applyPromptCatalog(response.data);
   return true;
 }
 $('prompt-organ').addEventListener('change', renderPromptDirectory);
@@ -5174,6 +5358,27 @@ function rebuildConfigTabs(sections) {
 
 // 有没保存的改动时，切回这一页不重新读，免得改动丢掉。
 let configLoadRevision = 0;
+function applyConfigData(session, data) {
+  const missing = $('cf-missing');
+  missing.classList.add('hidden');
+  $('cf-content').classList.remove('hidden');
+  cf.session = session;
+  cf.data = data.config;
+  cf.schema = data.schema;
+  cf.readonly = new Set(data.readonly);
+  cf.biochemicalSources = data.biochemical_sources || {};
+  cf.noDefault = new Set(data.no_default);
+  cf.pwSections = new Set(data.password_sections);
+  cf.changes = {};
+  cf.invalid = new Set();
+  const sections = cfSectionList();
+  rebuildConfigTabs(sections);
+  resetConfigSections();
+  cf.searchEntries = configSearchEntries(sections);
+  renderConfigSearch();
+  refreshQQLinkVisibility();
+  refreshConfigDirty();
+}
 async function loadConfigPage(force) {
   const session = state.loaded;
   if (session !== cf.session) {
@@ -5184,29 +5389,23 @@ async function loadConfigPage(force) {
   const hasDraft = () => cf.session === session && cf.data && (cf.busy || Object.keys(cf.changes).length || cf.invalid.size);
   if (!force && hasDraft()) return;
   const revision = ++configLoadRevision;
+  const cached = force ? null : cacheRead('config', CONFIG_CACHE_TTL_MS);
+  // 页面还留着同一份配置的 DOM 时不再重画，切回来只切显示（D129）。
+  if (cached?.fresh && cf.session === session && cf.data === cached.data.config) {
+    refreshQQLinkVisibility();
+    return;
+  }
+  if (cached) {
+    applyConfigData(session, cached.data);
+    if (cached.fresh) return;
+  }
   const res = await api('/api/config');
   if (revision !== configLoadRevision || session !== state.loaded || (!force && hasDraft())) return;
   const missing = $('cf-missing');
   if (notBuilt(res)) { missing.textContent = NOT_BUILT_TEXT; missing.classList.remove('hidden'); $('cf-content').classList.add('hidden'); return; }
-  if (!res.ok) { failApi(res); return; }
-  missing.classList.add('hidden');
-  $('cf-content').classList.remove('hidden');
-  cf.session = session;
-  cf.data = res.data.config;
-  cf.schema = res.data.schema;
-  cf.readonly = new Set(res.data.readonly);
-  cf.biochemicalSources = res.data.biochemical_sources || {};
-  cf.noDefault = new Set(res.data.no_default);
-  cf.pwSections = new Set(res.data.password_sections);
-  cf.changes = {};
-  cf.invalid = new Set();
-  const sections = cfSectionList();
-  rebuildConfigTabs(sections);
-  resetConfigSections();
-  cf.searchEntries = configSearchEntries(sections);
-  renderConfigSearch();
-  refreshQQLinkVisibility();
-  refreshConfigDirty();
+  if (!res.ok) { failApi(res); return; }   // 有缓存时旧内容留在页面上
+  cacheWrite('config', res.data, CONFIG_CACHE_TTL_MS);
+  applyConfigData(session, res.data);
 }
 PAGES.config = { load: () => loadConfigPage(false) };
 $('og-search-settings').addEventListener('click', () => showPage('config', () => focusConfigSection('exploration')));
@@ -5285,6 +5484,7 @@ $('cf-restore-all-form').addEventListener('submit', async event => {
     if (session !== state.loaded) return;
     if (!res.ok) { showBanner('cf-restore-all-error', errorText(res)); return; }
     configLoadRevision++;
+    clearPageCache('config');
     cf.data = res.data.config;
     cf.changes = {};
     cf.invalid.clear();
@@ -5326,16 +5526,8 @@ function monitorList(id, res, emptyText) {
     while (next) { const old = next; next = next.nextElementSibling; old.remove(); }
   });
 }
-let monitorRequest = 0;
-async function loadMonitor() {
-  const request = ++monitorRequest;
-  const [ov, hormones, recent, persona] = await Promise.all([
-    api('/api/overview'),
-    api('/api/timeline?hours=72&limit=10&types=hormone_triggered,judgment'),
-    api('/api/timeline?hours=24&limit=12'),
-    api('/api/timeline?hours=720&limit=6&types=persona_changed,identity_changed'),
-  ]);
-  if (request !== monitorRequest || !state.loggedIn || state.page !== 'monitor') return;
+const MONITOR_CACHE_MS = 10000;
+function renderMonitorResponses({ov, hormones, recent, persona}) {
   const missing = $('mo-missing');
   updateLiveRegion(missing, () => {
     if (!ov.ok) {
@@ -5371,9 +5563,33 @@ async function loadMonitor() {
   monitorList('mo-recent', recent, '最近 24 小时没有记录。');
   monitorList('mo-persona', persona, '最近 30 天人设没有变化。');
 }
-$('mo-refresh').addEventListener('click', loadMonitor);
+let monitorRequest = 0;
+async function loadMonitor(force = false) {
+  const request = ++monitorRequest;
+  const cached = force ? null : cacheRead('monitor', MONITOR_CACHE_MS);
+  if (cached) {
+    renderMonitorResponses(cached.data);
+    if (cached.fresh) return;
+  }
+  const [ov, hormones, recent, persona] = await Promise.all([
+    api('/api/overview'),
+    api('/api/timeline?hours=72&limit=10&types=hormone_triggered,judgment'),
+    api('/api/timeline?hours=24&limit=12'),
+    api('/api/timeline?hours=720&limit=6&types=persona_changed,identity_changed'),
+  ]);
+  if (request !== monitorRequest || !state.loggedIn || state.page !== 'monitor') return;
+  if (!ov.ok) {
+    if (cached) { fail(ov); return; }   // 刷新失败保留缓存内容
+    renderMonitorResponses({ov, hormones, recent, persona});
+    return;
+  }
+  const data = {ov, hormones, recent, persona};
+  cacheWrite('monitor', data, MONITOR_CACHE_MS);
+  renderMonitorResponses(data);
+}
+$('mo-refresh').addEventListener('click', () => loadMonitor(true));
 PAGES.monitor = { load: loadMonitor };
-setInterval(() => { if (state.loggedIn && state.page === 'monitor') loadMonitor(); }, MONITOR_REFRESH_MS);
+setInterval(() => { if (state.loggedIn && state.page === 'monitor') loadMonitor(true); }, MONITOR_REFRESH_MS);
 
 // ---------- 启动：先问登录状态，再决定显示登录页、改密码页还是主界面 ----------
 async function watchLauncherExit() {

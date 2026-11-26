@@ -46,7 +46,7 @@ function createResourcePageControls({el, label, select}) {
 }
 
 function createPagedResource({el, list, label = '分页', request, render, measure, prepare, loaded, empty, error,
-  clearOnError = false, isVisible = () => true}) {
+  clearOnError = false, isVisible = () => true, cacheKey, cacheTtl = 15000}) {
   let page = 0, pages = null, limit = 0, active = false, pending;
   const controls = createResourcePageControls({el, label, select:read});
 
@@ -57,6 +57,18 @@ function createPagedResource({el, list, label = '分页', request, render, measu
   function message(text) {
     list.replaceChildren(el('p', {class:'muted resource-empty', text}));
   }
+  // 第一页缓存先渲染，过期再后台刷新；翻页和筛选变化不走缓存（D129）。
+  function renderData(data) {
+    const total = data.total;
+    pages = Number.isInteger(total) && total >= 0 ? Math.ceil(total / limit) : null;
+    if (page > 0 && pages != null && page >= pages) {
+      return read(Math.max(0, pages - 1));
+    }
+    sync();
+    if (data.items.length) list.replaceChildren(...data.items.map(render));
+    else message(data.enabled ? (empty?.(data) ?? '没有符合条件的记录') : '此功能当前关闭');
+    loaded?.(data);
+  }
   async function read(target = page) {
     if (!active || !isVisible()) return;
     pending?.abort();
@@ -65,7 +77,11 @@ function createPagedResource({el, list, label = '分页', request, render, measu
     page = target;
     sync();
     prepare?.();
-    message('读取中…');
+    const key = cacheKey?.({offset: target * limit, limit});
+    const cached = key ? cacheRead(key, cacheTtl) : null;
+    if (cached?.fresh) { pending = null; renderData(cached.data); return; }
+    if (cached) renderData(cached.data);
+    else message('读取中…');
     const response = await request({offset:target * limit, limit, signal:controller.signal});
     if (pending !== controller || !isVisible()) return;
     pending = null;
@@ -73,20 +89,14 @@ function createPagedResource({el, list, label = '分页', request, render, measu
       pages = null;
       if (clearOnError) page = 0;
       sync();
+      if (cached) { error(response); return; }   // 刷新失败保留缓存内容
       list.replaceChildren(el('div', {class:'row resource-empty'}, el('span', {text:'读取失败'}),
         el('button', {class:'btn small', type:'button', text:'重试', onclick:() => read(clearOnError ? 0 : target)})));
       error(response);
       return;
     }
-    const total = response.data.total;
-    pages = Number.isInteger(total) && total >= 0 ? Math.ceil(total / limit) : null;
-    if (target > 0 && pages != null && target >= pages) {
-      return read(Math.max(0, pages - 1));
-    }
-    sync();
-    if (response.data.items.length) list.replaceChildren(...response.data.items.map(render));
-    else message(response.data.enabled ? (empty?.(response.data) ?? '没有符合条件的记录') : '此功能当前关闭');
-    loaded?.(response.data);
+    if (key) cacheWrite(key, response.data, cacheTtl);
+    renderData(response.data);
   }
   function reset(newLimit = measure()) {
     limit = newLimit;
@@ -266,15 +276,18 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       ...controls, el('button', {class:'btn small primary', text:'查询'}));
   }
   function searchable(options, form, endpoint, getParams) {
-    let params;
+    let params = getParams(form.elements);
     function apply() {
       params = getParams(form.elements);
       return pager.reset();
     }
-    const pager = createResourcePager({...options, el, error:fail, request:({offset, limit, signal}) => {
-      params ??= getParams(form.elements);
-      return api(endpoint + '?' + new URLSearchParams({...params, offset, limit}), 'GET', undefined, {}, signal);
-    }});
+    const pager = createResourcePager({...options, el, error:fail,
+      cacheKey: options.cachePrefix && (({offset, limit}) => offset === 0 && params
+        ? options.cachePrefix + ':' + new URLSearchParams({...params, limit}) : null),
+      request:({offset, limit, signal}) => {
+        params ??= getParams(form.elements);
+        return api(endpoint + '?' + new URLSearchParams({...params, offset, limit}), 'GET', undefined, {}, signal);
+      }});
     form.addEventListener('submit', event => { event.preventDefault(); apply(); });
     form.addEventListener('change', event => { if (event.target.name !== 'q') apply(); });
     return Object.assign(pager, {apply, resetApplied(overrides) {
@@ -350,7 +363,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     if (!container.isConnected) return;
     if ([401, 403, 404].includes(response.status)) {
       detail('记忆检修不可用', field('状态', '此资料或登录状态已不可用。'));
-      void memory.read();
+      void refreshMemory();
       return;
     }
     message.textContent = errorText(response);
@@ -376,7 +389,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           const result = await api(`${maintenanceEndpoint}/${encodeURIComponent(operation.plan_id)}/undo`, 'POST');
           if (!result.ok) { showLifecycleError(result, message, body); return; }
           if (body.isConnected && $('editor-dialog').open) await lifecycleHistory(item, offset);
-          await memory.read();
+          await refreshMemory();
         } finally { button.disabled = false; }
       }))));
     body.append(actions('纠错历史分页',
@@ -410,7 +423,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
               message.textContent = method === 'apply' ? '已执行' : '已撤销';
               buttons.replaceChildren(...(method === 'apply' ? [undo] : []));
             }
-            await memory.read();
+            await refreshMemory();
           } finally { button.disabled = false; }
         }
         const message = el('p', {role:'status'});
@@ -442,7 +455,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       }
       if (form.isConnected) $('editor-dialog').close();
       toast('已保存');
-      await memory.read();
+      await refreshMemory();
     });
     openEditor('修正记忆', form);
   }
@@ -457,7 +470,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         if (!response.ok) { fail(response); return; }
         if (button.isConnected) $('editor-dialog').close();
         toast(`已${label} ${response.data.changed} 条文字记忆`);
-        await memory.read();
+        await refreshMemory();
       } finally { button.disabled = false; }
     });
     openEditor(label + '所选文字记忆', el('div', {class:'stack'},
@@ -534,7 +547,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           async event => {
             const button = event.currentTarget;
             if (await change('/api/resources/memory', 'PATCH', {...memoryTarget(item), is_enabled:!item.is_enabled},
-              memory.read, button) && button.isConnected) $('editor-dialog').close();
+              refreshMemory, button) && button.isConnected) $('editor-dialog').close();
           })),
       el('div', {class:'row resource-actions'}, action('关闭', () => $('editor-dialog').close())));
     detail(type || '文字记忆', body);
@@ -563,7 +576,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       if (!state.isConnected || !$('editor-dialog').open) return;
       if (!response.ok) {
         state.textContent = response.status === 404 ? '没有此事实，或当前不可见。' : errorText(response);
-        if (response.status === 404) await memory.read();
+        if (response.status === 404) await refreshMemory();
         return;
       }
       const fact = response.data;
@@ -586,7 +599,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
     }, box, '会话总结事实');
   }
   const counts = $('memory-counts');
-  const memory = searchable({panel:$('memory-query-text'), id:'memory', render:renderMemory, prepare:() => {
+  const memory = searchable({panel:$('memory-query-text'), id:'memory', cachePrefix:'memory', render:renderMemory, prepare:() => {
     selected.clear();
     selection.checked = selection.indeterminate = false;
     selection.disabled = correct.disabled = toggleRemoved.disabled = true;
@@ -647,7 +660,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
         if (!changed.ok) { showLifecycleError(changed, feedback, container); return; }
         toast(operation === 'apply' ? '画像检修已应用' : '画像检修已撤销');
         if (container.isConnected && $('editor-dialog').open) await openProfileMaintenance(item);
-        await profiles.read();
+        await refreshProfiles();
       } finally { button.disabled = false; }
     }
     form.append(el('h4', {text:'纠错历史'}), ...history.map(operation => el('div', {class:'row'},
@@ -713,6 +726,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
       try {
         const response = await api(endpoint, 'PATCH', {aliases:value});
         if (!response.ok) { fail(response); return; }
+        clearPageCache('profiles');
         toast(value === null ? '已撤销本机别名' : '已保存别名');
         if (form.isConnected && $('editor-dialog').open) editProfileAliases(item, endpoint, response.data);
       } finally {
@@ -835,11 +849,22 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
           updated && el('span', {text:'更新 ' + updated}),
           groupCard != null && groupCard !== '' && el('span', {class:'memory-source-tag', text:'群名片 ' + readable(groupCard)}))));
   }
-  const profiles = searchable({panel:profilePanel, id:'profiles', render:profileCard,
+  const profiles = searchable({panel:profilePanel, id:'profiles', cachePrefix:'profiles', render:profileCard,
     empty:() => profileForm.elements.q.value.trim()
       ? '没有符合条件的人物画像，试试清空搜索。'
       : '还没有人物画像。人物在聊天中出现并被整理后会显示在这里。'},
   profileForm, '/api/resources/profiles', fields => ({q:fields.q.value}));
+  // 写操作后先让对应缓存失效，再重新读取，避免第一页缓存把旧内容顶回来（D129）。
+  function refreshMemory() {
+    clearPageCache('memory');
+    clearPageCache('memory-operations');
+    clearPageCache('memory-flow');
+    return memory.read();
+  }
+  function refreshProfiles() {
+    clearPageCache('profiles');
+    return profiles.read();
+  }
 
   const picturePanel = $('memory-pictures');
   const pictureForm = searchForm('搜索图片', '搜索描述、会话或附件', el('label', {}, '原图 ',
@@ -858,6 +883,8 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   picturePanel.append(resetImages);
   let pictureParams = {q:'', availability:''};
   const pictures = createResourcePager({el, panel:picturePanel, id:'pictures', grid:true, error:fail,
+    cacheKey: ({offset, limit}) => offset === 0
+      ? 'pictures:' + new URLSearchParams({...pictureParams, similar: similarTo ?? '', limit}) : null,
     request:({offset, limit, signal}) => api(similarTo == null
       ? '/api/resources/pictures?' + new URLSearchParams({...pictureParams, offset, limit})
       : '/api/resources/images?' + new URLSearchParams({similar_to:similarTo, limit}), 'GET', undefined, {}, signal),
@@ -889,6 +916,7 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   pictureForm.addEventListener('submit', event => { event.preventDefault(); searchPictures(); });
   pictureForm.elements.availability.addEventListener('change', searchPictures);
   const operations = createResourcePager({el, panel:$('memory-panel-operations'), id:'memory-operations', error:fail,
+    cacheKey: ({offset, limit}) => offset === 0 ? 'memory-operations:' + limit : null,
     request:({offset, limit, signal}) => api('/api/resources/memory/operations?' + new URLSearchParams({offset, limit}),
       'GET', undefined, {}, signal),
     empty:() => '没有可见的移除或恢复记录。在文字查询中选中记录并移除后，操作会记录在这里。',
