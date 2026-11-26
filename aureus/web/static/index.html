@@ -2134,14 +2134,14 @@ function renderOverview(d) {
   overviewField ??= attachOverviewField();
   if (overviewField.pointer) overviewField.refresh();
 }
-function renderOverviewActivity(recent) {
+function renderOverviewActivity(data) {
   const activity = $('ov-activity');
-  const records = recent.ok ? recent.data.records.slice().reverse() : [];
+  const records = data ? data.records.slice().reverse() : [];
   updateLiveRegion(activity, () => {
     activity.replaceChildren(...records.map(record => el('li', {},
       el('span', {text:EVENT_NAMES[record.event_type] || record.event_type}),
       el('time', {datetime:record.time, text:fmtTime(record.time, true)}))));
-    if (!records.length) activity.append(el('li', {class:'ov-empty', text:recent.ok ? '近 24 小时没有动态' : '暂时无法读取动态'}));
+    if (!records.length) activity.append(el('li', {class:'ov-empty', text:data ? '近 24 小时没有动态' : '暂时无法读取动态'}));
   });
 }
 function loadOverview() {
@@ -2198,7 +2198,7 @@ function loadOverview() {
       activityRequest.then(recent => {
         if (!current() || generation !== timelineGeneration || recent.aborted) return;
         if (recent.ok) cacheWrite('overview-activity', recent.data, OVERVIEW_CACHE_MS);
-        renderOverviewActivity(recent);
+        renderOverviewActivity(recent.ok ? recent.data : null);
       });
     }
     if (roundRequest) {
