@@ -4194,8 +4194,13 @@ async function loadInboxMessages() {
     if (before === null) break;
   }
   list.removeAttribute('aria-busy');
+  // 已有缓存时，两页预取全部成功才替换；重试从最新页开始，而不是续读旧游标。
+  if (cached && failure) {
+    inbox.historyError = 'refresh';
+    inboxHistoryStatus(errorText(failure) || '刷新消息失败。', true);
+    return;
+  }
   if (!pages.length) {
-    if (cached) { if (failure) fail(failure); return; }   // 刷新失败保留缓存内容
     inboxStatus('inbox-message-status', errorText(failure));
     return;
   }
@@ -4297,6 +4302,7 @@ $('inbox-open-archive').addEventListener('click', () => openInboxView('archive')
 $('inbox-home').addEventListener('click', () => openInboxView(null));
 $('inbox-messages').addEventListener('scroll', maybeLoadOlderInboxMessages, {passive:true});
 $('inbox-history-retry').addEventListener('click', () => {
+  if (inbox.historyError === 'refresh') return loadInboxMessages();
   inbox.historyError = false;
   loadOlderInboxMessages();
 });
