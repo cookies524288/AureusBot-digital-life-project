@@ -2173,14 +2173,14 @@ function loadOverview() {
     }
     if (activityRequest) {
       activityRequest.then(recent => {
-        if (!current()) return;
+        if (!current() || recent.aborted) return;   // 切页或新一次采样取消的请求不显示失败
         if (recent.ok) cacheWrite('overview-activity', recent.data, OVERVIEW_CACHE_MS);
         renderOverviewActivity(recent);
       });
     }
     if (roundRequest) {
       roundRequest.then(round => {
-        if (!current()) return;
+        if (!current() || round.aborted) return;
         if (round.ok) cacheWrite('overview-round', round.data, OVERVIEW_CACHE_MS);
         renderOverviewRound(round.ok ? round.data.records : [], round.ok);
       });
