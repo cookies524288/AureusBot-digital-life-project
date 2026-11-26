@@ -307,6 +307,10 @@ textarea{resize:vertical;min-height:96px;line-height:1.6}
 @media (max-width:820px){.chat-head,.chat-log,.composer{padding-left:14px;padding-right:14px}.msg{max-width:88%}}
 
 /* ---------- 时间线 ---------- */
+/* 3.39：标题与刷新按钮吸顶，滚动列表时始终可见；背景和底边线随头部一起盖住下方内容 */
+#page-timeline{padding-top:0}
+#page-timeline>.page-head{position:sticky;top:0;z-index:4;padding-top:16px;padding-bottom:8px;margin-bottom:12px;background:var(--bg)}
+#page-timeline>.page-head::after{bottom:0}
 .tl-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .tl-toolbar select{width:auto}
 .tl-toolbar-bottom{margin-top:18px;padding-top:14px;border-top:1px dashed var(--stitch)}
