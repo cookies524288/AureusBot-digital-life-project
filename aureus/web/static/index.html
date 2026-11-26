@@ -969,7 +969,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </nav>
 <main id="pages">
 <section id="page-overview" class="page">
-<div class="page-head ov-head"><div><h2>总览</h2><div class="ov-meta"><b>AUREUS <span id="ov-version" class="mono"></span></b><time id="ov-date"></time></div></div><div class="row"><button id="ov-power" type="button" class="btn small hidden" aria-label="关机" title="关机"><svg class="ico" aria-hidden="true"><use href="#i-power"/></svg></button><button id="ov-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="theme-btn" type="button" class="btn small" aria-label="切换主题" title="切换主题"><svg class="ico" aria-hidden="true"><use href="#i-theme"/></svg></button></div></div>
+<div class="page-head ov-head"><div><h2>总览</h2><div class="ov-meta"><b>AUREUS <span id="ov-version" class="mono"></span></b><time id="ov-date"></time></div></div><div class="row"><button id="ov-power" type="button" class="btn small hidden" aria-label="关机" title="关机"><svg class="ico" aria-hidden="true"><use href="#i-power"/></svg></button><button id="theme-btn" type="button" class="btn small" aria-label="切换主题" title="切换主题"><svg class="ico" aria-hidden="true"><use href="#i-theme"/></svg></button></div></div>
 <div class="page-body stack"><div id="ov-restart" class="banner hidden">配置已修改，重启后生效。</div><div id="ov-missing" class="empty hidden"></div>
 <div id="ov-content" class="ov-grid hidden">
 <article class="ov-slot"><div class="ov-face"><div class="ov-status-body">
@@ -1014,7 +1014,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <button id="chat-send" class="btn primary" disabled><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-send"/></svg>发送</button>
 </div>
 </div></section>
-<section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div><button id="tl-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
+<section id="page-timeline" class="page"><div class="page-head"><div><h2>时间线</h2></div></div>
 <div class="page-body">
 <div id="tl-missing" class="empty hidden"></div>
 <div class="row" style="justify-content:center;margin-bottom:12px"><button id="tl-more" class="btn hidden" disabled>加载更早的</button></div>
@@ -1108,7 +1108,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
     <div id="memory-panel-transfer" class="stack hidden"></div>
   </div>
 </section>
-<section id="page-inbox" class="page wide"><div class="page-head"><h2 id="inbox-heading" tabindex="-1">平台桌面</h2><div class="row"><button id="inbox-home" type="button" class="btn small hidden" aria-label="返回平台桌面" title="返回平台桌面"><svg class="ico" aria-hidden="true"><use href="#i-back"/></svg></button><button id="inbox-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div></div>
+<section id="page-inbox" class="page wide"><div class="page-head"><h2 id="inbox-heading" tabindex="-1">平台桌面</h2><div class="row"><button id="inbox-home" type="button" class="btn small hidden" aria-label="返回平台桌面" title="返回平台桌面"><svg class="ico" aria-hidden="true"><use href="#i-back"/></svg></button></div></div>
 <div class="page-body">
 <div id="inbox-desktop" class="stack">
 <p class="muted">点击图标进入会话；右键图标打开平台设置。</p>
@@ -1220,7 +1220,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <li><div class="og-step"><b>结束本轮</b><p>器官在后台工作，心跳在后续拍收回结果。回复、学习、整理等任务按各自条件调用器官。</p></div></li>
 </ol></section>
 </div></div></div></section>
-<section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-refresh" class="btn small"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button><button id="ky-add" class="btn primary" disabled><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
+<section id="page-keys" class="page"><div class="page-head"><div><h2>密钥库</h2></div><div class="row"><button id="ky-add" class="btn primary" disabled><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>添加密钥</button></div></div>
 <div class="page-body stack"><div id="ky-status" class="banner danger hidden" role="status"></div><div id="ky-empty" class="empty hidden">还没有密钥。</div><div id="ky-list" class="grid"></div></div></section>
 <section id="page-config" class="page"><div class="page-head"><div><h2>设置</h2></div>
 <div class="row"><button id="cf-open-folder" class="btn" type="button">打开配置文件夹</button><button id="cf-restore-all" class="btn danger" disabled>恢复默认设置</button><button id="cf-reset" class="btn" disabled>放弃修改</button><button id="cf-save" class="btn primary" disabled>保存</button></div></div>
@@ -1265,7 +1265,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 </div>
 <div id="prompt-editor" class="stack card"></div>
 </div></div></section>
-<section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div><button id='mo-refresh' class='btn small'><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>刷新</button></div>
+<section id='page-monitor' class='page wide'><div class='page-head'><div><h2>观察</h2></div></div>
 <div class='page-body stack'>
 <div id='mo-missing' class='empty hidden'></div>
 <div id='mo-content' class='stack hidden'>
@@ -2058,7 +2058,6 @@ function loadOverview() {
   }
   return sample(true);
 }
-$('ov-refresh').addEventListener('click', loadOverview);
 $('ov-power').addEventListener('click', async (event) => {
   const button = event.currentTarget;
   button.disabled = true;
@@ -2190,11 +2189,75 @@ async function recoverChatReplies(ws) {
   }
 }
 
+// 实时事件（3.43）：/ws?events=1 同时承载聊天与数据变更事件；事件只带类型和最小标识。
+// 收到事件先让相关页面缓存失效，当前页再去抖刷新；非当前页等下次进入时重新取。
+const LIVE_REFRESH_DELAY_MS = 250;
+const LIVE_TOPIC_CACHE_PREFIXES = {
+  timeline: ['timeline:', 'overview-activity', 'overview-round', 'monitor'],
+  inbox: ['inbox-conversations', 'inbox-messages:', 'overview-activity', 'monitor'],
+  round: ['overview', 'overview-round', 'monitor'],
+  resources: ['memory', 'memory-operations', 'profiles'],
+};
+const liveRefreshTimers = new Map();
+let socketNeedsCatchUp = false;
+
+function invalidateLiveTopic(topic) {
+  for (const prefix of LIVE_TOPIC_CACHE_PREFIXES[topic] || []) clearPageCache(prefix);
+}
+
+// 当前页重新取数的统一入口；刷新函数保留给推送、写操作和内部定时调用（3.43）。
+function refreshCurrentPage() {
+  switch (state.page) {
+    case 'overview': return loadOverview();
+    case 'timeline': return loadTimeline(false);
+    case 'inbox': return refreshInboxLive();
+    case 'monitor': return loadMonitor(true);
+    case 'chat': return loadChatHistory();
+    case 'keys': return loadKeysPage(true);
+    case 'memory': return PAGES.memory.refresh?.();
+    default: return undefined;
+  }
+}
+
+function refreshLiveTopic(topic) {
+  if (!state.loggedIn || document.hidden) return;
+  if (state.page === 'overview' && ['timeline', 'inbox', 'round'].includes(topic)) loadOverview();
+  else if (state.page === 'timeline' && topic === 'timeline') loadTimeline(false);
+  else if (state.page === 'monitor' && (topic === 'timeline' || topic === 'inbox')) loadMonitor(true);
+  else if (state.page === 'inbox' && topic === 'inbox') refreshInboxLive();
+  else if (state.page === 'inbox' && topic === 'round') followConversationTyping();
+  else if (state.page === 'chat' && topic === 'round') followConversationTyping();
+  else if (state.page === 'memory' && topic === 'resources') PAGES.memory.refresh?.();
+}
+
+function handleLiveEvent(event) {
+  const topic = event.topic;
+  if (!LIVE_TOPIC_CACHE_PREFIXES[topic]) return;
+  invalidateLiveTopic(topic);
+  const previous = liveRefreshTimers.get(topic);
+  if (previous) clearTimeout(previous);
+  liveRefreshTimers.set(topic, setTimeout(() => {
+    liveRefreshTimers.delete(topic);
+    refreshLiveTopic(topic);
+  }, LIVE_REFRESH_DELAY_MS));
+}
+
+// 断线期间后端不重放事件；重连后清空页面缓存，当前页重新取一次（3.43）。
+function catchUpLiveUpdates() {
+  clearPageCache();
+  refreshCurrentPage();
+}
+
+function clearLiveTimers() {
+  for (const timer of liveRefreshTimers.values()) clearTimeout(timer);
+  liveRefreshTimers.clear();
+}
+
 function openSocket() {
   socketWanted = true;
   if (socket) return;
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(scheme + '://' + location.host + '/ws');
+  const ws = new WebSocket(scheme + '://' + location.host + '/ws?events=1');
   socket = ws;
   followConversationTyping();
   setConn('连接中', '');
@@ -2202,6 +2265,9 @@ function openSocket() {
     if (socket !== ws) return;
     setConn('已连接', 'ok');
     followConversationTyping();
+    const catchUp = socketNeedsCatchUp;
+    socketNeedsCatchUp = false;
+    if (catchUp) catchUpLiveUpdates();
     return recoverChatReplies(ws);
   };
   ws.onmessage = ev => {
@@ -2209,11 +2275,13 @@ function openSocket() {
     let m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === 'error') { toast(m.detail, 'error'); return; }
+    if (m.type === 'event') { handleLiveEvent(m); return; }
     addMessage({...m, kind:'me', notice:m.type === 'notice'});
   };
   ws.onclose = () => {
     if (socket !== ws) return;   // 主动关掉的，或者已经换了新连接
     socket = null;
+    socketNeedsCatchUp = true;
     clearTyping();
     setConn('已断开', 'warn');
     reconnectLater();
@@ -2222,6 +2290,8 @@ function openSocket() {
 }
 function closeSocket() {
   socketWanted = false;
+  socketNeedsCatchUp = false;
+  clearLiveTimers();
   const old = socket;
   socket = null;
   clearTyping();
@@ -3102,7 +3172,6 @@ async function loadTimeline(more, switching = false, force = false) {
   applyTimelineData(res.data, {more, scroll: more || shownFromCache || switching ? 'preserve' : 'latest'});
 }
 $('tl-hours').addEventListener('change', () => loadTimeline(false, true));
-$('tl-refresh').addEventListener('click', () => loadTimeline(false, false, true));
 $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
 PAGES.timeline = { load: () => loadTimeline(false) };
@@ -3112,7 +3181,7 @@ const INBOX_PAGE_SIZE = 50;
 const INBOX_PREFETCH_PAGES = 2;
 const INBOX_OLDER_THRESHOLD = 120;
 const inbox = {view:null, enabled:false, conversations:[], archives:[], selected:null,
-  conversationRequest:0, messageRequest:0, olderRequest:0,
+  conversationRequest:0, messageRequest:0, olderRequest:0, latestRequest:0,
   nextBefore:null, nextBeforeSource:null, loadingOlder:false, historyError:false,
   messageKeys:new Set()};
 const inboxKey = conversation => conversation.archive || JSON.stringify(conversation.key);
@@ -3253,6 +3322,7 @@ function clearInboxThread() {
   if (state.page === 'inbox') clearTyping();
   ++inbox.messageRequest;
   ++inbox.olderRequest;
+  ++inbox.latestRequest;
   resetInboxMedia();
   clearInboxRetention();
   clearInboxActivity();
@@ -3544,6 +3614,51 @@ async function loadInbox() {
   await renderInboxView({keepSelection: true});
 }
 
+// 收到 inbox 事件：先刷新会话列表，再只取当前会话最新一页并追加新消息（3.43、3.47）。
+async function refreshInboxLive() {
+  if (!state.loggedIn || state.page !== 'inbox' || document.hidden) return;
+  await loadInbox();
+  await refreshInboxMessages();
+}
+
+async function refreshInboxMessages() {
+  if (!inbox.selected || state.page !== 'inbox') return;
+  const request = ++inbox.latestRequest;
+  const thread = inbox.messageRequest, session = state.loaded;
+  const res = await api(`${inboxMessageURL()}?${inboxPageQuery(null, null)}`);
+  if (request !== inbox.latestRequest || thread !== inbox.messageRequest
+      || session !== state.loaded || state.page !== 'inbox' || !inbox.selected) return;
+  if (!res.ok) return;
+  appendInboxMessages(res.data.messages || []);
+}
+
+// 只追加没见过的消息；第一条 Bot 回复原地替换输入中气泡，多段回复依次接在后面（3.47）。
+function appendInboxMessages(messages) {
+  const list = $('inbox-messages');
+  const stick = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  let typing = list.querySelector(':scope > .inbox-typing');
+  let replaced = false, added = 0;
+  for (const message of messages.slice().reverse()) {
+    const key = inboxMessageKey(message);
+    if (inbox.messageKeys.has(key)) continue;
+    inbox.messageKeys.add(key);
+    const node = renderInboxMessage(message);
+    if (typing && !replaced && message.direction === 'outgoing') {
+      typing.replaceWith(node);
+      typing = null;
+      replaced = true;
+    } else {
+      list.append(node);
+    }
+    added += 1;
+  }
+  if (!added) return;
+  if (typing) list.append(typing);   // 新的来信追加后，输入中气泡仍在末尾
+  if (typingSession && replaced) typingSession.bubbleReplaced = true;
+  clearPageCache('inbox-messages:' + inboxKey(inbox.selected));
+  if (stick) scrollInboxToLatest();
+}
+
 function openInboxView(view) {
   clearInboxThread();
   inbox.view = view;
@@ -3779,6 +3894,7 @@ async function loadInboxMessages() {
   if (!inbox.selected) return;
   const request = ++inbox.messageRequest, session = state.loaded;
   ++inbox.olderRequest;
+  ++inbox.latestRequest;
   resetInboxMedia();
   inbox.loadingOlder = false;
   inbox.historyError = false;
@@ -3911,7 +4027,6 @@ $('inbox-back-to-list').addEventListener('click', showInboxConversationList);
 $('inbox-image-dialog').addEventListener('close', () => $('inbox-image-dialog-picture').removeAttribute('src'));
 $('inbox-open-archive').addEventListener('click', () => openInboxView('archive'));
 $('inbox-home').addEventListener('click', () => openInboxView(null));
-$('inbox-refresh').addEventListener('click', loadInbox);
 $('inbox-messages').addEventListener('scroll', maybeLoadOlderInboxMessages, {passive:true});
 $('inbox-history-retry').addEventListener('click', () => {
   inbox.historyError = false;
@@ -5265,7 +5380,6 @@ function openKeyEditor(entry, action = 'create', onProviderKey) {
   return body;
 }
 $('ky-add').addEventListener('click', () => openKeyEditor(null));
-$('ky-refresh').addEventListener('click', () => loadKeysPage(true));
 PAGES.keys = {load:loadKeysPage};
 
 // ---------- 器官工作卡片：选择卡片后，在右侧抽屉里编辑；模型选择立即自动保存 ----------
@@ -6386,7 +6500,6 @@ async function loadMonitor(force = false) {
   cacheWrite('monitor', data, MONITOR_CACHE_MS);
   renderMonitorResponses(data);
 }
-$('mo-refresh').addEventListener('click', () => loadMonitor(true));
 PAGES.monitor = { load: loadMonitor };
 setInterval(() => { if (state.loggedIn && state.page === 'monitor') loadMonitor(true); }, MONITOR_REFRESH_MS);
 

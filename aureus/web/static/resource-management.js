@@ -1306,6 +1306,16 @@ function installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAG
   }
   $('learning-workbench-retry').addEventListener('click', loadLearningWorkbench);
   PAGES.learning = {load:loadLearningWorkbench};
-  PAGES.memory = {prepare:prepareMemory, leave:() => activeMemory?.hide()};
+  PAGES.memory = {
+    prepare:prepareMemory,
+    leave:() => activeMemory?.hide(),
+    // 实时推送的资源事件到达时重新读取当前标签页（3.43）。
+    refresh() {
+      clearPageCache('memory');
+      clearPageCache('memory-operations');
+      clearPageCache('profiles');
+      return showMemoryTab(memoryTab);
+    },
+  };
   return showMemoryTab;
 }
