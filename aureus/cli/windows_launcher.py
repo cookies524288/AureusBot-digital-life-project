@@ -10,7 +10,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from threading import Thread
-from time import sleep
+from time import monotonic, sleep
 
 from aureus.common import AureusPaths, ConfigError, SystemClock, home_is_default, resolve_home
 from aureus.common.paths import PROJECT_ROOT, HomePathError
@@ -23,7 +23,9 @@ from aureus.web.runner import LOOPBACK_HOST, WebServer, WebServerError, running_
 from .windows_terminal import WindowsTerminal
 
 RESTART_EXIT_CODE = 75
-_STARTUP_POLLS = 80
+# 双击时另一个实例可能正在启动或重启：旧进程释放单实例锁、新进程发布网页地址都要时间。
+# 这段时间里反复尝试附着或接手启动，最多等这么久（3.49）。
+_STARTUP_WAIT_SECONDS = 30.0
 _STARTUP_POLL_INTERVAL = 0.1
 _HOME_POINTER = "aureus-home.txt"
 
@@ -110,46 +112,49 @@ async def _run_web(
 def _launch(
     paths: AureusPaths, *, fake: bool, tray: bool, opening_browser: bool, owner_pid: int | None
 ) -> bool:
-    if _open_running_web(paths, tray=tray):
-        return False
     restarting = False
     clock = SystemClock()
-    try:
-        with open_core(paths, fake_organs=fake, clock=clock, to_console=False) as core:
+    deadline = monotonic() + _STARTUP_WAIT_SECONDS
+    while True:
+        if _open_running_web(paths, tray=tray):
+            return False
+        try:
+            with open_core(paths, fake_organs=fake, clock=clock, to_console=False) as core:
 
-            def request_restart() -> None:
-                nonlocal restarting
-                restarting = True
-                core.heartbeat.request_stop()
+                def request_restart() -> None:
+                    nonlocal restarting
+                    restarting = True
+                    core.heartbeat.request_stop()
 
-            terminal = WindowsTerminal(core.heartbeat, request_restart)
-            with open_web(
-                core, clock, open_terminal=terminal.open, request_restart=request_restart
-            ) as web:
-                if web is None:
-                    raise ConfigError("请在 aureus.toml 的 [web] 中启用网页，或运行 aureus chat。")
-                try:
-                    asyncio.run(
-                        _run_web(
-                            core,
-                            web,
-                            terminal,
-                            request_restart,
-                            tray=tray,
-                            opening_browser=opening_browser,
-                            owner_pid=owner_pid,
+                terminal = WindowsTerminal(core.heartbeat, request_restart)
+                with open_web(
+                    core, clock, open_terminal=terminal.open, request_restart=request_restart
+                ) as web:
+                    if web is None:
+                        raise ConfigError(
+                            "请在 aureus.toml 的 [web] 中启用网页，或运行 aureus chat。"
                         )
-                    )
-                except* (WebServerError, OSError) as errors:
-                    raise ConfigError(str(errors.exceptions[0])) from None
-    except SingleInstanceLockError:
-        # 同时双击时，先拿到核心锁的进程可能还没开始监听。
-        for _ in range(_STARTUP_POLLS):
-            if _open_running_web(paths, tray=tray):
-                return False
+                    try:
+                        asyncio.run(
+                            _run_web(
+                                core,
+                                web,
+                                terminal,
+                                request_restart,
+                                tray=tray,
+                                opening_browser=opening_browser,
+                                owner_pid=owner_pid,
+                            )
+                        )
+                    except* (WebServerError, OSError) as errors:
+                        raise ConfigError(str(errors.exceptions[0])) from None
+            return restarting
+        except SingleInstanceLockError:
+            # 另一个实例正在运行：可能还没发布网页地址，也可能正在重启。
+            # 等它发布后附着；锁释放了就由下一轮正常启动，不另开第二个内核。
+            if monotonic() >= deadline:
+                raise
             sleep(_STARTUP_POLL_INTERVAL)
-        raise
-    return restarting
 
 
 def main() -> int:
