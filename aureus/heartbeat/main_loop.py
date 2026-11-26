@@ -16,7 +16,7 @@ import logging
 import sqlite3
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, tzinfo
 from enum import Enum, auto
 from typing import Any, cast
@@ -107,6 +107,18 @@ from aureus.heartbeat.inbox_store import ConversationKey, InboxMessage, InboxSto
 from aureus.heartbeat.initiative import InitiativeDecision, decide
 from aureus.heartbeat.initiative_runner import InitiativeTracker, read_last_conversation
 from aureus.heartbeat.judging import Judgment, TowardMeKind
+from aureus.heartbeat.live import (
+    RESOURCE_EMOJI,
+    RESOURCE_EXPRESSION,
+    RESOURCE_IMAGES,
+    RESOURCE_LANGUAGE,
+    RESOURCE_MEMORY,
+    TOPIC_INBOX,
+    TOPIC_RESOURCES,
+    TOPIC_ROUND,
+    LiveEvent,
+    LiveEventHub,
+)
 from aureus.heartbeat.memory_consolidation import (
     ORGAN as MEMORY_CONSOLIDATION_ORGAN,
 )
@@ -201,6 +213,12 @@ _INDEXING_REJECTED_PAUSE_SECONDS = 300.0
 _INDEX_EXPRESSION = "expression"
 _INDEX_EMOJI = "emoji_cache"
 _INDEX_IMAGES = "images"
+# 索引种类对应网页上的资源名；每建成一批就让对应页面的缓存失效（3.43）。
+_RESOURCE_BY_INDEX = {
+    _INDEX_EXPRESSION: RESOURCE_EXPRESSION,
+    _INDEX_EMOJI: RESOURCE_EMOJI,
+    _INDEX_IMAGES: RESOURCE_IMAGES,
+}
 # 重启时最多读多少条激素触发记录；超过半衰期 8 倍的会被 Hormones 丢掉，这里只防读得太多。
 _HORMONE_RESTORE_LIMIT = 1000
 # /state 里激素的显示名（09 号文档术语表）。
@@ -516,6 +534,10 @@ class Heartbeat:
         self._downtime: Downtime | None = None
         self._cognitive_state: CognitiveState | None = None
         self._last_broadcast: str | None = None
+        # 网页实时事件（3.43）：第一拍读到急停状态之前先不推送，免得停机中漏出事件。
+        self.live_events = LiveEventHub()
+        self.live_events.pause()
+        self._last_round_state: tuple[bool, bool, ConversationKey | None] | None = None
 
     # ---------- 给通道用的接口 ----------
 
@@ -674,6 +696,9 @@ class Heartbeat:
         inbox = self._platform_inbox
         if self._maintenance_paused or inbox is None:
             return
+        if inbox.allows(message.conversation):
+            # 只带收件箱序号：网页据此让平台页失效并重新拉取，不推正文。
+            self.live_events.publish(LiveEvent(TOPIC_INBOX, {"id": message.id}))
         if inbox.is_priority(message.perception) and inbox.allows(message.conversation):
             self._preempt_inbox(inbox, message.conversation)
             self._wake.set()
@@ -730,6 +755,8 @@ class Heartbeat:
         """
         engaged = self._emergency_stop.engage(reason)
         if engaged:
+            # 先停推送，再清理：取消分段时写的记录也不该推给网页。
+            self.live_events.pause()
             self._reply_outbox.clear()
             self._cancel_indexing()
         self._wake.set()
@@ -747,6 +774,8 @@ class Heartbeat:
         released = self._emergency_stop.release()
         if released:
             self._indexing_retry_at = None
+            if not self._stop_requested and not self._maintenance_paused:
+                self.live_events.resume()
         self._wake.set()
         return released
 
@@ -926,6 +955,7 @@ class Heartbeat:
     def request_stop(self) -> None:
         """请心跳停下来：跳完当前这一拍就开始关闭。"""
         self._stop_requested = True
+        self.live_events.pause()
         self._cancel_language_task()
         self._cancel_indexing()
         if self._platform_inbox is not None:
@@ -943,6 +973,8 @@ class Heartbeat:
         if paused == self._maintenance_paused:
             return
         self._maintenance_paused = paused
+        # 先停推送，再取消进行中的回复：取消时写的记录也不该推给网页。
+        self._update_live_pause()
         if paused:
             self._cancel_indexing()
             self._inbox_followups.clear()
@@ -1135,6 +1167,7 @@ class Heartbeat:
         self._maybe_consolidate_memory()
         self._broadcast_cognitive_state()
         self._record_body_sample()
+        self._publish_round_state()
 
     async def wait_for_thought(self) -> None:
         """等进行中的想法有结果（结果由下一拍处理）。没有在想就立即返回。"""
@@ -1193,6 +1226,7 @@ class Heartbeat:
         status = self._emergency_stop.status()
         previous = self._halt_status
         self._halt_status = status
+        self._update_live_pause()
         if status.halted:
             self._reply_outbox.clear()
             if self._platform_inbox is not None:
@@ -1272,6 +1306,8 @@ class Heartbeat:
         if isinstance(outcome, ConsolidationOutcome):
             assert self._memory_consolidator is not None
             self._memory_consolidator.finish(outcome, self._clock.now())
+            if outcome.completed:
+                self.live_events.publish(LiveEvent(TOPIC_RESOURCES, {"resource": RESOURCE_MEMORY}))
             return
         if isinstance(outcome, growth.PersonaReviewOutcome):
             assert self._persona_growth is not None
@@ -2236,6 +2272,7 @@ class Heartbeat:
         elif task.result() is True:
             learner.pending.discard(batch)
             self._language_last_status = "本批结束"
+            self.live_events.publish(LiveEvent(TOPIC_RESOURCES, {"resource": RESOURCE_LANGUAGE}))
         else:
             self._language_last_status = "未完成，样本保留"
         self._on_thought_done(task)
@@ -2568,6 +2605,12 @@ class Heartbeat:
                     if kind in completed:
                         continue
                     more, did = await build()
+                    if did:
+                        resource = _RESOURCE_BY_INDEX.get(kind)
+                        if resource is not None:
+                            self.live_events.publish(
+                                LiveEvent(TOPIC_RESOURCES, {"resource": resource})
+                            )
                     if not more:
                         completed.add(kind)
                         continue
@@ -2915,6 +2958,38 @@ class Heartbeat:
             metadata=state.to_dict(),
         )
         self._last_broadcast = statement
+
+    # ---------- 网页实时事件（3.43） ----------
+
+    def _update_live_pause(self) -> None:
+        """急停、维护暂停或关闭时不推送网页实时事件；恢复后不补发暂停期间的变更。"""
+        if self._stop_requested or self._maintenance_paused or self._halt_status.halted:
+            self.live_events.pause()
+        else:
+            self.live_events.resume()
+
+    def _publish_round_state(self) -> None:
+        """正在回复谁的状态变了就推一条；暂停时先不记，恢复后的下一拍补上当前状态。"""
+        state = self._round_state()
+        if state == self._last_round_state or self.live_events.paused:
+            return
+        self._last_round_state = state
+        active, web, conversation = state
+        data: dict[str, object] = {"active": active}
+        if active:
+            data["web"] = web
+            if conversation is not None:
+                data["conversation"] = asdict(conversation)
+        self.live_events.publish(LiveEvent(TOPIC_ROUND, data))
+
+    def _round_state(self) -> tuple[bool, bool, ConversationKey | None]:
+        """（是否正在回复，是否网页私聊，平台会话）；网页私聊的会话是 None。"""
+        if self.is_replying_to(web_visibility=VisibilityScope.USER_ONLY):
+            return (True, True, None)
+        conversation = self._thought_conversation()
+        if conversation is not None and self.is_replying_to(conversation=conversation):
+            return (True, False, conversation)
+        return (False, False, None)
 
     # ---------- 想法（后台任务） ----------
 
