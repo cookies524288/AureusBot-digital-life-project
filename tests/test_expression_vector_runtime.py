@@ -8,13 +8,13 @@ import httpx
 import litellm
 import pytest
 
-from aureus.common import ManualClock
+from aureus.common import Clock, ManualClock
 from aureus.core import model_runtime, runtime
 from aureus.heartbeat import MessageRoute, Perception, TrustLevel
 from aureus.memory import ExpressionVectorIndex, LanguageContent, LanguageKind, LanguageStore
 from aureus.memory.language_matching import ExpressionReviewStatus
 from aureus.organs import LOCAL_EXPRESSION_EMBEDDING, KeyResolver, ModelRoute, ModelsConfig
-from aureus.organs.llm_adapter import EmbeddingOrgan
+from aureus.organs.llm_adapter import EmbeddingOrgan, LLMOrgan
 from aureus.timeline import VisibilityScope
 from tests.heartbeat.test_judging_flow import NOW
 from tests.test_exploration_runtime import _paths
@@ -154,11 +154,39 @@ async def test_local_expression_vectors_reach_actual_reply(
 
     class MockEmbedding(EmbeddingOrgan):
         def __init__(
-            self, organ_id: str, routes: tuple[ModelRoute, ...], resolver: KeyResolver
+            self,
+            organ_id: str,
+            routes: tuple[ModelRoute, ...],
+            resolver: KeyResolver,
+            *,
+            clock: Clock | None = None,
         ) -> None:
-            super().__init__(organ_id, routes, resolver, transport=transport)
+            super().__init__(organ_id, routes, resolver, transport=transport, clock=clock)
+
+    class MockLLM(LLMOrgan):
+        def __init__(
+            self,
+            organ_id: str,
+            routes: tuple[ModelRoute, ...],
+            key_resolver: KeyResolver,
+            completion: object = None,
+            token_counter: object = None,
+            sleep: object = None,
+            *,
+            prompts: object = None,
+            transport: object = None,
+            clock: Clock | None = None,
+        ) -> None:
+            super().__init__(
+                organ_id,
+                routes,
+                key_resolver,
+                transport=httpx.MockTransport(chat),
+                clock=clock,
+            )
 
     monkeypatch.setattr(model_runtime, "EmbeddingOrgan", MockEmbedding)
+    monkeypatch.setattr(model_runtime, "LLMOrgan", MockLLM)
     clock = ManualClock(NOW)
 
     async def reply(core: runtime.Core, number: int) -> str:
