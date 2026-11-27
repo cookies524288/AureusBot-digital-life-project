@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from aureus.common.config import ConfigError
 from aureus.common.paths import AureusPaths
@@ -24,6 +24,8 @@ MODELS_CONFIG_FORMAT_VERSION = 1
 # 服务商没写超时和重试次数时的默认值。超时 120 秒（D135，取代 D132 的 90 秒）。
 DEFAULT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_RETRY = 2
+DEFAULT_FIRST_TOKEN_TIMEOUT_SECONDS = 30.0
+FIRST_TOKEN_TIMEOUT_RANGE = (5.0, 120.0)
 
 # 分时价格最多写这么多段（D134）：一天 24 小时按分钟切，12 段已经够用，
 # 再多的时段在网页上也看不清，多半是填错了。
@@ -82,13 +84,49 @@ class ProviderConfig(BaseModel):
     # 网页按名称选择；保存稳定 id，改名不影响引用（D87）。
     api_key_ref: str | None = Field(default=None, pattern=ENTRY_ID_PATTERN)
     timeout_seconds: float = Field(default=DEFAULT_TIMEOUT_SECONDS, gt=0)
+    first_token_timeout_seconds: float = DEFAULT_FIRST_TOKEN_TIMEOUT_SECONDS
     max_retry: int = Field(default=DEFAULT_MAX_RETRY, ge=0)
+
+    @field_validator("first_token_timeout_seconds")
+    @classmethod
+    def _check_first_token_range(cls, value: float) -> float:
+        minimum, maximum = FIRST_TOKEN_TIMEOUT_RANGE
+        if value != 0 and not minimum <= value <= maximum:
+            raise ValueError("首包超时必须为 0 或 5～120 秒。")
+        return value
 
     @model_validator(mode="after")
     def _one_key_source(self) -> Self:
         if self.api_key_env is not None and self.api_key_ref is not None:
             raise ValueError("服务商只能选择一个密钥来源。")
         return self
+
+    @model_validator(mode="after")
+    def _check_explicit_first_token_timeout(self) -> Self:
+        if (
+            "first_token_timeout_seconds" in self.model_fields_set
+            and self.first_token_timeout_seconds != 0
+            and self.first_token_timeout_seconds >= self.timeout_seconds
+        ):
+            raise ValueError("first_token_timeout_seconds 必须小于服务商的 timeout_seconds。")
+        return self
+
+    @property
+    def first_chunk_timeout(self) -> float | None:
+        """普通流式请求的生效首包时限；旧配置缺字段时仍以总时限为上限。"""
+        if self.first_token_timeout_seconds == 0:
+            return None
+        return min(self.timeout_seconds, self.first_token_timeout_seconds)
+
+
+class CircuitBreakerConfig(BaseModel):
+    """按服务商保护业务调用；手动测速仍按原有规则运行（D148）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = True
+    failure_threshold: int = Field(default=3, ge=1)
+    cooldown_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
 
 
 class PricePeriod(BaseModel):
@@ -249,6 +287,7 @@ class ModelsConfig(BaseModel):
     providers: tuple[ProviderConfig, ...] = ()
     models: tuple[ModelConfig, ...] = ()
     organs: dict[str, OrganConfig] = Field(default_factory=dict)
+    circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig)
 
     @model_validator(mode="after")
     def _check_references(self) -> Self:

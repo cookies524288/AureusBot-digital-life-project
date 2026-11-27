@@ -36,6 +36,7 @@ from .config_files import (
     ConfigService,
     ModelRename,
     check_biochemical_write,
+    models_for_editing,
     models_require_password,
     runtime_field_names,
 )
@@ -291,7 +292,9 @@ def register_config_routes(
                     != f"{request.url.scheme}://{request.url.netloc}"
                 ):
                     raise HTTPException(403, detail="请从当前网页保存API供应商。")
-                if current != submitted or list(current.organs) != list(submitted.organs):
+                if models_for_editing(current) != models_for_editing(submitted) or list(
+                    current.organs
+                ) != list(submitted.organs):
                     prepared = (
                         await asyncio.to_thread(model_runtime.prepare, submitted)
                         if model_runtime is not None

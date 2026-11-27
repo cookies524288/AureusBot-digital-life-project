@@ -20,6 +20,7 @@ from aureus.organs.llm_adapter import (
     conversational_routes,
     local_expression_endpoint,
 )
+from aureus.organs.provider_breaker import ProviderCircuitBreaker
 
 EMBEDDING_ORGANS = {"text_embedding": "embedding", "image_embedding": "image_embedding"}
 
@@ -93,6 +94,7 @@ class ModelRuntime:
         """只构造、不应用；可在线程中执行，失败时文件和原器官都不改变。"""
         organs: list[Organ] = []
         available: set[str] = set()
+        circuit_breaker = ProviderCircuitBreaker(config.circuit_breaker, self._clock)
         for name in config.organs:
             if name == LOCAL_EXPRESSION_EMBEDDING:
                 continue
@@ -103,7 +105,11 @@ class ModelRuntime:
                 if embedding_routes and not self._fake_organs:
                     organs.append(
                         EmbeddingOrgan(
-                            name, embedding_routes, self._resolver, clock=self._clock
+                            name,
+                            embedding_routes,
+                            self._resolver,
+                            clock=self._clock,
+                            circuit_breaker=circuit_breaker,
                         )
                     )
                     available.add(name)
@@ -123,6 +129,7 @@ class ModelRuntime:
                                     (local,),
                                     self._resolver,
                                     clock=self._clock,
+                                    circuit_breaker=circuit_breaker,
                                 )
                             )
                 continue
@@ -138,7 +145,12 @@ class ModelRuntime:
                 FakeReplyer(organ_id=name)
                 if self._fake_organs
                 else LLMOrgan(
-                    name, routes, self._resolver, prompts=self.prompts, clock=self._clock
+                    name,
+                    routes,
+                    self._resolver,
+                    prompts=self.prompts,
+                    clock=self._clock,
+                    circuit_breaker=circuit_breaker,
                 )
             )
         # 启动时的假回复器来自心跳配置，models.toml 可以没有同名条目。

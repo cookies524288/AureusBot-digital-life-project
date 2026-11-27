@@ -148,7 +148,8 @@ class SafetyGateway:
             await self._record_usage(organ_id, cancelled.attempts)
             raise
         except OrganCallError as failure:
-            await self._finish(organ_id, failure.attempts, succeeded=False, detail=str(failure))
+            if not failure.skipped_by_circuit:
+                await self._finish(organ_id, failure.attempts, succeeded=False, detail=str(failure))
             raise
         except Exception as error:
             # 器官自己出了错（代码问题）：不知道有没有花 token，账本里没有这次的记录。

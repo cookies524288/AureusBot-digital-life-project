@@ -5,7 +5,7 @@ import base64
 import json
 import threading
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -55,12 +55,14 @@ from aureus.organs.llm_adapter import (
     probe_model,
 )
 from aureus.organs.model_config import (
+    CircuitBreakerConfig,
     ModelConfig,
     ModelRoute,
     ModelsConfig,
     ProviderConfig,
     ReasoningLevel,
 )
+from aureus.organs.provider_breaker import ProviderCircuitBreaker
 
 
 def make_image_bytes(format_name: str, mode: str = "RGB") -> bytes:
@@ -1443,6 +1445,177 @@ class HangingStream(httpx.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         await asyncio.Event().wait()
         yield b""
+
+
+@pytest.mark.parametrize("hang_before_headers", [False, True])
+@pytest.mark.asyncio
+async def test_first_chunk_timeout_fails_over(keys: KeyResolver, hang_before_headers: bool) -> None:
+    primary, backup = make_config().routes_for("replyer")
+    primary = ModelRoute(
+        primary.model,
+        primary.provider.model_copy(update={"first_token_timeout_seconds": 0.02, "max_retry": 0}),
+        None,
+        8,
+    )
+    closed = False
+    sent: list[str] = []
+
+    async def completion(**kwargs: Any) -> Any:
+        name = kwargs["model"]
+        sent.append(name)
+        assert kwargs["stream"] and kwargs["num_retries"] == 0
+        if name == "openai/big-model" and hang_before_headers:
+            await asyncio.Event().wait()
+
+        async def chunks() -> AsyncIterator[Any]:
+            nonlocal closed
+            if name == "openai/big-model":
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    closed = True
+            yield make_stream_chunk(content="完整回复")
+
+        return chunks()
+
+    organ = LLMOrgan("replyer", [primary, backup], keys, completion, fixed_counter)
+    result = await organ.process(OrganRequest("replyer", "提示", stream=True))
+    assert sent == ["openai/big-model", "openai/small-model"]
+    assert closed != hang_before_headers
+    assert result.suggestion == "完整回复"
+    failed, success = result.attempts
+    assert failed.failure_reason == "流式首包超时"
+    assert failed.estimated and failed.budget_tokens > 0
+    assert success.succeeded
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_total_timeout_covers_non_stream_and_rest_of_stream(
+    keys: KeyResolver, stream: bool
+) -> None:
+    primary = make_config().routes_for("replyer")[0]
+    primary = ModelRoute(
+        primary.model,
+        primary.provider.model_copy(
+            update={
+                "timeout_seconds": 0.10,
+                "first_token_timeout_seconds": 0.02,
+                "max_retry": 0,
+            }
+        ),
+        None,
+        None,
+    )
+
+    async def completion(**kwargs: Any) -> Any:
+        if not stream:
+            assert not kwargs.get("stream")
+            await asyncio.sleep(0.04)  # 跨过首包时限后，非流式仍能正常返回。
+            return make_response("正文", 8, 2)
+
+        async def chunks() -> AsyncIterator[Any]:
+            yield make_stream_chunk(content="不完整的正文")
+            await asyncio.Event().wait()
+
+        return chunks()
+
+    organ = LLMOrgan("replyer", [primary], keys, completion, fixed_counter)
+    request = OrganRequest("replyer", "提示", stream=stream)
+    if stream:
+        with pytest.raises(OrganCallError) as failure:
+            await organ.process(request)
+        assert failure.value.attempts[0].failure_reason == "超时"
+    else:
+        assert (await organ.process(request)).suggestion == "正文"
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_and_half_opens(keys: KeyResolver) -> None:
+    clock = ManualClock(datetime(2026, 11, 27, tzinfo=UTC))
+    breaker = ProviderCircuitBreaker(CircuitBreakerConfig(), clock)
+    primary, backup = make_config().routes_for("replyer")
+    probe_started = asyncio.Event()
+    finish_probe = asyncio.Event()
+    calls: list[str] = []
+    fail_probe = False
+
+    async def completion(**kwargs: Any) -> Any:
+        model = kwargs["model"]
+        calls.append(model)
+        if model == "openai/big-model":
+            if calls.count(model) <= 3:
+                raise RateLimitError()
+            probe_started.set()
+            await finish_probe.wait()
+            if fail_probe:
+                raise RateLimitError()
+        return make_response("正文", 8, 2)
+
+    def make_shared_organ(name: str) -> LLMOrgan:
+        return LLMOrgan(
+            name, [primary, backup], keys, completion, fixed_counter, circuit_breaker=breaker
+        )
+
+    replyer = make_shared_organ("replyer")
+    planner = make_shared_organ("planner")
+    reply = OrganRequest("replyer", "提示")
+    plan = OrganRequest("planner", "提示")
+    for _ in range(3):
+        result = await replyer.process(reply)
+        assert [attempt.provider for attempt in result.attempts] == ["cloud", "local"]
+    clock.advance(timedelta(seconds=59))
+    skipped = await planner.process(plan)
+    assert [attempt.provider for attempt in skipped.attempts] == ["local"]
+    assert "冷却中" in skipped.metadata["failures_before_success"][0]
+    clock.advance(timedelta(seconds=1))
+    fail_probe = True
+    probe = asyncio.create_task(replyer.process(reply))
+    await asyncio.wait_for(probe_started.wait(), 1)
+    try:
+        parallel = await planner.process(plan)
+        assert "探测在途" in parallel.metadata["failures_before_success"][0]
+        assert [attempt.provider for attempt in parallel.attempts] == ["local"]
+    finally:
+        finish_probe.set()
+        failed_probe = await probe
+    assert [attempt.provider for attempt in failed_probe.attempts] == ["cloud", "local"]
+    assert [attempt.provider for attempt in (await planner.process(plan)).attempts] == ["local"]
+    clock.advance(timedelta(seconds=60))
+    fail_probe = False
+    assert [attempt.provider for attempt in (await planner.process(plan)).attempts] == ["cloud"]
+    assert [attempt.provider for attempt in (await replyer.process(reply)).attempts] == ["cloud"]
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_records_skip_reason(keys: KeyResolver) -> None:
+    config = make_config(organ_models=("big",)).model_copy(
+        update={
+            "circuit_breaker": CircuitBreakerConfig(failure_threshold=1),
+        }
+    )
+    completion = FakeCompletion(RateLimitError())
+    organ = LLMOrgan.from_config("replyer", config, keys, completion, fixed_counter)
+    request = OrganRequest("replyer", "提示")
+    extras: list[dict[str, Any]] = []
+    sink = logger.add(lambda message: extras.append(message.record["extra"]))
+    try:
+        with pytest.raises(OrganCallError) as first:
+            await organ.process(request)
+        with pytest.raises(OrganCallError) as skipped:
+            await organ.process(request)
+    finally:
+        logger.remove(sink)
+    assert len(first.value.attempts) == len(completion.calls) == 1
+    assert not first.value.skipped_by_circuit
+    assert skipped.value.skipped_by_circuit and not skipped.value.attempts
+    assert extras[-1] == {
+        "event": "provider_circuit_skip",
+        "organ_id": "replyer",
+        "provider": "cloud",
+        "model": "big",
+        "reason": "服务商熔断冷却中",
+    }
 
 
 @pytest.mark.asyncio

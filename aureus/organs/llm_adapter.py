@@ -24,7 +24,7 @@ import os
 import sys
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import aclosing
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
@@ -54,6 +54,7 @@ from aureus.organs.interface import (
 from aureus.organs.llm_tools import ToolCallCollector, encode_tool_history, encode_tools
 from aureus.organs.llm_usage import TokenUsage, compute_cost, extract_usage
 from aureus.organs.model_config import (
+    CircuitBreakerConfig,
     ModelConfig,
     ModelRoute,
     ModelsConfig,
@@ -61,6 +62,7 @@ from aureus.organs.model_config import (
     ProviderProtocol,
 )
 from aureus.organs.prompts import PromptStore
+from aureus.organs.provider_breaker import ProviderCircuitBreaker, ProviderCircuitOpenError
 
 # 调用大模型的函数。默认是 litellm.acompletion；测试时换成假的，不联网。
 CompletionFunction = Callable[..., Awaitable[Any]]
@@ -80,7 +82,7 @@ def _has_reasoning(value: Any) -> bool:
 
 
 class _FirstChunkTimeoutError(Exception):
-    """测速的流式请求在首包超时前没有收到任何数据（D131）。"""
+    """流式请求在首包时限内没有收到数据（D131、D148）。"""
 
 
 @dataclass
@@ -91,20 +93,22 @@ class _StreamProgress:
 
 
 async def _read_stream(
-    stream: Any,
+    open_stream: Awaitable[Any],
     tools: ToolCallCollector | None = None,
     on_first_output: Callable[[], None] | None = None,
     *,
-    first_chunk_timeout: float | None = None,
+    total_timeout: float,
+    first_chunk_timeout: float | None,
     progress: _StreamProgress | None = None,
 ) -> tuple[str | None, TokenUsage, bool]:
     """读取流式响应：正文、用量，以及有没有收到推理内容。
 
     Args:
-        stream: litellm 的流式响应，或直连网关时由 `_direct_chat_stream` 生成的同形分片。
+        open_stream: 打开 litellm 或回环直连网关的流；拿到响应头也算在首包等待里。
         tools: 收集工具调用的收集器；不需要时传 None。
         on_first_output: 第一次收到非空正文或推理内容时调用一次，测速用它记延迟。
-        first_chunk_timeout: 等第一个数据块的最长秒数；超时抛 `_FirstChunkTimeoutError`（D131）。
+        total_timeout: 整个请求的最长秒数。
+        first_chunk_timeout: 从发出请求到第一个数据块的最长秒数；None 表示只用总时限。
         progress: 记录是否收到过任何数据块，测速用它判断首包超时能否回退。
 
     Returns:
@@ -114,47 +118,45 @@ async def _read_stream(
     usage = TokenUsage(known=False)
     reasoning = False
     first_output = False
-    first_chunk = True
-    async with aclosing(stream):
-        iterator = stream.__aiter__()
-        while True:
-            try:
-                if first_chunk and first_chunk_timeout is not None:
-                    async with asyncio.timeout(first_chunk_timeout):
-                        chunk = await anext(iterator)
-                else:
-                    chunk = await anext(iterator)
-            except StopAsyncIteration:
-                break
-            except TimeoutError as error:
-                if first_chunk:
-                    raise _FirstChunkTimeoutError() from error
-                raise
-            first_chunk = False
-            if progress is not None:
-                progress.received = True
-            if chunk.choices:
-                choice = chunk.choices[0]
-                delta = choice.delta
-                content = getattr(delta, "content", None)
-                if isinstance(content, str):
-                    pieces.append(content)
-                visible = isinstance(content, str) and bool(content.strip())
-                if getattr(delta, "tool_calls", None):
-                    # 工具调用也是第一段输出，测速要把它算进首包延迟（3.53）。
-                    visible = True
-                if _has_reasoning(delta):
-                    reasoning = True
-                    visible = True
-                if visible and not first_output:
-                    first_output = True
-                    if on_first_output is not None:
-                        on_first_output()
-                if tools is not None:
-                    tools.read_choice(choice, stream=True)
-            actual = extract_usage(chunk)
-            if actual.known:
-                usage = actual
+    waiting_for_first = first_chunk_timeout is not None
+    started = asyncio.get_running_loop().time()
+    deadline = asyncio.timeout_at(started + (first_chunk_timeout or total_timeout))
+    try:
+        async with deadline, AsyncExitStack() as stack:
+            stream = await open_stream
+            stack.push_async_callback(stream.aclose)
+            async for chunk in stream:
+                if waiting_for_first:
+                    deadline.reschedule(started + total_timeout)
+                    waiting_for_first = False
+                if progress is not None:
+                    progress.received = True
+                if chunk.choices:
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    content = getattr(delta, "content", None)
+                    if isinstance(content, str):
+                        pieces.append(content)
+                    visible = isinstance(content, str) and bool(content.strip())
+                    if getattr(delta, "tool_calls", None):
+                        # 工具调用也是第一段输出，测速要把它算进首包延迟（3.53）。
+                        visible = True
+                    if _has_reasoning(delta):
+                        reasoning = True
+                        visible = True
+                    if visible and not first_output:
+                        first_output = True
+                        if on_first_output is not None:
+                            on_first_output()
+                    if tools is not None:
+                        tools.read_choice(choice, stream=True)
+                actual = extract_usage(chunk)
+                if actual.known:
+                    usage = actual
+    except TimeoutError as error:
+        if waiting_for_first and deadline.expired():
+            raise _FirstChunkTimeoutError() from error
+        raise
     return "".join(pieces).strip() or None, usage, reasoning
 
 
@@ -170,6 +172,7 @@ LITELLM_PREFIX_BY_PROTOCOL: dict[ProviderProtocol, str] = {
 # 失败原因的中文说明，按异常的类名匹配。只用类名、不用异常消息：
 # 消息里可能回显请求内容或密钥（见 15 号文档第 4 节）。
 FAILURE_REASON_BY_ERROR_NAME = {
+    "_FirstChunkTimeoutError": "流式首包超时",
     "Timeout": "超时",
     "TimeoutError": "超时",
     "TimeoutException": "超时",
@@ -210,6 +213,7 @@ REJECTED_BEFORE_PROCESSING_ERROR_NAMES = frozenset(
 # 覆盖了直连路径的 ReadTimeout、ConnectError、RemoteProtocolError 等子类。
 RETRYABLE_ERROR_NAMES = frozenset(
     {
+        "_FirstChunkTimeoutError",
         "Timeout",
         "TimeoutError",
         "TimeoutException",
@@ -232,10 +236,11 @@ ASSUMED_COMPLETION_TOKENS = 8192
 class _RouteFailureError(Exception):
     """某一条路线没能用。retryable 表示值得对同一个模型再试一次。"""
 
-    def __init__(self, reason: str, *, retryable: bool = False) -> None:
+    def __init__(self, reason: str, *, retryable: bool = False, empty_reply: bool = False) -> None:
         super().__init__(reason)
         self.reason = reason
         self.retryable = retryable
+        self.empty_reply = empty_reply
 
 
 def _failure_reason(error: Exception) -> str:
@@ -1154,21 +1159,20 @@ async def probe_model(
                 max_tokens=_MODEL_TEST_MAX_TOKENS,
             )
             try:
-                async with asyncio.timeout(provider.timeout_seconds):
-                    stream = await _send_chat(
+                text, usage, reasoning = await _read_stream(
+                    _send_chat(
                         route,
                         completion,
                         stream_kwargs,
                         library=library,
                         transport=transport,
-                    )
-                    text, usage, reasoning = await _read_stream(
-                        stream,
-                        collector,
-                        on_first_output=mark_latency,
-                        first_chunk_timeout=first_timeout,
-                        progress=progress,
-                    )
+                    ),
+                    collector,
+                    on_first_output=mark_latency,
+                    total_timeout=provider.timeout_seconds,
+                    first_chunk_timeout=first_timeout,
+                    progress=progress,
+                )
             except _FirstChunkTimeoutError:
                 first_chunk_timed_out = True
             except TimeoutError:
@@ -1319,12 +1323,16 @@ class EmbeddingOrgan:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
         clock: Clock | None = None,
+        circuit_breaker: ProviderCircuitBreaker | None = None,
     ) -> None:
         self.organ_id = organ_id
         self._routes = routes
         self._resolver = resolver
         self._transport = transport
         self._clock = clock or SystemClock()
+        self._circuit_breaker = circuit_breaker or ProviderCircuitBreaker(
+            CircuitBreakerConfig(), self._clock
+        )
 
     @property
     def local_expression_space(self) -> str | None:
@@ -1376,6 +1384,7 @@ class EmbeddingOrgan:
             raise OrganCallError(self.organ_id, ["本地表达嵌入路线已变更或不可用"])
         attempts: list[CallAttempt] = []
         failures: list[str] = []
+        skipped = 0
         for route in order_routes(self._routes, request.model_preference):
             try:
                 params = _provider_arguments(route.provider, self._resolver)
@@ -1399,21 +1408,25 @@ class EmbeddingOrgan:
             failure = None
             vectors: tuple[tuple[float, ...], ...] = ()
             try:
-                async with asyncio.timeout(route.provider.timeout_seconds):
-                    result = await self._send(route, inputs, params, on_request=on_request)
-                actual = extract_usage(result)
-                if actual.known:
-                    usage = actual
-                vectors = _read_embedding_batch(result.data, len(inputs))
-                if not vectors:
-                    failure = EMPTY_REPLY_REASON
-            except Exception as error:
-                failure = _failure_reason(error)
-                if _rejected_before_processing(error) or (
-                    isinstance(error, httpx.HTTPStatusError)
-                    and error.response.status_code in (400, 401, 403, 404, 422, 429)
-                ):
-                    usage = TokenUsage()
+                with self._circuit_breaker.attempt(self.organ_id, route) as permit:
+                    try:
+                        async with asyncio.timeout(route.provider.timeout_seconds):
+                            result = await self._send(route, inputs, params, on_request=on_request)
+                        actual = extract_usage(result)
+                        if actual.known:
+                            usage = actual
+                        vectors = _read_embedding_batch(result.data, len(inputs))
+                        if not vectors:
+                            failure = EMPTY_REPLY_REASON
+                    except Exception as error:
+                        failure = _failure_reason(error)
+                        if _rejected_before_processing(error):
+                            usage = TokenUsage()
+                    permit.succeeded = failure is None
+            except ProviderCircuitOpenError as error:
+                failures.append(f"{route.model.name}：{error}")
+                skipped += 1
+                continue
             attempts.append(
                 CallAttempt(
                     route.model.name,
@@ -1439,7 +1452,12 @@ class EmbeddingOrgan:
                     embeddings=vectors,
                 )
             failures.append(f"{route.model.name}：{failure}")
-        raise OrganCallError(self.organ_id, failures or ["未配置可用的模型"], attempts)
+        raise OrganCallError(
+            self.organ_id,
+            failures or ["未配置可用的模型"],
+            attempts,
+            skipped_by_circuit=skipped > 0 and skipped == len(failures),
+        )
 
     async def _send(
         self,
@@ -1665,6 +1683,7 @@ class LLMOrgan:
         prompts: PromptStore | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         clock: Clock | None = None,
+        circuit_breaker: ProviderCircuitBreaker | None = None,
     ) -> None:
         llm_routes = conversational_routes(organ_id, routes)
         if routes and not llm_routes:
@@ -1693,6 +1712,9 @@ class LLMOrgan:
         self._transport = transport
         # 分时计费按请求时刻取价格（D134），时间一律从时钟对象取（D26）。
         self._clock = clock or SystemClock()
+        self._circuit_breaker = circuit_breaker or ProviderCircuitBreaker(
+            CircuitBreakerConfig(), self._clock
+        )
 
     @classmethod
     def from_config(
@@ -1734,6 +1756,7 @@ class LLMOrgan:
             sleep,
             transport=transport,
             clock=clock,
+            circuit_breaker=ProviderCircuitBreaker(config.circuit_breaker, clock or SystemClock()),
         )
 
     async def process(self, request: OrganRequest) -> OrganResponse:
@@ -1762,13 +1785,21 @@ class LLMOrgan:
         messages = assemble_messages(request, self._prompts)
         failures: list[str] = []
         attempts: list[CallAttempt] = []
+        skipped = 0
         for route in order_routes(self._routes, request.model_preference):
+            attempts_before_route = len(attempts)
             try:
                 text, tool_calls, attempt = await self._call(route, messages, attempts, request)
             except asyncio.CancelledError:
-                if request.stream:
+                if attempts:
                     raise OrganCallCancelled(attempts) from None
                 raise
+            except ProviderCircuitOpenError as failure:
+                if len(attempts) > attempts_before_route:
+                    failures.append(f"{route.model.name}：{attempts[-1].failure_reason}")
+                failures.append(f"{route.model.name}：{failure}")
+                skipped += 1
+                continue
             except _RouteFailureError as failure:
                 failures.append(f"{route.model.name}：{failure.reason}")
                 logger.warning(
@@ -1776,7 +1807,12 @@ class LLMOrgan:
                 )
                 continue
             return self._build_response(route, text, tool_calls, attempt, failures, attempts)
-        raise OrganCallError(self.organ_id, failures, attempts)
+        raise OrganCallError(
+            self.organ_id,
+            failures,
+            attempts,
+            skipped_by_circuit=not attempts and skipped == len(failures),
+        )
 
     def _estimate_usage(
         self, route: ModelRoute, messages: list[dict[str, str]], requests: int, extra_bytes: int = 0
@@ -1923,16 +1959,64 @@ class LLMOrgan:
         extra_bytes: int,
         tool_names: set[str],
     ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
-        """真正发出一次请求；流式没有正文时再发一次非流式重试（D127）。
+        """原有 D127 空流回退；首包超时不是空回复，不在这里回退。"""
+        empty_stream_reason: str
+        try:
+            return await self._complete(route, kwargs, messages, attempts, extra_bytes, tool_names)
+        except _RouteFailureError as failure:
+            if not kwargs.get("stream") or not failure.empty_reply:
+                raise
+            empty_stream_reason = failure.reason
+        retry_kwargs = {
+            key: value for key, value in kwargs.items() if key not in ("stream", "stream_options")
+        }
+        try:
+            return await self._complete(
+                route, retry_kwargs, messages, attempts, extra_bytes, tool_names
+            )
+        except _RouteFailureError as failure:
+            reason = (
+                REASONING_ONLY_REASON
+                if failure.empty_reply and empty_stream_reason == REASONING_ONLY_REASON
+                else failure.reason
+            )
+            raise _RouteFailureError(reason) from None
 
-        失败的请求先记进 attempts，再抛出。D132 起非流式的空响应也重试一次；
-        流式已经用非流式回退过，就不再额外重试。
-        """
+    async def _complete(
+        self,
+        route: ModelRoute,
+        kwargs: dict[str, Any],
+        messages: list[dict[str, str]],
+        attempts: list[CallAttempt],
+        extra_bytes: int,
+        tool_names: set[str],
+    ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
+        """只尝试一个真实请求；失败、取消也把这次用量交给网关。"""
+        with self._circuit_breaker.attempt(self.organ_id, route) as permit:
+            try:
+                outcome = await self._complete_request(
+                    route, kwargs, messages, attempts, extra_bytes, tool_names
+                )
+            except _RouteFailureError:
+                permit.succeeded = False
+                raise
+            permit.succeeded = True
+            return outcome
+
+    async def _complete_request(
+        self,
+        route: ModelRoute,
+        kwargs: dict[str, Any],
+        messages: list[dict[str, str]],
+        attempts: list[CallAttempt],
+        extra_bytes: int,
+        tool_names: set[str],
+    ) -> tuple[str, tuple[ToolCall, ...] | None, CallAttempt]:
         tools = ToolCallCollector(tool_names) if tool_names else None
         reasoning_only = False
-        fallback_used = False
+        total_timeout = route.provider.timeout_seconds
         try:
-            response = await _send_chat(
+            pending = _send_chat(
                 route,
                 self._completion,
                 kwargs,
@@ -1940,53 +2024,28 @@ class LLMOrgan:
                 transport=self._transport,
             )
             if kwargs.get("stream"):
-                text, usage, reasoning_only = await _read_stream(response, tools)
-                if text is None and (tools is None or tools.finish() == ()):
-                    # 流式没有正文、也没有工具调用：同一请求去掉 stream 再试一次（D127）。
-                    # 流式那一次照样记账；重试的用量以非流式响应为准。
-                    if not usage.known:
-                        usage = self._estimate_usage(route, messages, 1, extra_bytes)
-                    attempts.append(
-                        self._attempt(
-                            route,
-                            usage,
-                            REASONING_ONLY_REASON if reasoning_only else EMPTY_REPLY_REASON,
-                        )
-                    )
-                    retry_kwargs = {
-                        key: value
-                        for key, value in kwargs.items()
-                        if key not in ("stream", "stream_options")
-                    }
-                    fallback_used = True
-                    response = await _send_chat(
-                        route,
-                        self._completion,
-                        retry_kwargs,
-                        library=self._library,
-                        transport=self._transport,
-                    )
-                    text, usage, fallback_reasoning, tool_calls = _read_completion(
-                        response, tools
-                    )
-                    reasoning_only = reasoning_only or fallback_reasoning
+                text, usage, reasoning_only = await _read_stream(
+                    pending,
+                    tools,
+                    total_timeout=total_timeout,
+                    first_chunk_timeout=route.provider.first_chunk_timeout,
+                )
+                tool_calls = tools.finish() if tools is not None else ()
+            else:
+                async with asyncio.timeout(total_timeout):
+                    response = await pending
+                if self.organ_id == "voice":
+                    usage = extract_usage(response)
+                    value = getattr(response, "text", None)
+                    text = value.strip() if isinstance(value, str) and value.strip() else None
+                    tool_calls = ()
+                else:
+                    text, usage, reasoning_only, tool_calls = _read_completion(response, tools)
                     if tools is None:
                         tool_calls = ()
-                else:
-                    tool_calls = tools.finish() if tools is not None else ()
-            elif self.organ_id == "voice":
-                usage = extract_usage(response)
-                value = getattr(response, "text", None)
-                text = value.strip() if isinstance(value, str) and value.strip() else None
-                tool_calls = ()
-            else:
-                text, usage, reasoning_only, tool_calls = _read_completion(response, tools)
-                if tools is None:
-                    tool_calls = ()
         except asyncio.CancelledError:
-            if kwargs.get("stream"):
-                usage = self._estimate_usage(route, messages, 1, extra_bytes)
-                attempts.append(self._attempt(route, usage, "新消息或运行控制中止流式请求"))
+            usage = self._estimate_usage(route, messages, 1, extra_bytes)
+            attempts.append(self._attempt(route, usage, "本轮生成已取消"))
             raise
         except Exception as error:
             reason = _failure_reason(error)
@@ -2000,10 +2059,7 @@ class LLMOrgan:
                 )
             attempts.append(attempt)
             # from None：不带上原始异常，免得追踪信息里带出请求头里的密钥。
-            # 流式已经用非流式回退过，这次失败不再触发第二次重试（D132）。
-            raise _RouteFailureError(
-                reason, retryable=_retryable(error) and not fallback_used
-            ) from None
+            raise _RouteFailureError(reason, retryable=_retryable(error)) from None
         if not usage.known:
             usage = self._estimate_usage(route, messages, 1, extra_bytes)
         if text is None and tool_calls == ():
@@ -2011,7 +2067,7 @@ class LLMOrgan:
             # 思考上），这次请求照样要记账。D132：非流式空响应重试一次。
             reason = REASONING_ONLY_REASON if reasoning_only else EMPTY_REPLY_REASON
             attempts.append(self._attempt(route, usage, reason))
-            raise _RouteFailureError(reason, retryable=not fallback_used)
+            raise _RouteFailureError(reason, retryable=True, empty_reply=True)
         suggestion = (text or "") if tool_calls is not None else ""
         return suggestion, tool_calls, self._attempt(route, usage)
 

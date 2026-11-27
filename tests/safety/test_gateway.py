@@ -162,6 +162,19 @@ async def test_interrupted_stream_records_usage_without_a_failure(harness: Harne
     assert harness.events(EVENT_CALL_FAILED) == []
 
 
+async def test_circuit_breaker_does_not_trip_runaway_guard(harness: Harness) -> None:
+    skipped = OrganCallError(ORGAN, ["正在冷却"], skipped_by_circuit=True)
+    harness.add_organ([skipped, skipped, skipped, skipped, ok(make_attempt(10, 2))])
+    gateway = harness.build(SafetyConfig(max_consecutive_failures=2))
+    for _ in range(4):
+        with pytest.raises(OrganCallError, match="正在冷却"):
+            await gateway.call(harness.request())
+    assert harness.events(EVENT_CALL_FAILED) == []
+    assert harness.ledger.tokens_used_in_month(harness.clock.now()) == 0
+    assert (await gateway.call(harness.request())).suggestion == "好的"
+    assert harness.ledger.tokens_used_in_month(harness.clock.now()) == 12
+
+
 def drop_ledger_table(db_path: Path) -> None:
     """从数据库文件外面把账本表删掉，模拟账本坏了。"""
     conn = sqlite3.connect(str(db_path))

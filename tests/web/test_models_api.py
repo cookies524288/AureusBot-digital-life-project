@@ -84,7 +84,13 @@ def test_missing_models_file_returns_empty_config_and_literal_choices(rig: Confi
     assert response.status_code == 200
     data = response.json()
     assert data["exists"] is False
-    assert data["config"] == {"config_version": 1, "providers": [], "models": [], "organs": {}}
+    assert data["config"] == {
+        "config_version": 1,
+        "providers": [],
+        "models": [],
+        "organs": {},
+        "circuit_breaker": {"enabled": True, "failure_threshold": 3, "cooldown_seconds": 60},
+    }
     assert data["choices"] == {
         "protocols": list(get_args(ProviderProtocol)),
         "kinds": list(get_args(ModelKind)),
@@ -292,6 +298,37 @@ def test_edit_one_model_preserves_other_entries_and_comments(rig: ConfigRig) -> 
     assert tomllib.loads(text)["models"][0]["identifier"] == "changed-id"
     assert rig.client.get("/api/overview").json()["restart_required"] is False
     assert rig.models.bus.is_registered("replyer")
+
+
+def test_old_short_provider_configuration_can_be_saved_from_web(rig: ConfigRig) -> None:
+    rig.paths.models_config_file.write_text(
+        ORIGINAL.replace('name = "cloud"', 'name = "cloud"\ntimeout_seconds = 21'),
+        encoding="utf-8",
+    )
+    rig.log_in()
+    config = rig.client.get("/api/models").json()["config"]
+    provider = config["providers"][0]
+    assert "first_token_timeout_seconds" not in provider
+    config["models"][0]["identifier"] = "new-model"
+    config["circuit_breaker"]["enabled"] = False
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 200
+    raw = tomllib.loads(rig.paths.models_config_file.read_text(encoding="utf-8"))
+    assert "first_token_timeout_seconds" not in raw["providers"][0]
+    assert raw["circuit_breaker"] == {"enabled": False}
+    provider["first_token_timeout_seconds"] = 21
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 422
+
+
+def test_explicit_default_first_token_timeout_round_trips(rig: ConfigRig) -> None:
+    config = saved_config(rig)
+    config["providers"][0]["first_token_timeout_seconds"] = 30
+    assert rig.client.put("/api/models", json={"config": config}).status_code == 200
+    saved = rig.client.get("/api/models").json()["config"]
+    assert saved["providers"][0]["first_token_timeout_seconds"] == 30
+    del saved["providers"][0]["first_token_timeout_seconds"]
+    assert rig.client.put("/api/models", json={"config": saved}).status_code == 200
+    reloaded = rig.client.get("/api/models").json()["config"]
+    assert "first_token_timeout_seconds" not in reloaded["providers"][0]
 
 
 def test_unchanged_submission_does_not_write_or_set_restart_flag(rig: ConfigRig) -> None:

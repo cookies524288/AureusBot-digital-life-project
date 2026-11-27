@@ -167,12 +167,18 @@ class OrganCallError(Exception):
     """
 
     def __init__(
-        self, organ_id: str, failures: list[str], attempts: Sequence[CallAttempt] = ()
+        self,
+        organ_id: str,
+        failures: list[str],
+        attempts: Sequence[CallAttempt] = (),
+        *,
+        skipped_by_circuit: bool = False,
     ) -> None:
         self.organ_id = organ_id
         self.failures = failures
         # 失败的请求也可能已经用掉了 token，账本照样要记（D39）。
         self.attempts = list(attempts)
+        self.skipped_by_circuit = skipped_by_circuit
         super().__init__(f"器官 {organ_id} 的所有模型都调用失败：" + "；".join(failures))
 
     @property
@@ -182,7 +188,7 @@ class OrganCallError(Exception):
 
 
 class OrganCallCancelled(asyncio.CancelledError):
-    """流式请求被取消，携带安全网关仍需记账的尝试。"""
+    """调用被取消，携带安全网关仍需记账的真实请求。"""
 
     def __init__(self, attempts: Sequence[CallAttempt]) -> None:
         super().__init__()

@@ -182,32 +182,45 @@ def _edit_model_table(table: Any, before: dict[str, Any], after: dict[str, Any])
             table[field] = value
 
 
+def models_for_editing(config: ModelsConfig) -> dict[str, Any]:
+    """保留首包字段缺省的语义：旧总时限较短时不能显式写入 30 秒。"""
+    field = "first_token_timeout_seconds"
+    values = config.model_dump(mode="json")
+    for provider, row in zip(config.providers, values["providers"], strict=True):
+        if field not in provider.model_fields_set:
+            del row[field]
+    return values
+
+
 def _edit_models(
     document: TOMLDocument, submitted: ModelsConfig, rename: ModelRename | None
 ) -> None:
     """按名称复用现有表，只写值有变化的字段，并跟随提交顺序。"""
     current = validate_models_config(document.unwrap(), "models.toml")
+    previous_values = models_for_editing(current)
+    next_values = models_for_editing(submitted)
     for section in ("providers", "models"):
-        old_entries = {item.name: item for item in getattr(current, section)}
-        entries = getattr(submitted, section)
-        if tuple(old_entries.values()) == entries:
+        old_entries = {item["name"]: item for item in previous_values[section]}
+        entries = next_values[section]
+        if list(old_entries.values()) == entries:
             continue
         old_tables = {table["name"]: table for table in document.get(section, [])}
         tables = tomlkit.aot()
         for entry in entries:
+            name = entry["name"]
             previous_name = (
-                rename[1]
-                if rename and (section, entry.name) == (rename[0], rename[2])
-                else entry.name
+                rename[1] if rename and (section, name) == (rename[0], rename[2]) else name
             )
-            previous = old_entries.get(previous_name)
-            table = old_tables[previous_name] if previous is not None else tomlkit.table()
-            before = (
-                previous.model_dump(mode="json")
-                if previous is not None
-                else model_defaults(section)
-            )
-            _edit_model_table(table, before, entry.model_dump(mode="json"))
+            if previous_name in old_entries:
+                table = old_tables[previous_name]
+                before = old_entries[previous_name]
+            else:
+                table = tomlkit.table()
+                before = model_defaults(section)
+                before.pop("first_token_timeout_seconds", None)
+            _edit_model_table(table, before, entry)
+            if section == "providers" and "first_token_timeout_seconds" not in entry:
+                table.pop("first_token_timeout_seconds", None)
             tables.append(table)
         if entries:
             document[section] = tables
@@ -227,6 +240,12 @@ def _edit_models(
             _edit_model_table(table, before, entry.model_dump(mode="json"))
             organs[name] = table
         document["organs"] = organs
+    if current.circuit_breaker != submitted.circuit_breaker:
+        circuit = document.get("circuit_breaker", tomlkit.table())
+        _edit_model_table(
+            circuit, previous_values["circuit_breaker"], next_values["circuit_breaker"]
+        )
+        document["circuit_breaker"] = circuit
     if "config_version" not in document:
         document["config_version"] = 1
 
@@ -280,7 +299,7 @@ class ConfigService:
         refs = [p.api_key_ref for p in config.providers if p.api_key_ref is not None]
         return {
             "exists": exists,
-            "config": config.model_dump(mode="json"),
+            "config": models_for_editing(config),
             "defaults": {section: model_defaults(section) for section in MODEL_ENTRY_TYPES},
             "choices": {
                 "protocols": list(get_args(ProviderProtocol)),

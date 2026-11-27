@@ -5146,7 +5146,7 @@ function openProviderEditor(provider) {
       fields.name.input.focus();
       return;
     }
-    const next = { name, protocol: fields.protocol.input.value,
+    const next = { ...original, name, protocol: fields.protocol.input.value,
       base_url: fieldText(fields.base_url) || null,
       api_key_env: fields.key.input.value === 'legacy' ? legacyKey : null,
       api_key_ref: fields.key.input.value.startsWith('vault:') ? fields.key.input.value.slice(6) : null,

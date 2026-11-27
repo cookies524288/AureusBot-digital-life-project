@@ -148,6 +148,49 @@ def test_default_timeout_is_120_seconds(tmp_path: Path) -> None:
     assert config.providers[1].timeout_seconds == 5.0
 
 
+@pytest.mark.parametrize("total", [5, 21, 120])
+def test_old_provider_uses_clamped_default_first_token_timeout(tmp_path: Path, total: int) -> None:
+    text = VALID_TOML.replace("timeout_seconds = 5", f"timeout_seconds = {total}")
+    config = load_models_config(write_models_toml(tmp_path, text))
+    provider = config.providers[1]
+    assert provider.first_token_timeout_seconds == 30
+    assert provider.first_chunk_timeout == min(total, 30)
+    assert config.circuit_breaker.model_dump() == {
+        "enabled": True,
+        "failure_threshold": 3,
+        "cooldown_seconds": 60,
+    }
+
+
+@pytest.mark.parametrize("first", [4, 121, -1, 21, 22])
+def test_invalid_explicit_first_token_timeout_reports_config_error(
+    tmp_path: Path, first: int
+) -> None:
+    text = VALID_TOML.replace(
+        "timeout_seconds = 5", f"timeout_seconds = 21\nfirst_token_timeout_seconds = {first}"
+    )
+    assert "first_token_timeout_seconds" in load_error(tmp_path, text)
+
+
+def test_timeout_and_circuit_breaker_can_be_disabled(tmp_path: Path) -> None:
+    text = VALID_TOML.replace(
+        "timeout_seconds = 5", "timeout_seconds = 5\nfirst_token_timeout_seconds = 0"
+    )
+    text += "\n[circuit_breaker]\nenabled = false\n"
+    config = load_models_config(write_models_toml(tmp_path, text))
+    assert config.providers[1].first_chunk_timeout is None
+    assert not config.circuit_breaker.enabled
+
+
+@pytest.mark.parametrize(
+    "bad_field", ["failure_threshold = 0", "cooldown_seconds = 0", "bogus = 1"]
+)
+def test_circuit_breaker_config_rejects_invalid_fields(tmp_path: Path, bad_field: str) -> None:
+    assert "circuit_breaker" in load_error(
+        tmp_path, VALID_TOML + f"\n[circuit_breaker]\n{bad_field}\n"
+    )
+
+
 def test_prices_are_optional(tmp_path: Path) -> None:
     # D37：账本和预算按 token 计，价格不是必填；不写就是“费用未知”。
     text = VALID_TOML.replace("price_in = 4.0\nprice_out = 8.0\n", "")
