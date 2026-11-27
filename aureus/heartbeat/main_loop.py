@@ -146,6 +146,7 @@ from aureus.heartbeat.recall import MemoryTracker
 from aureus.heartbeat.reply_outbox import AtReplyPart, EmojiReplyPart, PartReceipt, ReplyOutbox
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD, delivery_callbacks
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
+from aureus.heartbeat.round_timing import RoundTiming, timing_now
 from aureus.heartbeat.self_check import describe_self_check
 from aureus.hormones import (
     HormoneEffects,
@@ -1409,6 +1410,11 @@ class Heartbeat:
             return
         outcome = thought.task.result()
         assert outcome is not None and not isinstance(outcome, bool)
+        if isinstance(outcome, _ThoughtOutcome) and outcome.timed_out:
+            self._record_interrupted_round(
+                thought, "思考超时，本轮未完成。", reason_code="deadline"
+            )
+            return
         if isinstance(outcome, InboxSelection):
             if (
                 inbox is not None
@@ -1671,6 +1677,7 @@ class Heartbeat:
             quote_source=outcome.plan is not None and outcome.plan.quote_source,
             can_deliver=can_deliver if residence is not None or target_key is not None else None,
             on_receipt=after_receipt,
+            timing=trace.timing if trace is not None else None,
         )
 
     def allows_emoji_delivery(self) -> bool:
@@ -1690,6 +1697,7 @@ class Heartbeat:
         segment: int | None,
         can_deliver: Callable[[], bool] | None,
         on_receipt: PartReceipt | None = None,
+        timing: RoundTiming | None = None,
     ) -> bool:
         action = (
             part.action
@@ -1724,6 +1732,7 @@ class Heartbeat:
             segment,
             on_confirm=confirmed,
             on_failure=(lambda: on_receipt(segment, False)) if on_receipt else None,
+            timing=timing,
         )
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if not permission.allowed:
@@ -1820,6 +1829,7 @@ class Heartbeat:
         quote_source: bool = False,
         can_deliver: Callable[[], bool] | None = None,
         on_receipt: PartReceipt | None = None,
+        timing: RoundTiming | None = None,
     ) -> bool:
         """投递已记录的各段。返回本次调用中是否已交给通道。"""
         if (
@@ -1830,7 +1840,7 @@ class Heartbeat:
             and qq_action is None
         ):
             delivered = self._send_reply_part(
-                target, parts[0], record, quote_source, 1, None, on_receipt
+                target, parts[0], record, quote_source, 1, None, on_receipt, timing
             )
             finish = after_delivery if delivered else after_failure
             if finish is not None:
@@ -1861,6 +1871,7 @@ class Heartbeat:
             on_receipt=on_receipt,
             track_receipts=residence is not None and target.channel in self._receipt_channels,
             on_activity=renew_residence if residence is not None else None,
+            timing=timing,
         )
 
     def _register_judgment(self, pending: _PendingJudgment) -> None:
@@ -2101,9 +2112,13 @@ class Heartbeat:
         }
         if thought.round_trace is not None:
             metadata["round_id"] = thought.round_trace.id
+            if thought.round_trace.timing is not None:
+                metadata["stage_timings"] = thought.round_trace.timing.metadata()
         return metadata
 
-    def _record_interrupted_round(self, thought: _Thought, reason: str) -> None:
+    def _record_interrupted_round(
+        self, thought: _Thought, reason: str, *, reason_code: str | None = None
+    ) -> None:
         trace = thought.round_trace
         if trace is None:
             return
@@ -2119,6 +2134,7 @@ class Heartbeat:
                 "channel": target.channel,
                 "actions": [action.to_metadata() for action in trace.actions],
                 **trace.attention_metadata(),
+                **({"reason": reason_code} if reason_code is not None else {}),
             },
         )
 
@@ -2204,6 +2220,7 @@ class Heartbeat:
             wall_time=now,
             now=now,
             mode=mode,
+            monotonic_now=timing_now(),
         )
 
     def _take_inbox_priority(self, inbox: InboxAttention) -> None:
@@ -2579,8 +2596,10 @@ class Heartbeat:
             visibility=VisibilityScope.PRIVATE,
             metadata={"kind": item.kind, "anchor_id": records[0].id},
         )
-        trace = _RoundTrace(attempt.id, timed_chat=item, used_platform_history=True)
-        job = replace(self._reply_job((heard,)), round_trace=trace, media_sources=())
+        timing = RoundTiming(heard.queued_at)
+        trace = _RoundTrace(attempt.id, timed_chat=item, used_platform_history=True, timing=timing)
+        with timing.phase("context_ms"):
+            job = replace(self._reply_job((heard,)), round_trace=trace, media_sources=())
         task = asyncio.create_task(self._conversation._think(job), name="aureus-chat-recheck")
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task, (heard,), job.strategy, round_trace=trace)
@@ -2668,16 +2687,23 @@ class Heartbeat:
                 self._unanswered.remove(batch[:-capacity])
                 batch = batch[-capacity:]
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
+        key = _platform_key(batch[-1])
+        debouncer = self._debouncers.get(key) if key is not None else None
+        timing = RoundTiming(
+            min(heard.queued_at for heard in batch),
+            debouncer.measured_deadline if debouncer is not None else None,
+        )
         trace = _RoundTrace(
             batch[0].record.id,
             residence_deadline=(
                 inbox.deadline if inbox is not None and residence is not None else None
             ),
+            timing=timing,
         )
-        job = replace(self._reply_job(batch), round_trace=trace)
+        with timing.phase("context_ms"):
+            job = replace(self._reply_job(batch), round_trace=trace)
         self._unanswered.remove(batch)
-        key = _platform_key(batch[-1])
-        if key is not None and (debouncer := self._debouncers.get(key)) is not None:
+        if debouncer is not None:
             # 批次已经取走：清掉这一批的起点和截止时间，保留上一条供下一批判断（D142）。
             debouncer.consume()
         run = None

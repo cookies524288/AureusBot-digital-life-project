@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from aureus.common.clock import Clock, SystemClock
+from aureus.common.config import DEFAULT_THOUGHT_DEADLINE_SECONDS, ConfigError
 from aureus.organs import (
     LOCAL_EXPRESSION_EMBEDDING,
     FakePlanner,
@@ -55,12 +56,14 @@ class ModelRuntime:
         fake_plan_organ: str | None = None,
         prompts: PromptStore | None = None,
         clock: Clock | None = None,
+        thought_deadline_seconds: float = DEFAULT_THOUGHT_DEADLINE_SECONDS,
     ) -> None:
         self.bus = bus
         self._resolver = resolver
         self.prompts = prompts
         # 分时计费按请求时刻取价格（D134），时间一律从时钟对象取（D26）。
         self._clock = clock or SystemClock()
+        self._thought_deadline_seconds = thought_deadline_seconds
         # 来源是启动参数 --fake；热重载不能把假器官切换成真实调用。
         self._fake_organs = fake_organs
         self.embedding_spaces = EmbeddingSpaces()
@@ -92,6 +95,14 @@ class ModelRuntime:
 
     def prepare(self, config: ModelsConfig) -> PreparedModels:
         """只构造、不应用；可在线程中执行，失败时文件和原器官都不改变。"""
+        if self._thought_deadline_seconds:
+            for provider in config.providers:
+                first = provider.first_chunk_timeout
+                if first is not None and self._thought_deadline_seconds <= first:
+                    raise ConfigError(
+                        "[heartbeat] thought_deadline_seconds 必须大于服务商 "
+                        f"{provider.name} 的生效首包时限 first_token_timeout_seconds。"
+                    )
         organs: list[Organ] = []
         available: set[str] = set()
         circuit_breaker = ProviderCircuitBreaker(config.circuit_breaker, self._clock)

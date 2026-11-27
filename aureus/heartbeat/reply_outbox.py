@@ -10,6 +10,7 @@ from unicodedata import name
 from aureus.common import Clock, HeartbeatConfig
 from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.perception import Perception, QQChatAction
+from aureus.heartbeat.round_timing import RoundTiming
 from aureus.timeline import TimelineRecord
 
 type _Address = ConversationKey | tuple[str, str]
@@ -25,6 +26,7 @@ type _Send = Callable[
         int | None,
         _DeliveryGuard | None,
         PartReceipt | None,
+        RoundTiming | None,
     ],
     bool,
 ]
@@ -73,6 +75,7 @@ class _Reply:
     mention_confirmed: bool | None = True
     track_receipts: bool = False
     on_activity: Callable[[], None] | None = None
+    timing: RoundTiming | None = None
 
     def fail(self) -> None:
         if not self.delivered and self.on_failed is not None:
@@ -148,6 +151,7 @@ class ReplyOutbox:
         on_receipt: PartReceipt | None = None,
         track_receipts: bool = False,
         on_activity: Callable[[], None] | None = None,
+        timing: RoundTiming | None = None,
     ) -> bool:
         """同一次回复的后续段计入打字时间，并立即投递已到期的段。"""
         if not parts and emoji is None and qq_action is None:
@@ -182,6 +186,7 @@ class ReplyOutbox:
             on_receipt=on_receipt,
             track_receipts=track_receipts,
             on_activity=on_activity,
+            timing=timing,
         )
         queue.replies.append(reply)
         self._deliver_due(address, queue)
@@ -281,6 +286,7 @@ class ReplyOutbox:
                 segment,
                 reply.can_deliver,
                 receipt,
+                reply.timing,
             )
             if delivered and not reply.track_receipts and reply.on_activity is not None:
                 reply.on_activity()

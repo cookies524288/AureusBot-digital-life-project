@@ -2596,6 +2596,7 @@ const TL_FIELDS = {
   result: {label:'结果'},
   changed: {label:'改动', format: value => Array.isArray(value) ? value.join('、') : tlText(value)},
   elapsed_ms: {label:'耗时（毫秒）'},
+  stage_timings: {label:'本轮阶段计时', format:tlRoundTiming},
   probability: {label:'概率', format: tlPercent},
   recall: {label:'召回关键词', format: value => Array.isArray(value) ? value.join('、') : tlText(value)},
   account_id: {hide: true},
@@ -2846,6 +2847,16 @@ function tlStrategyNode(strategy, context) {
   }
   return rows.length ? tlDetailList(rows) : '—';
 }
+function tlRoundTiming(value) {
+  const stages = {
+    inbox_wait_ms:'入队等待', debounce_ms:'防抖（已含在入队等待内）', context_ms:'组装上下文',
+    planner_ms:'规划', replyer_ms:'生成回复', split_ms:'分段',
+    first_delivery_ms:'入队到首次投递确认', last_delivery_ms:'入队到全部投递确认',
+  };
+  const rows = Object.entries(stages).filter(([key]) => typeof value?.[key] === 'number')
+    .map(([key, label]) => ({label, node:`${value[key]} 毫秒`}));
+  return rows.length ? tlDetailList(rows) : null;
+}
 // 只列真正起作用的项：0 怒气、没回击、没有的布尔项都不显示。
 function tlHormonesNode(effects) {
   if (!effects || typeof effects !== 'object') return tlText(effects);
@@ -3052,6 +3063,7 @@ const TL_EVENT_DETAILS = {
   },
   planning_interrupted(metadata, add) {
     for (const key of ['channel', 'residence_deadline', 'mention_pull']) add(key);
+    add('reason', {format: value => value === 'deadline' ? '思考超时' : value});
   },
 };
 
@@ -3075,6 +3087,7 @@ function timelineDetailRows(metadata, eventType, recordTime) {
   const builder = TL_EVENT_DETAILS[eventType];
   if (builder) builder(metadata, add, addRow, skip, context);
   else for (const key of Object.keys(metadata)) if (TL_FIELDS[key]) add(key);
+  if (!used.has('stage_timings')) add('stage_timings');
   const leftovers = Object.entries(metadata).filter(([key]) => !used.has(key) && !tlHiddenKey(key));
   if (leftovers.length) rows.push({label:'其它', node:tlGenericValue(Object.fromEntries(leftovers), context)});
   return rows;
@@ -6276,6 +6289,7 @@ const CFG_FIELDS = {
   'heartbeat.max_reply_messages': ['回复条数上限', '一次回复最多拆成多少条。'],
   'heartbeat.min_message_chars': ['分条字数下限', '拆分时每条至少保留多少个字。'],
   'heartbeat.typing_delay_enabled': ['分段打字延迟', '模拟输入后续分段所需的用时。保存后重启生效。'],
+  'heartbeat.thought_deadline_seconds': ['单轮思考时限（秒）', '从开始思考计时，超时只结束生成，不发送假回复。填 0 关闭；保存后重启生效。'],
   'heartbeat.typing_han_seconds': ['每个汉字用时（秒）', '计算后续分段的打字时间时，每个汉字累加的秒数。保存后重启生效。'],
   'heartbeat.typing_other_seconds': ['每个其他字符用时（秒）', '计算后续分段的打字时间时，每个非汉字字符累加的秒数。保存后重启生效。'],
   'heartbeat.typing_jitter_min_seconds': ['随机延迟下限（秒）', '每个后续分段额外等待的最少秒数。保存后重启生效。'],

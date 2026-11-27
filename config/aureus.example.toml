@@ -39,6 +39,8 @@ config_version = 1
 # broadcast_cognitive_state = true
 # 关闭时最多等进行中的模型调用多少秒，等不到就取消。
 # shutdown_grace_seconds = 60
+# 单轮思考时限（实际秒数；0 关闭，启用时 30～900 秒）。超时结束生成，不伪造回复。
+# thought_deadline_seconds = 180
 # 回复时带上最近多少条对话。
 # recent_message_limit = 20
 # 回复正文就绪后最多再等表情多久，超时就只发文字。

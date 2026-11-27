@@ -58,6 +58,7 @@ class ConfigRig:
             OrganBus(),
             KeyResolver(self.paths.env_file, environ={}),
             fake_organs=True,
+            thought_deadline_seconds=self.service.runtime.heartbeat.thought_deadline_seconds,
             prompts=PromptStore(self.paths.home / "prompts.toml", registered_templates())
             if prompt_identity is not None
             else None,

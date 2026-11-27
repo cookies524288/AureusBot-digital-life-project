@@ -8,6 +8,7 @@ from aureus.heartbeat.events import (
     EVENT_REPLY_DELIVERED,
     EVENT_REPLY_DELIVERY_FAILED,
 )
+from aureus.heartbeat.round_timing import RoundTiming
 from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
 
 INTERNAL_REPLY_RECORD = "outbox_internal"
@@ -29,6 +30,7 @@ def delivery_callbacks(
     *,
     on_confirm: Callable[[], None] | None = None,
     on_failure: Callable[[], None] | None = None,
+    timing: RoundTiming | None = None,
 ) -> tuple[DeliveryConfirm, Callable[[str], None]]:
     """最多保留一个投递结果；网页同一条发给多个连接时不重复记录。"""
     fields: dict[str, Any] = {"channel": reply.metadata.get("channel", ""), "reply_id": reply.id}
@@ -52,14 +54,20 @@ def delivery_callbacks(
         nonlocal settled
         if settled:
             return
+        details = fields.copy()
+        if platform_message_id:
+            details["message_id"] = platform_message_id
+        if timing is not None:
+            total = 0 if reply.metadata.get("nontext_reply") else len(
+                reply.metadata.get("reply_segments") or [reply.content]
+            )
+            details["stage_timings"] = timing.observe_delivery(segment, total)
         timeline.append(
             EVENT_REPLY_DELIVERED,
             content,
             ActorType.ME,
             visibility=reply.visibility,
-            metadata={**fields, "message_id": platform_message_id}
-            if platform_message_id
-            else fields,
+            metadata=details,
         )
         settled = True
         if on_confirm is not None:

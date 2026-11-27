@@ -1444,3 +1444,19 @@ def test_body_social_need_rejects_bad_values(tmp_path: Path, field: str, text: s
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[body]\n{field} = {text}\n")
     assert field in error_message_of(paths)
+
+
+def test_old_heartbeat_configuration_uses_thought_deadline_default() -> None:
+    runtime = validate_runtime_config({"heartbeat": {"shutdown_grace_seconds": 12}}, "合成配置")
+    assert runtime.heartbeat.thought_deadline_seconds == 180
+
+
+@pytest.mark.parametrize("seconds", [0, 30, 900])
+def test_thought_deadline_accepts_disabled_and_range_endpoints(seconds: int) -> None:
+    assert HeartbeatConfig(thought_deadline_seconds=seconds).thought_deadline_seconds == seconds
+
+
+@pytest.mark.parametrize("seconds", [1, 29, 901, -1, float("inf")])
+def test_thought_deadline_rejects_invalid_ranges(seconds: float) -> None:
+    with pytest.raises(ValueError, match="30～900"):
+        HeartbeatConfig(thought_deadline_seconds=seconds)

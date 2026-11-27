@@ -6,6 +6,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, tzinfo
 from functools import partial
@@ -92,6 +93,7 @@ from aureus.heartbeat.recall import (
 from aureus.heartbeat.reply_outbox import EmojiReplyPart
 from aureus.heartbeat.reply_segments import ReplyDraft, prepare_reply
 from aureus.heartbeat.reply_strategy import ReplyStrategy, judge_allowed
+from aureus.heartbeat.round_timing import Phase, RoundTiming, timing_now
 from aureus.hormones import (
     HormoneEffects,
     Hormones,
@@ -194,6 +196,7 @@ class _Heard:
     record: TimelineRecord
     is_user: bool
     residence: InboxResidence | None = None
+    queued_at: float = field(default_factory=timing_now)
 
 
 @dataclass(frozen=True)
@@ -330,6 +333,7 @@ class _RoundTrace:
     residence_deadline: datetime | None = None
     mention_pull: tuple[MentionPull, ...] = ()
     other_mention_count: int = 0
+    timing: RoundTiming | None = None
 
     def attention_metadata(self) -> dict[str, object]:
         """仅公开本轮实际使用的截止时间和摘要，不序列化内部路由。"""
@@ -379,6 +383,13 @@ def _trace_action(job: _ReplyJob, action: PlannerAction) -> None:
         job.round_trace.actions.append(action)
 
 
+def _time_phase(job: _ReplyJob, phase: Phase) -> AbstractContextManager[None]:
+    trace = job.round_trace
+    if trace is not None and trace.timing is not None:
+        return trace.timing.phase(phase)
+    return contextlib.nullcontext()
+
+
 @dataclass(frozen=True)
 class _ThoughtOutcome:
     """一次想法的结果：器官的建议、规划器决定不回复、或者一条要告诉用户的系统通知。"""
@@ -406,6 +417,7 @@ class _ThoughtOutcome:
     emoji_task: asyncio.Task[EmojiReplyPart | None] | None = None
     after_text_selection: StartSelection | None = None
     target_record_id: int | None = None
+    timed_out: bool = False
 
 
 @dataclass(frozen=True)
@@ -950,48 +962,71 @@ class ConversationFlow:
         job: _ReplyJob,
         register_judgment: Callable[["_PendingJudgment"], None] | None = None,
     ) -> _ThoughtOutcome:
+        """普通回复和到期回看共用单轮时限；外部取消不冒充超时（D148）。"""
+        deadline = asyncio.timeout(self._config.thought_deadline_seconds or None)
+        try:
+            async with deadline:
+                outcome = await self._generate_reply(job, register_judgment)
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+        else:
+            if not deadline.expired():
+                return outcome
+        return _ThoughtOutcome(timed_out=True)
+
+    async def _generate_reply(
+        self,
+        job: _ReplyJob,
+        register_judgment: Callable[["_PendingJudgment"], None] | None,
+    ) -> _ThoughtOutcome:
         """在后台规划、回复；判断从同一份材料并行启动，不回写本轮状态（D110）。"""
         originals = job.messages
-        if (
-            job.history_route is not None
-            and self.inbox_store is not None
-            and job.round_trace is not None
-        ):
-            key = job.history_route
-            job.round_trace.history_stamp = key, self.inbox_store.history_revision(key)
-        if job.target_candidates:
-            if not all(self.source_available(heard) for heard in job.target_candidates):
-                return _ThoughtOutcome(declined=True)
-            known = {
-                row.metadata["inbox_message_id"]
-                for row in (*job.history, *job.messages)
-                if "inbox_message_id" in row.metadata
-            }
-            job = replace(
-                job,
-                messages=tuple(self.chat_history.references(row, known) for row in job.messages),
-            )
-        if job.media_sources:
-            messages = await self.inbox_media.enrich(
-                job.messages, job.media_sources, job.strategy.model_preference
-            )
-            job = replace(job, messages=messages)
-        recall = _RoundRecall()
-        if job.target_builder is None:
-            self._start_judgment(job, register_judgment)
-        if (
-            job.target_builder is None
-            and self._can_recall()
-            and (
-                self._memory_config.heuristic_recall_enabled or _self_recall(originals[-1].content)
-            )
-        ):
-            words = heuristic_keywords(originals)
-            limit = self._memory_config.heuristic_max_results
-            if words and (hits := await self._retrieve(job, words, limit)):
-                recall.automatic = words, hits
+        with _time_phase(job, "context_ms"):
+            if (
+                job.history_route is not None
+                and self.inbox_store is not None
+                and job.round_trace is not None
+            ):
+                key = job.history_route
+                job.round_trace.history_stamp = key, self.inbox_store.history_revision(key)
+            if job.target_candidates:
+                if not all(self.source_available(heard) for heard in job.target_candidates):
+                    return _ThoughtOutcome(declined=True)
+                known = {
+                    row.metadata["inbox_message_id"]
+                    for row in (*job.history, *job.messages)
+                    if "inbox_message_id" in row.metadata
+                }
+                job = replace(
+                    job,
+                    messages=tuple(
+                        self.chat_history.references(row, known) for row in job.messages
+                    ),
+                )
+            if job.media_sources:
+                messages = await self.inbox_media.enrich(
+                    job.messages, job.media_sources, job.strategy.model_preference
+                )
+                job = replace(job, messages=messages)
+            recall = _RoundRecall()
+            if job.target_builder is None:
+                self._start_judgment(job, register_judgment)
+            if (
+                job.target_builder is None
+                and self._can_recall()
+                and (
+                    self._memory_config.heuristic_recall_enabled
+                    or _self_recall(originals[-1].content)
+                )
+            ):
+                words = heuristic_keywords(originals)
+                limit = self._memory_config.heuristic_max_results
+                if words and (hits := await self._retrieve(job, words, limit)):
+                    recall.automatic = words, hits
         try:
-            plan, recalled = await self._plan(job, recall)
+            with _time_phase(job, "planner_ms"):
+                plan, recalled = await self._plan(job, recall)
             if job.planner_run is not None and job.planner_run.restart_requested:
                 return _ThoughtOutcome(declined=True)
             outcome = (
@@ -1139,7 +1174,8 @@ class ConversationFlow:
         """把有效的驳回理由交给规划器重审一次。"""
 
         async def reply(decision: Plan, memory: _Recall | None) -> _ThoughtOutcome:
-            selected = self._targeted_job(job, decision)
+            with _time_phase(job, "context_ms"):
+                selected = self._targeted_job(job, decision)
             if selected is None:
                 _trace_action(job, PlannerAction("reply", "rejected", "回复对象已失效"))
                 return _ThoughtOutcome(declined=True)
@@ -1191,7 +1227,8 @@ class ConversationFlow:
                     )
                     if hits:
                         target_recall.automatic = words, hits
-            result = await self._reply(selected, decision, target_recall, memory)
+            with _time_phase(selected, "replyer_ms"):
+                result = await self._reply(selected, decision, target_recall, memory)
             if job.target_builder is not None and result.response is not None:
                 self._start_judgment(selected, register_judgment)
             choose_after = None
@@ -1228,7 +1265,8 @@ class ConversationFlow:
         _trace_action(job, PlannerAction("review", "requested", "重新判断是否需要回复"))
         try:
             reason = "请重新判断本批应回应哪句。" if job.target_builder else outcome.review_reason
-            revised, recalled = await self._plan(job, recall, review_reason=reason)
+            with _time_phase(job, "planner_ms"):
+                revised, recalled = await self._plan(job, recall, review_reason=reason)
         except CallRejectedError:
             return _ThoughtOutcome(declined=True)
         if revised is None or not revised.should_reply:
@@ -1394,24 +1432,29 @@ class ConversationFlow:
         """再审通过后才整理实际发言；快速模型只看到要分段的文字。"""
         emoji_task = outcome.emoji_task
         try:
-            explicit = self._config.reply_split_mode == "explicit"
-            draft = prepare_reply(response.suggestion, explicit=explicit)
-            if not draft.sections:
-                return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
-            text = draft.text.strip()
-            if self._config.split_reply_enabled and explicit:
-                sections = draft.explicit_segments(self._config.max_reply_messages)
-            elif self._config.split_reply_enabled:
-                suggestion = (
-                    await self._suggest_reply_splits(job, draft) if self.has_fast_model else None
-                )
-                sections = draft.segments(
-                    suggestion,
-                    max_messages=self._config.max_reply_messages,
-                    min_chars=self._config.min_message_chars,
-                )
-            else:
-                sections = (text,)
+            with _time_phase(job, "split_ms"):
+                explicit = self._config.reply_split_mode == "explicit"
+                draft = prepare_reply(response.suggestion, explicit=explicit)
+                if not draft.sections:
+                    return replace(
+                        outcome, response=None, notice="模型返回了空回复，这次没有回复。"
+                    )
+                text = draft.text.strip()
+                if self._config.split_reply_enabled and explicit:
+                    sections = draft.explicit_segments(self._config.max_reply_messages)
+                elif self._config.split_reply_enabled:
+                    suggestion = (
+                        await self._suggest_reply_splits(job, draft)
+                        if self.has_fast_model
+                        else None
+                    )
+                    sections = draft.segments(
+                        suggestion,
+                        max_messages=self._config.max_reply_messages,
+                        min_chars=self._config.min_message_chars,
+                    )
+                else:
+                    sections = (text,)
             if not sections:
                 return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
             later = None

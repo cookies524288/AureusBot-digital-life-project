@@ -25,6 +25,7 @@ CONFIG_FORMAT_VERSION = 1
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 DEFAULT_WEB_PORT = 28976
 DEFAULT_EMOJI_REGISTRATION_LIMIT = 500
+DEFAULT_THOUGHT_DEADLINE_SECONDS = 180.0
 
 
 class ConfigError(Exception):
@@ -78,6 +79,7 @@ class HeartbeatConfig(BaseModel):
     broadcast_cognitive_state: bool = True
     # 关闭时最多等进行中的器官调用多少秒，等不到就取消（D41 第 6 条）。
     shutdown_grace_seconds: float = Field(default=60.0, ge=0)
+    thought_deadline_seconds: float = DEFAULT_THOUGHT_DEADLINE_SECONDS
     # 回复时带上最近多少条对话（包括刚收到的新消息）。
     recent_message_limit: int = Field(default=20, ge=1)
     # 正文就绪后最多再等表情多久，超时就只发文字（D117）。
@@ -147,6 +149,14 @@ class HeartbeatConfig(BaseModel):
     working_memory_capacity: int = Field(default=50, ge=2, le=300)
     # 每次整理后保留的近期原文条数；默认值随 D146 从 25 改为 20。
     working_memory_retain: int = Field(default=20, ge=1)
+
+    @field_validator("thought_deadline_seconds")
+    @classmethod
+    def validate_thought_deadline(cls, value: float) -> float:
+        """D148：0 关闭；启用时允许 30～900 秒的单轮生成时限。"""
+        if value != 0 and not 30 <= value <= 900:
+            raise ValueError("单轮思考时限必须为 0 或 30～900 秒。")
+        return value
 
     @model_validator(mode="before")
     @classmethod

@@ -14,7 +14,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aureus.channels import WebChannel
-from aureus.common import BudgetCalendar, ConfigError, SafetyConfig, WebConfig
+from aureus.common import (
+    BudgetCalendar,
+    ConfigError,
+    HeartbeatConfig,
+    RuntimeConfig,
+    SafetyConfig,
+    WebConfig,
+)
 from aureus.core.model_runtime import ModelRuntime, PreparedModels
 from aureus.organs import (
     ModelKind,
@@ -329,6 +336,26 @@ def test_explicit_default_first_token_timeout_round_trips(rig: ConfigRig) -> Non
     assert rig.client.put("/api/models", json={"config": saved}).status_code == 200
     reloaded = rig.client.get("/api/models").json()["config"]
     assert "first_token_timeout_seconds" not in reloaded["providers"][0]
+
+
+def test_model_hot_reload_rejects_first_token_longer_than_running_thought_limit(
+    tmp_path: Path,
+) -> None:
+    runtime = RuntimeConfig(heartbeat=HeartbeatConfig(thought_deadline_seconds=40))
+    rig = ConfigRig(tmp_path, runtime=runtime)
+    try:
+        config = saved_config(rig)
+        config["models"][0]["identifier"] = "in-use"
+        assert rig.client.put("/api/models", json={"config": config}).status_code == 200
+        before = rig.paths.models_config_file.read_bytes()
+        config["providers"][0]["first_token_timeout_seconds"] = 45
+        rejected = rig.client.put("/api/models", json={"config": config})
+        assert rejected.status_code == 422
+        assert "thought_deadline_seconds" in rejected.json()["detail"]
+        assert rig.paths.models_config_file.read_bytes() == before
+        assert rig.models.bus.is_registered("replyer")
+    finally:
+        rig.close()
 
 
 def test_unchanged_submission_does_not_write_or_set_restart_flag(rig: ConfigRig) -> None:

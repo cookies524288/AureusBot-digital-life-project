@@ -136,6 +136,7 @@ def _build_organ_bus(
         fake_plan_organ=heartbeat.plan_organ,
         prompts=PromptStore(paths.home / "prompts.toml", registered_templates()),
         clock=clock,
+        thought_deadline_seconds=heartbeat.thought_deadline_seconds,
     )
     if fake_organs:
         if heartbeat.plan_organ != heartbeat.reply_organ:

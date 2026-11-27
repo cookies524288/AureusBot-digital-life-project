@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from aureus.common import AureusPaths, ConfigError, ManualClock
+from aureus.common import AureusPaths, ConfigError, HeartbeatConfig, ManualClock
 from aureus.core.model_runtime import ModelRuntime
-from aureus.core.runtime import open_core
+from aureus.core.runtime import _build_organ_bus, open_core
 from aureus.heartbeat.exploration import ExplorationState
 from aureus.organs import (
     KeyResolver,
@@ -32,6 +32,60 @@ def config_for(identifier: str, references: list[str] | None = None) -> ModelsCo
             "organs": {"replyer": {"models": ["chosen"] if references is None else references}},
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("thought", "first", "total", "valid"),
+    [(30, "", 21, True), (30, "", 120, False), (30, "0", 120, True), (0, "45", 120, True)],
+)
+def test_model_assembly_compares_effective_first_token_limit_to_thought_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    thought: int,
+    first: str,
+    total: int,
+    valid: bool,
+) -> None:
+    paths = AureusPaths(tmp_path)
+    paths.ensure_directories()
+    config = f"""
+    [[providers]]
+    name = "local"
+    protocol = "openai"
+    timeout_seconds = {total}
+
+    [[models]]
+    name = "chosen"
+    identifier = "fake"
+    provider = "local"
+
+    [organs.replyer]
+    models = ["chosen"]
+
+    [organs.planner]
+    models = ["chosen"]
+    """
+    if first:
+        config = config.replace("[[models]]", f"first_token_timeout_seconds = {first}\n[[models]]")
+    paths.models_config_file.write_text(config, encoding="utf-8")
+    completion = FakeCompletion()
+    monkeypatch.setattr("aureus.organs.llm_adapter._load_litellm_completion", lambda: completion)
+
+    def assemble() -> ModelRuntime:
+        return _build_organ_bus(
+            paths,
+            HeartbeatConfig(thought_deadline_seconds=thought),
+            KeyResolver(paths.env_file, environ={}),
+            fake_organs=False,
+            clock=ManualClock(START),
+        )
+
+    if valid:
+        assert assemble().available_organs == frozenset({"planner", "replyer"})
+    else:
+        with pytest.raises(ConfigError, match=r"thought_deadline_seconds.*local.*首包"):
+            assemble()
+    assert completion.calls == []
 
 
 @pytest.mark.asyncio

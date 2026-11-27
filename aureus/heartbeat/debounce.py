@@ -47,6 +47,7 @@ class MessageDebouncer:
         self._last_author: str | None = None
         self._deadline: float | None = None
         self._urgent: float | None = None
+        self.measured_deadline: float | None = None
 
     @property
     def deadline(self) -> float | None:
@@ -64,6 +65,7 @@ class MessageDebouncer:
         wall_time: float,
         now: float,
         mode: DebounceMode = "natural",
+        monotonic_now: float | None = None,
     ) -> str:
         """更新截止时间并返回本次规则说明；预处理耗时也占用 8 秒/1 秒上限。
 
@@ -76,6 +78,7 @@ class MessageDebouncer:
             wall_time: 现在这一刻的墙钟时间。
             now: 现在这一刻的时间轴，用来算截止时间。
             mode: 等待档位；关闭防抖时调用方不调用这里。
+            monotonic_now: 仅测量用的单调时钟读数，不参与防抖决策。
 
         Returns:
             这次采用的规则说明，中文，用于观察和排查。
@@ -126,6 +129,8 @@ class MessageDebouncer:
             if self._urgent is not None and candidate > self._urgent:
                 reasons.append("受@或提及 1 秒上限限制")
             self._deadline = min(candidate, limit)
+            if monotonic_now is not None:
+                self.measured_deadline = monotonic_now + self._deadline - now
             reason = "；".join(reasons)
         else:
             reason = "批次已到期，不再延长等待"
@@ -134,3 +139,4 @@ class MessageDebouncer:
     def consume(self) -> None:
         """本批消息已收走；只保留上一条的时间和发言人，用于下一批判断。"""
         self._first = self._deadline = self._urgent = None
+        self.measured_deadline = None
