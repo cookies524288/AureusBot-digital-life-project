@@ -55,6 +55,8 @@ from aureus.organs.interface import (
 from aureus.organs.llm_tools import ToolCallCollector, encode_tool_history, encode_tools
 from aureus.organs.llm_usage import TokenUsage, compute_cost, extract_usage
 from aureus.organs.model_config import (
+    IMAGE_EMBEDDING_DATA_URI,
+    IMAGE_EMBEDDING_INPUT_KEY,
     CircuitBreakerConfig,
     ModelConfig,
     ModelRoute,
@@ -565,11 +567,20 @@ def _model_test_tool() -> dict[str, Any]:
     }
 
 
+def _uses_image_embedding_data_uri(model: ModelConfig) -> bool:
+    """模型是否声明按 OpenAI 兼容的 data URI 字符串数组发送图片（D150）。"""
+    return model.extra_params.get(IMAGE_EMBEDDING_INPUT_KEY) == IMAGE_EMBEDDING_DATA_URI
+
+
 def model_probe_inputs(model: ModelConfig) -> dict[str, dict[str, Any]]:
     """列出已声明的每项能力及其实际测试输入（提示词与图片按 MaiBot 移植，3.53）。"""
     if model.kind == "embedding":
         return {"embedding": {"input": [_MODEL_TEST_INPUT]}}
     if model.kind == "image_embedding":
+        if _uses_image_embedding_data_uri(model):
+            return {
+                "image_embedding": {"input": ["data:image/png;base64," + _MODEL_TEST_IMAGE_BASE64]}
+            }
         return {"image_embedding": {"input": [{"image": _MODEL_TEST_IMAGE_BASE64}]}}
     if model.kind == "transcription":
         return {"transcription": {"file": "一秒静音 WAV"}}
@@ -764,14 +775,14 @@ async def _post_embeddings(
     )
 
 
-def _embedding_image_bytes(value: bytes) -> bytes:
-    """把图片转成嵌入服务能处理的格式：GIF/WebP 等转 PNG，PNG/JPEG 原样（D143）。
+def _embedding_image_data(value: bytes) -> tuple[bytes, str]:
+    """把图片转成嵌入服务能处理的格式，并给出对应的 MIME（D143、D150）。
 
     Args:
         value: 原始图片字节。
 
     Returns:
-        可以直接发送的图片字节。
+        （可以直接发送的图片字节，MIME）。MIME 只会是 image/png 或 image/jpeg。
 
     Raises:
         _RouteFailureError: 图片损坏、无法识别或超过 Pillow 的解压限制。
@@ -781,28 +792,34 @@ def _embedding_image_bytes(value: bytes) -> bytes:
     try:
         with Image.open(BytesIO(value)) as image:
             if image.format in ("PNG", "JPEG") and image.mode in ("RGB", "RGBA", "L"):
-                return value
+                mime = "image/png" if image.format == "PNG" else "image/jpeg"
+                return value, mime
             # 动图只取第一帧；P、CMYK、LA 等模式统一转成 RGB。
             image.seek(0)
             output = BytesIO()
             image.convert("RGB").save(output, format="PNG")
-            return output.getvalue()
+            return output.getvalue(), "image/png"
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as error:
         raise _RouteFailureError("图片格式不支持") from error
 
 
-def _embedding_images(inputs: Sequence[bytes]) -> tuple[str, ...]:
-    """按输入顺序把图片转成可发送的字节并 base64 编码（D143）。
+def _embedding_images(inputs: Sequence[bytes], *, data_uri: bool) -> tuple[str, ...]:
+    """按输入顺序把图片转成可发送的字节并编码（D143、D150）。
 
     Args:
         inputs: 原始图片字节，顺序与调用方的输入一致。
+        data_uri: 为真时返回完整的 data URI（OpenAI 兼容服务用），
+            否则返回原始 base64 文本（Jina 的多模态对象用）。
 
     Returns:
-        每张图片的 base64 文本，顺序不变。
+        每张图片的编码文本，顺序不变。
     """
-    return tuple(
-        base64.b64encode(_embedding_image_bytes(value)).decode("ascii") for value in inputs
-    )
+    encoded: list[str] = []
+    for value in inputs:
+        data, mime = _embedding_image_data(value)
+        text = base64.b64encode(data).decode("ascii")
+        encoded.append(f"data:{mime};base64,{text}" if data_uri else text)
+    return tuple(encoded)
 
 
 def _tool_call_object(raw: Any) -> Any:
@@ -1499,12 +1516,17 @@ class EmbeddingOrgan:
             )
         base = (route.provider.base_url or "https://api.jina.ai/v1").rstrip("/")
         images = tuple(value for value in inputs if isinstance(value, bytes))
-        encoded = await asyncio.to_thread(_embedding_images, images)
-        payload = {
-            "model": route.model.identifier,
-            "embedding_type": "float",
-            "input": [{"image": item} for item in encoded],
-        }
+        data_uri = _uses_image_embedding_data_uri(route.model)
+        encoded = await asyncio.to_thread(_embedding_images, images, data_uri=data_uri)
+        if data_uri:
+            # OpenAI 兼容服务只把 data:image 开头的字符串当图片（D150）。
+            payload = {"model": route.model.identifier, "input": list(encoded)}
+        else:
+            payload = {
+                "model": route.model.identifier,
+                "embedding_type": "float",
+                "input": [{"image": item} for item in encoded],
+            }
         return await _post_embeddings(
             base,
             payload,

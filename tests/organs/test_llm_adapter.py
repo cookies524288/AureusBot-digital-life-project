@@ -44,7 +44,7 @@ from aureus.organs.llm_adapter import (
     EmbeddingOrgan,
     LLMOrgan,
     ModelProbeError,
-    _embedding_image_bytes,
+    _embedding_image_data,
     _embedding_images,
     _model_test_prompt,
     _model_test_tool,
@@ -55,6 +55,8 @@ from aureus.organs.llm_adapter import (
     probe_model,
 )
 from aureus.organs.model_config import (
+    IMAGE_EMBEDDING_DATA_URI,
+    IMAGE_EMBEDDING_INPUT_KEY,
     CircuitBreakerConfig,
     ModelConfig,
     ModelRoute,
@@ -83,31 +85,44 @@ def make_animated_gif_bytes() -> bytes:
 
 
 @pytest.mark.parametrize("format_name", ["GIF", "WEBP"])
-def test_embedding_image_bytes_converts_gif_and_webp_to_png(format_name: str) -> None:
-    converted = _embedding_image_bytes(make_image_bytes(format_name))
+def test_embedding_image_data_converts_gif_and_webp_to_png(format_name: str) -> None:
+    converted, mime = _embedding_image_data(make_image_bytes(format_name))
+    assert mime == "image/png"
     with Image.open(BytesIO(converted)) as image:
         assert image.format == "PNG"
         assert image.mode == "RGB"
 
 
-def test_embedding_image_bytes_takes_first_frame_of_animated_gif() -> None:
-    converted = _embedding_image_bytes(make_animated_gif_bytes())
+def test_embedding_image_data_takes_first_frame_of_animated_gif() -> None:
+    converted, mime = _embedding_image_data(make_animated_gif_bytes())
+    assert mime == "image/png"
     with Image.open(BytesIO(converted)) as image:
         assert image.format == "PNG"
         assert image.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
 
 
 @pytest.mark.parametrize(
-    ("format_name", "mode"),
-    [("PNG", "RGB"), ("PNG", "RGBA"), ("PNG", "L"), ("JPEG", "RGB"), ("JPEG", "L")],
+    ("format_name", "mode", "expected_mime"),
+    [
+        ("PNG", "RGB", "image/png"),
+        ("PNG", "RGBA", "image/png"),
+        ("PNG", "L", "image/png"),
+        ("JPEG", "RGB", "image/jpeg"),
+        ("JPEG", "L", "image/jpeg"),
+    ],
 )
-def test_embedding_image_bytes_keeps_png_and_jpeg(format_name: str, mode: str) -> None:
+def test_embedding_image_data_keeps_png_and_jpeg(
+    format_name: str, mode: str, expected_mime: str
+) -> None:
     original = make_image_bytes(format_name, mode)
-    assert _embedding_image_bytes(original) == original
+    converted, mime = _embedding_image_data(original)
+    assert converted == original
+    assert mime == expected_mime
 
 
-def test_embedding_image_bytes_converts_palette_png_to_rgb_png() -> None:
-    converted = _embedding_image_bytes(make_image_bytes("PNG", "P"))
+def test_embedding_image_data_converts_palette_png_to_rgb_png() -> None:
+    converted, mime = _embedding_image_data(make_image_bytes("PNG", "P"))
+    assert mime == "image/png"
     with Image.open(BytesIO(converted)) as image:
         assert image.format == "PNG"
         assert image.mode == "RGB"
@@ -117,16 +132,17 @@ def test_embedding_images_preserves_order_and_encodes_base64() -> None:
     png = make_image_bytes("PNG")
     gif = make_image_bytes("GIF")
 
-    encoded = _embedding_images((png, gif))
+    encoded = _embedding_images((png, gif), data_uri=False)
 
     assert base64.b64decode(encoded[0]) == png
+    assert not encoded[0].startswith("data:")
     with Image.open(BytesIO(base64.b64decode(encoded[1]))) as image:
         assert image.format == "PNG"
 
 
 def test_embedding_images_rejects_broken_bytes() -> None:
     with pytest.raises(_RouteFailureError, match="图片格式不支持"):
-        _embedding_images((b"not an image",))
+        _embedding_images((b"not an image",), data_uri=False)
 
 
 def image_embedding_route(
@@ -134,11 +150,16 @@ def image_embedding_route(
     provider_name: str = "jina",
     identifier: str = "jina-embeddings-v4",
     base_url: str | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> ModelRoute:
     """一条图片嵌入路线；base_url 为空时按 Jina 默认地址发送。"""
     provider = ProviderConfig(name=provider_name, protocol="openai", base_url=base_url)
     model = ModelConfig(
-        name="picture", identifier=identifier, provider=provider_name, kind="image_embedding"
+        name="picture",
+        identifier=identifier,
+        provider=provider_name,
+        kind="image_embedding",
+        extra_params=extra_params or {},
     )
     return ModelRoute(model, provider, None, None)
 
@@ -152,7 +173,8 @@ async def test_image_embedding_uses_jina_protocol_and_reports_usage(tmp_path: Pa
         body = json.loads(request.content)
         assert body["model"] == "jina-embeddings-v4"
         assert body["embedding_type"] == "float"
-        assert base64.b64decode(body["input"][0]["image"]) == image
+        # 默认仍是 Jina 的多模态对象，里面放原始 base64，不是 data URI（D150）。
+        assert body["input"][0] == {"image": base64.b64encode(image).decode("ascii")}
         return httpx.Response(
             200,
             json={"data": [{"index": 0, "embedding": [3, 4]}], "usage": {"total_tokens": 7}},
@@ -167,6 +189,86 @@ async def test_image_embedding_uses_jina_protocol_and_reports_usage(tmp_path: Pa
     response = await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(image,)))
     assert response.embeddings == ((3.0, 4.0),)
     assert response.attempts == [CallAttempt("picture", "jina", 7, 0)]
+
+
+@pytest.mark.asyncio
+async def test_image_embedding_data_uri_sends_data_uri_strings(tmp_path: Path) -> None:
+    """声明 data URI 格式时发字符串数组，不带 embedding_type（D150）。"""
+    image = make_image_bytes("PNG")
+    sent: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [3, 4]}]})
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [
+            image_embedding_route(
+                extra_params={
+                    IMAGE_EMBEDDING_INPUT_KEY: IMAGE_EMBEDDING_DATA_URI,
+                }
+            )
+        ],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    response = await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(image,)))
+
+    assert response.embeddings == ((3.0, 4.0),)
+    assert "embedding_type" not in sent[0]
+    assert sent[0]["model"] == "jina-embeddings-v4"
+    [item] = sent[0]["input"]
+    assert isinstance(item, str)
+    prefix = "data:image/png;base64,"
+    assert item.startswith(prefix)
+    assert base64.b64decode(item[len(prefix) :]) == image
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("format_name", "expected_mime"),
+    [
+        ("PNG", "image/png"),
+        ("JPEG", "image/jpeg"),
+        ("GIF", "image/png"),
+        ("WEBP", "image/png"),
+    ],
+)
+async def test_image_embedding_data_uri_uses_correct_mime(
+    tmp_path: Path, format_name: str, expected_mime: str
+) -> None:
+    """按 D143 转换后的格式决定 MIME：PNG/JPEG 原样，GIF/WebP 转 PNG（D150）。"""
+    original = make_image_bytes(format_name)
+    sent: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    organ = EmbeddingOrgan(
+        "image_embedding",
+        [
+            image_embedding_route(
+                extra_params={
+                    IMAGE_EMBEDDING_INPUT_KEY: IMAGE_EMBEDDING_DATA_URI,
+                }
+            )
+        ],
+        KeyResolver(tmp_path / "test.env"),
+        transport=httpx.MockTransport(respond),
+    )
+    await organ.process(OrganRequest("image_embedding", "", embedding_inputs=(original,)))
+
+    [item] = sent[0]["input"]
+    prefix = f"data:{expected_mime};base64,"
+    assert item.startswith(prefix)
+    encoded = base64.b64decode(item[len(prefix) :])
+    if expected_mime == "image/png" and format_name in ("GIF", "WEBP"):
+        with Image.open(BytesIO(encoded)) as image:
+            assert image.format == "PNG"
+    else:
+        assert encoded == original
 
 
 @pytest.mark.asyncio
@@ -317,8 +419,9 @@ async def test_image_embedding_converts_in_worker_thread(
 ) -> None:
     threads: list[threading.Thread] = []
 
-    def fake_images(inputs: Sequence[bytes]) -> tuple[str, ...]:
+    def fake_images(inputs: Sequence[bytes], *, data_uri: bool) -> tuple[str, ...]:
         threads.append(threading.current_thread())
+        assert data_uri is False
         return tuple(base64.b64encode(value).decode("ascii") for value in inputs)
 
     monkeypatch.setattr(llm_adapter, "_embedding_images", fake_images)
@@ -792,6 +895,27 @@ def test_model_probe_inputs_use_maibot_prompt_image_and_tool() -> None:
     )
     assert model_probe_inputs(image_model)["image_embedding"]["input"] == [
         {"image": _MODEL_TEST_IMAGE_BASE64}
+    ]
+
+
+def test_model_probe_inputs_reflect_image_embedding_format() -> None:
+    """测速展示的输入与实际发送格式一致（D150）。"""
+    default_model = ModelConfig(
+        name="picture", identifier="picture", provider="test", kind="image_embedding"
+    )
+    data_uri_model = ModelConfig(
+        name="picture",
+        identifier="picture",
+        provider="test",
+        kind="image_embedding",
+        extra_params={IMAGE_EMBEDDING_INPUT_KEY: IMAGE_EMBEDDING_DATA_URI},
+    )
+
+    assert model_probe_inputs(default_model)["image_embedding"]["input"] == [
+        {"image": _MODEL_TEST_IMAGE_BASE64}
+    ]
+    assert model_probe_inputs(data_uri_model)["image_embedding"]["input"] == [
+        "data:image/png;base64," + _MODEL_TEST_IMAGE_BASE64
     ]
 
 
