@@ -52,6 +52,7 @@ from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat import exploration_runner, interest_changes, language_runner
 from aureus.heartbeat import persona_growth_runner as growth
 from aureus.heartbeat.agenda_hooks import AgendaHooks
+from aureus.heartbeat.background_tasks import IndexBatch, IndexKind, IndexSupervisor
 from aureus.heartbeat.chat_plugins import AssetNames, GroupReader
 from aureus.heartbeat.context import build_initiative_plan_prompt, build_initiative_reply_prompt
 from aureus.heartbeat.conversation import (
@@ -178,10 +179,13 @@ from aureus.people import (
 from aureus.safety import (
     ACTION_CALL_ORGAN,
     ACTION_REPLY_TO_USER,
+    BudgetExceededError,
     CallRejectedError,
     EmergencyStop,
+    EnergyDepletedError,
     HaltStatus,
     PermissionChecker,
+    RunawayBlockedError,
 )
 from aureus.timeline import (
     ActorType,
@@ -217,9 +221,9 @@ _INDEX_BUILD_MAX_STALLED_ROUNDS = 3
 # 网关因预算或精力拒绝后至少等这么久再试；心跳本身每拍也会重新检查。
 _INDEXING_REJECTED_PAUSE_SECONDS = 300.0
 # 构建器按这三种索引轮转，与器官面板的统计种类同名。
-_INDEX_EXPRESSION = "expression"
-_INDEX_EMOJI = "emoji_cache"
-_INDEX_IMAGES = "images"
+_INDEX_EXPRESSION: IndexKind = "expression"
+_INDEX_EMOJI: IndexKind = "emoji_cache"
+_INDEX_IMAGES: IndexKind = "images"
 # 索引种类对应网页上的资源名；每建成一批就让对应页面的缓存失效（3.43）。
 _RESOURCE_BY_INDEX = {
     _INDEX_EXPRESSION: RESOURCE_EXPRESSION,
@@ -1279,6 +1283,7 @@ class Heartbeat:
             await self._beat()
 
     async def _beat(self) -> None:
+        self._collect_indexing_error()
         await self._flush_deferred_records()
         pending_cancel = self._maintenance_task
         if pending_cancel is not None and pending_cancel.done():
@@ -3232,9 +3237,9 @@ class Heartbeat:
             )
         return frozenset(scopes)
 
-    def _index_builders(self) -> list[tuple[str, Callable[[], Awaitable[tuple[bool, bool]]]]]:
+    def _index_builders(self) -> list[tuple[IndexKind, IndexBatch]]:
         """当前可自动构建的索引种类；每种返回（是否还有缺项，本批是否处理过）。"""
-        builders: list[tuple[str, Callable[[], Awaitable[tuple[bool, bool]]]]] = []
+        builders: list[tuple[IndexKind, IndexBatch]] = []
         recall = self._conversation.expression_recall
         if recall is not None and recall.space is not None:
             builders.append((_INDEX_EXPRESSION, self._build_expression_batch))
@@ -3278,10 +3283,11 @@ class Heartbeat:
     async def _build_indexes(self) -> None:
         """按批轮转补齐各索引；每批之后让出，条件不满足或全部完成时退出。
 
-        返回的「是否还有缺项」为假时该种索引本轮完成。单批失败不抛出心跳：
-        预算或精力拒绝暂停一段时间，其它失败记日志后下一轮再试（D125）。
+        返回的「是否还有缺项」为假时该种索引本轮完成。只有可重跑索引的模型失败进入监督；
+        权限、账本与数据库错误原样交回心跳。
         """
-        completed: set[str] = set()
+        completed: set[IndexKind] = set()
+        supervisor = IndexSupervisor()
         stalled = 0
         try:
             while self._indexing_allowed():
@@ -3292,7 +3298,7 @@ class Heartbeat:
                 for kind, build in builders:
                     if kind in completed:
                         continue
-                    more, did = await build()
+                    more, did = await supervisor.run_batch(kind, build)
                     if did:
                         resource = _RESOURCE_BY_INDEX.get(kind)
                         if resource is not None:
@@ -3314,23 +3320,18 @@ class Heartbeat:
                         logger.warning("索引构建连续 %s 轮没有进展，暂停到下一轮", stalled)
                         break
                     await asyncio.sleep(self._indexing.interval_seconds)
-        except asyncio.CancelledError:
-            raise
-        except CallRejectedError as error:
+        except (BudgetExceededError, EnergyDepletedError, RunawayBlockedError) as error:
             self._indexing_retry_at = self._clock.now() + timedelta(
                 seconds=max(self._indexing.interval_seconds, _INDEXING_REJECTED_PAUSE_SECONDS)
             )
-            logger.info("索引构建暂停（%s），条件恢复后继续", type(error).__name__)
-        except (OrganCallError, ValueError, sqlite3.Error, OSError) as error:
+            logger.info("索引构建暂停，条件恢复后继续：%s", error)
+        except OrganCallError as error:
+            if not error.skipped_by_circuit:
+                raise
             self._indexing_retry_at = self._clock.now() + timedelta(
                 seconds=self._indexing.interval_seconds
             )
-            logger.warning("索引构建这一轮未完成（%s），下一轮继续", type(error).__name__)
-        except Exception:
-            self._indexing_retry_at = self._clock.now() + timedelta(
-                seconds=self._indexing.interval_seconds
-            )
-            logger.exception("索引构建出错，下一轮再试")
+            logger.info("索引因服务商熔断暂停：%s", error)
         else:
             self._indexing_retry_at = self._clock.now() + timedelta(
                 seconds=self._indexing.interval_seconds
@@ -3366,14 +3367,20 @@ class Heartbeat:
             logger.exception("后台索引构建异常结束")
 
     def _indexing_finished(self, task: asyncio.Task[None]) -> None:
-        """构建任务结束后清掉引用；异常只记日志，不叫醒心跳。"""
-        if self._indexing_task is task:
-            self._indexing_task = None
-        if task.cancelled():
+        """异常保留在原任务中，并叫醒心跳处理。"""
+        if self._indexing_task is not task:
             return
-        error = task.exception()
-        if error is not None:
-            logger.error("后台索引构建异常结束（%s）", type(error).__name__)
+        if task.cancelled() or task.exception() is None:
+            self._indexing_task = None
+        else:
+            self._wake.set()
+
+    def _collect_indexing_error(self) -> None:
+        """不能在上一次构建异常未处理时重新启动构建。"""
+        task = self._indexing_task
+        if task is not None and task.done() and not task.cancelled():
+            self._indexing_task = None
+            task.result()
 
     async def _initiate(self, job: _InitiativeJob) -> _ThoughtOutcome:
         """后台只问器官，不写状态；任何失败都朝不打扰的方向倒。"""

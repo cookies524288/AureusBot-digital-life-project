@@ -1,6 +1,7 @@
 """心跳后台自动建索引：假器官、手动时钟，不联网（D125）。"""
 
 import asyncio
+import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,7 +19,9 @@ from aureus.heartbeat import (
     Perception,
     TrustLevel,
     VisibilityScope,
+    background_tasks,
 )
+from aureus.heartbeat.background_tasks import IndexSupervisor
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
 from aureus.identity import Identity
@@ -42,7 +45,9 @@ from aureus.safety import (
     BudgetExceededError,
     EmergencyStop,
     EnergyDepletedError,
+    LedgerUnavailableError,
     PermissionChecker,
+    PermissionDeniedError,
 )
 from aureus.timeline import TimelineDatabase
 
@@ -675,3 +680,107 @@ async def test_auto_build_disabled_falls_back_to_on_demand(tmp_path: Path) -> No
     assert task is not None
     await task
     assert harness.coverage() == (3, 3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "attempts"),
+    [
+        (OrganCallError(LOCAL_EXPRESSION_EMBEDDING, ["模型失败"]), 4),
+        (LedgerUnavailableError(LOCAL_EXPRESSION_EMBEDDING, "账本不可写"), 1),
+        (PermissionDeniedError(LOCAL_EXPRESSION_EMBEDDING, "权限拒绝"), 1),
+    ],
+)
+async def test_failed_auto_builder_wakes_the_main_loop_and_stops_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, attempts: int
+) -> None:
+    harness = Harness(tmp_path, expressions=1)
+    harness.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
+    harness.call.reject = error
+    monkeypatch.setattr(harness.heartbeat, "wake_up", lambda: harness.heartbeat.downtime)
+    delays: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+        await asyncio.sleep(0)
+
+    async def next_beat() -> float:
+        return 3600.0
+
+    monkeypatch.setattr(background_tasks, "sleep", sleep)
+    monkeypatch.setattr(harness.heartbeat, "seconds_until_next_beat", next_beat)
+    with closing(harness.timeline), pytest.raises(type(error)) as failure:
+        async with asyncio.timeout(5):
+            await harness.heartbeat.run()
+    assert failure.value is error
+    assert len(harness.call.requests) == attempts
+    assert delays == ([1, 5, 30] if attempts == 4 else [])
+    assert harness.heartbeat._indexing_task is None
+
+
+@pytest.mark.asyncio
+async def test_supervised_image_backfill_keeps_attachment_backoff_and_saved_vectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with closing((harness := Harness(tmp_path, inbox=True)).timeline):
+        store = harness.inbox
+        assert store is not None
+        assert store.add(image_message("group-1", "m1", "missing", "ok", "retried")) is not None
+        requests: list[tuple[str | bytes, ...]] = []
+        delays: list[float] = []
+
+        async def call(request: OrganRequest) -> OrganResponse:
+            requests.append(request.embedding_inputs)
+            if len(requests) == 2:
+                raise OrganCallError("image_embedding", ["合成的暂时错误"])
+            return await harness.call.call(request)
+
+        async def read(
+            _perception: Perception, attachment: MediaReference
+        ) -> tuple[bytes, str] | None:
+            if attachment.file_id == "missing":
+                return None
+            return attachment.file_id.encode(), "image/png"
+
+        async def sleep(delay: float) -> None:
+            delays.append(delay)
+
+        images = InboxImageIndex(harness.database, call, lambda: True, clock=harness.clock)
+        monkeypatch.setattr(background_tasks, "sleep", sleep)
+        assert await IndexSupervisor().run_batch(
+            "images", lambda: images.backfill_batch(store, read, lambda _key: True, 5)
+        ) == (True, True)
+
+        assert requests == [(b"ok",), (b"retried",), (b"retried",)]
+        assert delays == [1]
+        assert [(row[1], row[2]) for row in retry_rows(harness.database)] == [("missing", 1)]
+        with closing(open_connection(harness.database)) as connection:
+            stored = connection.execute("SELECT attachment FROM inbox_image_vectors ORDER BY id")
+            assert [row[0] for row in stored] == ["ok", "retried"]
+
+
+@pytest.mark.asyncio
+async def test_image_backfill_propagates_sqlite_write_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with closing((harness := Harness(tmp_path, inbox=True)).timeline):
+        store = harness.inbox
+        assert store is not None
+        assert store.add(image_message("group-1", "m1", "file")) is not None
+        images = InboxImageIndex(harness.database, harness.call.call, lambda: True)
+        error = sqlite3.OperationalError("合成的向量写入失败")
+
+        def save(*_args: object) -> None:
+            raise error
+
+        async def read(_perception: Perception, _attachment: MediaReference) -> tuple[bytes, str]:
+            return PNG, "image/png"
+
+        monkeypatch.setattr(images, "_save", save)
+        with pytest.raises(sqlite3.OperationalError) as failure:
+            await IndexSupervisor().run_batch(
+                "images", lambda: images.backfill_batch(store, read, lambda _key: True, 5)
+            )
+        assert failure.value is error
+        assert len(harness.call.requests) == 1
+        assert retry_rows(harness.database) == []

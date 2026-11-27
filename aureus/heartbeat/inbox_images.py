@@ -118,6 +118,8 @@ class InboxImageIndex:
             return
         try:
             await self._index(perception, attachment, image)
+        except (CallRejectedError, OrganCallError):
+            return
         except SQLiteError:
             logger.exception("图片向量索引写入失败")
 
@@ -177,21 +179,12 @@ class InboxImageIndex:
                         continue
                     data, _mime = media
                     try:
-                        saved = await self._index(
-                            perception,
-                            attachment,
-                            data,
-                            propagate_rejection=True,
-                            stop_on_circuit=True,
-                        )
-                    except OrganCallError:
+                        saved = await self._index(perception, attachment, data)
+                    except OrganCallError as error:
+                        if not error.skipped_by_circuit:
+                            raise
                         # 服务商正在熔断冷却：本批立即停下，下一拍再试（D150、D151）。
                         return False, written > 0
-                    except SQLiteError:
-                        # 数据库本身不可用，写不了退避记录，下一拍再试即可（D151）。
-                        logger.exception("图片向量索引写入失败")
-                        skipped += 1
-                        continue
                     if saved:
                         written += 1
                         remaining -= 1
@@ -247,26 +240,12 @@ class InboxImageIndex:
         perception: Perception,
         attachment: MediaReference,
         image: bytes,
-        *,
-        propagate_rejection: bool = False,
-        stop_on_circuit: bool = False,
     ) -> bool:
         """写入一张图片的向量；返回是否真的保存了。"""
         message_id = await asyncio.to_thread(self._unindexed_source, perception, attachment)
         if message_id is None:
             return False
-        try:
-            response = await self._call(
-                OrganRequest("image_embedding", "", embedding_inputs=(image,))
-            )
-        except CallRejectedError:
-            if propagate_rejection:
-                raise
-            return False
-        except OrganCallError as error:
-            if stop_on_circuit and error.skipped_by_circuit:
-                raise
-            return False
+        response = await self._call(OrganRequest("image_embedding", "", embedding_inputs=(image,)))
         if len(response.embeddings) != 1 or not isinstance(
             space := response.metadata.get("embedding_space"), str
         ):
