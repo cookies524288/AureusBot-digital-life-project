@@ -1,0 +1,3742 @@
+{
+  "revisions": {
+    "baseline": "e19c41138d213a80e976c5d2322737a9058a7b52",
+    "candidate": "2edb93042adf977604e2d44d542634d23a5542f1",
+    "deferred": "2edb93042adf977604e2d44d542634d23a5542f1"
+  },
+  "cold": {
+    "baseline": [
+      {
+        "ttfb_ms": 188.70000000298023,
+        "dom_content_loaded_ms": 279.70000000298023,
+        "overview_response_end_ms": 292.59999999403954,
+        "document_bytes": 429099,
+        "status_request_start_ms": 279.5,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 206.29999999701977,
+            "end_ms": 233,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 207.20000000298023,
+            "end_ms": 231.40000000596046,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 207.29999999701977,
+            "end_ms": 235.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 207.29999999701977,
+            "end_ms": 239.40000000596046,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 207.29999999701977,
+            "end_ms": 246.40000000596046,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 207.40000000596046,
+            "end_ms": 263.5,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5,
+        "dom_content_loaded_ms": 75.5,
+        "overview_response_end_ms": 85.20000000298023,
+        "document_bytes": 429099,
+        "status_request_start_ms": 75.20000000298023,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17.200000002980232,
+            "end_ms": 42,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 17.700000002980232,
+            "end_ms": 41,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17.799999997019768,
+            "end_ms": 49.20000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17.799999997019768,
+            "end_ms": 50,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17.799999997019768,
+            "end_ms": 55.70000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17.900000005960464,
+            "end_ms": 58.900000005960464,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 4.700000002980232,
+        "dom_content_loaded_ms": 66.40000000596046,
+        "overview_response_end_ms": 76.79999999701977,
+        "document_bytes": 429099,
+        "status_request_start_ms": 66.20000000298023,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17,
+            "end_ms": 37.70000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 17.5,
+            "end_ms": 49.20000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17.600000008940697,
+            "end_ms": 48.1000000089407,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17.600000008940697,
+            "end_ms": 50.1000000089407,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17.600000008940697,
+            "end_ms": 53.20000000298023,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17.600000008940697,
+            "end_ms": 53.1000000089407,
+            "decoded_bytes": 68464
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 4.9000000059604645,
+        "dom_content_loaded_ms": 71.1000000089407,
+        "overview_response_end_ms": 78,
+        "document_bytes": 429099,
+        "status_request_start_ms": 69.70000000298023,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17.5,
+            "end_ms": 50.70000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 17.700000002980232,
+            "end_ms": 51,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17.700000002980232,
+            "end_ms": 50.80000001192093,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17.80000001192093,
+            "end_ms": 50.6000000089407,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17.80000001192093,
+            "end_ms": 50.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17.80000001192093,
+            "end_ms": 56.900000005960464,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 4.9000000059604645,
+        "dom_content_loaded_ms": 66.40000000596046,
+        "overview_response_end_ms": 73.5,
+        "document_bytes": 429099,
+        "status_request_start_ms": 65.80000001192093,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17.100000008940697,
+            "end_ms": 43.80000001192093,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 17.30000001192093,
+            "end_ms": 43,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17.400000005960464,
+            "end_ms": 49.5,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17.5,
+            "end_ms": 49.1000000089407,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17.600000008940697,
+            "end_ms": 50.80000001192093,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17.600000008940697,
+            "end_ms": 53,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 4.399999991059303,
+        "dom_content_loaded_ms": 65.19999998807907,
+        "overview_response_end_ms": 73.29999999701977,
+        "document_bytes": 429099,
+        "status_request_start_ms": 63.29999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 16.899999991059303,
+            "end_ms": 39.69999998807907,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17.5,
+            "end_ms": 39,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 17.5,
+            "end_ms": 42.3999999910593,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17.5,
+            "end_ms": 49.29999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17.599999994039536,
+            "end_ms": 46.69999998807907,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17.599999994039536,
+            "end_ms": 49.099999994039536,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 9.700000002980232,
+        "dom_content_loaded_ms": 74.80000001192093,
+        "overview_response_end_ms": 80.90000000596046,
+        "document_bytes": 429099,
+        "status_request_start_ms": 74.30000001192093,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 26.30000001192093,
+            "end_ms": 49.20000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 26.600000008940697,
+            "end_ms": 54.70000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 26.700000002980232,
+            "end_ms": 61.6000000089407,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 26.80000001192093,
+            "end_ms": 58.70000000298023,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 26.80000001192093,
+            "end_ms": 59.30000001192093,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 26.80000001192093,
+            "end_ms": 62.6000000089407,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5,
+        "dom_content_loaded_ms": 63.400000005960464,
+        "overview_response_end_ms": 69.1000000089407,
+        "document_bytes": 429099,
+        "status_request_start_ms": 62.900000005960464,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 16.400000005960464,
+            "end_ms": 38.6000000089407,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 16.900000005960464,
+            "end_ms": 46.1000000089407,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17,
+            "end_ms": 44.6000000089407,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17,
+            "end_ms": 45.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17,
+            "end_ms": 47.400000005960464,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17,
+            "end_ms": 50.70000000298023,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.799999997019768,
+        "dom_content_loaded_ms": 72.29999999701977,
+        "overview_response_end_ms": 80.3999999910593,
+        "document_bytes": 429099,
+        "status_request_start_ms": 71.3999999910593,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 26.099999994039536,
+            "end_ms": 44.8999999910593,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 27,
+            "end_ms": 48.70000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 27,
+            "end_ms": 50.79999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 27,
+            "end_ms": 52.3999999910593,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 27.200000002980232,
+            "end_ms": 51.599999994039536,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 27.299999997019768,
+            "end_ms": 51.79999999701977,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.5,
+        "dom_content_loaded_ms": 67.20000000298023,
+        "overview_response_end_ms": 75.5,
+        "document_bytes": 429099,
+        "status_request_start_ms": 66.40000000596046,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 22.299999997019768,
+            "end_ms": 45.1000000089407,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 22.799999997019768,
+            "end_ms": 46.20000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 22.900000005960464,
+            "end_ms": 48.6000000089407,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23,
+            "end_ms": 49.6000000089407,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 48.1000000089407,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 49.1000000089407,
+            "decoded_bytes": 9853
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 4.5,
+        "dom_content_loaded_ms": 75.6000000089407,
+        "overview_response_end_ms": 84.29999999701977,
+        "document_bytes": 429099,
+        "status_request_start_ms": 74.90000000596046,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 29.700000002980232,
+            "end_ms": 48.79999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 31.100000008940697,
+            "end_ms": 49.29999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 31.200000002980232,
+            "end_ms": 49.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 31.200000002980232,
+            "end_ms": 56.1000000089407,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 31.299999997019768,
+            "end_ms": 53.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 31.400000005960464,
+            "end_ms": 55.400000005960464,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.0999999940395355,
+        "dom_content_loaded_ms": 64.8999999910593,
+        "overview_response_end_ms": 73.8999999910593,
+        "document_bytes": 429099,
+        "status_request_start_ms": 64,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 21.700000002980232,
+            "end_ms": 41.3999999910593,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 22,
+            "end_ms": 46.29999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 22.099999994039536,
+            "end_ms": 44.599999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 22.099999994039536,
+            "end_ms": 45.70000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 22.200000002980232,
+            "end_ms": 43,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 22.200000002980232,
+            "end_ms": 45.20000000298023,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.200000002980232,
+        "dom_content_loaded_ms": 69.29999999701977,
+        "overview_response_end_ms": 78.59999999403954,
+        "document_bytes": 429099,
+        "status_request_start_ms": 68.29999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 22.899999991059303,
+            "end_ms": 40.599999994039536,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23,
+            "end_ms": 44.099999994039536,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 23,
+            "end_ms": 49.5,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23.099999994039536,
+            "end_ms": 44.79999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.099999994039536,
+            "end_ms": 48.3999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 52,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 8.099999994039536,
+        "dom_content_loaded_ms": 72.5,
+        "overview_response_end_ms": 83.70000000298023,
+        "document_bytes": 429099,
+        "status_request_start_ms": 71.59999999403954,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 27.200000002980232,
+            "end_ms": 45.79999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 27.299999997019768,
+            "end_ms": 48.79999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 27.400000005960464,
+            "end_ms": 52.5,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 27.5,
+            "end_ms": 50.400000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 27.599999994039536,
+            "end_ms": 51.79999999701977,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 27.700000002980232,
+            "end_ms": 52.400000005960464,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.5999999940395355,
+        "dom_content_loaded_ms": 72.90000000596046,
+        "overview_response_end_ms": 82.09999999403954,
+        "document_bytes": 429099,
+        "status_request_start_ms": 72,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.599999994039536,
+            "end_ms": 51.20000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 24.799999997019768,
+            "end_ms": 49.70000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24.900000005960464,
+            "end_ms": 53.79999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 25,
+            "end_ms": 50.5,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 25,
+            "end_ms": 54.599999994039536,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 25.200000002980232,
+            "end_ms": 54,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 6.0999999940395355,
+        "dom_content_loaded_ms": 81.3999999910593,
+        "overview_response_end_ms": 89.8999999910593,
+        "document_bytes": 429099,
+        "status_request_start_ms": 80.3999999910593,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.399999991059303,
+            "end_ms": 55.19999998807907,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 25,
+            "end_ms": 57.79999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 25.099999994039536,
+            "end_ms": 61.69999998807907,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 25.19999998807907,
+            "end_ms": 56.29999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 25.19999998807907,
+            "end_ms": 56.8999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 25.299999997019768,
+            "end_ms": 60.3999999910593,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 6.200000002980232,
+        "dom_content_loaded_ms": 69.09999999403954,
+        "overview_response_end_ms": 77.90000000596046,
+        "document_bytes": 429099,
+        "status_request_start_ms": 68.09999999403954,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 19.099999994039536,
+            "end_ms": 39.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 19.299999997019768,
+            "end_ms": 38.29999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 19.5,
+            "end_ms": 44.099999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 19.5,
+            "end_ms": 49.70000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 19.599999994039536,
+            "end_ms": 44.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 19.599999994039536,
+            "end_ms": 50.099999994039536,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.899999991059303,
+        "dom_content_loaded_ms": 76.8999999910593,
+        "overview_response_end_ms": 87,
+        "document_bytes": 429099,
+        "status_request_start_ms": 76.09999999403954,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 23.5,
+            "end_ms": 52.099999994039536,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 24.399999991059303,
+            "end_ms": 52.79999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24.399999991059303,
+            "end_ms": 55.599999994039536,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24.5,
+            "end_ms": 51,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.5,
+            "end_ms": 53.3999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.599999994039536,
+            "end_ms": 58.69999998807907,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.799999997019768,
+        "dom_content_loaded_ms": 84.90000000596046,
+        "overview_response_end_ms": 93.6000000089407,
+        "document_bytes": 429099,
+        "status_request_start_ms": 84,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 25.200000002980232,
+            "end_ms": 45.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 25.799999997019768,
+            "end_ms": 52.70000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 25.900000005960464,
+            "end_ms": 50.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 25.900000005960464,
+            "end_ms": 64.20000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 26,
+            "end_ms": 51.79999999701977,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 26.100000008940697,
+            "end_ms": 63.900000005960464,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 5.800000011920929,
+        "dom_content_loaded_ms": 88.80000001192093,
+        "overview_response_end_ms": 99,
+        "document_bytes": 429099,
+        "status_request_start_ms": 87.70000000298023,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 19.100000008940697,
+            "end_ms": 59.70000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 19.30000001192093,
+            "end_ms": 62.5,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 19.400000005960464,
+            "end_ms": 58.30000001192093,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 19.400000005960464,
+            "end_ms": 67,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 19.5,
+            "end_ms": 57.6000000089407,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 19.600000008940697,
+            "end_ms": 64.70000000298023,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 6.199999988079071,
+        "dom_content_loaded_ms": 85.79999999701977,
+        "overview_response_end_ms": 96.09999999403954,
+        "document_bytes": 429099,
+        "status_request_start_ms": 84.8999999910593,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 27.69999998807907,
+            "end_ms": 51.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 27.899999991059303,
+            "end_ms": 53.5,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 27.899999991059303,
+            "end_ms": 57.099999994039536,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 28.099999994039536,
+            "end_ms": 56.599999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 28.099999994039536,
+            "end_ms": 60.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 28.099999994039536,
+            "end_ms": 64.09999999403954,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 6.9000000059604645,
+        "dom_content_loaded_ms": 119.70000000298023,
+        "overview_response_end_ms": 131.80000001192093,
+        "document_bytes": 429099,
+        "status_request_start_ms": 118.6000000089407,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 60.400000005960464,
+            "end_ms": 85.20000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 62.6000000089407,
+            "end_ms": 90.70000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 62.70000000298023,
+            "end_ms": 95,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 62.80000001192093,
+            "end_ms": 85.90000000596046,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 62.80000001192093,
+            "end_ms": 91.90000000596046,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 62.900000005960464,
+            "end_ms": 95.6000000089407,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 6.199999988079071,
+        "dom_content_loaded_ms": 85.29999999701977,
+        "overview_response_end_ms": 94.8999999910593,
+        "document_bytes": 429099,
+        "status_request_start_ms": 84.3999999910593,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 27.5,
+            "end_ms": 54.19999998807907,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 27.899999991059303,
+            "end_ms": 62,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 28,
+            "end_ms": 55.599999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 28,
+            "end_ms": 62.8999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 28.099999994039536,
+            "end_ms": 61,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 28.19999998807907,
+            "end_ms": 64.29999999701977,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      },
+      {
+        "ttfb_ms": 13.5,
+        "dom_content_loaded_ms": 94.29999999701977,
+        "overview_response_end_ms": 103.8999999910593,
+        "document_bytes": 429099,
+        "status_request_start_ms": 93.5,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 34.29999999701977,
+            "end_ms": 68.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 34.599999994039536,
+            "end_ms": 72,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 34.69999998807907,
+            "end_ms": 72.3999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 34.79999999701977,
+            "end_ms": 69.5,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 34.79999999701977,
+            "end_ms": 72.8999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 34.8999999910593,
+            "end_ms": 73.69999998807907,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 2
+      }
+    ],
+    "candidate": [
+      {
+        "ttfb_ms": 8,
+        "dom_content_loaded_ms": 78.19999998807907,
+        "overview_response_end_ms": 86.09999999403954,
+        "document_bytes": 453141,
+        "status_request_start_ms": 78.09999999403954,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 22.099999994039536,
+            "end_ms": 42.19999998807907,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 22.5,
+            "end_ms": 43.5,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 22.5,
+            "end_ms": 56.8999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 22.5,
+            "end_ms": 62.29999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 22.599999994039536,
+            "end_ms": 55.79999999701977,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 22.599999994039536,
+            "end_ms": 60.29999999701977,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 22.599999994039536,
+            "end_ms": 62.5,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.5999999940395355,
+        "dom_content_loaded_ms": 63.5,
+        "overview_response_end_ms": 68.90000000596046,
+        "document_bytes": 453141,
+        "status_request_start_ms": 62.900000005960464,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17.599999994039536,
+            "end_ms": 34.29999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 18.299999997019768,
+            "end_ms": 35.099999994039536,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 18.299999997019768,
+            "end_ms": 45.20000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 18.400000005960464,
+            "end_ms": 42.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 18.400000005960464,
+            "end_ms": 47.20000000298023,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 18.5,
+            "end_ms": 46.5,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 18.5,
+            "end_ms": 48.5,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 24.799999997019768,
+        "dom_content_loaded_ms": 114.79999999701977,
+        "overview_response_end_ms": 123.69999998807907,
+        "document_bytes": 453141,
+        "status_request_start_ms": 114.5,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 45.29999999701977,
+            "end_ms": 74.69999998807907,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 46.19999998807907,
+            "end_ms": 76.19999998807907,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 46.29999999701977,
+            "end_ms": 77.09999999403954,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 46.29999999701977,
+            "end_ms": 86.3999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 46.3999999910593,
+            "end_ms": 100.59999999403954,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 46.5,
+            "end_ms": 87.59999999403954,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 46.69999998807907,
+            "end_ms": 88.69999998807907,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 7.200000002980232,
+        "dom_content_loaded_ms": 87.40000000596046,
+        "overview_response_end_ms": 94.6000000089407,
+        "document_bytes": 453141,
+        "status_request_start_ms": 87.1000000089407,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 20.5,
+            "end_ms": 57,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 20.700000002980232,
+            "end_ms": 58.70000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 20.799999997019768,
+            "end_ms": 57.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 20.799999997019768,
+            "end_ms": 65.20000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 20.900000005960464,
+            "end_ms": 65.90000000596046,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 21,
+            "end_ms": 70.6000000089407,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 21.100000008940697,
+            "end_ms": 71.1000000089407,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.799999997019768,
+        "dom_content_loaded_ms": 66,
+        "overview_response_end_ms": 71.59999999403954,
+        "document_bytes": 453141,
+        "status_request_start_ms": 65.5,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 16.400000005960464,
+            "end_ms": 35.400000005960464,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17,
+            "end_ms": 36.29999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 17,
+            "end_ms": 43.79999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17,
+            "end_ms": 47.29999999701977,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17,
+            "end_ms": 49.29999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 17.099999994039536,
+            "end_ms": 52.599999994039536,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17.099999994039536,
+            "end_ms": 52.79999999701977,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.899999991059303,
+        "dom_content_loaded_ms": 95.5,
+        "overview_response_end_ms": 100.79999999701977,
+        "document_bytes": 453141,
+        "status_request_start_ms": 94.79999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 16.700000002980232,
+            "end_ms": 39.29999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 16.899999991059303,
+            "end_ms": 40.20000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17,
+            "end_ms": 44,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17,
+            "end_ms": 51.8999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17,
+            "end_ms": 53.099999994039536,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17,
+            "end_ms": 80.59999999403954,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 17.099999994039536,
+            "end_ms": 80.29999999701977,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.199999988079071,
+        "dom_content_loaded_ms": 80.09999999403954,
+        "overview_response_end_ms": 85.19999998807907,
+        "document_bytes": 453141,
+        "status_request_start_ms": 79.5,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 23.599999994039536,
+            "end_ms": 53.8999999910593,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23.799999997019768,
+            "end_ms": 47.5,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23.799999997019768,
+            "end_ms": 55.5,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 23.799999997019768,
+            "end_ms": 60.599999994039536,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.799999997019768,
+            "end_ms": 65.19999998807907,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 23.899999991059303,
+            "end_ms": 65.3999999910593,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.899999991059303,
+            "end_ms": 65.59999999403954,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.399999991059303,
+        "dom_content_loaded_ms": 75.3999999910593,
+        "overview_response_end_ms": 80.69999998807907,
+        "document_bytes": 453141,
+        "status_request_start_ms": 74.69999998807907,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17.899999991059303,
+            "end_ms": 47,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 18.5,
+            "end_ms": 47.79999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 18.5,
+            "end_ms": 54.3999999910593,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 18.5,
+            "end_ms": 55.29999999701977,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 18.5,
+            "end_ms": 57.19999998807907,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 18.5,
+            "end_ms": 58,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 18.599999994039536,
+            "end_ms": 60.099999994039536,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.0999999940395355,
+        "dom_content_loaded_ms": 68,
+        "overview_response_end_ms": 72.8999999910593,
+        "document_bytes": 453141,
+        "status_request_start_ms": 67.5,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17.5,
+            "end_ms": 41.8999999910593,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 18.099999994039536,
+            "end_ms": 41.20000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 18.099999994039536,
+            "end_ms": 50.8999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 18.200000002980232,
+            "end_ms": 47.099999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 18.200000002980232,
+            "end_ms": 49.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 18.200000002980232,
+            "end_ms": 54.20000000298023,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 18.200000002980232,
+            "end_ms": 55.5,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.200000002980232,
+        "dom_content_loaded_ms": 70.40000000596046,
+        "overview_response_end_ms": 78.29999999701977,
+        "document_bytes": 453141,
+        "status_request_start_ms": 67.79999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 23,
+            "end_ms": 41.29999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 42.20000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 48.599999994039536,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23.400000005960464,
+            "end_ms": 47.29999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.5,
+            "end_ms": 47.900000005960464,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.5,
+            "end_ms": 48.29999999701977,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 23.599999994039536,
+            "end_ms": 51.70000000298023,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.799999997019768,
+        "dom_content_loaded_ms": 69.59999999403954,
+        "overview_response_end_ms": 76.29999999701977,
+        "document_bytes": 453141,
+        "status_request_start_ms": 67.29999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 21.899999991059303,
+            "end_ms": 33.70000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 22.200000002980232,
+            "end_ms": 37.70000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 22.200000002980232,
+            "end_ms": 47.8999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 22.399999991059303,
+            "end_ms": 48.70000000298023,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 22.399999991059303,
+            "end_ms": 49.20000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 22.5,
+            "end_ms": 51,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 22.5,
+            "end_ms": 51.599999994039536,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.700000002980232,
+        "dom_content_loaded_ms": 74.20000000298023,
+        "overview_response_end_ms": 80.59999999403954,
+        "document_bytes": 453141,
+        "status_request_start_ms": 71.79999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 22.200000002980232,
+            "end_ms": 30.899999991059303,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23,
+            "end_ms": 46.29999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23.099999994039536,
+            "end_ms": 46.8999999910593,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 23.099999994039536,
+            "end_ms": 53.599999994039536,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.200000002980232,
+            "end_ms": 47.3999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.200000002980232,
+            "end_ms": 49.099999994039536,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 23.200000002980232,
+            "end_ms": 54.79999999701977,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.9000000059604645,
+        "dom_content_loaded_ms": 77.30000001192093,
+        "overview_response_end_ms": 83.40000000596046,
+        "document_bytes": 453141,
+        "status_request_start_ms": 75,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 22.900000005960464,
+            "end_ms": 41.30000001192093,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23.100000008940697,
+            "end_ms": 45.6000000089407,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 23.200000002980232,
+            "end_ms": 50.400000005960464,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23.30000001192093,
+            "end_ms": 45.1000000089407,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.30000001192093,
+            "end_ms": 57.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.400000005960464,
+            "end_ms": 51,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 23.400000005960464,
+            "end_ms": 52,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 6.299999997019768,
+        "dom_content_loaded_ms": 81.79999999701977,
+        "overview_response_end_ms": 89.79999999701977,
+        "document_bytes": 453141,
+        "status_request_start_ms": 79.29999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 26.5,
+            "end_ms": 52.599999994039536,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 26.799999997019768,
+            "end_ms": 48.8999999910593,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 26.899999991059303,
+            "end_ms": 57.3999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 27,
+            "end_ms": 53.3999999910593,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 27.099999994039536,
+            "end_ms": 54,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 27.099999994039536,
+            "end_ms": 58.099999994039536,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 27.299999997019768,
+            "end_ms": 60.79999999701977,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 10.700000002980232,
+        "dom_content_loaded_ms": 82.5,
+        "overview_response_end_ms": 90.6000000089407,
+        "document_bytes": 453141,
+        "status_request_start_ms": 79.90000000596046,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 29.30000001192093,
+            "end_ms": 49.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 29.5,
+            "end_ms": 56.30000001192093,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 29.700000002980232,
+            "end_ms": 58.900000005960464,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 29.80000001192093,
+            "end_ms": 53.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 29.80000001192093,
+            "end_ms": 56.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 29.900000005960464,
+            "end_ms": 57.1000000089407,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 30,
+            "end_ms": 61.5,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5,
+        "dom_content_loaded_ms": 74.59999999403954,
+        "overview_response_end_ms": 83.70000000298023,
+        "document_bytes": 453141,
+        "status_request_start_ms": 73.70000000298023,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.900000005960464,
+            "end_ms": 48.29999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 25.099999994039536,
+            "end_ms": 47.400000005960464,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 25.099999994039536,
+            "end_ms": 52,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 25.200000002980232,
+            "end_ms": 46.5,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 25.299999997019768,
+            "end_ms": 53.099999994039536,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 25.400000005960464,
+            "end_ms": 52.70000000298023,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 25.400000005960464,
+            "end_ms": 56.400000005960464,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.300000011920929,
+        "dom_content_loaded_ms": 69.80000001192093,
+        "overview_response_end_ms": 77,
+        "document_bytes": 453141,
+        "status_request_start_ms": 68.90000000596046,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 21.30000001192093,
+            "end_ms": 41.70000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 21.900000005960464,
+            "end_ms": 41.20000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 22,
+            "end_ms": 45.6000000089407,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 22,
+            "end_ms": 49.20000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 22.100000008940697,
+            "end_ms": 46.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 22.200000002980232,
+            "end_ms": 49,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 22.200000002980232,
+            "end_ms": 52.30000001192093,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.299999997019768,
+        "dom_content_loaded_ms": 74.29999999701977,
+        "overview_response_end_ms": 82.70000000298023,
+        "document_bytes": 453141,
+        "status_request_start_ms": 73.5,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 22.900000005960464,
+            "end_ms": 31.200000002980232,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23.900000005960464,
+            "end_ms": 33.900000005960464,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24,
+            "end_ms": 53.70000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24,
+            "end_ms": 54.79999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.099999994039536,
+            "end_ms": 54.20000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.200000002980232,
+            "end_ms": 52.79999999701977,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 24.299999997019768,
+            "end_ms": 53.400000005960464,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.0999999940395355,
+        "dom_content_loaded_ms": 81.29999999701977,
+        "overview_response_end_ms": 90.79999999701977,
+        "document_bytes": 453141,
+        "status_request_start_ms": 80.3999999910593,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 23.899999991059303,
+            "end_ms": 48.3999999910593,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 24,
+            "end_ms": 49.19999998807907,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24.099999994039536,
+            "end_ms": 52.8999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24.299999997019768,
+            "end_ms": 52.29999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.299999997019768,
+            "end_ms": 56.29999999701977,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.299999997019768,
+            "end_ms": 56,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 24.399999991059303,
+            "end_ms": 60.099999994039536,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.700000002980232,
+        "dom_content_loaded_ms": 92.1000000089407,
+        "overview_response_end_ms": 102.40000000596046,
+        "document_bytes": 453141,
+        "status_request_start_ms": 90.90000000596046,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.600000008940697,
+            "end_ms": 52.400000005960464,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 25.799999997019768,
+            "end_ms": 53.1000000089407,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 25.900000005960464,
+            "end_ms": 65.70000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 26,
+            "end_ms": 57.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 26,
+            "end_ms": 59,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 26.100000008940697,
+            "end_ms": 62.900000005960464,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 26.100000008940697,
+            "end_ms": 68.40000000596046,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 7.700000002980232,
+        "dom_content_loaded_ms": 95.20000000298023,
+        "overview_response_end_ms": 104.59999999403954,
+        "document_bytes": 453141,
+        "status_request_start_ms": 94.29999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 39.599999994039536,
+            "end_ms": 59.900000005960464,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 39.70000000298023,
+            "end_ms": 68.90000000596046,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 39.79999999701977,
+            "end_ms": 67.90000000596046,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 39.79999999701977,
+            "end_ms": 72.29999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 40,
+            "end_ms": 69.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 40.099999994039536,
+            "end_ms": 68.20000000298023,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 40.20000000298023,
+            "end_ms": 74.79999999701977,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 6.0999999940395355,
+        "dom_content_loaded_ms": 103.79999999701977,
+        "overview_response_end_ms": 113,
+        "document_bytes": 453141,
+        "status_request_start_ms": 102.69999998807907,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 29.399999991059303,
+            "end_ms": 63.3999999910593,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 29.899999991059303,
+            "end_ms": 62.69999998807907,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 30.099999994039536,
+            "end_ms": 78.59999999403954,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 30.19999998807907,
+            "end_ms": 73.59999999403954,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 30.19999998807907,
+            "end_ms": 74.29999999701977,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 30.19999998807907,
+            "end_ms": 75.09999999403954,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 30.299999997019768,
+            "end_ms": 80.19999998807907,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 6.100000008940697,
+        "dom_content_loaded_ms": 90.40000000596046,
+        "overview_response_end_ms": 99.6000000089407,
+        "document_bytes": 453141,
+        "status_request_start_ms": 89.40000000596046,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 31.100000008940697,
+            "end_ms": 60.1000000089407,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 31.400000005960464,
+            "end_ms": 61,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 31.5,
+            "end_ms": 65.1000000089407,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 31.600000008940697,
+            "end_ms": 62.30000001192093,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 31.700000002980232,
+            "end_ms": 59.30000001192093,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 31.700000002980232,
+            "end_ms": 65.40000000596046,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 31.80000001192093,
+            "end_ms": 69.20000000298023,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.700000002980232,
+        "dom_content_loaded_ms": 74.5,
+        "overview_response_end_ms": 85.5,
+        "document_bytes": 453141,
+        "status_request_start_ms": 73.29999999701977,
+        "scripts": [
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24,
+            "end_ms": 40,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 24.200000002980232,
+            "end_ms": 45.099999994039536,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24.200000002980232,
+            "end_ms": 50.8999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24.299999997019768,
+            "end_ms": 44.3999999910593,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.399999991059303,
+            "end_ms": 47.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.399999991059303,
+            "end_ms": 53.599999994039536,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 24.5,
+            "end_ms": 54.599999994039536,
+            "decoded_bytes": 6337
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      }
+    ],
+    "deferred": [
+      {
+        "ttfb_ms": 5.5,
+        "dom_content_loaded_ms": 68.20000000298023,
+        "overview_response_end_ms": 75.90000000596046,
+        "document_bytes": 453205,
+        "status_request_start_ms": 68.20000000298023,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 11,
+            "end_ms": 32.6000000089407,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 23.400000005960464,
+            "end_ms": 44.30000001192093,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23.900000005960464,
+            "end_ms": 56,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24,
+            "end_ms": 53.400000005960464,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.100000008940697,
+            "end_ms": 51.30000001192093,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24.100000008940697,
+            "end_ms": 52,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.200000002980232,
+            "end_ms": 57,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 0
+      },
+      {
+        "ttfb_ms": 4.899999991059303,
+        "dom_content_loaded_ms": 126.3999999910593,
+        "overview_response_end_ms": 131.79999999701977,
+        "document_bytes": 453205,
+        "status_request_start_ms": 126.29999999701977,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 84.09999999403954,
+            "end_ms": 102.09999999403954,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 84.20000000298023,
+            "end_ms": 103.59999999403954,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 84.20000000298023,
+            "end_ms": 104.59999999403954,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 84.20000000298023,
+            "end_ms": 114.5,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 84.29999999701977,
+            "end_ms": 108.29999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 84.29999999701977,
+            "end_ms": 113.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 84.3999999910593,
+            "end_ms": 116.3999999910593,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.899999991059303,
+        "dom_content_loaded_ms": 70,
+        "overview_response_end_ms": 79.09999999403954,
+        "document_bytes": 453205,
+        "status_request_start_ms": 70,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 12.699999988079071,
+            "end_ms": 35.79999999701977,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 19.399999991059303,
+            "end_ms": 44.19999998807907,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 20.099999994039536,
+            "end_ms": 43.599999994039536,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 20.19999998807907,
+            "end_ms": 49.69999998807907,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 20.19999998807907,
+            "end_ms": 55.69999998807907,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 20.299999997019768,
+            "end_ms": 52.599999994039536,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 20.399999991059303,
+            "end_ms": 59.5,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.0999999940395355,
+        "dom_content_loaded_ms": 69.69999998807907,
+        "overview_response_end_ms": 77.19999998807907,
+        "document_bytes": 453205,
+        "status_request_start_ms": 69.69999998807907,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 18,
+            "end_ms": 43.29999999701977,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 18.099999994039536,
+            "end_ms": 50.69999998807907,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 18.19999998807907,
+            "end_ms": 39.69999998807907,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 18.19999998807907,
+            "end_ms": 50,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 18.19999998807907,
+            "end_ms": 51.8999999910593,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 18.19999998807907,
+            "end_ms": 56.29999999701977,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 18.299999997019768,
+            "end_ms": 58.5,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.4000000059604645,
+        "dom_content_loaded_ms": 74,
+        "overview_response_end_ms": 81.20000000298023,
+        "document_bytes": 453205,
+        "status_request_start_ms": 74,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 17.600000008940697,
+            "end_ms": 41.80000001192093,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 28.30000001192093,
+            "end_ms": 48.70000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 28.700000002980232,
+            "end_ms": 52,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 28.80000001192093,
+            "end_ms": 58.70000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 28.900000005960464,
+            "end_ms": 57.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 28.900000005960464,
+            "end_ms": 60.80000001192093,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 29,
+            "end_ms": 63.400000005960464,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.5,
+        "dom_content_loaded_ms": 71.70000000298023,
+        "overview_response_end_ms": 78.5,
+        "document_bytes": 453205,
+        "status_request_start_ms": 71.70000000298023,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 10.400000005960464,
+            "end_ms": 41.20000000298023,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 17.400000005960464,
+            "end_ms": 48.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 17.799999997019768,
+            "end_ms": 51.79999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 17.900000005960464,
+            "end_ms": 52.400000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 17.900000005960464,
+            "end_ms": 56.79999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 17.900000005960464,
+            "end_ms": 59.900000005960464,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 17.900000005960464,
+            "end_ms": 61.099999994039536,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.300000011920929,
+        "dom_content_loaded_ms": 66.20000000298023,
+        "overview_response_end_ms": 70.6000000089407,
+        "document_bytes": 453205,
+        "status_request_start_ms": 66.1000000089407,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 14.5,
+            "end_ms": 46,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 20.700000002980232,
+            "end_ms": 45.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 21,
+            "end_ms": 44.400000005960464,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 21,
+            "end_ms": 50.30000001192093,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 21.100000008940697,
+            "end_ms": 51.900000005960464,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 21.100000008940697,
+            "end_ms": 55.70000000298023,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 21.100000008940697,
+            "end_ms": 56.30000001192093,
+            "decoded_bytes": 9853
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.600000008940697,
+        "dom_content_loaded_ms": 56.900000005960464,
+        "overview_response_end_ms": 61.900000005960464,
+        "document_bytes": 453205,
+        "status_request_start_ms": 56.900000005960464,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 16.400000005960464,
+            "end_ms": 32.400000005960464,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 16.600000008940697,
+            "end_ms": 39.20000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 16.700000002980232,
+            "end_ms": 40,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 16.700000002980232,
+            "end_ms": 41,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 16.700000002980232,
+            "end_ms": 43.80000001192093,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 16.80000001192093,
+            "end_ms": 46.6000000089407,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 16.80000001192093,
+            "end_ms": 47.70000000298023,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 0
+      },
+      {
+        "ttfb_ms": 5.700000002980232,
+        "dom_content_loaded_ms": 68.79999999701977,
+        "overview_response_end_ms": 74.6000000089407,
+        "document_bytes": 453205,
+        "status_request_start_ms": 68.70000000298023,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 13.200000002980232,
+            "end_ms": 42.20000000298023,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 21.799999997019768,
+            "end_ms": 43.400000005960464,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 22.299999997019768,
+            "end_ms": 46.1000000089407,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 22.400000005960464,
+            "end_ms": 51,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 22.400000005960464,
+            "end_ms": 53.29999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 22.5,
+            "end_ms": 55.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 22.5,
+            "end_ms": 56.20000000298023,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.5,
+        "dom_content_loaded_ms": 70,
+        "overview_response_end_ms": 77,
+        "document_bytes": 453205,
+        "status_request_start_ms": 69.8999999910593,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 14.799999997019768,
+            "end_ms": 42.19999998807907,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 47.599999994039536,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23.69999998807907,
+            "end_ms": 50.69999998807907,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 23.69999998807907,
+            "end_ms": 52.69999998807907,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23.799999997019768,
+            "end_ms": 51.5,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.799999997019768,
+            "end_ms": 54.8999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.899999991059303,
+            "end_ms": 54.29999999701977,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.399999991059303,
+        "dom_content_loaded_ms": 83.09999999403954,
+        "overview_response_end_ms": 90,
+        "document_bytes": 453205,
+        "status_request_start_ms": 83,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 24.19999998807907,
+            "end_ms": 61.29999999701977,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.399999991059303,
+            "end_ms": 66.09999999403954,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 24.5,
+            "end_ms": 57.3999999910593,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24.5,
+            "end_ms": 67.8999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24.599999994039536,
+            "end_ms": 59.599999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.69999998807907,
+            "end_ms": 70.69999998807907,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.69999998807907,
+            "end_ms": 71,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.5999999940395355,
+        "dom_content_loaded_ms": 68,
+        "overview_response_end_ms": 76.19999998807907,
+        "document_bytes": 453205,
+        "status_request_start_ms": 67.8999999910593,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 14,
+            "end_ms": 22.799999997019768,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.599999994039536,
+            "end_ms": 41.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 25.399999991059303,
+            "end_ms": 42.19999998807907,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 25.399999991059303,
+            "end_ms": 52.3999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 25.5,
+            "end_ms": 50.3999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 25.5,
+            "end_ms": 50.8999999910593,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 25.599999994039536,
+            "end_ms": 54.099999994039536,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.799999997019768,
+        "dom_content_loaded_ms": 80,
+        "overview_response_end_ms": 88.09999999403954,
+        "document_bytes": 453205,
+        "status_request_start_ms": 80,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 12.899999991059303,
+            "end_ms": 33.599999994039536,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 35.69999998807907,
+            "end_ms": 52.79999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 36.69999998807907,
+            "end_ms": 59.8999999910593,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 36.8999999910593,
+            "end_ms": 62.69999998807907,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 37,
+            "end_ms": 56.5,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 37,
+            "end_ms": 57.3999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 37.099999994039536,
+            "end_ms": 63.19999998807907,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.9000000059604645,
+        "dom_content_loaded_ms": 119.40000000596046,
+        "overview_response_end_ms": 126.70000000298023,
+        "document_bytes": 453205,
+        "status_request_start_ms": 119.20000000298023,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 13,
+            "end_ms": 39,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 27.700000002980232,
+            "end_ms": 47,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 28.900000005960464,
+            "end_ms": 48.79999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 29,
+            "end_ms": 56.400000005960464,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 29.099999994039536,
+            "end_ms": 52,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 29.200000002980232,
+            "end_ms": 53.70000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 29.299999997019768,
+            "end_ms": 56.20000000298023,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 6,
+        "dom_content_loaded_ms": 76.90000000596046,
+        "overview_response_end_ms": 84.70000000298023,
+        "document_bytes": 453205,
+        "status_request_start_ms": 76.79999999701977,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 15.700000002980232,
+            "end_ms": 33.6000000089407,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 36.20000000298023,
+            "end_ms": 58.20000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 37.70000000298023,
+            "end_ms": 59.29999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 37.70000000298023,
+            "end_ms": 61.79999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 37.79999999701977,
+            "end_ms": 62.29999999701977,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 37.900000005960464,
+            "end_ms": 60.70000000298023,
+            "decoded_bytes": 3166
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 37.900000005960464,
+            "end_ms": 62.900000005960464,
+            "decoded_bytes": 9853
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.5,
+        "dom_content_loaded_ms": 81,
+        "overview_response_end_ms": 89.3999999910593,
+        "document_bytes": 453205,
+        "status_request_start_ms": 81,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 13.799999997019768,
+            "end_ms": 32.79999999701977,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 21.899999991059303,
+            "end_ms": 55.70000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 22.299999997019768,
+            "end_ms": 59,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 22.299999997019768,
+            "end_ms": 63.20000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 22.399999991059303,
+            "end_ms": 62.20000000298023,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 22.5,
+            "end_ms": 62.8999999910593,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 22.5,
+            "end_ms": 65.29999999701977,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.200000002980232,
+        "dom_content_loaded_ms": 79.1000000089407,
+        "overview_response_end_ms": 87.40000000596046,
+        "document_bytes": 453205,
+        "status_request_start_ms": 79.1000000089407,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 24.100000008940697,
+            "end_ms": 52.1000000089407,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.400000005960464,
+            "end_ms": 51.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 24.600000008940697,
+            "end_ms": 60.6000000089407,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24.700000002980232,
+            "end_ms": 62.80000001192093,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24.80000001192093,
+            "end_ms": 57.20000000298023,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.80000001192093,
+            "end_ms": 64.20000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.80000001192093,
+            "end_ms": 65.30000001192093,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 4.799999997019768,
+        "dom_content_loaded_ms": 70.8999999910593,
+        "overview_response_end_ms": 79.19999998807907,
+        "document_bytes": 453205,
+        "status_request_start_ms": 70.8999999910593,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 12.5,
+            "end_ms": 39.3999999910593,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 20.69999998807907,
+            "end_ms": 49.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 21.19999998807907,
+            "end_ms": 52.5,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 21.19999998807907,
+            "end_ms": 54.5,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 21.299999997019768,
+            "end_ms": 53.599999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 21.399999991059303,
+            "end_ms": 57.599999994039536,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 21.5,
+            "end_ms": 57.29999999701977,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 6,
+        "dom_content_loaded_ms": 82.20000000298023,
+        "overview_response_end_ms": 89.80000001192093,
+        "document_bytes": 453205,
+        "status_request_start_ms": 82.20000000298023,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 23.80000001192093,
+            "end_ms": 53.70000000298023,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24,
+            "end_ms": 57.5,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 24.100000008940697,
+            "end_ms": 58.5,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 24.100000008940697,
+            "end_ms": 62.1000000089407,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 24.30000001192093,
+            "end_ms": 62.70000000298023,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 24.400000005960464,
+            "end_ms": 66,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 24.5,
+            "end_ms": 67.30000001192093,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.5,
+        "dom_content_loaded_ms": 90.09999999403954,
+        "overview_response_end_ms": 97.8999999910593,
+        "document_bytes": 453205,
+        "status_request_start_ms": 89.8999999910593,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 14.299999997019768,
+            "end_ms": 28.5,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 22.899999991059303,
+            "end_ms": 47.099999994039536,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 23.200000002980232,
+            "end_ms": 50,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 23.200000002980232,
+            "end_ms": 56.3999999910593,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 50.599999994039536,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 23.299999997019768,
+            "end_ms": 72.20000000298023,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 23.399999991059303,
+            "end_ms": 72.5,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 5.5999999940395355,
+        "dom_content_loaded_ms": 82.20000000298023,
+        "overview_response_end_ms": 89.79999999701977,
+        "document_bytes": 453205,
+        "status_request_start_ms": 82.09999999403954,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 14.399999991059303,
+            "end_ms": 51.099999994039536,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 24.5,
+            "end_ms": 52.20000000298023,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 25.299999997019768,
+            "end_ms": 57.5,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 25.299999997019768,
+            "end_ms": 65.09999999403954,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 25.399999991059303,
+            "end_ms": 61.5,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 25.399999991059303,
+            "end_ms": 62,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 25.5,
+            "end_ms": 67.09999999403954,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 7.0999999940395355,
+        "dom_content_loaded_ms": 100.29999999701977,
+        "overview_response_end_ms": 109.40000000596046,
+        "document_bytes": 453205,
+        "status_request_start_ms": 100.20000000298023,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 17.700000002980232,
+            "end_ms": 41.70000000298023,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 45,
+            "end_ms": 68.09999999403954,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 47,
+            "end_ms": 74.29999999701977,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 47.099999994039536,
+            "end_ms": 78.5,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 47.20000000298023,
+            "end_ms": 75.09999999403954,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 47.29999999701977,
+            "end_ms": 76.09999999403954,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 47.29999999701977,
+            "end_ms": 78.09999999403954,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 6.299999997019768,
+        "dom_content_loaded_ms": 93.20000000298023,
+        "overview_response_end_ms": 102,
+        "document_bytes": 453205,
+        "status_request_start_ms": 93,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 16.900000005960464,
+            "end_ms": 51.20000000298023,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 27.400000005960464,
+            "end_ms": 65,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 27.900000005960464,
+            "end_ms": 64.20000000298023,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 27.900000005960464,
+            "end_ms": 72.70000000298023,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 28,
+            "end_ms": 69.70000000298023,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 28.099999994039536,
+            "end_ms": 73.90000000596046,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 28.200000002980232,
+            "end_ms": 75.79999999701977,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      },
+      {
+        "ttfb_ms": 11.700000002980232,
+        "dom_content_loaded_ms": 75.70000000298023,
+        "overview_response_end_ms": 84.40000000596046,
+        "document_bytes": 453205,
+        "status_request_start_ms": 75.70000000298023,
+        "scripts": [
+          {
+            "path": "/assets/timeline-live.js",
+            "start_ms": 31.200000002980232,
+            "end_ms": 48.6000000089407,
+            "decoded_bytes": 6337
+          },
+          {
+            "path": "/assets/organ-graph.js",
+            "start_ms": 31.400000005960464,
+            "end_ms": 49.29999999701977,
+            "decoded_bytes": 11426
+          },
+          {
+            "path": "/assets/memory-graph.js",
+            "start_ms": 31.5,
+            "end_ms": 57.900000005960464,
+            "decoded_bytes": 12021
+          },
+          {
+            "path": "/assets/resource-management.js",
+            "start_ms": 31.600000008940697,
+            "end_ms": 58.29999999701977,
+            "decoded_bytes": 68464
+          },
+          {
+            "path": "/assets/memory-flow-transfer.js",
+            "start_ms": 31.700000002980232,
+            "end_ms": 53,
+            "decoded_bytes": 9762
+          },
+          {
+            "path": "/assets/memory-bundles.js",
+            "start_ms": 31.700000002980232,
+            "end_ms": 62.1000000089407,
+            "decoded_bytes": 9853
+          },
+          {
+            "path": "/assets/inbox-retention.js",
+            "start_ms": 31.799999997019768,
+            "end_ms": 62.5,
+            "decoded_bytes": 3166
+          }
+        ],
+        "overview_initial_timeline_reads": 1
+      }
+    ]
+  },
+  "chrome": "Chrome/158.0.8127.38",
+  "variant": {
+    "deferred": "timeline-live.js: head defer; enter: DOMContentLoaded"
+  },
+  "cold_orders": [
+    [
+      "baseline",
+      "candidate",
+      "deferred"
+    ],
+    [
+      "baseline",
+      "deferred",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline",
+      "deferred"
+    ],
+    [
+      "candidate",
+      "deferred",
+      "baseline"
+    ],
+    [
+      "deferred",
+      "baseline",
+      "candidate"
+    ],
+    [
+      "deferred",
+      "candidate",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "candidate",
+      "deferred"
+    ],
+    [
+      "baseline",
+      "deferred",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline",
+      "deferred"
+    ],
+    [
+      "candidate",
+      "deferred",
+      "baseline"
+    ],
+    [
+      "deferred",
+      "baseline",
+      "candidate"
+    ],
+    [
+      "deferred",
+      "candidate",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "candidate",
+      "deferred"
+    ],
+    [
+      "baseline",
+      "deferred",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline",
+      "deferred"
+    ],
+    [
+      "candidate",
+      "deferred",
+      "baseline"
+    ],
+    [
+      "deferred",
+      "baseline",
+      "candidate"
+    ],
+    [
+      "deferred",
+      "candidate",
+      "baseline"
+    ],
+    [
+      "baseline",
+      "candidate",
+      "deferred"
+    ],
+    [
+      "baseline",
+      "deferred",
+      "candidate"
+    ],
+    [
+      "candidate",
+      "baseline",
+      "deferred"
+    ],
+    [
+      "candidate",
+      "deferred",
+      "baseline"
+    ],
+    [
+      "deferred",
+      "baseline",
+      "candidate"
+    ],
+    [
+      "deferred",
+      "candidate",
+      "baseline"
+    ]
+  ],
+  "runtime_errors": []
+}
