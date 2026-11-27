@@ -1377,7 +1377,7 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_idle_residence_makes_room_for_a_mention_in_another_group(tmp_path: Path) -> None:
-    """D137/D138：驻留会话空闲时，别群的提及不必等它自己离开。"""
+    """关闭提及摘要后，空闲驻留仍按 D137/D140 让给别群提及。"""
     clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     timeline = TimelineDatabase(database, clock)
@@ -1397,7 +1397,7 @@ async def test_idle_residence_makes_room_for_a_mention_in_another_group(tmp_path
                 "persona": {"immutable": "温和。"},
             }
         ),
-        config=HeartbeatConfig(split_reply_enabled=False),
+        config=HeartbeatConfig(split_reply_enabled=False, mention_pull_enabled=False),
         permissions=PermissionChecker(stop),
         emergency_stop=stop,
         inbox_store=store,
@@ -1450,7 +1450,7 @@ async def test_idle_residence_makes_room_for_a_mention_in_another_group(tmp_path
 
 @pytest.mark.asyncio
 async def test_pending_segments_survive_a_mention_from_another_group(tmp_path: Path) -> None:
-    """D137：旧驻留还有分段在打字时，提及不能把没发完的回复截断。"""
+    """D140：关闭提及摘要时，提及也不能截断旧驻留正在投递的分段。"""
     clock = ManualClock(datetime(2026, 11, 23, 10, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     timeline = TimelineDatabase(database, clock)
@@ -1481,6 +1481,7 @@ async def test_pending_segments_survive_a_mention_from_another_group(tmp_path: P
         config=HeartbeatConfig(
             message_debounce_mode="off",
             planner_message_steering=False,
+            mention_pull_enabled=False,
             split_reply_enabled=True,
             typing_delay_enabled=True,
             typing_jitter_min_seconds=10,

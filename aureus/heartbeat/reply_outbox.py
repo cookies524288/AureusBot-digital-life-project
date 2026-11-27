@@ -58,7 +58,7 @@ def _is_han(character: str) -> bool:
     )
 
 
-@dataclass
+@dataclass(eq=False)
 class _Reply:
     target: Perception
     record: TimelineRecord
@@ -71,6 +71,8 @@ class _Reply:
     text_parts: int = 0
     on_receipt: PartReceipt | None = None
     mention_confirmed: bool | None = True
+    track_receipts: bool = False
+    on_activity: Callable[[], None] | None = None
 
     def fail(self) -> None:
         if not self.delivered and self.on_failed is not None:
@@ -109,6 +111,7 @@ class ReplyOutbox:
         self._record_discard = record_discard
         self._wake = wake
         self._conversations: dict[_Address, _ConversationOutbox] = {}
+        self._awaiting_receipt: dict[_Address, int] = {}
 
     def _typing_delay(self, text: str) -> float:
         config = self._config
@@ -128,7 +131,7 @@ class ReplyOutbox:
 
     def has_pending_conversation(self, key: ConversationKey) -> bool:
         """查看这个平台会话是否还有没发完的分段。"""
-        return key in self._conversations
+        return key in self._conversations or key in self._awaiting_receipt
 
     def enqueue(
         self,
@@ -143,6 +146,8 @@ class ReplyOutbox:
         quote_source: bool = False,
         can_deliver: _DeliveryGuard | None = None,
         on_receipt: PartReceipt | None = None,
+        track_receipts: bool = False,
+        on_activity: Callable[[], None] | None = None,
     ) -> bool:
         """同一次回复的后续段计入打字时间，并立即投递已到期的段。"""
         if not parts and emoji is None and qq_action is None:
@@ -175,9 +180,13 @@ class ReplyOutbox:
             can_deliver,
             quote_source,
             on_receipt=on_receipt,
+            track_receipts=track_receipts,
+            on_activity=on_activity,
         )
         queue.replies.append(reply)
         self._deliver_due(address, queue)
+        if reply in queue.replies and on_activity is not None:
+            on_activity()
         return reply.delivered
 
     def clear(self) -> None:
@@ -222,6 +231,26 @@ class ReplyOutbox:
 
         return receipt
 
+    def _track_receipt(
+        self, address: _Address, reply: _Reply, notify: PartReceipt | None
+    ) -> PartReceipt:
+        """交给通道不等于发完；实际回执才能释放驻留投递。"""
+        self._awaiting_receipt[address] = self._awaiting_receipt.get(address, 0) + 1
+
+        def receipt(segment: int | None, accepted: bool) -> None:
+            remaining = self._awaiting_receipt[address] - 1
+            if remaining:
+                self._awaiting_receipt[address] = remaining
+            else:
+                del self._awaiting_receipt[address]
+            if accepted and reply.on_activity is not None:
+                reply.on_activity()
+            self._wake()
+            if notify is not None:
+                notify(segment, accepted)
+
+        return receipt
+
     def _deliver_due(self, address: _Address, queue: _ConversationOutbox) -> None:
         while queue.replies:
             reply = queue.replies[0]
@@ -242,6 +271,8 @@ class ReplyOutbox:
             if isinstance(content, AtReplyPart) and reply.parts:
                 reply.mention_confirmed = None
                 receipt = self._mention_receipt(reply)
+            if reply.track_receipts:
+                receipt = self._track_receipt(address, reply, receipt)
             delivered = self._send(
                 reply.target,
                 content,
@@ -251,6 +282,8 @@ class ReplyOutbox:
                 reply.can_deliver,
                 receipt,
             )
+            if delivered and not reply.track_receipts and reply.on_activity is not None:
+                reply.on_activity()
             reply.quote_source = False
             queue.last_sent_at = self._clock.now()
             if not reply.parts:

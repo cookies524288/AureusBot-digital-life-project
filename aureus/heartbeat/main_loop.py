@@ -508,6 +508,7 @@ class Heartbeat:
             else None
         )
         self._sinks: dict[str, MessageSink] = {}
+        self._receipt_channels: set[str] = set()
         self._quote_routes: dict[str, Callable[[MessageRoute], bool]] = {}
         self._sticker_followups = StickerFollowups(clock)
         self._reply_outbox = ReplyOutbox(
@@ -647,8 +648,11 @@ class Heartbeat:
         sink: MessageSink,
         *,
         can_quote: Callable[[MessageRoute], bool] | None = None,
+        confirms_delivery: bool = False,
     ) -> None:
         """接上消息通道，并可提供按目的路由检查引用能力的接口。
+
+        confirms_delivery 表示通道接手后会报告成功或失败，不能把接手当作发完。
 
         Raises:
             ValueError: 同名的通道已经接上了。
@@ -656,6 +660,8 @@ class Heartbeat:
         if name in self._sinks:
             raise ValueError(f"通道 {name} 已经接上了")
         self._sinks[name] = sink
+        if confirms_delivery:
+            self._receipt_channels.add(name)
         if can_quote is not None:
             self._quote_routes[name] = can_quote
 
@@ -687,6 +693,8 @@ class Heartbeat:
             chat.allows = allows
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
+            if self._platform_inbox.residence is not None:
+                self._wake.set()
         if self._language is not None:
             self._language.set_learning_source_filter(
                 lambda scope: language_runner.allows_learning_scope(scope, allows)
@@ -1247,9 +1255,10 @@ class Heartbeat:
         self._read_body()
         self._check_stress()
         self._agenda_hooks._check_agenda()
+        expired = inbox is not None and self._expire_inbox_residence(inbox)
         self._maybe_recheck_chat()
         if inbox is not None:
-            self._maybe_select_inbox(inbox, had_thought=had_thought)
+            self._maybe_select_inbox(inbox, had_thought=had_thought and not expired)
         thought = self._thought
         if (
             self._unanswered
@@ -1404,7 +1413,7 @@ class Heartbeat:
                 and outcome.conversation is not None
                 and outcome.conversation.platform in self._sinks
                 and not self._unanswered
-                and not self._stop_requested
+                and self.allows_emoji_delivery()
                 and self._permissions.check(ACTION_CALL_ORGAN).allowed
             ):
                 self._submit_inbox(inbox.read_selection(outcome, now=self._clock.now()))
@@ -1475,26 +1484,25 @@ class Heartbeat:
             if preview is not None and history is not None and history.permits(preview.scope.key):
                 retention.publish(preview)
         person_id = _person_id_of(selected.record)
-        if (
-            self._platform_inbox is not None
-            and outcome.plan is not None
-            and not self._halt_status.halted
-        ):
+        if inbox is not None and outcome.plan is not None and not self._halt_status.halted:
             plan = outcome.plan
             queued = self._unanswered.peek_batch()
-            if target_key is not None and any(
+            if plan.stay_in_conversation and not (
+                self._permissions.check(ACTION_CALL_ORGAN).allowed and self.allows_emoji_delivery()
+            ):
+                plan = replace(plan, stay_in_conversation=None)
+            elif target_key is not None and any(
                 _platform_key(heard) not in (None, target_key)
-                and self._platform_inbox.is_priority(heard.perception)
+                and inbox.yields_to_when_idle(heard.perception)
                 for heard in queued
             ):
                 plan = replace(plan, stay_in_conversation=False)
-            self._platform_inbox.apply_plan(plan, target, selected.record, now=self._clock.now())
-            if (
-                inbox is not None
-                and inbox.residence is not None
-                and inbox.residence.conversation == target_key
-            ):
+            was_active = inbox.active_conversation == target_key and target_key is not None
+            inbox.apply_plan(plan, target, selected.record, now=self._clock.now())
+            if inbox.residence is not None and inbox.residence.conversation == target_key:
                 residence = inbox.residence
+                if was_active and inbox.active_conversation is None:
+                    self._discard_residence_batches(residence, "已离开会话，未开始这批规划。")
         self._record_reply_reference(thought, outcome.reference_plan, target)
         if outcome.declined:
             if (
@@ -1822,6 +1830,18 @@ class Heartbeat:
             if finish is not None:
                 finish()
             return delivered
+        inbox = self._platform_inbox
+        residence = inbox.residence if inbox is not None else None
+        if residence is not None and (
+            target.route is None
+            or ConversationKey.from_perception(target) != residence.conversation
+        ):
+            residence = None
+
+        def renew_residence() -> None:
+            if inbox is not None and residence is not None and inbox.permits(residence):
+                inbox.renew(self._clock.now())
+
         return self._reply_outbox.enqueue(
             target,
             record,
@@ -1833,6 +1853,8 @@ class Heartbeat:
             quote_source=quote_source,
             can_deliver=can_deliver,
             on_receipt=on_receipt,
+            track_receipts=residence is not None and target.channel in self._receipt_channels,
+            on_activity=renew_residence if residence is not None else None,
         )
 
     def _register_judgment(self, pending: _PendingJudgment) -> None:
@@ -2177,9 +2199,13 @@ class Heartbeat:
         )
 
     def _take_inbox_priority(self, inbox: InboxAttention) -> None:
-        if inbox.residence is not None and not inbox.permits(inbox.residence):
+        if inbox.residence is not None and not (
+            inbox.permits(inbox.residence)
+            and self._permissions.check(ACTION_CALL_ORGAN).allowed
+            and self.allows_emoji_delivery()
+        ):
             self._clear_planner_restarts(inbox.residence.conversation)
-            self._interrupt_inbox(inbox, "会话已失去阅读权限，未投递。")
+            self._interrupt_inbox(inbox, "会话已失去处理权限，未投递。")
         messages = inbox.priority_messages()
         for message in messages:
             if inbox.preempts(message.perception):
@@ -2206,6 +2232,16 @@ class Heartbeat:
             return
         inbox.interrupt()
         self._invalidate_judgments(residence=residence)
+        self._discard_residence_batches(residence, reason)
+        thought = self._thought
+        if (
+            thought is not None
+            and thought.replying_to
+            and thought.replying_to[-1].residence is residence
+        ):
+            self._discard_inbox_thought(thought, reason)
+
+    def _discard_residence_batches(self, residence: InboxResidence, reason: str) -> None:
         queued = [heard for heard in self._unanswered if heard.residence is residence]
         if queued:
             target = queued[-1].perception
@@ -2222,13 +2258,6 @@ class Heartbeat:
                 },
             )
             self._unanswered.remove(queued)
-        thought = self._thought
-        if (
-            thought is not None
-            and thought.replying_to
-            and thought.replying_to[-1].residence is residence
-        ):
-            self._discard_inbox_thought(thought, reason)
 
     def _discard_inbox_thought(self, thought: _Thought, reason: str) -> None:
         if thought.inbox_discard_reason is None:
@@ -2314,7 +2343,8 @@ class Heartbeat:
                 and self._thought is None
                 and not self._unanswered
                 and not self._pending
-                and not self._stop_requested
+                and self.allows_emoji_delivery()
+                and not self._residence_waiting_for_delivery()
                 and (reading is None or not reading.sleep.night)
                 and self._permissions.check(ACTION_CALL_ORGAN).allowed
             ),
@@ -2340,9 +2370,17 @@ class Heartbeat:
         self, *, browsing: bool = False, residence: InboxResidence | None = None
     ) -> None:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
+        inbox = self._platform_inbox
+        received_for_residence = False
         while self._pending:
             perception, inbox_message = self._pending[0]
-            inbox = self._platform_inbox
+            message_residence = (
+                residence
+                if residence is not None
+                and inbox_message is not None
+                and inbox_message.conversation == residence.conversation
+                else None
+            )
             if inbox_message is not None and inbox is not None:
                 previous = self._timeline.query(
                     TimelineQuery(
@@ -2352,7 +2390,7 @@ class Heartbeat:
                     )
                 )
                 if previous:
-                    if residence is None:
+                    if message_residence is None:
                         inbox.store.mark_read([inbox_message.id])
                     self._pending.popleft()
                     continue
@@ -2396,8 +2434,9 @@ class Heartbeat:
                 visibility=perception.visibility,
                 metadata=metadata,
             )
+            received_for_residence |= message_residence is not None
             self._pending.popleft()
-            if inbox_message is not None and inbox is not None and residence is None:
+            if inbox_message is not None and inbox is not None and message_residence is None:
                 inbox.store.mark_read([inbox_message.id])
             priority = _priority_of(perception, person)
             # 特别关心排在仅提及之前，两者都排在普通消息之前；抢占仍只由用户和特别关心触发（D137）。
@@ -2416,12 +2455,14 @@ class Heartbeat:
                 perception,
                 record,
                 person is not None and person.is_user and priority is Priority.USER,
-                residence,
+                message_residence,
             )
             self._enqueue_reply(heard, priority)
             if priority is Priority.USER:
                 self._last_user_contact = perception
                 self._initiative.note_user_message(record.timestamp)
+        if received_for_residence and inbox is not None and inbox.residence is residence:
+            inbox.renew(self._clock.now())
 
     def _enqueue_reply(self, heard: _Heard, priority: Priority) -> None:
         key = _platform_key(heard)
@@ -2480,6 +2521,7 @@ class Heartbeat:
             or self._unanswered
             or self._stop_requested
             or self._halt_status.halted
+            or self._residence_waiting_for_delivery()
             or not self._permissions.check(ACTION_CALL_ORGAN).allowed
         ):
             return
@@ -2512,6 +2554,26 @@ class Heartbeat:
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task, (heard,), job.strategy, round_trace=trace)
 
+    def _residence_waiting_for_delivery(self) -> bool:
+        inbox = self._platform_inbox
+        return (
+            inbox is not None
+            and inbox.residence is not None
+            and self._reply_outbox.has_pending_conversation(inbox.residence.conversation)
+        )
+
+    def _expire_inbox_residence(self, inbox: InboxAttention) -> bool:
+        residence = inbox.residence
+        if (
+            residence is None
+            or self._thought is not None
+            or self._residence_waiting_for_delivery()
+            or not inbox.expire_if_due(self._clock.now())
+        ):
+            return False
+        self._discard_residence_batches(residence, "会话驻留到期，未开始这批规划。")
+        return True
+
     def _maybe_start_thought(self) -> None:
         """定焦点、想一想：有没回复的消息、又没在想别的，就在后台调用器官。"""
         if self._thought is not None or not self._unanswered or self._stop_requested:
@@ -2528,14 +2590,14 @@ class Heartbeat:
             inbox is not None
             and active is not None
             and not self._unanswered.peek_batch((None, active))
-            and not self._reply_outbox.has_pending_conversation(active)
+            and not self._residence_waiting_for_delivery()
         ):
             waiting = next(
                 (
                     heard
                     for heard in self._unanswered
                     if _platform_key(heard) not in (None, active)
-                    and inbox.is_priority(heard.perception)
+                    and inbox.yields_to_when_idle(heard.perception)
                 ),
                 None,
             )
@@ -2559,7 +2621,7 @@ class Heartbeat:
             self._unanswered.remove(batch)
             return
         if inbox is not None and inbox.residence is not None and residence is None:
-            if self._reply_outbox.has_pending_conversation(inbox.residence.conversation):
+            if self._residence_waiting_for_delivery():
                 # 旧驻留还有分段在打字：先让它发完，下一拍再切换，别丢掉正在投递的回复。
                 return
             self._interrupt_inbox(inbox, "会话已切换，原批次未投递。")
@@ -3348,7 +3410,14 @@ class Heartbeat:
         if reading is not None and reading.sleep.night and self._body is not None:
             interval = max(interval, self._body.config.night_tick_interval_seconds)
         if self._thought is None:
-            active = self._platform_inbox.active_conversation if self._platform_inbox else None
+            inbox = self._platform_inbox
+            active = inbox.active_conversation if inbox is not None else None
+            if (
+                inbox is not None
+                and (deadline := inbox.deadline) is not None
+                and not self._residence_waiting_for_delivery()
+            ):
+                interval = min(interval, max(0.0, (deadline - self._clock.now()).total_seconds()))
             if (
                 not self._unanswered
                 and not self._pending

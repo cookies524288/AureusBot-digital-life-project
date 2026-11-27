@@ -162,6 +162,7 @@ class InboxAttention:
             return False
         self._leave()
         self._idle_since = now - _IDLE_BEFORE_READING
+        self._wants_to_read = True
         return True
 
     def mention_pull_summary(
@@ -231,6 +232,15 @@ class InboxAttention:
         if perception.trust is TrustLevel.UNVERIFIED:
             return False
         return self._preempts_verified(perception)
+
+    def yields_to_when_idle(self, perception: Perception) -> bool:
+        """点名交由驻留规划判断，只有引用而没有点名的来信仍走 D147。"""
+        return (
+            perception.route is not None
+            and self.allows(ConversationKey.from_perception(perception))
+            and (not self._mention_pull_enabled or not perception.mentioned)
+            and self.is_priority(perception)
+        )
 
     def _preempts_verified(self, perception: Perception) -> bool:
         if self._people is None:
