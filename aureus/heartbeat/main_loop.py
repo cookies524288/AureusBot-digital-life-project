@@ -45,6 +45,7 @@ from aureus.common import (
     PeopleConfig,
     PersonaGrowthConfig,
 )
+from aureus.common.async_cleanup import finish_after
 from aureus.common.config import DEFAULT_WEB_INBOUND_QUEUE_LIMIT, CortisolConfig
 from aureus.common.web_identity import WEB_CHANNEL_NAME, WEB_USER_ID
 from aureus.core import CognitiveObserver, CognitiveState
@@ -552,6 +553,7 @@ class Heartbeat:
         self._debouncers: dict[ConversationKey, MessageDebouncer] = {}
         self._wake = asyncio.Event()
         self._phase = _Phase.NOT_STARTED
+        self._shutdown_reason: str | None = None
         self._stop_requested = False
         self._maintenance_paused = False
         self._maintenance_task: asyncio.Task[Any] | None = None
@@ -1086,33 +1088,36 @@ class Heartbeat:
 
     # ---------- 生命周期 ----------
 
-    async def run(self) -> None:
-        """醒来，一直跳到 request_stop()，然后关闭。被取消时也会先走完关闭流程再退出。"""
+    async def run(self, *, finalize: bool = True) -> None:
+        """醒来，一直跳到 request_stop()；通道仍在运行时由组装层完成最后收尾。"""
         self.wake_up()
         reason = SHUTDOWN_REQUESTED
-        try:
-            while not self._stop_requested:
-                beat = asyncio.create_task(self.beat(), name="aureus-beat")
-                try:
-                    await asyncio.shield(beat)
-                except asyncio.CancelledError:
-                    self.request_stop()
-                    await beat
-                    raise
-                await self._wait_for_next_beat()
-        except asyncio.CancelledError:
-            reason = SHUTDOWN_INTERRUPTED
-            raise
-        except Exception:
-            # 出错时停下来，而不是带着没记全的经历继续跑（时间线是唯一的经历记录）。
-            reason = SHUTDOWN_AFTER_ERROR
-            logger.exception("心跳出错，开始关闭")
-            raise
-        finally:
-            await self.shut_down(reason)
+        async with finish_after(lambda: self.shut_down(reason, finalize=finalize)):
+            try:
+                while not self._stop_requested:
+                    beat = asyncio.create_task(self.beat(), name="aureus-beat")
+                    try:
+                        await asyncio.shield(beat)
+                    except asyncio.CancelledError:
+                        self.request_stop()
+                        if not beat.cancelled():
+                            async with finish_after(lambda beat=beat: beat):
+                                raise
+                        raise
+                    if not self._stop_requested:
+                        await self._wait_for_next_beat()
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                reason = SHUTDOWN_INTERRUPTED
+                raise
+            except Exception:
+                reason = SHUTDOWN_AFTER_ERROR
+                logger.exception("心跳出错，开始关闭")
+                raise
 
     def request_stop(self) -> None:
         """请心跳停下来：跳完当前这一拍就开始关闭。"""
+        if self._stop_requested:
+            return
         self._stop_requested = True
         self.live_events.pause()
         self._cancel_language_task()
@@ -1285,6 +1290,8 @@ class Heartbeat:
     async def _beat(self) -> None:
         self._collect_indexing_error()
         await self._flush_deferred_records()
+        if self._stop_requested:
+            return
         pending_cancel = self._maintenance_task
         if pending_cancel is not None and pending_cancel.done():
             if not pending_cancel.cancelled():
@@ -1352,18 +1359,16 @@ class Heartbeat:
         if thought is not None:
             await asyncio.wait({thought.task})
 
-    async def shut_down(self, reason: str = SHUTDOWN_REQUESTED) -> None:
-        """关闭：不再开始新的想法，等进行中的想法一会儿，把没记的消息记下来，写关闭记录。
-
-        尽力而为：写不进时间线时只记日志，不抛异常，免得掩盖让心跳停下来的那个原始错误。
-        关闭记录没写上也不要紧，下次醒来会按“没有正常关闭”算停机时长，结论仍然成立。
+    async def shut_down(self, reason: str = SHUTDOWN_REQUESTED, *, finalize: bool = True) -> None:
+        """停止新工作并收尾；通道仍在运行时，把最后留痕交给组装层。
 
         Args:
             reason: 为什么关闭，写进关闭记录。
+            finalize: 是否在这里排空最后的回执并写关闭记录。
         """
         if self._phase is _Phase.RUNNING:
             self.request_stop()
-        async with self._beat_lock:
+        async with self._beat_lock, finish_after(self._finalize_shutdown if finalize else None):
             await self._shut_down(reason)
 
     async def _shut_down(self, reason: str) -> None:
@@ -1374,17 +1379,29 @@ class Heartbeat:
         if self._phase is not _Phase.RUNNING:
             return
         self._phase = _Phase.STOPPING
+        recall = self._conversation.expression_recall
+        maintenance = self._emoji_maintenance
+        async with (
+            finish_after(recall.close if recall is not None else None),
+            finish_after(self._wait_for_indexing),
+            finish_after(maintenance.wait if maintenance is not None else None),
+            finish_after(self._settle_judgments_before_shutdown),
+        ):
+            await self._settle_thought_before_shutdown()
+        await self._take_in_perceptions()
+        self._shutdown_reason = reason
+
+    async def finalize_shutdown(self) -> None:
+        """通道退出后落最后的回执和关闭记录；不开始新工作。"""
+        async with self._beat_lock:
+            await self._finalize_shutdown()
+
+    async def _finalize_shutdown(self) -> None:
+        if self._phase is not _Phase.STOPPING:
+            return
         try:
-            try:
-                await self._settle_thought_before_shutdown()
-                await self._settle_judgments_before_shutdown()
-                await self._take_in_perceptions()
-                if self._emoji_maintenance is not None:
-                    await self._emoji_maintenance.wait()
-                await self._flush_deferred_records()
-            except Exception:
-                logger.exception("关闭时没能把进行中的想法或排队的消息记进时间线")
-            try:
+            await self._flush_deferred_records()
+            if (reason := self._shutdown_reason) is not None:
                 await self._timeline.async_append(
                     event_type=EVENT_SHUT_DOWN,
                     content=f"关闭：{reason}。",
@@ -1392,14 +1409,9 @@ class Heartbeat:
                     visibility=VisibilityScope.PRIVATE,
                     metadata={"reason": reason, "unanswered_messages": len(self._unanswered)},
                 )
-            except Exception:
-                logger.exception("关闭记录没能写进时间线")
+                logger.info("心跳已关闭：%s", reason)
         finally:
-            await self._wait_for_indexing()
-            if self._conversation.expression_recall is not None:
-                await self._conversation.expression_recall.close()
             self._phase = _Phase.STOPPED
-        logger.info("心跳已关闭：%s", reason)
 
     # ---------- 每一拍的步骤 ----------
 
@@ -3353,18 +3365,19 @@ class Heartbeat:
             task.cancel()
 
     async def _wait_for_indexing(self) -> None:
-        """关闭时等后台构建停下；取消不掉时只记日志，不拖住关闭。"""
+        """关闭前观察后台构建的实际结果，不能把失败当作正常取消。"""
         task = self._indexing_task
         self._indexing_task = None
         if task is None:
             return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("后台索引构建异常结束")
+        if not task.done():
+            if not task.cancelling():
+                task.cancel()
+            _, pending = await asyncio.wait({task}, timeout=_CANCEL_WAIT_SECONDS)
+            if pending:
+                raise TimeoutError("后台索引构建取消后未在停机限时内退出")
+        if not task.cancelled():
+            task.result()
 
     def _indexing_finished(self, task: asyncio.Task[None]) -> None:
         """异常保留在原任务中，并叫醒心跳处理。"""

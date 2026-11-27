@@ -19,6 +19,7 @@ from time import monotonic, sleep
 import httpx
 
 from aureus.common import AureusPaths, ConfigError, SystemClock, home_is_default, resolve_home
+from aureus.common.async_cleanup import finish_after
 from aureus.common.paths import PROJECT_ROOT, HomePathError
 from aureus.common.vault import VaultError
 from aureus.core.runtime import Core, open_core
@@ -203,18 +204,14 @@ async def _run_web(
         finally:
             core.heartbeat.request_stop()
 
-    async def beat() -> None:
-        try:
-            await core.heartbeat.run()
-        finally:
-            web.request_stop()
-
-    try:
-        async with core.qq or nullcontext(), asyncio.TaskGroup() as tasks:
-            tasks.create_task(serve())
-            tasks.create_task(beat())
-    finally:
-        await terminal.close()
+    async with (
+        finish_after(core.heartbeat.finalize_shutdown),
+        finish_after(terminal.close),
+        core.qq or nullcontext(),
+    ):
+        serving = asyncio.create_task(serve(), name="aureus-web")
+        async with finish_after(lambda: web.stop(serving)):
+            await core.heartbeat.run(finalize=False)
 
 
 def _launch(
@@ -254,8 +251,8 @@ def _launch(
                                 owner_pid=owner_pid,
                             )
                         )
-                    except* (WebServerError, OSError) as errors:
-                        raise ConfigError(str(errors.exceptions[0])) from None
+                    except WebServerError as error:
+                        raise ConfigError(str(error)) from error
             return restarting
         except SingleInstanceLockError:
             # 另一个实例正在运行：可能还没发布网页地址，也可能正在重启。

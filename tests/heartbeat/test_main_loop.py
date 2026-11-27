@@ -617,13 +617,56 @@ async def test_messages_still_queued_at_shutdown_are_recorded(harness: Harness) 
     assert harness.organs.requests == []  # 关闭时不再开始新的想法
 
 
-async def test_shutdown_does_not_raise_when_the_timeline_is_gone(harness: Harness) -> None:
+async def test_shutdown_exposes_a_closed_timeline(harness: Harness) -> None:
     harness.timeline.close()
 
-    await harness.heartbeat.shut_down()  # 只记日志，不掩盖原来让它停下的错误
+    with pytest.raises(RuntimeError, match="Database is not open"):
+        await harness.heartbeat.shut_down()
 
     harness.timeline.open()
     assert harness.records(EVENT_SHUT_DOWN) == []
+
+
+async def test_run_preserves_runtime_and_shutdown_errors(
+    factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = factory.make()
+    runtime_error = ValueError("拍内读取失败")
+    shutdown_error = sqlite3.OperationalError("停机排空失败")
+
+    async def broken_beat() -> NoReturn:
+        raise runtime_error
+
+    async def broken_stop() -> NoReturn:
+        raise shutdown_error
+
+    monkeypatch.setattr(harness.heartbeat, "beat", broken_beat)
+    monkeypatch.setattr(harness.heartbeat, "_settle_thought_before_shutdown", broken_stop)
+
+    with pytest.raises(ExceptionGroup) as failure:
+        await harness.heartbeat.run()
+
+    assert failure.value.exceptions == (runtime_error, shutdown_error)
+    assert not harness.records(EVENT_SHUT_DOWN)
+
+
+async def test_shutdown_propagates_the_index_failure_even_without_another_beat(
+    harness: Harness,
+) -> None:
+    error = sqlite3.OperationalError("后台索引写入失败")
+
+    async def broken_index() -> NoReturn:
+        raise error
+
+    task = asyncio.create_task(broken_index())
+    harness.heartbeat._indexing_task = task
+    task.add_done_callback(harness.heartbeat._indexing_finished)
+    await asyncio.wait({task})
+
+    with pytest.raises(sqlite3.OperationalError) as failure:
+        await harness.heartbeat.shut_down()
+    assert failure.value is error
+    assert not harness.records(EVENT_SHUT_DOWN)
 
 
 # ---------- run()：真正的主循环 ----------

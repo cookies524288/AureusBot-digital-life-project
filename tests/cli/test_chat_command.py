@@ -7,13 +7,20 @@ import textwrap
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+from websockets.asyncio.server import ServerConnection, serve
 
-from aureus.cli.chat_command import EXIT_FAILURE, EXIT_OK, run_chat_command
+from aureus.channels import QQ_CHANNEL_NAME, TerminalChannel
+from aureus.cli.chat_command import EXIT_FAILURE, EXIT_OK, _chat, run_chat_command
 from aureus.common import AureusPaths, shutdown_logging
-from aureus.heartbeat import EVENT_MESSAGE, EVENT_SHUT_DOWN
-from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery
+from aureus.core.runtime import open_core
+from aureus.heartbeat import EVENT_MESSAGE, EVENT_SHUT_DOWN, MessageRoute, Perception, TrustLevel
+from aureus.heartbeat.events import EVENT_REPLY_DELIVERED, EVENT_REPLY_DELIVERY_FAILED
+from aureus.heartbeat.inbox_store import ConversationKey
+from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from tests.channels.test_qq_runtime import ACCOUNT, GROUP, FakeOneBot
 
 IDENTITY = textwrap.dedent(
     """\
@@ -122,6 +129,105 @@ def test_end_of_input_shuts_down_cleanly(paths: AureusPaths) -> None:
     output = run_chat(paths, [])
     assert output[-1] == "已关闭。"
     assert read_timeline(paths)[-1].event_type == EVENT_SHUT_DOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirm", [True, False], ids=["receipt", "timeout"])
+async def test_chat_drains_only_in_flight_qq_receipts_before_closing_database(
+    paths: AureusPaths, confirm: bool
+) -> None:
+    release_receipt = asyncio.Event()
+
+    class HeldOneBot(FakeOneBot):
+        async def send(self, remote: ServerConnection, **payload: Any) -> None:
+            if "message_id" in payload.get("data", {}):
+                await release_receipt.wait()
+            await super().send(remote, **payload)
+
+    fake = HeldOneBot()
+    fake.reply_with = ["ok" if confirm else "timeout"]
+    existing_threads = set(threading.enumerate())
+    async with asyncio.timeout(8), serve(fake.handle, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        paths.runtime_config_file.write_text(
+            f'[web]\nenabled = false\n[qq]\nenabled = true\naccount_id = "{ACCOUNT}"\n'
+            f'endpoint = "ws://127.0.0.1:{port}"\naction_timeout_seconds = 1\n',
+            encoding="utf-8",
+        )
+        with open_core(paths, fake_organs=True, to_console=False) as core:
+            channel = core.qq
+            assert channel is not None and core.inbox_store is not None
+            heartbeat = core.heartbeat
+            terminal = TerminalChannel(heartbeat)
+            async with asyncio.TaskGroup() as tasks:
+                running = tasks.create_task(
+                    _chat(core, None, terminal, lambda _line: None, first=False)
+                )
+                try:
+                    await fake.connections.get()
+                    while channel._transport.socket is None or heartbeat.downtime is None:
+                        await asyncio.sleep(0.01)
+                    route = MessageRoute(str(ACCOUNT), "group", str(GROUP), "31")
+                    target = Perception(
+                        QQ_CHANNEL_NAME,
+                        "2200",
+                        "来信",
+                        VisibilityScope.GROUP,
+                        TrustLevel.VERIFIED_CONTACT,
+                        route=route,
+                    )
+                    reply = await core.timeline.async_append(
+                        EVENT_MESSAGE,
+                        "在途\n队列中",
+                        ActorType.ME,
+                        visibility=target.visibility,
+                        metadata={"channel": QQ_CHANNEL_NAME, "reply_segments": ["在途", "队列中"]},
+                    )
+                    await core.timeline.async_query(TimelineQuery(limit=1))
+                    assert heartbeat._send_reply_part(target, "在途", reply, False, 1, None)
+                    await fake.messages.get()
+                    assert heartbeat._send_reply_part(target, "队列中", reply, False, 2, None)
+                    heartbeat.request_stop()
+                    while not channel._closing:
+                        await asyncio.sleep(0.01)
+                    assert not running.done()
+                    assert not core.timeline.query(TimelineQuery(event_type=EVENT_SHUT_DOWN))
+                    release_receipt.set()
+                    await running
+                finally:
+                    release_receipt.set()
+
+            rows = core.timeline.query(TimelineQuery())
+            receipts = [row for row in rows if row.event_type == EVENT_REPLY_DELIVERED]
+            failures = [row for row in rows if row.event_type == EVENT_REPLY_DELIVERY_FAILED]
+            assert rows[-1].event_type == EVENT_SHUT_DOWN
+            assert sum(row.event_type == EVENT_SHUT_DOWN for row in rows) == 1
+            assert not channel._sending
+            assert not channel._transport._pending
+            assert fake.messages.empty()
+            conversation = ConversationKey(QQ_CHANNEL_NAME, str(ACCOUNT), "group", str(GROUP))
+            saved = core.inbox_store.list_messages(conversation)
+            if confirm:
+                assert [(row.content, row.metadata["message_id"]) for row in receipts] == [
+                    ("在途", "6000")
+                ]
+                assert [row.perception.content for row in saved] == ["在途"]
+                assert [row.metadata["segment"] for row in failures] == [2]
+            else:
+                assert not receipts and not saved
+                first_failure = next(row for row in failures if row.metadata["segment"] == 1)
+                assert "超时" in first_failure.content and "无法确认" in first_failure.content
+                assert sorted(row.metadata["segment"] for row in failures) == [1, 2]
+            workers = {
+                thread
+                for thread in set(threading.enumerate()) - existing_threads
+                if thread.name.startswith("aureus-timeline-")
+            }
+            assert {thread.name.rsplit("_", 1)[0] for thread in workers} == {
+                "aureus-timeline-read",
+                "aureus-timeline-write",
+            }
+        assert all(not thread.is_alive() for thread in workers)
 
 
 def test_restart_reopens_core_and_reads_next_command(paths: AureusPaths) -> None:

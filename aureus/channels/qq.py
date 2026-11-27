@@ -16,6 +16,7 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import WebSocketException
 
 from aureus.common import Clock, QQConfig, SystemClock
+from aureus.common.async_cleanup import finish_after, wait_for_cleanup
 from aureus.heartbeat import (
     MediaReference,
     MessageKind,
@@ -119,12 +120,15 @@ class QQChannel:
         self._cooldowns: OrderedDict[tuple[ConversationKey, str, str], datetime] = OrderedDict()
         self._fetching: set[asyncio.Task[None]] = set()
         self._sending: set[asyncio.Task[None]] = set()
+        self._in_flight: set[asyncio.Task[None]] = set()
         self._last_send: dict[ConversationKey, asyncio.Task[None]] = {}
         self._connection: asyncio.Task[None] | None = None
         self._group_lookups: dict[str, asyncio.Task[None]] = {}
         self._group_names: dict[str, str] = {}
+        self._closing = False
 
     async def __aenter__(self) -> Self:
+        self._closing = False
         self._connection = asyncio.create_task(self._transport.run(), name="aureus-onebot")
         return self
 
@@ -134,12 +138,39 @@ class QQChannel:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        tasks = [*self._sending, *self._fetching, *self._group_lookups.values()]
-        if self._connection is not None:
-            tasks.append(self._connection)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        self._closing = True
+        try:
+            await wait_for_cleanup(asyncio.create_task(self._drain_sends(), name="aureus-qq-close"))
+        except BaseException as close_error:
+            if exc_value is not None:
+                raise BaseExceptionGroup("运行和 QQ 收尾均出错", [exc_value, close_error]) from None
+            raise
+
+    async def _drain_sends(self) -> None:
+        async with finish_after(self._disconnect):
+            sending = set(self._sending)
+            tasks = [*self._fetching, *self._group_lookups.values(), *(sending - self._in_flight)]
+            for task in tasks:
+                task.cancel()
+            await self._settle(set(tasks) | sending)
+
+    async def _disconnect(self) -> None:
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            connection.cancel()
+            await self._settle({connection})
+
+    @staticmethod
+    async def _settle(tasks: set[asyncio.Task[None]]) -> None:
+        if not tasks:
+            return
+        await asyncio.wait(tasks)
+        errors = [task.exception() for task in tasks if not task.cancelled()]
+        failures = [error for error in errors if error is not None]
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise BaseExceptionGroup("QQ 后台任务收尾失败", failures)
 
     def _allows_route(self, route: MessageRoute | ConversationKey) -> bool:
         group = self._config.allowed_group_id
@@ -212,7 +243,8 @@ class QQChannel:
         if len(self._seen) > _RECENT_MESSAGE_LIMIT:
             self._seen.popitem(last=False)
         if (
-            any(
+            not self._closing
+            and any(
                 item.kind == "forward" and item.forward_id and item.text == "[合并转发]"
                 for item in perception.components
             )
@@ -566,6 +598,8 @@ class QQChannel:
         route = message.route
         if message.kind is not MessageKind.REPLY:
             return
+        if self._closing:
+            raise OneBotError("QQ 正在关闭，没有开始新的发送")
         if route is None:
             if self._test_group is not None or self._config.allowed_group_id is not None:
                 raise OneBotError("QQ 范围内的消息需要明确目的地址")
@@ -607,10 +641,11 @@ class QQChannel:
 
         def drop(finished: asyncio.Task[None]) -> None:
             self._sending.discard(finished)
+            self._in_flight.discard(finished)
             if self._last_send.get(conversation) is finished:
                 del self._last_send[conversation]
             if finished.cancelled() and message.report_delivery_failure is not None:
-                message.report_delivery_failure("QQ 发送已取消，没有收到这段回复的投递确认。")
+                message.report_delivery_failure("QQ 队列中的发送已取消，未投递这段回复。")
 
         task.add_done_callback(drop)
 
@@ -684,7 +719,8 @@ class QQChannel:
 
         def authorize() -> None:
             if (
-                self._transport.socket is not socket
+                self._closing
+                or self._transport.socket is not socket
                 or not self.allows_inbox_conversation(key)
                 or (message.can_deliver is not None and not message.can_deliver())
                 or (
@@ -712,6 +748,12 @@ class QQChannel:
             ):
                 raise OneBotError("此表情已失去登记或外发资格")
 
+        def authorize_send() -> None:
+            authorize()
+            task = asyncio.current_task()
+            assert task is not None
+            self._in_flight.add(task)
+
         def original(identifier: str) -> InboxMessage:
             row = store.find_platform_message(key, identifier) if store else None
             if row is None or row.perception.visibility != message.visibility:
@@ -720,7 +762,7 @@ class QQChannel:
 
         try:
             if previous is not None:
-                await previous
+                await asyncio.shield(previous)
             authorize()
             image = None
             if digest is not None:
@@ -840,23 +882,24 @@ class QQChannel:
                     if _image_mime(data):
                         image = data
                     else:
-                        await self.desktop.upload_file(key, name, data, authorize)
+                        await self.desktop.upload_file(key, name, data, authorize_send)
                         method = "uploaded"
             if method == "send_msg":
                 params = encode_message(message, route, image=image)
             if method != "uploaded":
-                authorize()
+                authorize_send()
                 receipt = await self._transport.call(socket, method, params)
                 if method == "send_msg":
                     identifier = message_id(receipt.get("message_id"))
                     if identifier is None:
                         raise OneBotError("QQ 未返回有效消息编号")
-                    await self._save_delivered(message, route, identifier, params["message"])
-                elif method == "delete_msg" and store is not None and action is not None:
-                    store.mark_recalled(key, action.target_id)
+        except TimeoutError:
+            logger.warning("等待 QQ 投递确认超时，无法确认是否送达", exc_info=True)
+            if message.report_delivery_failure is not None:
+                message.report_delivery_failure("等待 QQ 投递确认超时，无法确认这段回复是否送达。")
+            return
         except (
             OSError,
-            TimeoutError,
             WebSocketException,
             OneBotError,
             DesktopError,
@@ -867,13 +910,14 @@ class QQChannel:
             if message.report_delivery_failure is not None:
                 message.report_delivery_failure("QQ 未确认这段回复投递成功。")
             return
-        try:
-            if identifier is not None and message.confirm_platform_delivery is not None:
-                message.confirm_platform_delivery(identifier)
-            elif message.confirm_delivery is not None:
-                message.confirm_delivery()
-        except SQLiteError:
-            logger.exception("QQ 消息已发送，但时间线确认记录写入失败")
+        if identifier is not None and message.confirm_platform_delivery is not None:
+            message.confirm_platform_delivery(identifier)
+        elif message.confirm_delivery is not None:
+            message.confirm_delivery()
+        if identifier is not None:
+            await self._save_delivered(message, route, identifier, params["message"])
+        elif method == "delete_msg" and store is not None and action is not None:
+            await asyncio.to_thread(store.mark_recalled, key, action.target_id)
         try:
             if digest is not None and self._record_emoji_use is not None:
                 await asyncio.to_thread(self._record_emoji_use, digest)
@@ -903,9 +947,6 @@ class QQChannel:
             else None,
             components=components,
         )
-        try:
-            await asyncio.to_thread(
-                self._inbox_store.add_delivered, perception, sender_name=message.sender_name
-            )
-        except SQLiteError:
-            logger.exception("QQ 消息已发送，但外发历史写入失败")
+        await asyncio.to_thread(
+            self._inbox_store.add_delivered, perception, sender_name=message.sender_name
+        )

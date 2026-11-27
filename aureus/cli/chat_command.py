@@ -12,6 +12,7 @@ from contextlib import nullcontext
 from aureus.channels import CHANNEL_NAME, TerminalChannel
 from aureus.channels.onebot import account_id
 from aureus.common import AureusPaths, ConfigError, SystemClock, WebConfig
+from aureus.common.async_cleanup import finish_after
 from aureus.common.vault import VaultError
 from aureus.core.runtime import Core, open_core
 from aureus.identity.service import IdentityError
@@ -59,25 +60,35 @@ async def _chat(
     if not first:
         terminal.reconnect(heartbeat)
     heartbeat.attach_channel(CHANNEL_NAME, terminal.show)
-    # 心跳先醒来再接终端：醒来时要先读时间线算停机多久，用户敲的第一句话才不会抢在前面。
-    beating = asyncio.create_task(heartbeat.run(), name="aureus-heartbeat")
-    await asyncio.sleep(0)
-    if heartbeat.downtime is not None:
-        write_line(f"{heartbeat.bot_pronoun}醒来了。{heartbeat.downtime.describe()}")
     serving: asyncio.Task[None] | None = None
-    if web is not None:
-        serving = asyncio.create_task(
-            _serve_web(web, core.settings.runtime.web, write_line), name="aureus-web"
-        )
-    if first:
-        terminal.start()
-    try:
-        await beating
-    finally:
-        # 心跳停了（或被取消）网页也跟着停：网页消息已经没人回复了。
+
+    async def stop_web() -> None:
         if web is not None and serving is not None:
-            web.request_stop()
-            await serving
+            await web.stop(serving)
+
+    async def serve(server: WebServer) -> None:
+        try:
+            await _serve_web(server, core.settings.runtime.web, write_line)
+        except BaseException:
+            heartbeat.request_stop()
+            raise
+
+    async with finish_after(heartbeat.finalize_shutdown), core.qq or nullcontext():
+        beating = asyncio.create_task(heartbeat.run(finalize=False), name="aureus-heartbeat")
+        async with finish_after(stop_web):
+            try:
+                await asyncio.sleep(0)
+                if heartbeat.downtime is not None:
+                    write_line(f"{heartbeat.bot_pronoun}醒来了。{heartbeat.downtime.describe()}")
+                if web is not None:
+                    serving = asyncio.create_task(serve(web), name="aureus-web")
+                if first:
+                    terminal.start()
+            except BaseException:
+                heartbeat.request_stop()
+                async with finish_after(lambda: beating):
+                    raise
+            await beating
 
 
 def run_chat_command(
@@ -119,8 +130,7 @@ def run_chat_command(
                         core.heartbeat, read_line, write_line, request_restart=request_restart
                     )
                 with open_web(core, SystemClock(), request_restart=request_restart) as web:
-                    async with core.qq or nullcontext():
-                        await _chat(core, web, terminal, write_line, first=first)
+                    await _chat(core, web, terminal, write_line, first=first)
             if not restarting:
                 return
 

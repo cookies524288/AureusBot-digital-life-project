@@ -4,6 +4,7 @@ uvicorn 默认会接管 Ctrl+C 和终止信号，还会重设日志配置：这�
 信号由 aureus chat 处理（先让心跳写完 shut_down 再退出），日志仍走项目自己的设置。
 """
 
+import asyncio
 import contextlib
 import hashlib
 import os
@@ -17,6 +18,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from aureus.common import ConfigError, WebConfig
+from aureus.common.async_cleanup import wait_for_cleanup
 
 # 默认只监听本机；allow_remote 打开后监听所有网卡，局域网里的手机才连得上（D53 第 5 条）。
 LOOPBACK_HOST = "127.0.0.1"
@@ -169,3 +171,8 @@ class WebServer:
         """请服务停下来；可以重复调用。"""
         self._clear_address()
         self._server.should_exit = True
+
+    async def stop(self, serving: asyncio.Task[None]) -> None:
+        """停止接收请求，等待服务跑完有时限的退出流程。"""
+        self.request_stop()
+        await wait_for_cleanup(serving)
