@@ -15,6 +15,7 @@ from aureus.memory import ExpressionVectorIndex, LanguageContent, LanguageKind, 
 from aureus.memory.language_matching import ExpressionReviewStatus
 from aureus.organs import LOCAL_EXPRESSION_EMBEDDING, KeyResolver, ModelRoute, ModelsConfig
 from aureus.organs.llm_adapter import EmbeddingOrgan, LLMOrgan
+from aureus.organs.provider_breaker import ProviderCircuitBreaker
 from aureus.timeline import VisibilityScope
 from tests.heartbeat.test_judging_flow import NOW
 from tests.test_exploration_runtime import _paths
@@ -160,8 +161,16 @@ async def test_local_expression_vectors_reach_actual_reply(
             resolver: KeyResolver,
             *,
             clock: Clock | None = None,
+            circuit_breaker: ProviderCircuitBreaker | None = None,
         ) -> None:
-            super().__init__(organ_id, routes, resolver, transport=transport, clock=clock)
+            super().__init__(
+                organ_id,
+                routes,
+                resolver,
+                transport=transport,
+                clock=clock,
+                circuit_breaker=circuit_breaker,
+            )
 
     class MockLLM(LLMOrgan):
         def __init__(
@@ -176,6 +185,7 @@ async def test_local_expression_vectors_reach_actual_reply(
             prompts: object = None,
             transport: object = None,
             clock: Clock | None = None,
+            circuit_breaker: ProviderCircuitBreaker | None = None,
         ) -> None:
             super().__init__(
                 organ_id,
@@ -183,6 +193,7 @@ async def test_local_expression_vectors_reach_actual_reply(
                 key_resolver,
                 transport=httpx.MockTransport(chat),
                 clock=clock,
+                circuit_breaker=circuit_breaker,
             )
 
     monkeypatch.setattr(model_runtime, "EmbeddingOrgan", MockEmbedding)
