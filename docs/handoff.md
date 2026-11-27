@@ -1,11 +1,18 @@
 # Aureus 交接：3.66 任务已设计，3.65 聊天补全与 3.64 前端审查
 
+## 3.60b/3.60c 图片回填退避与取消调用记账：完成，已合入本地 main（2026-11-27）
+
+- D151：图片回填读不到的附件按 30 分钟起逐次翻倍、24 小时封顶退避；每批多扫描候选，坏附件不再挡住可读图片；本批无写入结束，不再每分钟「索引构建连续 3 轮没有进展」。新增 `inbox_image_retries` 表；保留删除同步清理。
+- D152：被新消息打断的模型调用仍记账，但 `succeeded=True`、保留「本轮生成已取消」原因；不写失败时间线，压力不再把取消算成失败。历史账本不改。
+- 复审复跑合并后八份 287 过、3 个既有页面脚本失败（`fields.removed`，合入前同一组 ID）；目标文件 Ruff、Pyright 通过；未跑全量、未重启、未推送。
+- 重启后观察：日志不再每分钟「索引构建没有进展」；`inbox_image_vectors` 继续增长；压力不再因取消调用上升（旧取消记录会留在窗口里直到被新记录挤出）。
+
 ## 3.60a 图片嵌入输入格式：完成，已合入本地 main（2026-11-27）
 
 - 根因：本机 chinese-clip 服务只把 `data:image` 字符串当图片，Aureus 发 Jina 对象，被当文本编码；大图超过 512 位置上限返回 500，小图返回 200 也只是文本向量。D143 只修了 GIF/WebP 转 PNG，没有修格式错配。
 - 设计见 D150，任务见 [3.60a](tasks/3.60a-image-embedding-input-format.md)。模型写 `extra_params.image_embedding_input = "{data_uri}"` 时改发 data URI 字符串；默认 Jina 不变；回填遇熔断停止本批。
 - 已合入本地 main：`3abd0bf` 配置常量与校验、`eb76478` 发送格式与测速展示、`0ce5f74` 回填熔断停止、`86592bf` 复用测速常量，随后提交文档与验收。复审复跑定向三份 **221 过**、`tests/organs` **305 过**、模型/配置网页接口 **105 过**；Ruff、Pyright 通过。未跑全量；未重启、未推送。
-- 维护者重启前，在本机 `aureus_home/config/models.toml` 的 chinese-clip 模型下补 `[models.extra_params] image_embedding_input = "{data_uri}"`。重启后观察图片索引增长，账本不再出现 image_embedding「服务商内部错误」。
+- 本机 `aureus_home/config/models.toml` 的 chinese-clip 模型已补 `[models.extra_params] image_embedding_input = "{data_uri}"`；15:52 重启后图片嵌入 53 次成功、0 失败，账本不再出现 image_embedding「服务商内部错误」。
 
 ## 3.66 单意识体驻留与响应效率：分批实施中（2026-11-27）
 
