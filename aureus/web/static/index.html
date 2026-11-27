@@ -2100,8 +2100,8 @@ function renderOverviewRound(records, ok = true) {
   const flow = $('ov-activity-flow');
   const round = ok ? inboxActivityLatestRound(records) : null;
   updateLiveRegion(flow, () => {
-    flow.replaceChildren(round ? inboxActivityRound(round) : inboxActivityIdle());
-    if (!ok) flow.append(el('p', {class:'ov-empty', text:'暂时无法读取活动'}));
+    flow.replaceChildren(!ok ? el('p', {class:'ov-empty', text:'暂时无法读取活动'})
+      : round ? inboxActivityRound(round) : inboxActivityIdle());
   });
 }
 
@@ -2111,6 +2111,7 @@ const LEGACY_OVERVIEW_SIGNAL_INTERVAL_MS = 2000;
 const OVERVIEW_CACHE_MS = 5000;
 const OVERVIEW_ACTIVITY_LIMIT = 3;
 const OVERVIEW_ROUND_LIMIT = 60;
+const OVERVIEW_RECENT_QUERY = `hours=24&limit=${OVERVIEW_ROUND_LIMIT}`;
 let overviewSignalTimer;
 let overviewLive;
 function renderOverview(d) {
@@ -2153,6 +2154,12 @@ function renderOverviewActivity(data) {
       el('time', {datetime:record.time, text:fmtTime(record.time, true)}))));
     if (!records.length) activity.append(el('li', {class:'ov-empty', text:data ? '近 24 小时没有动态' : '暂时无法读取动态'}));
   });
+}
+function cacheOverviewRecent(data) {
+  const activity = {...data, records:data.records.slice(-OVERVIEW_ACTIVITY_LIMIT)};
+  cacheWrite('overview-round', data, OVERVIEW_CACHE_MS);
+  cacheWrite('overview-activity', activity, OVERVIEW_CACHE_MS);
+  return activity;
 }
 function loadOverview() {
   if (state.incrementalUpdates) {
@@ -7427,6 +7434,14 @@ const PAGE_PREFETCH = {
       if (!res.ok || session !== state.loaded || (timeline && generation !== timelineGeneration)) return;
       cacheWrite(key, res.data, OVERVIEW_CACHE_MS);
     });
+    if (state.incrementalUpdates) {
+      return Promise.all([
+        read('/api/overview', 'overview'),
+        prefetchRequest('/api/timeline?' + OVERVIEW_RECENT_QUERY).then(res => {
+          if (res.ok && session === state.loaded && generation === timelineGeneration) cacheOverviewRecent(res.data);
+        }),
+      ]);
+    }
     return Promise.all([read('/api/overview', 'overview'),
       read('/api/timeline?hours=24&limit=3', 'overview-activity', true),
       read('/api/timeline?hours=24&limit=60', 'overview-round', true)]);

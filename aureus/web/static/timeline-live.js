@@ -68,27 +68,30 @@ function refreshOverviewLive(skipRecent = false) {
           fail(res);
         }
       });
-      const query = `hours=24&limit=${OVERVIEW_ROUND_LIMIT}`;
       const apply = data => {
         const before = live.records?.at(-1)?.id ?? 0;
         const records = [...(live.records ?? []), ...data.records.filter(row => row.id > before)].slice(-OVERVIEW_ROUND_LIMIT);
         const changed = !live.records || records.at(-1)?.id !== live.records.at(-1)?.id;
         live.records = records;
         live.cursor = data.since_id ?? records.at(-1)?.id ?? 0;
-        const round = {records, since_id:live.cursor};
-        const activity = {records:records.slice(-OVERVIEW_ACTIVITY_LIMIT)};
-        cacheWrite('overview-round', round, OVERVIEW_CACHE_MS);
-        cacheWrite('overview-activity', activity, OVERVIEW_CACHE_MS);
+        const activity = cacheOverviewRecent({records, since_id:live.cursor});
         if (changed) {
           renderOverviewActivity(activity);
           renderOverviewRound(records);
         }
       };
-      const recordsRead = skipRecent ? null : live.cursor == null ? api('/api/timeline?' + query).then(res => {
+      const recordsRead = skipRecent ? null : live.cursor == null ? api('/api/timeline?' + OVERVIEW_RECENT_QUERY).then(res => {
         if (!current()) return;
-        if (res.ok) apply(res.data);
-        else if (!res.aborted && !notBuilt(res)) fail(res);
-      }) : fetchTimelineDelta(query, live.cursor, current, apply);
+        if (res.ok) {
+          apply(res.data);
+        } else if (!res.aborted) {
+          if (!live.records) {
+            renderOverviewActivity(null);
+            renderOverviewRound([], false);
+          }
+          if (!notBuilt(res)) fail(res);
+        }
+      }) : fetchTimelineDelta(OVERVIEW_RECENT_QUERY, live.cursor, current, apply);
       skipRecent = false;
       await Promise.all([stateRead, recordsRead]);
     } while (live.again && current());

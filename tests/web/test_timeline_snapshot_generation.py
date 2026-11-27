@@ -84,8 +84,9 @@ def test_unrelated_event_keeps_same_snapshot_shared_across_navigation() -> None:
 def test_completed_overview_is_not_replayed_by_slow_timelines() -> None:
     run_page_script(SETUP + """
         state.page = 'persona';
-        const overview = '/api/overview', activity = '/api/timeline?hours=24&limit=3';
+        const overview = '/api/overview';
         const round = '/api/timeline?hours=24&limit=60';
+        const paths = [overview, round];
         const snapshot = () => [cacheRead('overview')?.data.version,
           cacheRead('overview-activity')?.data.summary.sample,
           cacheRead('overview-round')?.data.summary.sample];
@@ -96,7 +97,7 @@ def test_completed_overview_is_not_replayed_by_slow_timelines() -> None:
         await PAGE_PREFETCH.overview();
         const fresh = snapshot();
         release(); await old;
-        assert.deepEqual(requests, [overview, activity, round, overview, activity, round]);
+        assert.deepEqual(requests, paths.concat(paths));
         assert.deepEqual(fresh, ['新', '新', '新']);
         assert.deepEqual(snapshot(), fresh);
         assert.deepEqual(early, ['旧', undefined, undefined]);
