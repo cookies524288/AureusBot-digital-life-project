@@ -5,12 +5,14 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import closing
+from datetime import datetime, timedelta
 from math import hypot, sumprod
 from pathlib import Path
 from sqlite3 import Connection, Row
 from sqlite3 import Error as SQLiteError
 from typing import Any
 
+from aureus.common import Clock, SystemClock
 from aureus.common.sqlite import open_connection
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import (
@@ -24,6 +26,10 @@ from aureus.safety import CallRejectedError
 
 logger = logging.getLogger(__name__)
 
+# 退避曲线：读不到的旧附件不必每拍重试；首次 30 分钟，逐次翻倍，封顶 24 小时（D151）。
+_RETRY_BASE_SECONDS = 30 * 60
+_RETRY_MAX_SECONDS = 24 * 60 * 60
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox_image_vectors (
     id INTEGER PRIMARY KEY,
@@ -32,6 +38,14 @@ CREATE TABLE IF NOT EXISTS inbox_image_vectors (
     space TEXT NOT NULL,
     vector TEXT NOT NULL,
     UNIQUE (message_id, attachment)
+);
+CREATE TABLE IF NOT EXISTS inbox_image_retries (
+    message_id INTEGER NOT NULL REFERENCES inbox_messages(id),
+    attachment TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    retry_after TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY (message_id, attachment)
 );
 """
 _SOURCE = """
@@ -74,8 +88,11 @@ class InboxImageIndex:
         path: Path,
         call: Callable[[OrganRequest], Awaitable[OrganResponse]],
         enabled: Callable[[], bool],
+        *,
+        clock: Clock | None = None,
     ) -> None:
         self._path, self._call, self._enabled = path, call, enabled
+        self._clock = clock or SystemClock()
         # 后台回填持有这一批的写权；此时按需索引跳过，等下一轮回填统一处理。
         self._backfilling = False
         with closing(open_connection(path)) as connection:
@@ -118,6 +135,7 @@ class InboxImageIndex:
             return True, False
         self._backfilling = True
         try:
+            now = self._clock.now()
             conversations = await asyncio.to_thread(store.visible_conversation_keys)
             remaining = limit
             written = 0
@@ -127,17 +145,23 @@ class InboxImageIndex:
                     break
                 if not allows(conversation):
                     continue
-                rows = await asyncio.to_thread(self._unindexed_images, conversation, remaining)
-                for message_id, position in rows:
+                rows = await asyncio.to_thread(self._unindexed_images, conversation, remaining, now)
+                for message_id, position, file_id in rows:
                     loaded = await asyncio.to_thread(
                         store.get_visible_image, conversation, message_id, position
                     )
                     if loaded is None:
+                        await asyncio.to_thread(
+                            self._mark_retry, message_id, file_id, "附件不可见", now
+                        )
                         skipped += 1
                         continue
                     perception, attachment, _note = loaded
                     media = await read(perception, attachment)
                     if media is None:
+                        await asyncio.to_thread(
+                            self._mark_retry, message_id, file_id, "读取附件失败", now
+                        )
                         skipped += 1
                         continue
                     data, _mime = media
@@ -153,12 +177,17 @@ class InboxImageIndex:
                         # 服务商正在熔断冷却：本批立即停下，下一轮心跳再试（D150）。
                         return True, written > 0
                     except SQLiteError:
+                        # 数据库本身不可用，写不了退避记录，下一拍再试即可（D151）。
                         logger.exception("图片向量索引写入失败")
-                        saved = False
+                        skipped += 1
+                        continue
                     if saved:
                         written += 1
                         remaining -= 1
                     else:
+                        await asyncio.to_thread(
+                            self._mark_retry, message_id, file_id, "未保存向量", now
+                        )
                         skipped += 1
             if skipped:
                 logger.debug("图片索引本轮跳过 %s 条暂不可用的附件", skipped)
@@ -167,12 +196,17 @@ class InboxImageIndex:
             self._backfilling = False
 
     def _unindexed_images(
-        self, conversation: ConversationKey, limit: int
-    ) -> list[tuple[int, int]]:
-        """该会话中仍随可见入站消息保存、尚未建索引的图片（消息序号，附件位置）。"""
+        self, conversation: ConversationKey, limit: int, now: datetime
+    ) -> list[tuple[int, int, str]]:
+        """该会话中仍随可见入站消息保存、尚未建索引、也不在退避期内的图片。
+
+        Returns:
+            （消息序号，附件位置，附件地址）的列表。
+        """
+        stamp = now.isoformat(timespec="microseconds")
         with closing(open_connection(self._path, read_only=True)) as connection:
             rows = connection.execute(
-                f"""SELECT m.id, attachment.key
+                f"""SELECT m.id, attachment.key, attachment.value ->> '$[1]'
                     FROM inbox_messages m JOIN json_each(m.attachments) attachment
                     WHERE m.direction = 'incoming' AND {USER_VISIBLE_INBOX_MESSAGE}
                     AND attachment.type = 'array' AND attachment.value ->> '$[0]' = 'image'
@@ -186,10 +220,16 @@ class InboxImageIndex:
                         WHERE v.message_id = m.id
                         AND v.attachment = attachment.value ->> '$[1]'
                     )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM inbox_image_retries r
+                        WHERE r.message_id = m.id
+                        AND r.attachment = attachment.value ->> '$[1]'
+                        AND r.retry_after > ?
+                    )
                     ORDER BY m.id, attachment.key LIMIT ?""",
-                (*conversation.parameters(), limit),
+                (*conversation.parameters(), stamp, limit),
             ).fetchall()
-        return [(int(row[0]), int(row[1])) for row in rows]
+        return [(int(row[0]), int(row[1]), str(row[2])) for row in rows]
 
     async def _index(
         self,
@@ -245,6 +285,25 @@ class InboxImageIndex:
             ).fetchone()
         return int(row[0]) if row is not None else None
 
+    def _mark_retry(self, message_id: int, attachment: str, reason: str, now: datetime) -> None:
+        """记录一次读不到或没保存，并按次数延长退避（D151）。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            row = connection.execute(
+                "SELECT attempts FROM inbox_image_retries WHERE message_id=? AND attachment=?",
+                (message_id, attachment),
+            ).fetchone()
+            attempts = (int(row["attempts"]) if row is not None else 0) + 1
+            delay = min(_RETRY_BASE_SECONDS * 2 ** (attempts - 1), _RETRY_MAX_SECONDS)
+            retry_after = (now + timedelta(seconds=delay)).isoformat(timespec="microseconds")
+            connection.execute(
+                "INSERT INTO inbox_image_retries(message_id, attachment, attempts,"
+                " retry_after, reason) VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(message_id, attachment) DO UPDATE SET"
+                " attempts=excluded.attempts, retry_after=excluded.retry_after,"
+                " reason=excluded.reason",
+                (message_id, attachment, attempts, retry_after, reason),
+            )
+
     def _save(
         self, message_id: int, attachment: str, space: str, vector: tuple[float, ...]
     ) -> None:
@@ -253,6 +312,11 @@ class InboxImageIndex:
                 "INSERT OR IGNORE INTO inbox_image_vectors(message_id, attachment, space, vector)"
                 " SELECT id, ?, ?, ? FROM inbox_messages WHERE id=?",
                 (attachment, space, json.dumps(vector), message_id),
+            )
+            # 写成功说明附件又读得到了，退避记录随之失效（D151）。
+            connection.execute(
+                "DELETE FROM inbox_image_retries WHERE message_id=? AND attachment=?",
+                (message_id, attachment),
             )
 
     @staticmethod

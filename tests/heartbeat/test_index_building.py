@@ -63,6 +63,34 @@ def make_identity() -> Identity:
     )
 
 
+def image_message(group: str, name: str, *files: str) -> Perception:
+    """一条只带图片附件的合成入站消息。"""
+    return Perception(
+        "qq",
+        "bot",
+        "图片",
+        VisibilityScope.GROUP,
+        TrustLevel.VERIFIED_CONTACT,
+        route=MessageRoute("bot", "group", group, name),
+        attachments=tuple(MediaReference("image", file_id) for file_id in files),
+    )
+
+
+def retry_rows(path: Path) -> list[tuple[int, str, int, str, str]]:
+    """读取图片回填的退避记录，按附件地址排序。"""
+    with closing(open_connection(path)) as connection:
+        return [
+            (
+                row["message_id"],
+                row["attachment"],
+                row["attempts"],
+                row["retry_after"],
+                row["reason"],
+            )
+            for row in connection.execute("SELECT * FROM inbox_image_retries ORDER BY attachment")
+        ]
+
+
 class FakeEmbeddings:
     """按器官返回合成向量；可以拒绝、也可以在某一批之前停下等测试放行。"""
 
@@ -379,6 +407,62 @@ async def test_image_backfill_indexes_existing_unindexed_images(tmp_path: Path) 
         "image_embedding",
         "image_embedding",
     ]
+
+
+@pytest.mark.asyncio
+async def test_image_backfill_marks_unreadable_and_backs_off(tmp_path: Path) -> None:
+    """读不到的附件写入退避记录，退避期内不再读取；到期重试并延长（D151）。"""
+    harness = Harness(tmp_path, inbox=True)
+    assert harness.inbox is not None
+    store = harness.inbox
+    message = store.add(image_message("group-1", "m1", "file-1"))
+    assert message is not None
+    clock = ManualClock(START)
+    images = InboxImageIndex(harness.database, harness.call.call, lambda: True, clock=clock)
+    reads: list[str] = []
+
+    async def read(perception: Perception, attachment: MediaReference) -> tuple[bytes, str] | None:
+        reads.append(attachment.file_id)
+        return None
+
+    async def backfill() -> None:
+        await images.backfill_batch(store, read, lambda _key: True, 5)
+
+    await backfill()
+    assert reads == ["file-1"]
+    assert retry_rows(harness.database) == [
+        (
+            message.id,
+            "file-1",
+            1,
+            (START + timedelta(minutes=30)).isoformat(timespec="microseconds"),
+            "读取附件失败",
+        )
+    ]
+
+    await backfill()
+    assert reads == ["file-1"]
+
+    clock.advance(timedelta(minutes=30))
+    await backfill()
+    assert reads == ["file-1", "file-1"]
+    assert retry_rows(harness.database)[0][2:] == (
+        2,
+        (START + timedelta(minutes=90)).isoformat(timespec="microseconds"),
+        "读取附件失败",
+    )
+
+    clock.advance(timedelta(minutes=59))
+    await backfill()
+    assert len(reads) == 2
+    clock.advance(timedelta(minutes=1))
+    await backfill()
+    assert len(reads) == 3
+    assert retry_rows(harness.database)[0][2:] == (
+        3,
+        (START + timedelta(minutes=210)).isoformat(timespec="microseconds"),
+        "读取附件失败",
+    )
 
 
 @pytest.mark.asyncio

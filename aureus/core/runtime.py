@@ -461,6 +461,7 @@ def open_core(
                 paths.database_file,
                 gateway.call,
                 lambda: "image_embedding" in models.available_organs,
+                clock=the_clock,
             )
             heartbeat.set_inbox_image_indexer(inbox_images)
             heartbeat.set_inbox_attachment_reader(qq.read_inbox_attachment)
