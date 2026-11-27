@@ -222,7 +222,7 @@ async def test_typing_speed_multiplier_only_changes_later_enabled_delays(
     await rig.say("试试打字速度")
     if second_at:
         assert rig.replies() == ["首"]
-        rig.advance(second_at)
+        await rig.advance(second_at)
     assert rig.replies() == ["首", "汉字"]
     assert rig.delivery_times == [rig.started_at, rig.started_at + timedelta(seconds=second_at)]
 
