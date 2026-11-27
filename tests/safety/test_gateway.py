@@ -25,6 +25,7 @@ from aureus.organs import (
     OrganRequest,
     OrganResponse,
 )
+from aureus.organs.llm_adapter import CALL_CANCELLED_REASON
 from aureus.safety import (
     EVENT_CALL_FAILED,
     EVENT_CALL_REJECTED,
@@ -152,7 +153,18 @@ async def test_interrupted_stream_records_usage_without_a_failure(harness: Harne
 
         async def process(self, request: OrganRequest) -> OrganResponse:
             assert request.stream
-            raise OrganCallCancelled((make_attempt(10, 12, estimated=True, succeeded=False),))
+            # 取消发生在请求发出之后：用量照记，但不是服务商失败（D152）。
+            raise OrganCallCancelled(
+                (
+                    make_attempt(
+                        10,
+                        12,
+                        estimated=True,
+                        succeeded=True,
+                        failure_reason=CALL_CANCELLED_REASON,
+                    ),
+                )
+            )
 
     harness.bus.register(InterruptedOrgan())
     request = OrganRequest(ORGAN, "规划材料", stream=True)
@@ -160,6 +172,7 @@ async def test_interrupted_stream_records_usage_without_a_failure(harness: Harne
         await harness.build().call(request)
     assert harness.ledger.tokens_used_in_month(harness.clock.now()) == 22
     assert harness.events(EVENT_CALL_FAILED) == []
+    assert harness.ledger.latest_entries(1)[0].succeeded
 
 
 async def test_circuit_breaker_does_not_trip_runaway_guard(harness: Harness) -> None:
