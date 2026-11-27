@@ -390,11 +390,13 @@ async def test_followup_depends_on_last_confirmed_text_and_can_fall_silent(
         await replay.step()
         first = await asyncio.wait_for(replay.fake.messages.get(), 2)
         await asyncio.gather(*channel._sending)
+        await replay.core.heartbeat.beat()
         assert first["message"][0]["data"]["text"] == "第一段话"
         clock.advance(timedelta(seconds=20))
         await replay.step()
         second = await asyncio.wait_for(replay.fake.messages.get(), 2)
         await asyncio.gather(*channel._sending)
+        await replay.core.heartbeat.beat()
         assert second["message"][0]["data"]["text"] == "第二段话"
         assert not due_turns
         assert len(replay.records("reply_delivered")) == (1 if result == "second-declined" else 2)

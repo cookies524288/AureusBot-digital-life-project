@@ -239,7 +239,7 @@ async def test_hurt_shortens_the_reply_by_one_level(env: Env) -> None:
 async def test_surprise_is_detected_from_the_hormone_level(env: Env) -> None:
     rig, hormones = env.build([])
     assert hormones is not None
-    assert rig.heartbeat._surprised() is False  # pyright: ignore[reportPrivateUsage]
+    assert await rig.heartbeat._surprised() is False  # pyright: ignore[reportPrivateUsage]
     hormones.add(
         [
             HormoneTrigger(
@@ -254,7 +254,7 @@ async def test_surprise_is_detected_from_the_hormone_level(env: Env) -> None:
         ],
         env.clock.now(),
     )
-    assert rig.heartbeat._surprised() is True  # pyright: ignore[reportPrivateUsage]
+    assert await rig.heartbeat._surprised() is True  # pyright: ignore[reportPrivateUsage]
 
 
 async def test_disabled_hormones_means_no_behaviour_changes(env: Env) -> None:

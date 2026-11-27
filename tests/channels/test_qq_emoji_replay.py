@@ -101,6 +101,8 @@ async def test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success(
         await receive_mention(replay, monkeypatch, 31, "合成群友打招呼")
         await replay.step()
         first = await asyncio.wait_for(replay.fake.messages.get(), timeout=2)
+        await asyncio.gather(*channel._sending)
+        await replay.core.heartbeat.beat()
         second = await asyncio.wait_for(replay.fake.messages.get(), timeout=2)
         await asyncio.gather(*channel._sending)
 
