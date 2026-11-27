@@ -4,7 +4,7 @@
 
 - 根因：本机 chinese-clip 服务只把 `data:image` 字符串当图片，Aureus 发 Jina 对象，被当文本编码；大图超过 512 位置上限返回 500，小图返回 200 也只是文本向量。D143 只修了 GIF/WebP 转 PNG，没有修格式错配。
 - 设计见 D150，任务见 [3.60a](tasks/3.60a-image-embedding-input-format.md)。模型写 `extra_params.image_embedding_input = "{data_uri}"` 时改发 data URI 字符串；默认 Jina 不变；回填遇熔断停止本批。
-- 已在隔离 worktree 完成：`3abd0bf` 配置常量与校验、`eb76478` 发送格式与测速展示、`0ce5f74` 回填熔断停止，随后提交文档与自检。定向三份测试 **221 过**，Ruff 检查与 Pyright 通过；`ruff format --check` 仍是这些文件在 HEAD 就有的 21 处旧格式差异（3.66 已登记格式基线），本次新增行无新差异。未跑全量（派发说明）、未合入、未重启、未推送。本机 `models.toml` 待合入后补键。
+- 已在隔离 worktree 完成：`3abd0bf` 配置常量与校验、`eb76478` 发送格式与测速展示、`0ce5f74` 回填熔断停止，随后提交文档与自检。定向三份测试 **221 过**，Ruff 检查与 Pyright 通过；`ruff format --check` 仍有 21 处基线既有的旧格式差异（f112fad 原有 22 处，顺手修正了 `test_model_config.py` 的一处；3.66 已登记格式基线），本次新增行无新差异。未跑全量（派发说明）、未合入、未重启、未推送。本机 `models.toml` 待合入后补键。
 
 ## 3.66 单意识体驻留与响应效率：任务文档已写好（2026-11-27）
 
