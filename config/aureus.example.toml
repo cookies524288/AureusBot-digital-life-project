@@ -94,7 +94,8 @@ config_version = 1
 # chat_rechecks_enabled = true
 # chat_group_lookup_enabled = true
 # chat_meme_lookup_enabled = true
-# chat_meme_glossary = { "自定义梗" = "可公开的释义和用法" }
+# 需要添加词条时，取消下一行的注释，把 {} 改成 { "自定义梗" = "可公开的释义和用法" }。
+# chat_meme_glossary = {}
 # chat_assets_enabled = true
 # 自动分段时最多拆成几条。回复器指定的强制切点仍会保留。
 # max_reply_messages = 4
