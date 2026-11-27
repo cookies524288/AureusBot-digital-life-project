@@ -465,6 +465,52 @@ async def test_image_backfill_marks_unreadable_and_backs_off(tmp_path: Path) -> 
     )
 
 
+def test_image_backfill_backoff_caps_at_one_day(tmp_path: Path) -> None:
+    """同一附件连续失败时，退避从 30 分钟翻倍并在 24 小时封顶（D151）。"""
+    harness = Harness(tmp_path, inbox=True)
+    assert harness.inbox is not None
+    message = harness.inbox.add(image_message("group-1", "m1", "file-1"))
+    assert message is not None
+    images = InboxImageIndex(harness.database, harness.call.call, lambda: True)
+
+    for _ in range(8):
+        images._mark_retry(message.id, "file-1", "读取附件失败", START)
+
+    [row] = retry_rows(harness.database)
+    assert row[2] == 8
+    assert row[3] == (START + timedelta(hours=24)).isoformat(timespec="microseconds")
+
+
+@pytest.mark.asyncio
+async def test_image_backfill_removes_retry_after_success(tmp_path: Path) -> None:
+    """退避到期后重新读到并写入成功时，退避记录被删除（D151）。"""
+    harness = Harness(tmp_path, inbox=True)
+    assert harness.inbox is not None
+    store = harness.inbox
+    assert store.add(image_message("group-1", "m1", "file-1")) is not None
+    clock = ManualClock(START)
+    images = InboxImageIndex(harness.database, harness.call.call, lambda: True, clock=clock)
+    available = False
+
+    async def read(perception: Perception, attachment: MediaReference) -> tuple[bytes, str] | None:
+        if not available:
+            return None
+        return attachment.file_id.encode(), "image/png"
+
+    await images.backfill_batch(store, read, lambda _key: True, 5)
+    assert [row[1] for row in retry_rows(harness.database)] == ["file-1"]
+
+    available = True
+    clock.advance(timedelta(minutes=30))
+    more, written = await images.backfill_batch(store, read, lambda _key: True, 5)
+
+    assert (more, written) == (True, True)
+    assert retry_rows(harness.database) == []
+    with closing(open_connection(harness.database)) as connection:
+        stored = connection.execute("SELECT attachment FROM inbox_image_vectors").fetchall()
+    assert [row[0] for row in stored] == ["file-1"]
+
+
 @pytest.mark.asyncio
 async def test_image_backfill_reaches_readable_after_unreadable(tmp_path: Path) -> None:
     """前面的附件读不到也不挡住后面的可读图片，同一批继续写入（D151）。"""
