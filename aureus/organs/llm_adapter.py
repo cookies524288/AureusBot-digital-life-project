@@ -578,9 +578,7 @@ def model_probe_inputs(model: ModelConfig) -> dict[str, dict[str, Any]]:
         return {"embedding": {"input": [_MODEL_TEST_INPUT]}}
     if model.kind == "image_embedding":
         if _uses_image_embedding_data_uri(model):
-            return {
-                "image_embedding": {"input": ["data:image/png;base64," + _MODEL_TEST_IMAGE_BASE64]}
-            }
+            return {"image_embedding": {"input": [_MODEL_TEST_IMAGE_URL]}}
         return {"image_embedding": {"input": [{"image": _MODEL_TEST_IMAGE_BASE64}]}}
     if model.kind == "transcription":
         return {"transcription": {"file": "一秒静音 WAV"}}
