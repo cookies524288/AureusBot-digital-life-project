@@ -341,9 +341,22 @@ class InboxImageIndex:
         ):
             return 0
         scope = "FROM inbox_image_vectors WHERE message_id IN (SELECT value FROM json_each(?))"
-        if remove:
-            return connection.execute("DELETE " + scope, (ids,)).rowcount
-        return int(connection.execute("SELECT COUNT(*) " + scope, (ids,)).fetchone()[0])
+        if not remove:
+            return int(connection.execute("SELECT COUNT(*) " + scope, (ids,)).fetchone()[0])
+        removed = connection.execute("DELETE " + scope, (ids,)).rowcount
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='inbox_image_retries'"
+            ).fetchone()
+            is not None
+        ):
+            # 原文删掉后，它的退避记录也没有意义了；预览计数仍然只算向量（D151）。
+            connection.execute(
+                "DELETE FROM inbox_image_retries"
+                " WHERE message_id IN (SELECT value FROM json_each(?))",
+                (ids,),
+            )
+        return removed
 
     def browse(self, before: int | None, limit: int) -> list[dict[str, Any]]:
         """按收录顺序显示来源会话、消息时间和附件引用。"""

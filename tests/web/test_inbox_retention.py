@@ -182,6 +182,40 @@ def test_confirmation_rechecks_auth_only_removes_fixed_scoped_originals(rig: Ret
         memory.close()
 
 
+def test_cleanup_removes_image_retries_but_preview_counts_vectors_only(
+    rig: RetentionRig,
+) -> None:
+    """保留策略删除原件时一并删除退避记录；预览计数仍只算真实向量（D151）。"""
+    store = rig.store
+    old = store.add(perception(KEY, "old", "old"))
+    assert old is not None
+    store.mark_read([old.id])
+    other_key = ConversationKey("qq", "other-account", "group", KEY.recipient_id)
+    other = store.add(perception(other_key, "same", "other"))
+    assert other is not None
+
+    async def no_model(_request):
+        pytest.fail("不能请求模型")
+
+    index = InboxImageIndex(rig.path, no_model, lambda: True)
+    index._save(old.id, "shared", "space", (1.0,))
+    index._mark_retry(old.id, "missing-old", "读取附件失败", rig.clock.now())
+    index._mark_retry(other.id, "missing-other", "读取附件失败", rig.clock.now())
+
+    rig.advance_to_today()
+    rig.web.log_in()
+    preview = rig.preview()
+    assert preview["image_vectors"] == 1
+    assert rig.confirm(preview).status_code == 200
+
+    with closing(open_connection(rig.path, read_only=True)) as connection:
+        retries = [
+            (row["message_id"], row["attachment"])
+            for row in connection.execute("SELECT * FROM inbox_image_retries")
+        ]
+    assert retries == [(other.id, "missing-other")]
+
+
 def test_confirmed_cleanup_removes_caption_and_discards_late_write(rig: RetentionRig) -> None:
     source = replace(
         perception(KEY, "same", "原件"), attachments=(MediaReference("image", "same-name"),)
