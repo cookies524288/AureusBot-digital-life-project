@@ -120,7 +120,6 @@ export function ExpressionManagementPage({ browserHeader }: { browserHeader?: Re
     getId: (expression) => expression.id,
     initialFilters: INITIAL_FILTERS,
     preserveSelectionOnParamsChange: true,
-    searchDebounceMs: 0,
     queryFn: async ({ page, pageSize, search, filters }) => {
       // 按共享组浏览时取该组的 chat_ids（全局组传 undefined，让后端返回全部）
       const selectedGroup =

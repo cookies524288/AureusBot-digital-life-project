@@ -96,7 +96,6 @@ export function JargonManagementPage({ browserHeader }: { browserHeader?: ReactN
     getId: (jargon) => jargon.id,
     initialFilters: { summary: 'total', chatId: 'all', browseMode: 'all', groupIndex: null, sortBy: 'time' },
     preserveSelectionOnParamsChange: true,
-    searchDebounceMs: 300,
     queryFn: async ({ page, pageSize, search, filters }) => {
       const summaryStatus: JargonStatusFilter | undefined = [
         'confirmed_jargon',

@@ -55,8 +55,8 @@ import { EmojiDetailDialog, EmojiEditDialog, EmojiUploadDialog } from './EmojiDi
 import { EmojiBrowser, type EmojiFilters } from './EmojiBrowser'
 import { MobileEmojiGrid } from './MobileEmojiGrid'
 
-// 页面可见时每 10 秒同步后台收录和使用状态，离开页面后停止轮询。
-const EMOJI_REFRESH_INTERVAL = 10_000
+// 页面可见时每 30 秒同步后台收录和使用状态，离开页面后停止轮询。
+const EMOJI_REFRESH_INTERVAL = 30_000
 
 // 与表情包列表接口的每页上限一致；补齐整行时不能把 100 向上凑成 102 或 104。
 const EMOJI_MAX_PAGE_SIZE = 100
@@ -102,7 +102,7 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
   const { toast } = useToast()
 
   // 表情包列表：分页/搜索/筛选/排序/多选统一由 useDataList 承载，
-  // 翻页保留选中项，改参重置页码但保留选择，搜索内建 300ms 防抖。
+  // 翻页保留选中项，改参重置页码但保留选择。
   const list = useDataList<Emoji, EmojiFilters, number>({
     domain: 'emoji',
     initialPageSize: alignedPageSize,
@@ -114,7 +114,6 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
       sortBy: 'register_time',
       sortOrder: 'desc',
     },
-    searchDebounceMs: 300,
     queryOptions: { refetchInterval: EMOJI_REFRESH_INTERVAL },
     queryFn: async ({ page, pageSize, search, filters }) => {
       const result = await getEmojiList({
@@ -326,6 +325,7 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
           onBan={handleBan}
           onDelete={handleDelete}
           onUpload={() => setUploadDialogOpen(true)}
+          onRefresh={refreshData}
           error={list.isError ? list.error?.message : undefined}
           onRetry={() => list.refetch()}
           batchActions={
@@ -356,15 +356,20 @@ export function EmojiManagementPage({ browserHeader }: { browserHeader?: ReactNo
       <div className="space-y-4 lg:hidden">
         {isMobile && (
           <div data-mobile-emoji-toolbar="true" className="space-y-3">
-            <div className="relative">
-              <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
-              <Input
-                value={list.searchInput}
-                onChange={(event) => list.setSearchInput(event.target.value)}
-                placeholder="搜索 tag、描述或哈希..."
-                aria-label="搜索表情包"
-                className="h-10 rounded-xl pl-9"
-              />
+            <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
+                <Input
+                  value={list.searchInput}
+                  onChange={(event) => list.setSearchInput(event.target.value)}
+                  placeholder="搜索 tag、描述或哈希..."
+                  aria-label="搜索表情包"
+                  className="h-10 rounded-xl pl-9"
+                />
+              </div>
+              <Button variant="outline" size="sm" onClick={refreshData}>
+                刷新
+              </Button>
             </div>
             {stats && (
               <nav

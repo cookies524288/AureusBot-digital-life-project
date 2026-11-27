@@ -78,6 +78,11 @@ def _encode(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
 
 
+def import_entry_key(table: str, instance: str, source_key: str) -> str:
+    """生成管理目录和存量编号共同使用的历史导入键。"""
+    return _encode((table, instance, source_key))
+
+
 def _promote_legacy_row(connection: Connection, instance: str, row: ImportedLanguageRow) -> bool:
     if row.reason not in _LEGACY_EVIDENCE_REASONS.get(row.table, ()):
         return False
@@ -192,7 +197,9 @@ def imported_entries(connection: Connection, table: str) -> list[LanguageEntry]:
            ORDER BY entry.instance, entry.source_key, sample.record_id""",
         (table,),
     )
-    for source, group in groupby(rows, key=lambda row: (row["instance"], row["source_key"])):
+    for (instance, source_key), group in groupby(
+        rows, key=lambda row: (row["instance"], row["source_key"])
+    ):
         records = list(group)
         first = records[0]
         evidence = records if first["record_id"] is not None else []
@@ -219,7 +226,7 @@ def imported_entries(connection: Connection, table: str) -> list[LanguageEntry]:
                 tuple(row["record_id"] for row in evidence),
                 frozenset(row["speaker"] for row in evidence),
                 source_refs=(first["source_key"], *json.loads(first["evidence"])),
-                entry_key=_encode((table, *source)),
+                entry_key=import_entry_key(table, instance, source_key),
                 jargon_status=status,
             )
         )

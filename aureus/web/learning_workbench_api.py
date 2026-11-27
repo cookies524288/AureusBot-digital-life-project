@@ -223,17 +223,45 @@ def register_learning_workbench_routes(
             is_complete: bool | None = None,
             removed: bool = False,
         ) -> dict[str, Any]:
-            rows = await run(service.language_payloads, kind, removed=removed)
+            if service.language is None:
+                raise HTTPException(422, "学习功能当前关闭。")
             targets = set(
                 filter(None, (chat_id, session_id, *(chat_ids or []), *(session_ids or [])))
             )
-            term = search.casefold()
             statuses = {
                 "confirmed_jargon": "confirmed",
                 "manual_jargon": "confirmed",
                 "confirmed_not_jargon": "non_jargon",
                 "pending": "candidate",
             }
+            offset = (page - 1) * page_size
+            if kind == LanguageKind.EXPRESSION:
+                if (
+                    is_jargon is not None
+                    or is_global is not None
+                    or is_complete is not None
+                    or (jargon_status is not None and jargon_status in statuses)
+                ):
+                    items, total = [], 0
+                else:
+                    items, total = await run(
+                        service.expression_page,
+                        targets,
+                        search,
+                        offset,
+                        page_size,
+                        ascending=sort_by.endswith("_asc"),
+                        removed=removed,
+                    )
+                return {
+                    "success": True,
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
+                    "data": items,
+                }
+            rows = await run(service.language_payloads, kind, removed=removed)
+            term = search.casefold()
             rows = [
                 row
                 for row in rows
@@ -257,7 +285,6 @@ def register_learning_workbench_routes(
                 )
             ]
             rows.sort(key=lambda row: row["id"], reverse=not sort_by.endswith("_asc"))
-            offset = (page - 1) * page_size
             return {
                 "success": True,
                 "total": len(rows),

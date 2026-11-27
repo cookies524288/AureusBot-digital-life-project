@@ -5,7 +5,7 @@
 """
 
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -107,6 +107,43 @@ class LearningWorkbench:
         if scopes != self.scopes():
             raise PermissionError("来源授权已变化，请刷新后重试。")
         return result
+
+    def expression_page(
+        self,
+        targets: Collection[str],
+        search: str,
+        offset: int,
+        limit: int,
+        *,
+        ascending: bool,
+        removed: bool,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """交由语言库筛选和分页，出库后复核实时授权再交给网页。"""
+        if self.language is None:
+            raise ValueError("学习功能当前关闭。")
+        scopes = self.scopes()
+        rows, total = self.language.workbench_expression_page(
+            scopes, targets, search, offset, limit, ascending=ascending, removed=removed
+        )
+        if scopes != self.scopes():
+            raise PermissionError("来源授权已变化，请刷新后重试。")
+        return [
+            {
+                "id": row.identifier,
+                "entry_key": row.entry_key,
+                "is_enabled": row.enabled,
+                "is_removed": row.removed,
+                "chat_id": row.scope,
+                "chat_name": scopes.get(row.scope, "共享资料" if not row.scope else ""),
+                "situation": row.detail,
+                "style": row.text,
+                "last_active_time": row.created_at or 0,
+                "create_date": row.created_at,
+                "checked": row.approved,
+                "modified_by": None,
+            }
+            for row in rows
+        ], total
 
     def language_target(self, kind: LanguageKind, identifier: int) -> LanguageEntry:
         """编号只有在同一当前可管理集合中才有效。"""

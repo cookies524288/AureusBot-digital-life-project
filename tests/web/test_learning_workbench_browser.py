@@ -13,15 +13,21 @@ Browser = _BROWSER_MODULE.Browser
 _open_browser = _BROWSER_MODULE._open_browser
 
 WORKBENCH_RESPONSES = """(() => {
-  if (!['/learning-workbench/', '/learning-workbench'].includes(location.pathname)) return;
+  if (location.pathname !== '/') return;
   const native = window.fetch;
   const requests = [];
   const held = new Map();
   const errors = [];
   const qualityHistory = [];
+  const intervals = [];
+  const setInterval = window.setInterval.bind(window);
+  window.setInterval = (handler, delay, ...args) => {
+    if (new Error().stack?.includes('/learning-workbench/workbench.js')) intervals.push(delay);
+    return setInterval(handler, delay, ...args);
+  };
   window.addEventListener('error', event => errors.push(event.message));
   const control = window.fixture = {
-    requests, errors, held, qualityHistory, handoffPage: null, verdict: 'unreviewed',
+    requests, errors, held, qualityHistory, intervals, handoffPage: null, verdict: 'unreviewed',
   };
   const expression = page => ({ id:page, situation:`合成情境 ${page}`, style:`合成表达 ${page}`,
     last_active_time:1, chat_id:'synthetic', create_date:1, checked:false, modified_by:null });
@@ -67,7 +73,8 @@ WORKBENCH_RESPONSES = """(() => {
     const path = url.pathname.slice('/api/webui'.length);
     const page = Number(url.searchParams.get('page')) || 1;
     const body = options.body && JSON.parse(options.body);
-    requests.push({method, path, page, body, search:url.searchParams.get('search')});
+    requests.push({method, path, page, body, at:performance.now(),
+      query:Object.fromEntries(url.searchParams), search:url.searchParams.get('search')});
     const result = data => Response.json({success:true, data});
     const listing = (data, total) => Response.json({success:true, data, total, page, page_size:20});
     if (path.endsWith('/chats') || path.endsWith('/chat-targets')) return result([{
@@ -85,6 +92,12 @@ WORKBENCH_RESPONSES = """(() => {
       }
       case '/expression/stats/summary':
         return result({total:160,recent_7days:1,chat_count:1,top_chats:{}});
+      case '/expression/clusters':
+        return Response.json({success:true, index_exists:false, clusters:[], sample_count:0});
+      case '/expression/runtime/vectors/spaces':
+        return Response.json({success:true, items:[], state:'empty'});
+      case '/expression/vector-build-progress':
+        return Response.json({status:'completed', completed:8, total:8, percent:100});
       case '/expression/batch/delete':
         return Response.json({success:true,deleted_count:body.ids.length});
       case '/jargon/list': return listing([jargon], 1);
@@ -118,28 +131,25 @@ INTERACTION = """(async () => {
     throw Error(typeof message === 'function' ? message() : message);
   };
   await wait(() => document.querySelector('#page-learning.active'), '合成登录后未打开学习页');
-  const parentButton = await wait(() => {
-    const button = document.querySelector('#learning-workbench-open');
-    return button?.getClientRects().length && button;
-  }, '缺少产品学习入口');
-  parentButton.click();
-  const frame = document.querySelector('#learning-workbench-frame');
-  const doc = () => frame.contentDocument;
+  const host = await wait(() => document.querySelector('#learning-workbench-host')?.shadowRoot,
+    '缺少内联学习工作台');
+  const doc = () => host;
   const visible = node => node.getClientRects().length > 0;
   const find = selector => [...doc().querySelectorAll(selector)].find(visible);
   const click = (selector, message) =>
     wait(() => find(selector), message).then(element => element.click());
   const button = label => [...doc().querySelectorAll('button')]
     .find(node => visible(node) && node.textContent.trim() === label);
-  const text = value => doc().body?.innerText.includes(value);
+  const text = value => host.getElementById('root')?.innerText.includes(value);
   const check = (condition, message) => { if (!condition) throw Error(message); };
-  const control = await wait(() => frame.contentWindow.fixture, '未加载工作台构建产物');
+  const control = window.fixture;
   await wait(() => text('合成表达 1'), '表达列表没有加载');
   await wait(() => find('input[aria-label="跳转页码"]'), '页码输入不应藏在额外菜单中');
   await click('[aria-label="选择表达方式：合成情境 1"]', '表达多选不可用');
   control.handoffPage = 2;
   await click('[aria-label="第 2 页"]', '缺少第 2 页');
   await wait(() => control.held.has(2), '未发送第 2 页请求');
+  check(text('合成表达 1'), '第二页还未返回时，不应闪空上一页');
   const input = await wait(() => find('input[aria-label="跳转页码"]:enabled'), '翻页中不能跳页');
   input.value = '6';
   input.form.requestSubmit();
@@ -161,11 +171,35 @@ INTERACTION = """(async () => {
     () => control.requests.find(item => item.path === '/expression/batch/delete'),
     '未请求批量操作');
   check(bulk.method === 'POST' && bulk.body.ids.join(',') === '1,6', '批量请求丢失跨页选择');
+  const listRequests = () =>
+    control.requests.filter(request => request.path === '/expression/list');
+  const dispatchInput = (element, value) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, value);
+    element.dispatchEvent(new Event('input', {bubbles:true}));
+  };
+  const search = await wait(
+    () => find('input[placeholder="搜索情境、风格或上下文..."]'), '缺少表达搜索');
+  const originalSort = listRequests().at(-1).query.sort_by;
+  dispatchInput(search, '测');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  dispatchInput(search, '测试');
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const settledAt = performance.now();
+  dispatchInput(search, '测试表达');
+  await new Promise(resolve => setTimeout(resolve, 120));
+  check(!listRequests().some(request => request.search), '尚未停止输入就发送搜索请求');
+  const request = await wait(
+    () => listRequests().find(item => item.search === '测试表达'), '没有发出防抖搜索');
+  check(request.at - settledAt >= 240, '搜索请求早于防抖边界');
+  check(request.page === 1 && Number(request.query.page_size) > 0
+    && request.query.sort_by === originalSort,
+    '搜索应回到第 1 页且保留大小和已选排序');
+  check(listRequests().filter(item => item.search).length === 1, '逐个字符发出了额外请求');
   const tab = label => [...doc().querySelectorAll('[role=tab]')]
     .find(node => visible(node) && node.textContent.includes(label));
   const activateTab = async (label) => {
     const target = await wait(() => tab(label), `缺少${label}页签`);
-    target.dispatchEvent(new frame.contentWindow.MouseEvent('mousedown', {bubbles:true, button:0}));
+    target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, button:0}));
     await wait(() => target.getAttribute('aria-selected') === 'true', `${label}页签未激活`);
   };
   await activateTab('黑话');
@@ -176,7 +210,7 @@ INTERACTION = """(async () => {
   await wait(() => control.requests.some(item => item.path === '/emoji/list'),
     '表情列表没有发请求');
   await wait(() => find('[aria-label^="表情审批 · 未审"]'), () => JSON.stringify({
-    text:doc().body.innerText.slice(0, 450), errors:control.errors,
+    text:host.getElementById('root')?.innerText.slice(0, 450), errors:control.errors,
     requests:control.requests.slice(-12),
   }));
   const approval = await wait(() => find('[aria-label^="表情审批 · 未审"]'), '表情卡缺少审批');
@@ -194,24 +228,41 @@ INTERACTION = """(async () => {
   check(control.requests.filter(item => item.path === '/emoji/1/review').length === 2,
     '审批请求数不符');
   check(!control.requests.some(item => item.path === '/emoji/1/register'), '审批不应登记');
-  const currentTab = () => new URL(frame.contentWindow.location.href).searchParams.get('tab');
-  check(currentTab() === 'emoji', '页签没有写入浏览器 URL');
-  frame.contentWindow.history.back();
-  await wait(
-    () => currentTab() === 'jargon' && tab('黑话')?.getAttribute('aria-selected') === 'true',
-    '后退没有恢复黑话页签');
-  frame.contentWindow.history.forward();
-  await wait(
-    () => currentTab() === 'emoji' && tab('表情')?.getAttribute('aria-selected') === 'true',
-    '前进没有恢复表情页签');
+  check(location.hash === '#learning' && !new URLSearchParams(location.search).has('tab'),
+    '页签不应修改主页面地址');
+  const count = path => control.requests.filter(item => item.path === path).length;
+  const seenEmoji = count('/emoji/list');
+  const seenStats = count('/emoji/stats/summary');
+  check(control.intervals.includes(30000) && !control.intervals.includes(10000),
+    '表情未使用低频轮询');
+  (await wait(() => button('刷新'), '表情缺少手动刷新')).click();
+  await wait(() => count('/emoji/list') > seenEmoji && count('/emoji/stats/summary') > seenStats,
+    '刷新应同时读取表情列表和统计');
   await activateTab('表达方式');
-  const more = await wait(() => find('[aria-label="更多操作"]'), '表达页缺少更多菜单');
-  more.dispatchEvent(new frame.contentWindow.PointerEvent('pointerdown', {bubbles:true, button:0}));
-  const qualityEntry = await wait(
-    () => [...doc().querySelectorAll('[role=menuitem]')]
-      .find(node => visible(node) && node.textContent.includes('表达质检记录')),
-    '未提供表达质检记录入口');
-  qualityEntry.click();
+  const selectMore = async label => {
+    const more = await wait(() => find('[aria-label="更多操作"]'), '表达页缺少更多菜单');
+    more.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true, button:0}));
+    const item = await wait(() => [...doc().querySelectorAll('[role=menuitem]')]
+      .find(node => visible(node) && node.textContent.includes(label)), `未提供${label}入口`);
+    item.click();
+  };
+  await selectMore('聚类');
+  const spacePath = '/expression/runtime/vectors/spaces';
+  const progressPath = '/expression/vector-build-progress';
+  check(count(spacePath) === 0 && count(progressPath) === 0, '未打开向量库就查询');
+  const beforeVectors = control.intervals.length;
+  (await wait(() => button('向量库'), '缺少向量库入口')).click();
+  await wait(() => count(spacePath) === 1 && count(progressPath) === 1, '打开向量库没有加载状态');
+  check(control.intervals.slice(beforeVectors).includes(30000) && !control.intervals.includes(5000),
+    '向量库未使用低频轮询');
+  const refresh = await wait(() => [...doc().querySelectorAll('[role=dialog] button')]
+    .find(node => node.textContent.trim() === '刷新' && !node.disabled), '向量库缺少手动刷新');
+  refresh.click();
+  await wait(() => count(spacePath) === 2 && count(progressPath) === 2, '刷新未读取向量库与进度');
+  (await wait(() => button('关闭'), '向量库缺少关闭操作')).click();
+  await wait(() => !find('[role=dialog]'), '向量库未关闭');
+  (await wait(() => button('返回表达'), '缺少返回表达列表')).click();
+  await selectMore('表达质检记录');
   await wait(() => text('合成质检说法 1'), '未调用 Aureus 质检记录接口');
   const qualityRequest = control.requests.find(
     item => item.path === '/api/resources/learning/quality');
@@ -219,16 +270,13 @@ INTERACTION = """(async () => {
     '质检记录应使用有界 host 查询');
   const scope = await wait(() => find('select[aria-label="质检来源"]'), '质检记录缺少来源筛选');
   scope.value = 'synthetic-scope';
-  scope.dispatchEvent(new frame.contentWindow.Event('change', {bubbles:true}));
+  scope.dispatchEvent(new Event('change', {bubbles:true}));
   await wait(
     () => control.requests.some(item => item.path === '/api/resources/learning/quality'
       && item.query.scope === 'synthetic-scope'),
     '质检来源筛选未请求');
   const qualityPage = await wait(() => find('input[aria-label="质检记录跳页"]'), '质检列表无跳页');
-  const setPage = Object.getOwnPropertyDescriptor(
-    frame.contentWindow.HTMLInputElement.prototype, 'value').set;
-  setPage.call(qualityPage, '2');
-  qualityPage.dispatchEvent(new frame.contentWindow.Event('input', {bubbles:true}));
+  dispatchInput(qualityPage, '2');
   (await wait(() => button('跳转'), '质检跳页按钮缺失')).click();
   await wait(
     () => control.requests.some(item => item.path === '/api/resources/learning/quality'

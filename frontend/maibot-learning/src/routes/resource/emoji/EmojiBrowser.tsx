@@ -52,6 +52,7 @@ interface EmojiBrowserProps extends ComponentProps<typeof EmojiList> {
   onPageChange: (page: number) => void
   onPageSizeChange: (size: number) => void
   onUpload: () => void
+  onRefresh: () => void
   batchActions?: ReactNode
   error?: string
   onRetry: () => void
@@ -74,6 +75,7 @@ export function EmojiBrowser({
   onPageChange,
   onPageSizeChange,
   onUpload,
+  onRefresh,
   batchActions,
   error,
   onRetry,
@@ -240,6 +242,9 @@ export function EmojiBrowser({
                     </Button>
                   ))}
                 </div>
+                <Button variant="outline" size="sm" onClick={onRefresh}>
+                  刷新
+                </Button>
                 <Button size="sm" onClick={onUpload}>
                   <Plus />
                   上传

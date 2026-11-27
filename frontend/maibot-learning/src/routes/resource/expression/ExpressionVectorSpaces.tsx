@@ -9,6 +9,7 @@ import { useToast } from '@/hooks/use-toast'
 import { deleteExpressionVectorSpace, getExpressionVectorBuildProgress, getExpressionVectorSpaces } from '@/lib/expression-api'
 
 const SPACE_STATES = { active: '使用中', syncing: '同步中', saved: '未使用' }
+const VECTOR_REFRESH_INTERVAL_MS = 30_000
 const SYNC_STATES = {
   syncing: '正在同步表达向量',
   failed: '同步失败',
@@ -28,13 +29,13 @@ export function ExpressionVectorSpaces() {
     queryKey: ['expression', 'vector-spaces'],
     queryFn: getExpressionVectorSpaces,
     enabled: open,
-    refetchInterval: open ? 5000 : false,
+    refetchInterval: open ? VECTOR_REFRESH_INTERVAL_MS : false,
   })
   const progress = useQuery({
     queryKey: ['expression', 'vector-build-progress'],
     queryFn: getExpressionVectorBuildProgress,
     enabled: open,
-    refetchInterval: open ? 5000 : false,
+    refetchInterval: open ? VECTOR_REFRESH_INTERVAL_MS : false,
   })
   const deletion = useMutation({
     mutationFn: deleteExpressionVectorSpace,
@@ -59,6 +60,18 @@ export function ExpressionVectorSpaces() {
           <DialogHeader>
             <DialogTitle>表达向量库</DialogTitle>
           </DialogHeader>
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-fit"
+            disabled={spaces.isFetching || progress.isFetching}
+            onClick={() => {
+              void spaces.refetch()
+              void progress.refetch()
+            }}
+          >
+            刷新
+          </Button>
           {spaces.data?.state && (
             <p className="text-sm text-muted-foreground">{SYNC_STATES[spaces.data.state]}</p>
           )}

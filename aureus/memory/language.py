@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -31,6 +31,7 @@ from aureus.memory.expression_quality import (
     save_quality_decision,
     save_quality_term,
 )
+from aureus.memory.expression_workbench import WorkbenchExpression, read_expression_page
 from aureus.memory.language_import import (
     EXPRESSION_TABLE,
     IMPORT_SCHEMA,
@@ -443,6 +444,30 @@ class LanguageStore:
         """解析已分配的工作台编号，目标仍由调用方复验。"""
         with closing(open_connection(self._path)) as connection:
             return resolve_workbench_ids(connection, kind, identifiers)
+
+    def workbench_expression_page(
+        self,
+        scopes: Collection[str],
+        targets: Collection[str],
+        search: str,
+        offset: int,
+        limit: int,
+        *,
+        ascending: bool,
+        removed: bool,
+    ) -> tuple[list[WorkbenchExpression], int]:
+        """按当前获准会话直接查询表达列表页及总数。"""
+        with closing(open_connection(self._path)) as connection, connection:
+            return read_expression_page(
+                connection,
+                scopes,
+                targets,
+                search,
+                offset,
+                limit,
+                ascending=ascending,
+                removed=removed,
+            )
 
     def publish(
         self,

@@ -31,7 +31,7 @@ export interface UseDataListConfig<TItem, TFilters, TId> {
   initialFilters: TFilters
   /** 每页条数初始值，默认 20 */
   initialPageSize?: number
-  /** 搜索防抖毫秒，默认 0（不防抖、输入即生效） */
+  /** 搜索防抖毫秒，默认 250；设为 0 时输入即生效。 */
   searchDebounceMs?: number
   /** 列表请求；页面在此把各自 API 形状适配为 { items, total } */
   queryFn: (params: DataListQueryParams<TFilters>) => Promise<{ items: TItem[]; total: number }>
@@ -83,7 +83,7 @@ export function useDataList<TItem, TFilters, TId = string>(
     domain,
     initialPageSize = 20,
     preserveSelectionOnParamsChange = false,
-    searchDebounceMs = 0,
+    searchDebounceMs = 250,
   } = config
 
   const [page, setPageRaw] = useState(1)
@@ -98,12 +98,15 @@ export function useDataList<TItem, TFilters, TId = string>(
 
   // 搜索防抖：仅在 searchDebounceMs > 0 时启用定时器；定时器回调里的 setState 是异步的，不触发渲染期约束
   useEffect(() => {
-    if (searchDebounceMs <= 0) {
+    if (searchDebounceMs <= 0 || searchInput === debouncedSearch) {
       return
     }
-    const timer = setTimeout(() => setDebouncedSearch(searchInput), searchDebounceMs)
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchInput)
+      setPageRaw(1)
+    }, searchDebounceMs)
     return () => clearTimeout(timer)
-  }, [searchInput, searchDebounceMs])
+  }, [searchInput, debouncedSearch, searchDebounceMs])
   const search = searchDebounceMs > 0 ? debouncedSearch : searchInput
 
   // 参数变化时清空选中：仅在非空时新建 Set，避免空集反复重建触发渲染
@@ -137,12 +140,12 @@ export function useDataList<TItem, TFilters, TId = string>(
   const setSearchInput = useCallback(
     (value: string) => {
       setSearchInputRaw(value)
-      setPageRaw(1)
+      if (searchDebounceMs <= 0) setPageRaw(1)
       if (!preserveSelectionOnParamsChange) {
         clearSelection()
       }
     },
-    [clearSelection, preserveSelectionOnParamsChange]
+    [clearSelection, preserveSelectionOnParamsChange, searchDebounceMs]
   )
 
   const setPageSize = useCallback(
