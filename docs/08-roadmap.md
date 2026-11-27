@@ -292,7 +292,7 @@
 
 [3.61 启动器残留进程](tasks/3.61-launcher-stale-process.md)、[3.62 收件箱读取上限](tasks/3.62-inbox-read-cap.md)、[3.63 工作记忆上下文上限](tasks/3.63-working-memory-context-cap.md) 已实现，仍待各自的专项评审。
 
-[3.60a 图片嵌入输入格式](tasks/3.60a-image-embedding-input-format.md) **实现完成、待评审（2026-11-27）**。按 [D150](10-decisions.md) 允许图片嵌入模型用 `extra_params.image_embedding_input = "{data_uri}"` 改发 OpenAI 兼容的 data URI 字符串数组，默认 Jina 对象不变；回填遇到服务商熔断时停止本批。定向 221 过；未跑全量、未合入、未重启、未推送。
+[3.60a 图片嵌入输入格式](tasks/3.60a-image-embedding-input-format.md) **完成（2026-11-27）**。按 [D150](10-decisions.md) 允许图片嵌入模型用 `extra_params.image_embedding_input = "{data_uri}"` 改发 OpenAI 兼容的 data URI 字符串数组，默认 Jina 对象不变；回填遇到服务商熔断时停止本批。本地 main 已合入；复审复跑定向三份 221 过、`tests/organs` 305 过、模型/配置网页接口 105 过；未跑全量。本机 `models.toml` 补键并重启后由维护者观察图片索引与账本。
 
 [3.64 前端审查与回归](tasks/3.64-frontend-audit.md) **完成（2026-11-27）**。本地 `main` 已修收件箱历史、输入提示、前台追新、长文和版本阅读、可见字段标签与文字对比。续审修正时间线慢读覆盖新快照、总览有缓存却报错、平台会话改名不同步，以及筛选按下状态和极长文字。组合产品版 `e19c411` 共 22 个修复提交，16 份合成回归 57 项通过。实屏 A/B 已确认空行动规划正文、同前缀版本、极长会话名与未读数、慢读不回填和推送后的阅读状态；两版各自冷打开/重开 5 次，可测指标（TTFB、DOMContentLoaded、首屏数据就绪）中位差 2–3ms、无可信差异，绘制类指标受预览器影响不参与比较。真实键盘、触摸、窗口隐藏/恢复和减少动画已用 gstack 浏览器补测通过，隐藏期间的推送在恢复后自动出现；13 页深色扫查、器官方向键、模型选中配色和记忆详情也已实测。残余限制只有夹具隐藏的配置分区、真实硬件触摸、器官滑鼠拖拽和套接字到绘制时刻。[本轮证据](tasks/evidence/3.64-frontend-review.md)。
 
