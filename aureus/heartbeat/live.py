@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 # 事件类型（topic）：网页按它决定让哪一页的缓存失效。
 TOPIC_INBOX = "inbox"  # 新的平台消息已存进收件箱
+TOPIC_CHAT = "chat"
 TOPIC_TIMELINE = "timeline"  # 时间线追加了一条记录
 TOPIC_ROUND = "round"  # 正在回复谁的状态变了
 TOPIC_RESOURCES = "resources"  # 学习或记忆资源变了

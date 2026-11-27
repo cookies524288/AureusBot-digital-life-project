@@ -252,6 +252,8 @@ config_version = 1
 # login_lockout_seconds = 30
 # 只在有授权的 QQ 会话中从 QQ 官方图源读取头像；关闭后使用本地像素人头。
 # qq_avatars_enabled = true
+# 关闭后用原有的整页刷新路径，便于对照和排查。
+# incremental_updates_enabled = true
 
 # 反馈（设计见 docs/10-decisions.md 的 D67）：做事前记下预期，做完记结果，
 # 用真实成功率算「自信」；它说「有几成把握」时，数字来自这里。下面的值都是默认值。

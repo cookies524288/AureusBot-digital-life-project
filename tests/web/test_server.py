@@ -29,6 +29,7 @@ from aureus.channels import WebChannel
 from aureus.common import ManualClock, WebConfig
 from aureus.heartbeat import EVENT_MESSAGE, Perception
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
+from aureus.heartbeat.live import TOPIC_CHAT, LiveEvent, LiveEventHub
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.memory.emoji import MAX_EMOJI_BYTES, EmojiStore, ImportedEmoji
 from aureus.memory.history import MemorySource
@@ -64,6 +65,7 @@ class Rig:
         self.timeline = TimelineDatabase(tmp_path / "aureus.db", self.clock)
         self.timeline.open()
         self.auth = WebAuth(self.passwords, self.sessions, LoginLimiter(self.config, self.clock))
+        self.live = LiveEventHub()
         self.app = create_app(
             config=self.config,
             auth=self.auth,
@@ -73,6 +75,7 @@ class Rig:
             open_terminal=open_terminal,
             request_shutdown=request_shutdown,
             resource_emojis=resource_emojis,
+            live_events=self.live,
         )
 
     def client(self, host: str = "127.0.0.1") -> TestClient:
@@ -939,6 +942,57 @@ def test_history_limit_is_bounded_and_keeps_the_latest(rig: Rig) -> None:
     ]
     assert len(client.get("/api/history?limit=0").json()) == 1  # 下限 1
     assert len(client.get("/api/history?limit=100000").json()) == 5  # 上限 200，不报错
+
+
+def test_chat_history_supports_before_cursor_and_rejects_two_directions(rig: Rig) -> None:
+    set_password(rig)
+    add_message(rig, "第一条", ActorType.USER, "web")
+    add_message(rig, "第二条", ActorType.USER, "web")
+    newest = rig.timeline.append(
+        EVENT_MESSAGE, "第三条", ActorType.USER, visibility=VisibilityScope.USER_ONLY
+    )
+    rig.timeline.append(
+        EVENT_MESSAGE, "群聊不可见", ActorType.USER, visibility=VisibilityScope.GROUP
+    )
+    client = rig.client()
+    login(client, GOOD)
+    history = client.get(f"/api/history?before_id={newest.id}&limit=2").json()
+    assert [item["content"] for item in history] == ["第一条", "第二条"]
+    assert client.get(f"/api/history?before_id={newest.id}&since_id=0").status_code == 422
+
+
+@pytest.mark.parametrize("incremental", [True, False])
+def test_chat_events_use_visible_delivery_cursor_only(tmp_path: Path, incremental: bool) -> None:
+    rig = Rig(tmp_path, WebConfig(incremental_updates_enabled=incremental))
+    try:
+        set_password(rig)
+        seen: list[LiveEvent] = []
+        rig.live.subscribe(seen.append)
+        first = rig.timeline.append(
+            EVENT_REPLY_DELIVERED,
+            "私聊正文",
+            ActorType.ME,
+            visibility=VisibilityScope.USER_ONLY,
+            metadata={"reply_id": 10, "segment": 1},
+        )
+        rig.timeline.append(EVENT_REPLY_DELIVERED, "别处正文", ActorType.ME)
+        last = rig.timeline.append(
+            EVENT_REPLY_DELIVERED, "私聊末段", ActorType.ME, visibility=VisibilityScope.USER_ONLY
+        )
+        events = [dict(event.data) for event in seen if event.topic == TOPIC_CHAT]
+        assert events == (
+            [
+                {"id": first.id, "previous_id": 0, "delivery_key": "10:1"},
+                {"id": last.id, "previous_id": first.id},
+            ]
+            if incremental
+            else []
+        )
+        client = rig.client()
+        login(client, GOOD)
+        assert client.get("/api/status").json()["incremental_updates"] is incremental
+    finally:
+        rig.close()
 
 
 def test_chat_recovery_pages_confirmed_user_visible_segments_in_cursor_order(rig: Rig) -> None:

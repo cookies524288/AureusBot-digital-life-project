@@ -592,6 +592,7 @@ def test_chat_reconnect_supplements_confirmed_segments_without_repeating_live_bu
         r"""
         state.loggedIn = true;
         state.page = 'chat';
+        state.incrementalUpdates = false;
         openSocket();
         let finishHistory;
         const typing = {ok:true, data:{typing:false}};

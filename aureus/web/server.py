@@ -43,7 +43,7 @@ from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
-from aureus.heartbeat.live import TOPIC_TIMELINE, LiveEvent, LiveEventHub
+from aureus.heartbeat.live import TOPIC_CHAT, TOPIC_TIMELINE, LiveEvent, LiveEventHub
 from aureus.heartbeat.memory_summary_source import VISIBLE_SUMMARY_SCOPES, WEB_PRIVATE_SCOPE
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
@@ -116,6 +116,7 @@ SESSION_COOKIE = "aureus_session"
 SECONDS_PER_DAY = 86400
 DEFAULT_HISTORY_LIMIT = 50
 MAX_HISTORY_LIMIT = 200
+MAX_CHAT_RECOVERY_LIMIT = MAX_HISTORY_LIMIT + 1
 # WebSocket 的关闭码 1008：违反策略（没登录、来源不对、登录已失效）。
 WS_POLICY_VIOLATION = 1008
 # 每个连着的网页最多攒多少条待推送的消息；网页收得太慢就丢掉新消息并记日志，不拖住心跳。
@@ -127,6 +128,16 @@ SESSION_RECHECK_SECONDS = 30.0
 # 网页本身是随代码放在 static 目录里的一个静态文件，登录页、聊天页和设置页都在里面；
 # 页面不含任何数据，数据都走要登录的接口。路径从本文件派生，不写死（D38）。
 INDEX_PAGE = Path(__file__).parent / "static" / "index.html"
+
+
+def _history_delivery_key(record: TimelineRecord) -> dict[str, str]:
+    if (
+        record.event_type == EVENT_REPLY_DELIVERED
+        and "reply_id" in record.metadata
+        and "segment" in record.metadata
+    ):
+        return {"delivery_key": f"{record.metadata['reply_id']}:{record.metadata['segment']}"}
+    return {}
 
 
 class QQLinkRequest(BaseModel):
@@ -323,10 +334,25 @@ def create_app(
     max_age = config.session_days * SECONDS_PER_DAY
     instance = uuid4().hex
     live = live_events if live_events is not None else LiveEventHub()
+    last_chat_delivery = 0
 
     def publish_timeline_event(record: TimelineRecord) -> None:
-        """时间线追加了就通知网页；只带序号和事件类型，正文不经过推送（3.43）。"""
+        """发布最小游标；聊天回执有独立的前一条序号，不能用全局序号判断遗漏。"""
+        nonlocal last_chat_delivery
         live.publish(LiveEvent(TOPIC_TIMELINE, {"id": record.id, "event_type": record.event_type}))
+        if (
+            config.incremental_updates_enabled
+            and record.event_type == EVENT_REPLY_DELIVERED
+            and record.visibility is VisibilityScope.USER_ONLY
+        ):
+            previous = last_chat_delivery
+            last_chat_delivery = record.id
+            live.publish(
+                LiveEvent(
+                    TOPIC_CHAT,
+                    {"id": record.id, "previous_id": previous, **_history_delivery_key(record)},
+                )
+            )
 
     timeline.add_append_listener(publish_timeline_event)
 
@@ -476,7 +502,10 @@ def create_app(
     async def status(
         request: Request, _token: Annotated[str, Depends(require_session)]
     ) -> dict[str, bool | str]:
-        result: dict[str, bool | str] = {"must_change_password": auth.password_is_default}
+        must_change_password = auth.password_is_default
+        result: dict[str, bool | str] = {"must_change_password": must_change_password}
+        if not must_change_password:
+            result["incremental_updates"] = config.incremental_updates_enabled
         if settings is not None and not auth.password_is_default:
             result["bot_pronoun"] = settings.heartbeat.identity.facts.pronoun
         if qq_link is not None and not auth.password_is_default:
@@ -525,15 +554,22 @@ def create_app(
         limit: int = DEFAULT_HISTORY_LIMIT,
         replies_only: bool = False,
         since_id: int | None = None,
+        before_id: int | None = None,
     ) -> list[dict[str, Any]]:
         """读取最新私聊，或从已见序号之后按顺序补读（D84）。"""
-        bounded = min(max(limit, 1), MAX_HISTORY_LIMIT)
+        if since_id is not None and before_id is not None:
+            raise HTTPException(422, detail="不能同时指定向前和向后的翻页序号。")
+        maximum = (
+            MAX_CHAT_RECOVERY_LIMIT if replies_only and since_id is not None else MAX_HISTORY_LIMIT
+        )
+        bounded = min(max(limit, 1), maximum)
         records = await timeline.async_query(
             TimelineQuery(
                 event_types=(EVENT_REPLY_DELIVERED,)
                 if replies_only
                 else (EVENT_MESSAGE, EVENT_REPLY_DELIVERED),
                 since_id=since_id if since_id is not None else 0,
+                before_id=before_id,
                 latest=since_id is None,
                 limit=bounded,
                 visibility=VisibilityScope.USER_ONLY,
@@ -547,13 +583,7 @@ def create_app(
                 "who": record.actor_type.value,
                 "channel": str(record.metadata.get("channel", "")),
                 "content": record.content,
-                **(
-                    {"delivery_key": f"{record.metadata['reply_id']}:{record.metadata['segment']}"}
-                    if record.event_type == EVENT_REPLY_DELIVERED
-                    and "reply_id" in record.metadata
-                    and "segment" in record.metadata
-                    else {}
-                ),
+                **_history_delivery_key(record),
             }
             for record in records
         ]
