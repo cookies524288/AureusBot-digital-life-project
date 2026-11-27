@@ -178,7 +178,7 @@ def test_restore_each_editable_template_keeps_other_overrides(rig: ConfigRig) ->
     assert tomllib.loads(path.read_text(encoding="utf-8")) == overrides
     for key, original in originals.items():
         restored = client.delete(f"/api/prompts/{key}")
-        assert restored.status_code == 200 and restored.json() == original, key
+        assert restored.status_code == 200 and restored.json() == original, (key, restored.text)
         del overrides[key]
         assert (
             tomllib.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
