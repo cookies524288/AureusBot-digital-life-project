@@ -528,7 +528,7 @@ def create_app(
     ) -> list[dict[str, Any]]:
         """读取最新私聊，或从已见序号之后按顺序补读（D84）。"""
         bounded = min(max(limit, 1), MAX_HISTORY_LIMIT)
-        records = timeline.query(
+        records = await timeline.async_query(
             TimelineQuery(
                 event_types=(EVENT_REPLY_DELIVERED,)
                 if replies_only

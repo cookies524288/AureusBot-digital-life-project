@@ -5,13 +5,18 @@ metadata 存成 JSON 文本（D41 第 9 条）。
 """
 
 import ast
+import asyncio
 import contextlib
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+import threading
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+from queue import Empty, SimpleQueue
 from typing import Any
 
 from aureus.common import Clock, SystemClock
@@ -24,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 # 旧记录的 metadata 实在读不出来时，原文放在这个键下面，不丢、也不报错（D41 第 9 条）。
 UNREADABLE_METADATA_KEY = "unreadable_metadata"
+_READ_WORKERS = 2
 
 
 def _encode_metadata(metadata: dict[str, Any]) -> str:
@@ -73,39 +79,72 @@ class TimelineDatabase:
         """
         self._db_path = db_path
         self._clock = clock or SystemClock()
-        self._conn: sqlite3.Connection | None = None
+        self._open = False
+        self._local = threading.local()
+        self._connections: list[sqlite3.Connection] = []
+        self._connections_lock = threading.Lock()
+        self._writer: ThreadPoolExecutor | None = None
+        self._readers: ThreadPoolExecutor | None = None
         self._append_listeners: list[Callable[[TimelineRecord], None]] = []
+        self._notification_lock = threading.Lock()
+        self._listener_loop: asyncio.AbstractEventLoop | None = None
+        self._notifications: SimpleQueue[TimelineRecord] = SimpleQueue()
         self.platform_history = LegacyPlatformHistory(db_path)
 
     def open(self) -> None:
         """打开数据库连接并初始化表结构。"""
-        if self._conn is not None:
+        if self._open:
             return
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = open_connection(self._db_path)
+        connection = open_connection(self._db_path)
         try:
             # 主库启动时最先由这里打开；WAL 让网页读和心跳写不再互相等锁（D121）。
-            enable_wal(self._conn)
-        except sqlite3.Error:
-            logger.exception("把数据库切换到 WAL 模式失败，启动中止")
-            self._conn.close()
-            self._conn = None
+            enable_wal(connection)
+            self._init_schema(connection)
+        except BaseException:
+            connection.close()
             raise
-        self._init_schema()
+        self._local.connection = connection
+        self._connections.append(connection)
+        self._writer = ThreadPoolExecutor(1, thread_name_prefix="aureus-timeline-write")
+        self._readers = ThreadPoolExecutor(_READ_WORKERS, thread_name_prefix="aureus-timeline-read")
+        with contextlib.suppress(RuntimeError):
+            self._listener_loop = asyncio.get_running_loop()
+        self._open = True
 
     def close(self) -> None:
-        """关闭数据库连接。"""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        """等所有已提交的操作完成，再回收各线程的连接。"""
+        writer, self._writer = self._writer, None
+        readers, self._readers = self._readers, None
+        if writer is not None:
+            writer.shutdown()
+        if readers is not None:
+            readers.shutdown()
+        with self._connections_lock:
+            self._open = False
+            for connection in self._connections:
+                connection.close()
+            self._connections.clear()
+            self._local = threading.local()
+        self._listener_loop = None
 
-    def _init_schema(self) -> None:
+    def _connection(self, *, read_only: bool = True) -> sqlite3.Connection:
+        connection: sqlite3.Connection | None = getattr(self._local, "connection", None)
+        if connection is not None:
+            return connection
+        with self._connections_lock:
+            if not self._open:
+                raise RuntimeError("Database is not open")
+            connection = open_connection(self._db_path, read_only=read_only)
+            self._local.connection = connection
+            self._connections.append(connection)
+        return connection
+
+    def _init_schema(self, connection: sqlite3.Connection) -> None:
         """初始化数据库表和触发器（禁止 UPDATE 和 DELETE）。"""
-        assert self._conn is not None
-
         # 创建时间线表
-        self._conn.execute("""
+        connection.execute("""
             CREATE TABLE IF NOT EXISTS timeline (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
@@ -119,21 +158,21 @@ class TimelineDatabase:
         """)
 
         # 创建索引
-        self._conn.execute("""
+        connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_timeline_timestamp ON timeline(timestamp)
         """)
-        self._conn.execute("""
+        connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_timeline_event_type ON timeline(event_type)
         """)
         # 收件箱去重按 metadata 里的入箱序号查；表达式索引让每条消息不再全表扫（D129、D137）。
-        self._conn.execute("""
+        connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_timeline_message_inbox_id
             ON timeline(json_extract(metadata, '$.inbox_message_id'))
             WHERE event_type = 'message'
         """)
 
         # 禁止 UPDATE：尝试时抛出错误
-        self._conn.execute("""
+        connection.execute("""
             CREATE TRIGGER IF NOT EXISTS no_update_timeline
             BEFORE UPDATE ON timeline
             BEGIN
@@ -142,7 +181,7 @@ class TimelineDatabase:
         """)
 
         # 禁止 DELETE：尝试时抛出错误
-        self._conn.execute("""
+        connection.execute("""
             CREATE TRIGGER IF NOT EXISTS no_delete_timeline
             BEFORE DELETE ON timeline
             BEGIN
@@ -152,7 +191,7 @@ class TimelineDatabase:
 
         # 禁止 INSERT OR REPLACE：它会先删掉冲突的行，而默认情况下这个删除不触发
         # DELETE 触发器，所以要在插入前拦住「主键已存在」（审查 S3）。
-        self._conn.execute("""
+        connection.execute("""
             CREATE TRIGGER IF NOT EXISTS no_replace_timeline
             BEFORE INSERT ON timeline
             WHEN EXISTS (SELECT 1 FROM timeline WHERE id = NEW.id)
@@ -161,11 +200,9 @@ class TimelineDatabase:
             END
         """)
 
-        self._conn.commit()
+        connection.commit()
 
-    def add_append_listener(
-        self, listener: Callable[[TimelineRecord], None]
-    ) -> Callable[[], None]:
+    def add_append_listener(self, listener: Callable[[TimelineRecord], None]) -> Callable[[], None]:
         """登记追加钩子：每次成功追加后收到刚写入的那条记录。
 
         钩子只读：记录已经提交，时间线只追加、不能改（D11）。钩子用来通知别的子系统
@@ -191,46 +228,93 @@ class TimelineDatabase:
         visibility: VisibilityScope = VisibilityScope.PRIVATE,
         metadata: dict | None = None,
     ) -> TimelineRecord:
-        """追加一条时间线记录。
-
-        Args:
-            event_type: 事件类型
-            content: 事件内容
-            actor_type: 执行者类型
-            actor_id: 执行者 ID（actor_type=me 时留空）
-            visibility: 可见范围
-            metadata: 额外元数据
-
-        Returns:
-            追加后的时间线记录
-
-        Raises:
-            RuntimeError: 数据库未打开
-        """
-        if self._conn is None:
+        """同步追加一条时间线记录，供启动和 CLI 使用。"""
+        writer = self._writer
+        if writer is None:
             raise RuntimeError("Database is not open")
+        current_loop = None
+        with contextlib.suppress(RuntimeError):
+            current_loop = asyncio.get_running_loop()
+        listener_loop = self._get_listener_loop(current_loop)
+        record = writer.submit(
+            self._write_record,
+            listener_loop,
+            ensure_aware(self._clock.now()),
+            event_type,
+            content,
+            actor_type,
+            actor_id,
+            visibility,
+            metadata,
+        ).result()
+        if listener_loop is current_loop:
+            self._dispatch_notifications()
+        return record
 
-        # 统一成 UTC 再存：查询按字符串比较时间，混进别的时区会比错（与账本一致）。
-        timestamp = ensure_aware(self._clock.now())
-        metadata_json = _encode_metadata(metadata or {})
-
-        cursor = self._conn.execute(
-            """
-            INSERT INTO timeline
-            (timestamp, actor_type, actor_id, event_type, content, visibility, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                timestamp.isoformat(),
-                actor_type.value,
-                actor_id,
-                event_type,
-                content,
-                visibility.value,
-                metadata_json,
-            ),
+    async def async_append(
+        self,
+        event_type: str,
+        content: str,
+        actor_type: ActorType,
+        actor_id: str = "",
+        visibility: VisibilityScope = VisibilityScope.PRIVATE,
+        metadata: dict | None = None,
+    ) -> TimelineRecord:
+        """异步追加；同一实例的全部追加由单写线程按提交顺序执行。"""
+        writer = self._writer
+        if writer is None:
+            raise RuntimeError("Database is not open")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            writer,
+            self._write_record,
+            self._get_listener_loop(loop),
+            ensure_aware(self._clock.now()),
+            event_type,
+            content,
+            actor_type,
+            actor_id,
+            visibility,
+            metadata,
         )
-        self._conn.commit()
+
+    def _get_listener_loop(
+        self, current_loop: asyncio.AbstractEventLoop | None
+    ) -> asyncio.AbstractEventLoop | None:
+        if self._listener_loop is None or not self._listener_loop.is_running():
+            self._listener_loop = current_loop
+        return self._listener_loop
+
+    def _write_record(
+        self,
+        listener_loop: asyncio.AbstractEventLoop | None,
+        timestamp: datetime,
+        event_type: str,
+        content: str,
+        actor_type: ActorType,
+        actor_id: str,
+        visibility: VisibilityScope,
+        metadata: dict | None,
+    ) -> TimelineRecord:
+        metadata_json = _encode_metadata(metadata or {})
+        connection = self._connection(read_only=False)
+        with connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO timeline
+                (timestamp, actor_type, actor_id, event_type, content, visibility, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    timestamp.isoformat(),
+                    actor_type.value,
+                    actor_id,
+                    event_type,
+                    content,
+                    visibility.value,
+                    metadata_json,
+                ),
+            )
 
         record = TimelineRecord(
             id=cursor.lastrowid or 0,
@@ -242,14 +326,44 @@ class TimelineDatabase:
             visibility=visibility,
             metadata=metadata or {},
         )
-        for listener in list(self._append_listeners):
+        self._notifications.put(record)
+        if listener_loop is not None and listener_loop.is_running():
             try:
-                listener(record)
-            except Exception:
-                logger.exception("时间线追加钩子出错，不影响这条记录")
+                listener_loop.call_soon_threadsafe(self._dispatch_notifications)
+            except RuntimeError:
+                if listener_loop.is_running():
+                    raise
         return record
 
-    def query(self, query: TimelineQuery) -> Sequence[TimelineRecord]:
+    def _dispatch_notifications(self) -> None:
+        with self._notification_lock:
+            while True:
+                try:
+                    record = self._notifications.get_nowait()
+                except Empty:
+                    return
+                for listener in list(self._append_listeners):
+                    try:
+                        listener(record)
+                    except Exception:
+                        logger.exception("时间线追加钩子出错，不影响这条记录")
+
+    async def async_query(self, query: TimelineQuery) -> list[TimelineRecord]:
+        """在固定大小的只读线程池查询；繁忙时排队，不丢查询。"""
+        return await self.async_read(self.query, query)
+
+    async def async_read[T, **P](
+        self, read: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+    ) -> T:
+        """将一组只读时间线操作放到同一个读工作线程。"""
+        readers = self._readers
+        if readers is None:
+            raise RuntimeError("Database is not open")
+        return await asyncio.get_running_loop().run_in_executor(
+            readers, partial(read, *args, **kwargs)
+        )
+
+    def query(self, query: TimelineQuery) -> list[TimelineRecord]:
         """查询时间线记录。
 
         Args:
@@ -262,8 +376,7 @@ class TimelineDatabase:
         Raises:
             RuntimeError: 数据库未打开
         """
-        if self._conn is None:
-            raise RuntimeError("Database is not open")
+        connection = self._connection()
 
         conditions: list[str] = ["id > ?"]
         params: list[str | int | float | None] = [query.since_id]
@@ -315,7 +428,7 @@ class TimelineDatabase:
         sql = f"SELECT * FROM timeline WHERE {where_clause} ORDER BY id {order} LIMIT ?"
         params.append(query.limit)
 
-        cursor = self._conn.execute(sql, params)
+        cursor = connection.execute(sql, params)
         rows = cursor.fetchall()
         if query.latest:
             rows.reverse()
@@ -338,9 +451,7 @@ class TimelineDatabase:
         self, record_id: int, *, connection: sqlite3.Connection | None = None
     ) -> TimelineRecord | None:
         """按序号取一条记录；没有则返回 None，数据库未打开时抛出 RuntimeError。"""
-        database = connection if connection is not None else self._conn
-        if database is None:
-            raise RuntimeError("Database is not open")
+        database = connection if connection is not None else self._connection()
         row = database.execute("SELECT * FROM timeline WHERE id = ?", (record_id,)).fetchone()
         if row is None:
             return None
@@ -357,15 +468,18 @@ class TimelineDatabase:
 
     def inbox_message_ids(self, ids: Iterable[int]) -> set[int]:
         """批量查出这些收件箱序号里已经记进时间线的那些，供收件箱分页去重。"""
-        if self._conn is None:
-            raise RuntimeError("Database is not open")
         encoded = json.dumps(sorted(set(ids)))
-        rows = self._conn.execute(
-            "SELECT DISTINCT CAST(json_extract(metadata, '$.inbox_message_id') AS INTEGER) "
-            "FROM timeline WHERE event_type = 'message' "
-            "AND json_extract(metadata, '$.inbox_message_id') IN (SELECT value FROM json_each(?))",
-            (encoded,),
-        ).fetchall()
+        rows = (
+            self._connection()
+            .execute(
+                "SELECT DISTINCT CAST(json_extract(metadata, '$.inbox_message_id') AS INTEGER) "
+                "FROM timeline WHERE event_type = 'message' "
+                "AND json_extract(metadata, '$.inbox_message_id') "
+                "IN (SELECT value FROM json_each(?))",
+                (encoded,),
+            )
+            .fetchall()
+        )
         return {int(row[0]) for row in rows}
 
     def get_latest_id(self) -> int:
@@ -374,10 +488,7 @@ class TimelineDatabase:
         Returns:
             最大的记录 ID，如果为空返回 0
         """
-        if self._conn is None:
-            raise RuntimeError("Database is not open")
-
-        cursor = self._conn.execute("SELECT MAX(id) as max_id FROM timeline")
+        cursor = self._connection().execute("SELECT MAX(id) as max_id FROM timeline")
         row = cursor.fetchone()
         return row["max_id"] or 0
 
@@ -387,9 +498,6 @@ class TimelineDatabase:
         Returns:
             时间线记录总数
         """
-        if self._conn is None:
-            raise RuntimeError("Database is not open")
-
-        cursor = self._conn.execute("SELECT COUNT(*) as count FROM timeline")
+        cursor = self._connection().execute("SELECT COUNT(*) as count FROM timeline")
         row = cursor.fetchone()
         return row["count"]

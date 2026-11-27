@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from threading import get_ident
 
 import pytest
 from argon2 import PasswordHasher
@@ -23,7 +24,13 @@ from aureus.heartbeat.events import (
 )
 from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
-from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from aureus.timeline import (
+    ActorType,
+    TimelineDatabase,
+    TimelineQuery,
+    TimelineRecord,
+    VisibilityScope,
+)
 from aureus.web import LoginLimiter, PasswordStore, SessionStore, WebAuth, create_app
 
 NOW = datetime(2026, 11, 21, 12, tzinfo=UTC)
@@ -244,6 +251,26 @@ def test_recall_feedback_switch_hides_controls_and_rejects_mutation(tmp_path: Pa
         assert "recall_feedback_available" not in record
     finally:
         rig.close()
+
+
+@pytest.mark.parametrize("path", ["/api/history", "/api/timeline", "/api/overview"])
+def test_hot_timeline_reads_leave_the_request_thread(
+    rig: Rig, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    database_threads: list[int] = []
+    original_query = rig.timeline.query
+
+    def track_query(query: TimelineQuery) -> list[TimelineRecord]:
+        database_threads.append(get_ident())
+        return original_query(query)
+
+    monkeypatch.setattr(rig.timeline, "query", track_query)
+    with rig.client as client:
+        rig.log_in()
+        assert client.portal is not None
+        request_thread = client.portal.call(get_ident)
+        assert client.get(path).status_code == 200
+    assert database_threads and all(thread != request_thread for thread in database_threads)
 
 
 def test_timeline_filters_time_and_paginates_in_ascending_order(rig: Rig) -> None:

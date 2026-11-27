@@ -114,6 +114,20 @@ def _timeline_item(
     return item
 
 
+def _read_timeline_page(
+    timeline: TimelineDatabase,
+    query: TimelineQuery,
+    conversation: dict[str, str] | None,
+    recall_feedback_enabled: bool,
+) -> tuple[Sequence[TimelineRecord], list[dict[str, Any]]]:
+    records = (
+        timeline.query(query)
+        if conversation is None
+        else _conversation_records(timeline, query, conversation)
+    )
+    return records, [_timeline_item(row, timeline, recall_feedback_enabled) for row in records]
+
+
 class HeartbeatView(Protocol):
     """时间线和总览只读的心跳接口；所有调用留在事件循环线程。"""
 
@@ -196,23 +210,25 @@ def register_timeline_routes(
             event_types=event_types,
             without_metadata=(INTERNAL_REPLY_RECORD,),
         )
-        records = (
-            timeline.query(query)
-            if conversation is None
-            else _conversation_records(timeline, query, _conversation_metadata(conversation))
+        records, items = await timeline.async_read(
+            _read_timeline_page,
+            timeline,
+            query,
+            _conversation_metadata(conversation) if conversation is not None else None,
+            recall_feedback_enabled,
         )
         focus = heartbeat.working_memory_focus()
         if focus is None:
             message_limit = heartbeat.context_message_limit()
-            context = recent_dialogue(timeline, visibility=visibility, limit=message_limit)
+            context = await timeline.async_read(
+                recent_dialogue, timeline, visibility=visibility, limit=message_limit
+            )
             boundary_id = context[0].id if context else None
         else:
             message_limit, boundary_id = focus
         return {
             "summary": heartbeat.working_memory_summaries(),
-            "records": [
-                _timeline_item(record, timeline, recall_feedback_enabled) for record in records
-            ],
+            "records": items,
             "next_before_id": records[0].id if len(records) == bounded_limit else None,
             "context": {
                 "message_limit": message_limit,
@@ -223,11 +239,11 @@ def register_timeline_routes(
 
     @app.get("/api/overview")
     async def overview(_token: Annotated[str, Depends(require_ready)]) -> dict[str, Any]:
-        state = heartbeat.cognitive_state
-        references = timeline.query(
+        references = await timeline.async_query(
             TimelineQuery(event_type=EVENT_REPLY_REFERENCE, latest=True, limit=1)
         )
         reference = references[0] if references else None
+        state = heartbeat.cognitive_state
         return {
             "version": __version__,
             "state_text": heartbeat.describe_state(),

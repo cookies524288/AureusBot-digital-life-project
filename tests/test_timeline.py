@@ -291,10 +291,10 @@ def test_immutability_update_blocked(database: TimelineDatabase):
     database.append("message", "Original", ActorType.ME)
 
     # 尝试直接 UPDATE 应该被触发器阻止
-    assert database._conn is not None
+    connection = database._connection()
     with pytest.raises(Exception) as exc_info:
-        database._conn.execute("UPDATE timeline SET content = 'Modified' WHERE id = 1")
-        database._conn.commit()
+        connection.execute("UPDATE timeline SET content = 'Modified' WHERE id = 1")
+        connection.commit()
 
     assert "immutable" in str(exc_info.value).lower()
 
@@ -303,14 +303,14 @@ def test_immutability_insert_or_replace_blocked(database: TimelineDatabase):
     """测试 INSERT OR REPLACE 不能覆盖已有的行（审查 S3：REPLACE 不触发 DELETE 触发器）。"""
     database.append("message", "Original", ActorType.ME)
 
-    assert database._conn is not None
+    connection = database._connection()
     with pytest.raises(Exception) as exc_info:
-        database._conn.execute(
+        connection.execute(
             "INSERT OR REPLACE INTO timeline "
             "(id, timestamp, actor_type, event_type, visibility) "
             "VALUES (1, '2026-11-16T12:00:00+00:00', 'me', 'message', 'private')"
         )
-        database._conn.commit()
+        connection.commit()
 
     assert "immutable" in str(exc_info.value).lower()
     assert database.count_records() == 1
@@ -322,10 +322,10 @@ def test_immutability_delete_blocked(database: TimelineDatabase):
     database.append("message", "Original", ActorType.ME)
 
     # 尝试直接 DELETE 应该被触发器阻止
-    assert database._conn is not None
+    connection = database._connection()
     with pytest.raises(Exception) as exc_info:
-        database._conn.execute("DELETE FROM timeline WHERE id = 1")
-        database._conn.commit()
+        connection.execute("DELETE FROM timeline WHERE id = 1")
+        connection.commit()
 
     assert "immutable" in str(exc_info.value).lower()
 
@@ -376,21 +376,20 @@ def test_timeline_record_summary():
 
 def _insert_raw_metadata(database: TimelineDatabase, raw: str) -> None:
     """绕过 append，直接写一条带指定 metadata 原文的记录，模拟改成 JSON 之前的旧数据。"""
-    assert database._conn is not None
-    database._conn.execute(
+    connection = database._connection()
+    connection.execute(
         "INSERT INTO timeline (timestamp, actor_type, event_type, visibility, metadata) "
         "VALUES (?, ?, ?, ?, ?)",
         ("2026-11-16T00:00:00+00:00", "me", "legacy", "private", raw),
     )
-    database._conn.commit()
+    connection.commit()
 
 
 def test_metadata_is_stored_as_json(database: TimelineDatabase):
     metadata = {"层次": {"能量": 0.5, "障碍": ["能量不足"]}, "空": None, "开关": True}
     database.append("cognitive_state", "x", ActorType.ME, metadata=metadata)
 
-    assert database._conn is not None
-    raw = database._conn.execute("SELECT metadata FROM timeline").fetchone()[0]
+    raw = database._connection().execute("SELECT metadata FROM timeline").fetchone()[0]
     assert json.loads(raw) == metadata
     assert "能量" in raw  # 中文按原样存，不转成 \u 转义
     assert database.query(TimelineQuery())[0].metadata == metadata
