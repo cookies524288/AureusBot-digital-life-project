@@ -35,6 +35,7 @@ from aureus.organs.llm_adapter import (
     _MODEL_TEST_INPUT,
     _MODEL_TEST_TOOL_NAME,
     ASSUMED_COMPLETION_TOKENS,
+    CALL_CANCELLED_REASON,
     EMPTY_REPLY_REASON,
     EMPTY_SYSTEM_MESSAGE,
     LITELLM_PREFIX_BY_PROTOCOL,
@@ -788,6 +789,9 @@ async def test_cancelling_organ_stream_closes_it_and_accounts_for_attempt(
         await task
     assert closed.is_set()
     [attempt] = cancellation.value.attempts
+    # 取消照常记账，但不是服务商失败（D152）：压力不把它算进失败。
+    assert attempt.succeeded
+    assert attempt.failure_reason == CALL_CANCELLED_REASON
     assert attempt.estimated and attempt.budget_tokens > 0
     if tools:
         assert attempt.prompt_tokens > COUNTED_PROMPT_TOKENS
