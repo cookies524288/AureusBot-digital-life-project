@@ -50,6 +50,11 @@ EXTRA_PARAMS_CORE_KEYS = frozenset(
     }
 )
 
+# 图片嵌入的输入格式声明（D150）：声明为 data URI 时，按 OpenAI 兼容服务认识的
+# 字符串数组发送；不声明时保持 Jina 的多模态对象。沿用 MaiBot 的配置键。
+IMAGE_EMBEDDING_INPUT_KEY = "image_embedding_input"
+IMAGE_EMBEDDING_DATA_URI = "{data_uri}"
+
 # 分时价格用当地时间的 “时:分”。结束时间额外允许 24:00，表示当天结束（左闭右开）。
 _CLOCK_TIME_PATTERN = r"^(?:[01]\d|2[0-3]):[0-5]\d$"
 _CLOCK_END_TIME_PATTERN = r"^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$"
@@ -228,6 +233,16 @@ class ModelConfig(BaseModel):
         core = sorted(EXTRA_PARAMS_CORE_KEYS.intersection(self.extra_params))
         if core:
             raise ValueError(f"额外参数不能覆盖核心请求字段：{'、'.join(core)}")
+        if IMAGE_EMBEDDING_INPUT_KEY in self.extra_params:
+            if self.kind != "image_embedding":
+                raise ValueError(
+                    f"额外参数 {IMAGE_EMBEDDING_INPUT_KEY} "
+                    '只能用在 kind = "image_embedding" 的模型上。'
+                )
+            if self.extra_params[IMAGE_EMBEDDING_INPUT_KEY] != IMAGE_EMBEDDING_DATA_URI:
+                raise ValueError(
+                    f'额外参数 {IMAGE_EMBEDDING_INPUT_KEY} 只支持 "{IMAGE_EMBEDDING_DATA_URI}"。'
+                )
         try:
             encoded = json.dumps(self.extra_params, ensure_ascii=False, allow_nan=False)
         except (TypeError, ValueError):

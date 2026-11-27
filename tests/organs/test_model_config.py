@@ -353,11 +353,48 @@ def test_extra_params_size_is_limited(tmp_path: Path) -> None:
     assert "最多 8192 字节" in load_error(tmp_path, text)
 
 
+def with_image_model(value: str, kind: str = "image_embedding") -> str:
+    """在 big/small 之后、器官表之前插入一个带图片输入格式的模型。"""
+    block = (
+        "\n[[models]]\n"
+        "name = 'picture'\n"
+        "identifier = 'chinese-clip'\n"
+        "provider = 'cloud'\n"
+        f"kind = '{kind}'\n"
+        "\n[models.extra_params]\n"
+        f"image_embedding_input = '{value}'\n"
+    )
+    return VALID_TOML.replace("\n[organs.replyer]", block + "\n[organs.replyer]")
+
+
+def test_image_embedding_input_accepts_data_uri_on_image_models(tmp_path: Path) -> None:
+    # D150：图片嵌入模型可以声明按 data URI 字符串发送。
+    config = load_models_config(write_models_toml(tmp_path, with_image_model("{data_uri}")))
+
+    picture = config.models[2]
+    assert picture.kind == "image_embedding"
+    assert picture.extra_params == {"image_embedding_input": "{data_uri}"}
+
+
+@pytest.mark.parametrize("value", ["{base64}", "data_uri", ""])
+def test_image_embedding_input_rejects_other_values(tmp_path: Path, value: str) -> None:
+    message = load_error(tmp_path, with_image_model(value))
+
+    assert "image_embedding_input" in message
+    assert "只支持" in message
+
+
+@pytest.mark.parametrize("kind", ["llm", "embedding"])
+def test_image_embedding_input_rejects_other_model_kinds(tmp_path: Path, kind: str) -> None:
+    message = load_error(tmp_path, with_image_model("{data_uri}", kind=kind))
+
+    assert "image_embedding_input" in message
+    assert "image_embedding" in message
+
+
 def test_disabled_models_skip_routes_and_reasoning_checks(tmp_path: Path) -> None:
     text = (
-        VALID_TOML.replace(
-            "max_tokens = 2000", "max_tokens = 2000\nreasoning_levels = ['high']"
-        )
+        VALID_TOML.replace("max_tokens = 2000", "max_tokens = 2000\nreasoning_levels = ['high']")
         .replace("name = 'small'\nidentifier", "name = 'small'\nenabled = false\nidentifier")
         .replace("max_tokens = 300", "max_tokens = 300\nreasoning_effort = 'high'")
     )
