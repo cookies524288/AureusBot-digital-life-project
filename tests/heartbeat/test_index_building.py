@@ -34,6 +34,7 @@ from aureus.organs import (
     LOCAL_EXPRESSION_EMBEDDING,
     KeyResolver,
     OrganBus,
+    OrganCallError,
     OrganRequest,
     OrganResponse,
 )
@@ -385,6 +386,41 @@ async def test_image_backfill_indexes_existing_unindexed_images(tmp_path: Path) 
         "image_embedding",
         "image_embedding",
     ]
+
+
+@pytest.mark.asyncio
+async def test_image_backfill_stops_after_circuit_skip(tmp_path: Path) -> None:
+    """服务商熔断时本批只尝试一次就停下，返回还有缺项，不抛到心跳（D150）。"""
+    harness = Harness(tmp_path, inbox=True)
+    assert harness.inbox is not None
+    harness.call.reject = OrganCallError(
+        "image_embedding", ["服务商熔断冷却中"], skipped_by_circuit=True
+    )
+
+    harness.inbox.add(
+        Perception(
+            "qq",
+            "bot",
+            "图片",
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("bot", "group", "group-1", "m1"),
+            attachments=tuple(
+                MediaReference("image", file_id) for file_id in ("file-1", "file-2", "file-3")
+            ),
+        )
+    )
+    images = InboxImageIndex(harness.database, harness.call.call, lambda: True)
+
+    async def read(perception: Perception, attachment: MediaReference) -> tuple[bytes, str]:
+        return attachment.file_id.encode(), "image/png"
+
+    more, written = await images.backfill_batch(harness.inbox, read, lambda _key: True, 5)
+
+    assert (more, written) == (True, False)
+    assert [request.organ_id for request in harness.call.requests] == ["image_embedding"]
+    with closing(open_connection(harness.database)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM inbox_image_vectors").fetchone()[0] == 0
 
 
 @pytest.mark.asyncio

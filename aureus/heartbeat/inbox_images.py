@@ -143,8 +143,15 @@ class InboxImageIndex:
                     data, _mime = media
                     try:
                         saved = await self._index(
-                            perception, attachment, data, propagate_rejection=True
+                            perception,
+                            attachment,
+                            data,
+                            propagate_rejection=True,
+                            stop_on_circuit=True,
                         )
+                    except OrganCallError:
+                        # 服务商正在熔断冷却：本批立即停下，下一轮心跳再试（D150）。
+                        return True, written > 0
                     except SQLiteError:
                         logger.exception("图片向量索引写入失败")
                         saved = False
@@ -191,6 +198,7 @@ class InboxImageIndex:
         image: bytes,
         *,
         propagate_rejection: bool = False,
+        stop_on_circuit: bool = False,
     ) -> bool:
         """写入一张图片的向量；返回是否真的保存了。"""
         message_id = await asyncio.to_thread(self._unindexed_source, perception, attachment)
@@ -204,7 +212,9 @@ class InboxImageIndex:
             if propagate_rejection:
                 raise
             return False
-        except OrganCallError:
+        except OrganCallError as error:
+            if stop_on_circuit and error.skipped_by_circuit:
+                raise
             return False
         if len(response.embeddings) != 1 or not isinstance(
             space := response.metadata.get("embedding_space"), str
