@@ -918,6 +918,22 @@ class InboxStore:
             ).fetchall()
         return [_message(row) for row in rows]
 
+    def list_mention_conversations(
+        self, limit: int = 5, *, pending_ids: Iterable[int] = ()
+    ) -> list[tuple[ConversationKey, str, int]]:
+        """按完整会话统计提及；已读但尚未处理的来信也只计一次。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            rows = database.execute(
+                """SELECT c.*, COUNT(*) AS mention_count
+                   FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
+                   WHERE m.direction = 'incoming' AND m.mentioned = 1 AND m.trust != ?
+                     AND (m.id > COALESCE(c.last_read_id, 0)
+                          OR m.id IN (SELECT value FROM json_each(?)))
+                   GROUP BY c.id ORDER BY mention_count DESC, MIN(m.id) LIMIT ?""",
+                (TrustLevel.UNVERIFIED, json.dumps(tuple(pending_ids)), limit),
+            )
+            return [(_conversation(row), row["name"], row["mention_count"]) for row in rows]
+
     def list_attention_unread(
         self,
         conversation: ConversationKey,

@@ -26,6 +26,7 @@ SELECTION_TASK = "aureus-inbox-selection"
 _IDLE_BEFORE_READING = timedelta(minutes=5)
 _PRIORITY_LIMIT = 20
 _CANDIDATE_LIMIT = 100
+MENTION_PULL_LIMIT = 3
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +44,15 @@ class InboxResidence:
 
     conversation: ConversationKey
     read_limit: int
+
+
+@dataclass(frozen=True)
+class MentionPull:
+    """其他会话的展示名和待处理提及数；路由只用于内部核对。"""
+
+    conversation: ConversationKey
+    name: str
+    count: int
 
 
 async def select_conversations(
@@ -153,6 +163,23 @@ class InboxAttention:
         self._leave()
         self._idle_since = now - _IDLE_BEFORE_READING
         return True
+
+    def mention_pull_summary(
+        self,
+        exclude: ConversationKey | None,
+        *,
+        limit: int | None = MENTION_PULL_LIMIT,
+        pending_ids: Iterable[int] = (),
+    ) -> tuple[MentionPull, ...]:
+        """只列获准的会话。授权过滤在截断之前，避免泄露范围外的会话数量。"""
+        if not self._mention_pull_enabled:
+            return ()
+        candidates = self.store.list_mention_conversations(limit=-1, pending_ids=pending_ids)
+        return tuple(
+            MentionPull(key, name, count)
+            for key, name, count in candidates
+            if key != exclude and self.allows(key)
+        )[:limit]
 
     def _leave(self) -> None:
         """不再接新消息，保留本轮的投递资格。"""

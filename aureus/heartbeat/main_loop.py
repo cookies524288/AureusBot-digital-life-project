@@ -69,6 +69,7 @@ from aureus.heartbeat.conversation import (
     _RoundTrace,
     _Thought,
     _ThoughtOutcome,
+    with_mention_pull,
 )
 from aureus.heartbeat.cortisol import CortisolTiming
 from aureus.heartbeat.debounce import MessageDebouncer
@@ -3449,6 +3450,19 @@ class Heartbeat:
 
         job = _reply_job(batch, build)
         self._live_identity_changes.clear()
+        inbox = self._platform_inbox
+        if job.residence is not None and inbox is not None:
+            # D145 的已读水位与待答队列是两回事；已经上桌的提及也要纳入摘要。
+            pending_ids = (
+                message_id
+                for heard in self._unanswered
+                if heard.perception.mentioned
+                and type(message_id := heard.record.metadata.get("inbox_message_id")) is int
+            )
+            mentions = inbox.mention_pull_summary(
+                job.residence.conversation, limit=None, pending_ids=pending_ids
+            )
+            job = with_mention_pull(job, mentions, self._clock.now())
         return job
 
     def _conversation_job(
