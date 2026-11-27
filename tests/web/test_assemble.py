@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from aureus.channels import WEB_CHANNEL_NAME
 from aureus.common import AureusPaths, ConfigError, ManualClock, shutdown_logging
 from aureus.core.runtime import open_core
+from aureus.heartbeat import EVENT_MESSAGE
 from aureus.memory import (
     ExpressionVectorIndex,
     HistoricalMemory,
@@ -30,7 +31,7 @@ from aureus.memory import (
 from aureus.memory.emoji import ImportedEmoji
 from aureus.organs import CallPurpose, OrganRequest
 from aureus.people import HistoricalKind, HistoricalRecord
-from aureus.timeline import ActorType
+from aureus.timeline import ActorType, TimelineQuery
 from aureus.web import PasswordStore
 from aureus.web.assemble import open_web
 from aureus.web.runner import WebServer
@@ -93,6 +94,69 @@ def test_an_enabled_web_channel_is_attached_to_the_heartbeat(paths: AureusPaths)
             core.heartbeat.attach_channel(WEB_CHANNEL_NAME, lambda _message: None)
     # 关闭后数据库连接都放掉了：Windows 上文件没被锁住，能删掉。
     paths.database_file.unlink()
+
+
+@pytest.mark.parametrize("limit", [10, 0])
+def test_web_connections_share_the_inbound_limit_and_only_record_accepted_messages(
+    paths: AureusPaths, limit: int
+) -> None:
+    password = "correct horse"
+    PasswordStore(paths.web_password_file, FAST_HASHER).set_password(password)
+    write_web_config(paths, f"inbound_queue_limit = {limit}\n")
+    clock = ManualClock(START)
+    with (
+        open_core(paths, fake_organs=True, clock=clock, to_console=False) as core,
+        open_web(core, clock) as server,
+    ):
+        assert server is not None
+        app = server._server.config.app
+        assert isinstance(app, FastAPI)
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            assert client.portal is not None
+            assert client.post("/api/login", json={"password": password}).status_code == 200
+            origin = {"Origin": "http://testserver"}
+            with (
+                client.websocket_connect("/ws", headers=origin) as first,
+                client.websocket_connect("/ws", headers=origin) as second,
+            ):
+                accepted: dict[str, str] = {}
+                rejected: list[str] = []
+                for number in range(1, 7):
+                    first.send_json({"text": f"甲 {number}", "request_id": number})
+                    second.send_json({"text": f"乙 {number}", "request_id": number})
+                for label, socket in (("甲", first), ("乙", second)):
+                    for number in range(1, 7):
+                        receipt = socket.receive_json()
+                        assert receipt["request_id"] == number
+                        text = f"{label} {number}"
+                        if receipt["type"] == "accepted":
+                            accepted[text] = receipt["message_key"]
+                        else:
+                            assert receipt["type"] == "error"
+                            assert receipt["code"] == "inbound_queue_full"
+                            assert "没有收到" in receipt["detail"]
+                            rejected.append(text)
+                assert len(accepted) == (limit or 12)
+                assert len(set(accepted.values())) == len(accepted)
+                assert client.get("/api/history").json() == []
+
+                client.portal.call(core.heartbeat._take_in_perceptions)
+                first.send_json({"text": "已经写入但还没处理", "request_id": 7})
+                receipt = first.receive_json()
+                assert receipt["request_id"] == 7
+                if limit:
+                    assert receipt["code"] == "inbound_queue_full"
+                    rejected.append("已经写入但还没处理")
+                else:
+                    assert receipt["type"] == "accepted"
+                    accepted["已经写入但还没处理"] = receipt["message_key"]
+
+                client.portal.call(core.heartbeat._take_in_perceptions)
+                history = client.get("/api/history").json()
+                assert {row["content"]: row["message_key"] for row in history} == accepted
+                records = core.timeline.query(TimelineQuery(event_type=EVENT_MESSAGE, limit=25))
+                assert {record.content for record in records} == accepted.keys()
+                assert not set(rejected).intersection(accepted)
 
 
 def test_normal_web_connects_published_graph_display_grants(paths: AureusPaths) -> None:

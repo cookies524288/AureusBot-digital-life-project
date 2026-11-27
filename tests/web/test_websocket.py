@@ -163,6 +163,30 @@ def test_empty_and_overlong_messages_are_errors_not_disconnects(rig: Rig) -> Non
     assert rig.heartbeat.received == []
 
 
+def test_errors_and_success_name_the_original_chat_request(rig: Rig) -> None:
+    rig.log_in()
+    with rig.client.websocket_connect("/ws", headers=SAME_ORIGIN) as socket:
+        socket.send_json({"text": 42, "request_id": 7})
+        assert socket.receive_json() == {
+            "type": "error",
+            "detail": "消息格式不对。",
+            "request_id": 7,
+        }
+        socket.send_json({"text": " ", "request_id": 8})
+        assert socket.receive_json() == {
+            "type": "error",
+            "detail": "消息不能是空的",
+            "request_id": 8,
+        }
+        socket.send_json({"text": "你好", "request_id": 9})
+        received = {
+            frame["type"]: frame for frame in (socket.receive_json(), socket.receive_json())
+        }
+        assert received["accepted"]["request_id"] == 9
+        assert received["reply"]["content"] == "收到：你好"
+        assert rig.heartbeat.received[0].source_message_id == received["accepted"]["message_key"]
+
+
 def test_the_subscription_ends_when_the_page_disconnects(rig: Rig) -> None:
     rig.log_in()
     with rig.client.websocket_connect("/ws", headers=SAME_ORIGIN):

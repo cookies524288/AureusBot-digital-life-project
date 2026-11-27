@@ -3,6 +3,67 @@
 from tests.web.test_page_script import run_page_script
 
 
+def test_chat_only_shows_accepted_sends_and_keeps_newer_drafts() -> None:
+    run_page_script(
+        r"""
+        state.loggedIn = true;
+        api = async () => ({ok:true, data:[]});
+        toast = () => {};
+        openSocket();
+        await loadChatHistory();
+        const ws = sockets.at(-1);
+        ws.readyState = 1;
+        const outgoing = [];
+        ws.send = data => outgoing.push(JSON.parse(data));
+        const push = frame => ws.onmessage({data:JSON.stringify(frame)});
+        const box = $('chat-text');
+        const messages = () => chatEntries.filter(entry => entry.node.className === 'msg user');
+        const draft = text => { box.value = text; box.listeners.input[0]({target:box}); };
+        draft('第一句');
+        sendChat();
+        const first = outgoing.at(-1).request_id;
+        assert.equal(messages().length, 0);
+        draft('正输入的第二句');
+        push({type:'accepted', request_id:first + 1, message_key:'web:wrong'});
+        assert.equal(messages().length, 0);
+        push({type:'accepted', request_id:first, message_key:'web:first'});
+        assert.equal(messages().length, 1);
+        assert.equal(box.value, '正输入的第二句');
+        replaceChatWindow(state.loaded, []);
+        assert.equal(messages().length, 1);
+        appendChatHistory([{id:10, who:'user', content:'第一句', channel:'web',
+          message_key:'web:first', time:'2026-11-27T12:00:00Z'}]);
+        assert.equal(messages().length, 1);
+        assert.equal(messages()[0].id, 10);
+
+        sendChat();
+        const second = outgoing.at(-1).request_id;
+        draft('第三句草稿');
+        push({type:'error', request_id:second, code:'inbound_queue_full', detail:'这句没有收到。'});
+        assert.equal(messages().length, 1);
+        assert.equal(box.value, '第三句草稿');
+        const notice = chatEntries.find(entry => entry.node.className === 'msg notice');
+        assert.match(notice.node.children[0].textContent, /正输入的第二句/);
+        sendChat();
+        const third = outgoing.at(-1).request_id;
+        push({type:'accepted', request_id:third, message_key:'web:third'});
+        assert.equal(messages().length, 2);
+        assert.equal(box.value, '');
+
+        draft('收到一半就断开');
+        sendChat();
+        ws.onclose();
+        assert.equal(box.value, '收到一半就断开');
+        assert.equal(messages().length, 2);
+        assert.equal(outgoing.length, 4);
+        const last = outgoing.at(-1).request_id;
+        push({type:'accepted', request_id:last, message_key:'web:old-connection'});
+        assert.equal(messages().length, 2);
+        """,
+        include_resource_pages=False,
+    )
+
+
 def test_chat_live_event_appends_without_full_reload() -> None:
     run_page_script(
         r"""

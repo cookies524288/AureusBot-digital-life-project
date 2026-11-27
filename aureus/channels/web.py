@@ -83,7 +83,7 @@ class WebChannel:
         if not accepted and message.report_delivery_failure is not None:
             message.report_delivery_failure("没有网页连接接收这段回复，未投递。")
 
-    def send_from_user(self, text: str) -> bool:
+    def send_from_user(self, text: str, *, source_message_id: str | None = None) -> bool:
         """网页上登录的用户说了一句话，交给心跳。要在事件循环里调用。
 
         Returns:
@@ -91,6 +91,7 @@ class WebChannel:
 
         Raises:
             ValueError: 消息是空的，或者超过 MAX_MESSAGE_CHARS 个字。
+            InboundQueueFullError: 心跳的网页入站队列已满，没有收下本条。
         """
         content = text.strip()
         if not content:
@@ -104,5 +105,6 @@ class WebChannel:
                 content=content,
                 visibility=self.user_visibility,
                 trust=TrustLevel.VERIFIED_USER,
+                source_message_id=source_message_id,
             )
         )

@@ -2237,6 +2237,7 @@ const CHAT_RECOVERY_PAGE_SIZE = 50;
 const CHAT_RECOVERY_LIMIT = 200;
 const CHAT_MAX_ENTRIES = 500;
 let socket = null, socketWanted = false, lastDay = '';
+let pendingChatSend = null, nextChatRequest = 0;
 const chatEntries = [];
 const chatEntriesByKey = new Map();
 
@@ -2264,7 +2265,7 @@ function chatMessage({kind, channel, content, time, notice, id}) {
 }
 
 function registerChatMessage(message, fromHistory = false) {
-  const key = message.delivery_key ?? message.id;
+  const key = message.delivery_key ?? message.message_key ?? message.id;
   const existing = chatEntriesByKey.get(key);
   if (existing) {
     if (fromHistory) {
@@ -2484,7 +2485,7 @@ function replaceChatWindow(loaded, items) {
   loaded.chatHasOlder = items.length >= CHAT_RECOVERY_PAGE_SIZE;
   for (let index = chatEntries.length - 1; index >= 0; index--) {
     const entry = chatEntries[index];
-    if (!entry.stored && !entry.node.classList.contains('user')) continue;
+    if (!entry.stored) continue;
     entry.node.remove();
     entry.dayMarker?.remove();
     chatEntriesByKey.delete(entry.key);
@@ -2675,6 +2676,10 @@ function openSocket() {
     if (socket !== ws) return;
     let m;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (m.type === 'accepted' || (m.type === 'error' && m.request_id != null)) {
+      finishChatSend(m);
+      return;
+    }
     if (m.type === 'error') { toast(m.detail, 'error'); return; }
     if (m.type === 'event') { handleLiveEvent(m); return; }
     if (state.incrementalUpdates && m.type === 'reply' && !Number.isInteger(m.id)) {
@@ -2685,6 +2690,8 @@ function openSocket() {
   };
   ws.onclose = () => {
     if (socket !== ws) return;   // 主动关掉的，或者已经换了新连接
+    if (pendingChatSend) finishChatSend({request_id:pendingChatSend.id,
+      detail:'连接断开，未能确认这句话是否收到。请先查看聊天记录。'});
     socket = null;
     state.loaded.chatDeltaRequest?.controller.abort();
     delete state.loaded.chatDeltaRequest;
@@ -2701,6 +2708,7 @@ function closeSocket() {
   clearLiveTimers();
   const old = socket;
   socket = null;
+  pendingChatSend = null;
   clearTyping();
   if (old) old.close();
   chatEntries.length = 0;
@@ -2727,6 +2735,25 @@ function reconnectLater() {
   }, 3000);
 }
 
+function finishChatSend(receipt) {
+  const sent = pendingChatSend;
+  if (!sent || receipt.request_id !== sent.id) return;
+  pendingChatSend = null;
+  const box = $('chat-text');
+  const unchanged = !sent.edited && box.value === sent.draft;
+  if (receipt.type !== 'accepted') {
+    toast(receipt.detail, 'error');
+    if (!unchanged) addMessage({kind:'system', notice:true, channel:'web',
+      content:receipt.detail + '\n' + sent.text});
+    return;
+  }
+  addMessage({kind:'user', channel:'web', content:sent.text, message_key:receipt.message_key});
+  if (unchanged) {
+    box.value = '';
+    box.style.height = 'auto';
+  }
+}
+
 function sendChat() {
   const box = $('chat-text');
   const text = box.value.trim();
@@ -2742,10 +2769,10 @@ function sendChat() {
     return;
   }
   if (!socket || socket.readyState !== 1) { toast('还没连上，稍等一下再发。', 'error'); return; }
-  socket.send(JSON.stringify({ text }));
-  addMessage({kind:'user', channel:'web', content:text});
-  box.value = '';
-  box.style.height = 'auto';
+  if (pendingChatSend) { toast('正在等待上一句的入队确认。'); return; }
+  const id = ++nextChatRequest;
+  socket.send(JSON.stringify({text, request_id:id}));
+  pendingChatSend = {id, text, draft:box.value, edited:false};
 }
 $('chat-send').addEventListener('click', sendChat);
 $('chat-text').addEventListener('keydown', ev => {
@@ -2753,6 +2780,7 @@ $('chat-text').addEventListener('keydown', ev => {
 });
 $('chat-text').addEventListener('input', ev => {
   const box = ev.target;
+  if (pendingChatSend) pendingChatSend.edited = true;
   box.style.height = 'auto';
   box.style.height = Math.min(box.scrollHeight, 160) + 'px';
 });
@@ -6676,6 +6704,7 @@ const CFG_FIELDS = {
   'qq.account_id': ['QQ 机器人账号', '用于确认网关登录账号与当前配置一致的 QQ 号。'],
   'qq.allowed_group_id': ['允许的 QQ 群（可选）', '不写表示允许所有群和私聊；填写后只允许该群和本人普通私聊。'],
   'web.qq_avatars_enabled': ['平台会话 QQ 头像', '只通过服务端读取获准会话的 QQ 头像；关闭后显示像素头像。'],
+  'web.inbound_queue_limit': ['网页私聊等候上限', '所有网页共享；满载明确拒收，QQ 和终端不受影响。范围 10～5000，0 关闭。重启后生效。'],
   'qq.action_timeout_seconds': ['QQ 操作超时（秒）', '向 QQ 网关发起一次操作后，最多等待多少秒取得响应。'],
   'qq.reconnect_seconds': ['QQ 重连等待（秒）', '与 QQ 网关断开或连接失败后，等待多久再连接。'],
   'qq.chat_actions_enabled': ['QQ 原生聊天动作', '允许在获准会话发原生表情、贴表情、戳一戳或撤回自己的消息；平台未确认不算成功。'],

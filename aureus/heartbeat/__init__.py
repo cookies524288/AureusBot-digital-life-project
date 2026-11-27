@@ -39,6 +39,7 @@ from .judging import (
 )
 from .main_loop import Heartbeat, OrganCaller
 from .perception import (
+    InboundQueueFullError,
     MediaReference,
     MessageComponent,
     MessageKind,
@@ -80,6 +81,7 @@ __all__ = [
     "EVENT_WOKE_UP",
     "Downtime",
     "Heartbeat",
+    "InboundQueueFullError",
     "Judgment",
     "MediaReference",
     "MessageComponent",

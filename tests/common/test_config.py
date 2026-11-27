@@ -697,6 +697,7 @@ def test_web_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert web.enabled is True
     assert web.allow_remote is False  # 默认只监听本机（D53 第 5 条）
     assert web.session_days == 7  # D63 第 7 条
+    assert web.inbound_queue_limit == 500
 
 
 def section_lines(lines: list[str], section: str) -> list[str]:
@@ -751,12 +752,24 @@ def test_web_values_from_file_are_used(tmp_path: Path) -> None:
         ("login_max_failures", "0"),
         ("login_window_seconds", "-1"),
         ("login_lockout_seconds", "0"),
+        ("inbound_queue_limit", "-1"),
+        ("inbound_queue_limit", "9"),
+        ("inbound_queue_limit", "5001"),
+        ("inbound_queue_limit", "10.0"),
+        ("inbound_queue_limit", "true"),
     ],
 )
 def test_web_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:
     paths = AureusPaths(tmp_path)
     write_runtime_config(paths, f"[web]\n{field} = {text}\n")
     assert f"web.{field}" in error_message_of(paths)
+
+
+@pytest.mark.parametrize("limit", [0, 10, 5000])
+def test_web_accepts_the_inbound_queue_limit_boundaries(tmp_path: Path, limit: int) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, f"[web]\ninbound_queue_limit = {limit}\n")
+    assert load_runtime_config(paths).web.inbound_queue_limit == limit
 
 
 def test_web_unknown_field_is_reported(tmp_path: Path) -> None:

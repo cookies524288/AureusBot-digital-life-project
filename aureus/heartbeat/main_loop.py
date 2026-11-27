@@ -45,7 +45,7 @@ from aureus.common import (
     PeopleConfig,
     PersonaGrowthConfig,
 )
-from aureus.common.config import CortisolConfig
+from aureus.common.config import DEFAULT_WEB_INBOUND_QUEUE_LIMIT, CortisolConfig
 from aureus.common.web_identity import WEB_CHANNEL_NAME, WEB_USER_ID
 from aureus.core import CognitiveObserver, CognitiveState
 from aureus.feedback import FeedbackStore, Outcome
@@ -131,6 +131,7 @@ from aureus.heartbeat.memory_consolidation import ConsolidationOutcome, MemoryCo
 from aureus.heartbeat.memory_summary_source import PlatformSummarySource
 from aureus.heartbeat.pending_learning_buffer import PendingLearningBuffer
 from aureus.heartbeat.perception import (
+    InboundQueueFullError,
     MessageKind,
     MessageRoute,
     MessageSink,
@@ -299,6 +300,7 @@ class Heartbeat:
         has_persona_organ: bool = True,
         inbox_store: InboxStore | None = None,
         working_memory: WorkingMemory | None = None,
+        web_inbound_queue_limit: int = DEFAULT_WEB_INBOUND_QUEUE_LIMIT,
     ) -> None:
         """创建心跳。时间线要由调用方先打开。
 
@@ -353,6 +355,7 @@ class Heartbeat:
             has_persona_organ: 人设成长的总结器官是否已注册。
             inbox_store: 平台收件箱，未配置 QQ 时不启用。
             working_memory: 已感知经历的原始焦点与滚动摘要。
+            web_inbound_queue_limit: 网页共享的待处理来信上限；0 不限制。
         """
         self._clock = clock
         self._timeline = timeline
@@ -534,6 +537,7 @@ class Heartbeat:
         )
         self._pending: deque[tuple[Perception, InboxMessage | None]] = deque()
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
+        self._web_inbound_queue_limit = web_inbound_queue_limit
         self._thought: _Thought | None = None
         # 判断与回复分开持有：回复交付后仍在跑、等后续拍收取（D110）。
         self._pending_judgments: list[_PendingJudgment] = []
@@ -678,15 +682,27 @@ class Heartbeat:
 
         Raises:
             ValueError: 感知来自没有接上的通道（回复没处发，是程序写错了）。
+            InboundQueueFullError: 网页共享的待处理来信已满，本条没有入队。
         """
         if perception.channel not in self._sinks:
             raise ValueError(f"通道 {perception.channel} 没有接到心跳上")
         if self._maintenance_paused or self._phase in (_Phase.STOPPING, _Phase.STOPPED):
             logger.info("心跳正在关闭，没有收下来自 %s 的消息", perception.channel)
             return False
+        if perception.channel == WEB_CHANNEL_NAME and self._web_inbound_full():
+            raise InboundQueueFullError("网页待处理消息已满，这句没有收到。请稍后再发。")
         self._pending.append((perception, None))
         self._wake.set()
         return True
+
+    def _web_inbound_full(self) -> bool:
+        """待写时间线和已记下但未开始处理的网页消息共用容量。"""
+        limit = self._web_inbound_queue_limit
+        if not limit or len(self._pending) + len(self._unanswered) < limit:
+            return False
+        queued = sum(perception.channel == WEB_CHANNEL_NAME for perception, _ in self._pending)
+        queued += sum(heard.perception.channel == WEB_CHANNEL_NAME for heard in self._unanswered)
+        return queued >= limit
 
     def set_inbox_route_filter(self, allows: Callable[[ConversationKey], bool]) -> None:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""

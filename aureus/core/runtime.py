@@ -391,6 +391,7 @@ def open_core(
             has_persona_organ=persona_growth.organ in models.available_organs,
             inbox_store=inbox_store,
             emoji_store=emoji_store,
+            web_inbound_queue_limit=runtime.web.inbound_queue_limit,
         )
 
         def update_organs(available: frozenset[str]) -> None:

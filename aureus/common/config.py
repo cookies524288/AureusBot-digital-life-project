@@ -24,6 +24,7 @@ CONFIG_FORMAT_VERSION = 1
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 DEFAULT_WEB_PORT = 28976
+DEFAULT_WEB_INBOUND_QUEUE_LIMIT = 500
 DEFAULT_EMOJI_REGISTRATION_LIMIT = 500
 DEFAULT_THOUGHT_DEADLINE_SECONDS = 180.0
 
@@ -392,6 +393,15 @@ class WebConfig(BaseModel):
     login_lockout_seconds: int = Field(default=30, ge=1)
     qq_avatars_enabled: bool = True
     incremental_updates_enabled: bool = True
+    inbound_queue_limit: int = Field(default=DEFAULT_WEB_INBOUND_QUEUE_LIMIT, ge=0, le=5000)
+
+    @field_validator("inbound_queue_limit")
+    @classmethod
+    def check_inbound_queue_limit(cls, limit: int) -> int:
+        """只允许关闭或设置至少十条待处理消息。"""
+        if 0 < limit < 10:
+            raise ValueError("网页入站上限须为 0 或 10 到 5000")
+        return limit
 
 
 class QQConfig(BaseModel):

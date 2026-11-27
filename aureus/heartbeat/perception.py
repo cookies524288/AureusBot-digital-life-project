@@ -15,6 +15,7 @@ from typing import Literal
 from aureus.timeline import VisibilityScope
 
 __all__ = [
+    "InboundQueueFullError",
     "MediaReference",
     "MessageComponent",
     "MessageKind",
@@ -39,6 +40,10 @@ class TrustLevel(StrEnum):
     VERIFIED_CONTACT = "verified_contact"
     # 只知道平台账号，没法确认是谁（以后的 QQ 等平台）：只记录，不回复。
     UNVERIFIED = "unverified"
+
+
+class InboundQueueFullError(Exception):
+    """通道的待处理来信已达上限；本条没有入队或记入时间线。"""
 
 
 @dataclass(frozen=True)

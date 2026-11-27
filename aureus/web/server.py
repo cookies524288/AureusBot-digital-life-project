@@ -32,11 +32,11 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from aureus.channels import QQAvatars, QQDesktop, WebChannel
+from aureus.channels import WEB_CHANNEL_NAME, QQAvatars, QQDesktop, WebChannel
 from aureus.common import Clock, LanguageConfig, SystemClock, WebConfig
 from aureus.core.embedding_progress import EmbeddingProgress
 from aureus.core.model_runtime import ModelRuntime
-from aureus.heartbeat import EVENT_MESSAGE, OutgoingMessage
+from aureus.heartbeat import EVENT_MESSAGE, InboundQueueFullError, OutgoingMessage
 from aureus.heartbeat.events import EVENT_REPLY_DELIVERED
 from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.history_retention import HistoryRetention
@@ -117,6 +117,7 @@ SECONDS_PER_DAY = 86400
 DEFAULT_HISTORY_LIMIT = 50
 MAX_HISTORY_LIMIT = 200
 MAX_CHAT_RECOVERY_LIMIT = MAX_HISTORY_LIMIT + 1
+MAX_CHAT_REQUEST_ID = 2**53 - 1
 # WebSocket 的关闭码 1008：违反策略（没登录、来源不对、登录已失效）。
 WS_POLICY_VIOLATION = 1008
 # 每个连着的网页最多攒多少条待推送的消息；网页收得太慢就丢掉新消息并记日志，不拖住心跳。
@@ -130,13 +131,20 @@ SESSION_RECHECK_SECONDS = 30.0
 INDEX_PAGE = Path(__file__).parent / "static" / "index.html"
 
 
-def _history_delivery_key(record: TimelineRecord) -> dict[str, str]:
+def _history_message_key(record: TimelineRecord) -> dict[str, str]:
     if (
         record.event_type == EVENT_REPLY_DELIVERED
         and "reply_id" in record.metadata
         and "segment" in record.metadata
     ):
         return {"delivery_key": f"{record.metadata['reply_id']}:{record.metadata['segment']}"}
+    if (
+        record.event_type == EVENT_MESSAGE
+        and record.actor_type is ActorType.USER
+        and record.metadata.get("channel") == WEB_CHANNEL_NAME
+        and isinstance(source_key := record.metadata.get("source_message_id"), str)
+    ):
+        return {"message_key": source_key}
     return {}
 
 
@@ -200,8 +208,15 @@ def _same_origin(socket: WebSocket) -> bool:
     return urlsplit(origin).netloc == host
 
 
-async def _send_error(socket: WebSocket, detail: str) -> None:
-    await socket.send_json({"type": "error", "detail": detail})
+async def _send_error(
+    socket: WebSocket, detail: str, request_id: int | None = None, *, code: str | None = None
+) -> None:
+    payload: dict[str, str | int] = {"type": "error", "detail": detail}
+    if request_id is not None:
+        payload["request_id"] = request_id
+    if code is not None:
+        payload["code"] = code
+    await socket.send_json(payload)
 
 
 async def _push(
@@ -256,26 +271,44 @@ async def _push(
 async def _listen(
     socket: WebSocket, channel: WebChannel, sessions: SessionStore, token: str
 ) -> None:
-    """收网页上说的话，交给网页通道；格式不对或太长只回一条错误，不断开连接。"""
+    """收网页来信；带请求号的新页面收对应入队确认，旧页面只收拒绝原因。"""
     while True:
         raw = await socket.receive_text()
         if not await sessions.touch(token):
             await socket.close(code=WS_POLICY_VIOLATION)
             return
         try:
-            text = json.loads(raw)["text"]
-            if not isinstance(text, str):
-                raise TypeError("text 不是字符串")
-        except (ValueError, KeyError, TypeError):
+            payload = json.loads(raw)
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
             await _send_error(socket, "消息格式不对。")
             continue
+        request_id = payload.get("request_id")
+        if "request_id" in payload and (
+            type(request_id) is not int or not 1 <= request_id <= MAX_CHAT_REQUEST_ID
+        ):
+            await _send_error(socket, "请求编号不对。")
+            continue
+        text = payload.get("text")
+        if not isinstance(text, str):
+            await _send_error(socket, "消息格式不对。", request_id)
+            continue
+        message_key = f"web:{uuid4().hex}" if request_id is not None else None
         try:
-            accepted = channel.send_from_user(text)
+            accepted = channel.send_from_user(text, source_message_id=message_key)
+        except InboundQueueFullError as error:
+            await _send_error(socket, str(error), request_id, code="inbound_queue_full")
+            continue
         except ValueError as error:
-            await _send_error(socket, str(error))
+            await _send_error(socket, str(error), request_id)
             continue
         if not accepted:
-            await _send_error(socket, "正在关闭，这句没有收到。")
+            await _send_error(socket, "正在关闭或维护，这句没有收到。", request_id)
+        elif request_id is not None:
+            await socket.send_json(
+                {"type": "accepted", "request_id": request_id, "message_key": message_key}
+            )
 
 
 def create_app(
@@ -350,7 +383,7 @@ def create_app(
             live.publish(
                 LiveEvent(
                     TOPIC_CHAT,
-                    {"id": record.id, "previous_id": previous, **_history_delivery_key(record)},
+                    {"id": record.id, "previous_id": previous, **_history_message_key(record)},
                 )
             )
 
@@ -583,7 +616,7 @@ def create_app(
                 "who": record.actor_type.value,
                 "channel": str(record.metadata.get("channel", "")),
                 "content": record.content,
-                **_history_delivery_key(record),
+                **_history_message_key(record),
             }
             for record in records
         ]
