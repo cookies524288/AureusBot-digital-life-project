@@ -231,9 +231,9 @@ async def test_cli_publishes_language_from_real_staging_then_restarts(
                 TrustLevel.VERIFIED_USER,
             )
         )
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         plan, reply = requests
         assert "GG：抵达终点" in plan.prompt
         assert "gg：等候开局" in plan.prompt

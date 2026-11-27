@@ -163,12 +163,12 @@ async def env(tmp_path: Path) -> AsyncIterator[Env]:
 
 async def finish(rig: Rig) -> None:
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
 
 async def consider(env: Env, rig: Rig, hours: float = 20) -> None:
     env.clock.advance(timedelta(hours=hours))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.heartbeat.is_thinking
     await finish(rig)
 
@@ -196,7 +196,7 @@ async def test_disabled_initiative_makes_no_calls_after_a_day(env: Env) -> None:
     await rig.exchange("你好")
     env.organs.requests.clear()
     env.clock.advance(timedelta(hours=24))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not env.organs.requests and not rig.heartbeat.is_thinking
     assert not rig.records(EVENT_INITIATIVE_CONSIDERED)
 
@@ -264,10 +264,10 @@ async def test_initiative_uses_optional_segmentation_and_records_pending_parts(e
     assert env.feedback.get(considered.metadata["feedback_id"]) is not None
 
     env.clock.advance(timedelta(seconds=3.9))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert [sent.content for sent in rig.sent] == ["想问问近况"]
     env.clock.advance(timedelta(seconds=0.6))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert [sent.content for sent in rig.sent] == ["想问问近况", "明天\n  有空吗？"]
     assert len(rig.records(EVENT_INITIATIVE_CONSIDERED)) == 1
 
@@ -282,7 +282,7 @@ async def test_skip_counts_as_consideration_and_waits_three_hours(env: Env) -> N
     assert rig.heartbeat._initiative.state.contacts_today == 0
     assert len(rig.replies()) == 1
     env.clock.advance(timedelta(hours=3) - timedelta(seconds=1))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.heartbeat.is_thinking
     await consider(env, rig, 1 / 3600)
     assert len(rig.records(EVENT_INITIATIVE_CONSIDERED)) == 2
@@ -326,7 +326,7 @@ async def test_backoff_doubles_then_gives_up_until_user_speaks(env: Env) -> None
     await rig.exchange("你好")
     await consider(env, rig)
     env.clock.advance(timedelta(hours=6) - timedelta(seconds=1))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.heartbeat.is_thinking
     await consider(env, rig, 1 / 3600)
     considered = rig.records(EVENT_INITIATIVE_CONSIDERED)
@@ -334,17 +334,17 @@ async def test_backoff_doubles_then_gives_up_until_user_speaks(env: Env) -> None
     first = env.feedback.get(considered[0].metadata["feedback_id"])
     assert first is not None and first.outcome is Outcome.FAILURE
     env.clock.advance(timedelta(hours=6))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.heartbeat._initiative.state.unanswered_streak == 2
     assert not rig.heartbeat.is_thinking
     await consider(env, rig, 6)
     considered = rig.records(EVENT_INITIATIVE_CONSIDERED)
     assert considered[2].timestamp - considered[1].timestamp == timedelta(hours=12)
     env.clock.advance(timedelta(hours=6))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.heartbeat._initiative.state.unanswered_streak == 3
     env.clock.advance(timedelta(days=100))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.heartbeat.is_thinking
     assert len(rig.records(EVENT_INITIATIVE_CONSIDERED)) == 3
     assert [record.metadata["answered"] for record in rig.records(EVENT_INITIATIVE_RESULT)] == [
@@ -402,7 +402,7 @@ async def test_contact_messages_do_not_settle_the_users_pending_contact(env: Env
     pending = rig.heartbeat._initiative.state.pending_since
     env.clock.advance(timedelta(hours=1))
     submit(rig, trust=TrustLevel.VERIFIED_CONTACT)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert rig.heartbeat._initiative.state.pending_since == pending
     assert not rig.records(EVENT_INITIATIVE_RESULT)
@@ -436,7 +436,7 @@ async def test_night_energy_stress_and_halt_block_initiative(env: Env, gate: str
         )
     elif gate == "halt":
         rig.heartbeat.halt("测试")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.heartbeat.is_thinking and not env.organs.requests
     assert not rig.records(EVENT_INITIATIVE_CONSIDERED)
     if gate == "stress":
@@ -458,7 +458,7 @@ async def test_cautious_mood_allows_only_one_contact_per_day(env: Env) -> None:
     env.clock.advance(timedelta(minutes=1))
     await rig.exchange("在")
     env.clock.advance(timedelta(hours=3))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert mood.cautious and not rig.heartbeat.is_thinking
     assert len(rig.records(EVENT_INITIATIVE_CONSIDERED)) == 1
 
@@ -491,7 +491,7 @@ async def test_user_messages_take_priority_over_initiative(env: Env) -> None:
     env.organs.requests.clear()
     env.clock.advance(timedelta(hours=20))
     submit(rig)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert all(request.purpose is CallPurpose.USER_REPLY for request in env.organs.requests)
     assert not rig.records(EVENT_INITIATIVE_CONSIDERED)
@@ -502,10 +502,10 @@ async def test_a_user_arriving_during_initiative_waits_for_the_same_slot(env: En
     await rig.exchange("你好")
     env.organs.block = asyncio.Event()
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await env.organs.started.wait()
     submit(rig)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.heartbeat._unanswered) == 1
     env.organs.block.set()
     await finish(rig)
@@ -526,7 +526,7 @@ async def test_restart_restores_pending_count_and_settles_timeout_without_channe
     assert state.contacts_today == 1 and state.pending_since == considered.timestamp
     assert restored.heartbeat._last_conversation_at == NOW
     assert restored.heartbeat._last_user_contact is None
-    restored.heartbeat.beat()
+    await restored.heartbeat.beat()
     state = restored.heartbeat._initiative.state
     assert state.unanswered_streak == 1 and state.pending_since is None
     assert not restored.heartbeat.is_thinking
@@ -550,7 +550,7 @@ async def test_restart_keeps_the_daily_limit_even_after_user_returns(env: Env) -
     assert restored.heartbeat._initiative.state.contacts_today == 1
     await restored.exchange("我在")
     env.clock.advance(timedelta(hours=4))
-    restored.heartbeat.beat()
+    await restored.heartbeat.beat()
     assert not restored.heartbeat.is_thinking
     assert len(restored.records(EVENT_INITIATIVE_CONSIDERED)) == 1
 
@@ -562,7 +562,7 @@ async def test_restart_restores_consecutive_failures_and_latest_consideration(en
     await consider(env, rig)
     await consider(env, rig, 6)
     env.clock.advance(timedelta(hours=6))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.shut_down()
     restored = env.build(policy=policy)
     state = restored.heartbeat._initiative.state
@@ -577,7 +577,7 @@ async def test_latest_user_channel_is_used(env: Env) -> None:
     await rig.exchange("你好")
     rig.heartbeat.attach_channel("web", rig.sent.append)
     submit(rig, channel="web")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     rig.sent.clear()
     await consider(env, rig)
@@ -591,7 +591,7 @@ async def test_send_failure_counts_only_if_a_message_was_recorded(env: Env, fail
     await rig.exchange("你好")
     rig.sent.clear()
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
     if failure == "disconnected":
         rig.heartbeat._sinks.clear()
@@ -603,7 +603,7 @@ async def test_send_failure_counts_only_if_a_message_was_recorded(env: Env, fail
         rig.heartbeat._sinks[CHANNEL] = broken
     else:
         rig.heartbeat.halt("不许发")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     [record] = rig.records(EVENT_INITIATIVE_CONSIDERED)
     assert record.metadata["sent"] is False and record.metadata["decided"] == "failed"
     if failure == "disconnected":
@@ -619,7 +619,7 @@ async def test_shutdown_cancels_initiative_without_a_notice(env: Env) -> None:
     rig.sent.clear()
     env.organs.block = asyncio.Event()
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await env.organs.started.wait()
     await rig.heartbeat.shut_down()
     [record] = rig.records(EVENT_INITIATIVE_CONSIDERED)
@@ -646,7 +646,7 @@ async def test_agenda_read_failure_does_not_stop_the_heartbeat(
 
     monkeypatch.setattr(env.agenda, "open_items", broken)
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.heartbeat.is_thinking and not rig.records(EVENT_INITIATIVE_CONSIDERED)
 
 
@@ -669,10 +669,10 @@ async def test_unavailable_state_blocks_initiative_for_this_beat(
         else:
             patch.setattr(rig.timeline, "query", broken)
         env.clock.advance(timedelta(hours=20))
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         assert not rig.heartbeat.is_thinking and not env.organs.requests
     assert not rig.records(EVENT_INITIATIVE_CONSIDERED)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.heartbeat.is_thinking
     await finish(rig)
     assert rig.records(EVENT_INITIATIVE_CONSIDERED)[-1].metadata["sent"] is True

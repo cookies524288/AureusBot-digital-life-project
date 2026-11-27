@@ -87,16 +87,16 @@ class Rig:
                 route=route,
             )
         )
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         await self.heartbeat.wait_for_thought()
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
 
     def replies(self) -> list[str]:
         return [m.content for m in self.sent if m.kind is MessageKind.REPLY]
 
-    def advance(self, seconds: float) -> None:
+    async def advance(self, seconds: float) -> None:
         self.clock.advance(timedelta(seconds=seconds))
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
 
 
 @pytest.fixture
@@ -152,8 +152,8 @@ async def test_a_reply_is_sent_as_several_short_messages(
     await rig.say("我今天不太顺")
 
     assert rig.replies() == PIECES[:1]
-    rig.advance(4)
-    rig.advance(5)
+    await rig.advance(4)
+    await rig.advance(5)
     assert rig.replies() == PIECES
     assert all(m.sender_name == "小绿" for m in rig.sent)
 
@@ -294,13 +294,13 @@ async def test_typing_uses_han_other_and_each_jitter_draw(
     )
     await rig.say("开始")
     assert rig.replies() == ["开头"]
-    assert rig.heartbeat.seconds_until_next_beat() == pytest.approx(1.3)
-    rig.advance(1.299)
+    assert await rig.heartbeat.seconds_until_next_beat() == pytest.approx(1.3)
+    await rig.advance(1.299)
     assert rig.replies() == ["开头"]
-    rig.advance(0.001)
+    await rig.advance(0.001)
     assert rig.replies() == ["开头", "汉𠀀A!"]
-    assert rig.heartbeat.seconds_until_next_beat() == pytest.approx(2.3)
-    rig.advance(2.3)
+    assert await rig.heartbeat.seconds_until_next_beat() == pytest.approx(2.3)
+    await rig.advance(2.3)
     assert rig.replies() == ["开头", "汉𠀀A!", "emoji🙂"]
     assert rig.delivery_times == [
         rig.started_at + timedelta(seconds=seconds) for seconds in (0, 1.3, 3.6)
@@ -322,7 +322,7 @@ async def test_next_planner_sees_only_delivered_parts_and_queue_stays_in_order(
     group = MessageRoute("bot", "group", "group-one", "first")
     await rig.say("第一次来信", sender_id="first-person", route=group)
     assert rig.replies() == ["首段"]
-    rig.advance(1)
+    await rig.advance(1)
     second = MessageRoute("bot", "group", "group-one", "second")
     await rig.say("第二次来信", sender_id="another-person", route=second)
     assert rig.replies() == ["首段"]
@@ -332,11 +332,11 @@ async def test_next_planner_sees_only_delivered_parts_and_queue_stays_in_order(
     assert "2 段回复待确认" in prompt
     assert "第二次来信" in prompt
     assert all(marker not in prompt for marker in ("首段，", "收尾,", "<n>", "<!>"))
-    rig.advance(1)
+    await rig.advance(1)
     assert rig.replies() == ["首段", "随时都可以\n  继续说"]
-    rig.advance(2)
+    await rig.advance(2)
     assert rig.replies() == ["首段", "随时都可以\n  继续说", "收尾", "新回复"]
-    rig.advance(2)
+    await rig.advance(2)
     assert rig.replies()[-1] == "稍等"
     assert [message.route for message in rig.sent] == [group, group, group, second, second]
 
@@ -350,7 +350,7 @@ async def test_other_conversation_can_send_while_first_conversation_types(
     assert rig.replies() == ["第一群", "第二群"]
     assert "等待的内容" not in rig.organs.plans[1].prompt
     first_plan, second_plan = rig.timeline.query(TimelineQuery(event_type=EVENT_REPLY_REFERENCE))
-    rig.advance(10)
+    await rig.advance(10)
     delivered = rig.timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED))
     first_round = first_plan.metadata["round_id"]
     second_round = second_plan.metadata["round_id"]
@@ -371,9 +371,9 @@ async def test_pending_parts_respect_permission_and_shutdown(
     if stop in {"exit", "request_stop"}:
         if stop == "request_stop":
             rig.heartbeat.request_stop()
-            rig.advance(10)
+            await rig.advance(10)
         await rig.heartbeat.shut_down()
-        assert rig.heartbeat.seconds_until_next_beat() == 60.0
+        assert await rig.heartbeat.seconds_until_next_beat() == 60.0
     elif stop == "permission":
         permission = rig.permissions.check
 
@@ -384,17 +384,17 @@ async def test_pending_parts_respect_permission_and_shutdown(
 
         with monkeypatch.context() as patch:
             patch.setattr(rig.permissions, "check", check)
-            rig.advance(10)
-        rig.advance(10)
+            await rig.advance(10)
+        await rig.advance(10)
     elif stop == "emergency":
         rig.heartbeat.halt("打字期间急停")
         rig.heartbeat.resume()
-        rig.advance(10)
+        await rig.advance(10)
     else:
         rig.heartbeat.set_maintenance_paused(True)
-        rig.advance(10)
+        await rig.advance(10)
         rig.heartbeat.set_maintenance_paused(False)
-        rig.advance(10)
+        await rig.advance(10)
     assert rig.replies() == ["先发"]
 
 

@@ -1,6 +1,7 @@
 """探索收获存储：正文只记一句，分享标记只能写一次（D79）。"""
 
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -97,11 +98,11 @@ class FindingStore:
 
     def get(self, finding_id: int) -> Finding | None:
         """按编号取原文；不存在返回 None（D80 索引和日记材料）。"""
-        row = (
-            self._require_open()
-            .execute("SELECT * FROM findings WHERE id = ?", (finding_id,))
-            .fetchone()
-        )
+        self._require_open()
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            row = connection.execute(
+                "SELECT * FROM findings WHERE id = ?", (finding_id,)
+            ).fetchone()
         return _finding(row) if row is not None else None
 
     def recent(self, limit: int) -> list[Finding]:

@@ -67,7 +67,7 @@ class FakeHeartbeat:
     def submit(self, perception: Perception) -> bool:
         return True
 
-    def describe_state(self) -> str:
+    async def async_describe_state(self) -> str:
         return "测试状态"
 
     def context_message_limit(self) -> int:
@@ -76,7 +76,7 @@ class FakeHeartbeat:
     def working_memory_summaries(self) -> dict[str, str]:
         return self.summaries
 
-    def working_memory_focus(self) -> tuple[int, int | None] | None:
+    async def working_memory_focus(self) -> tuple[int, int | None] | None:
         return self.focus
 
     def working_memory_capacity(self) -> int | None:

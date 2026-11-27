@@ -337,9 +337,7 @@ def make_qq_heartbeat(
                 "persona": {"immutable": "温和。"},
             }
         ),
-        config=HeartbeatConfig(
-            qq_emoji_visual_enabled=False, typing_delay_enabled=False, **config
-        ),
+        config=HeartbeatConfig(qq_emoji_visual_enabled=False, typing_delay_enabled=False, **config),
         permissions=PermissionChecker(emergency_stop),
         emergency_stop=emergency_stop,
         timezone=UTC,
@@ -381,7 +379,7 @@ async def test_emoji_selection_runs_parallel_with_replyer(
     beating, sent, digest, timeline = make_qq_heartbeat(tmp_path, organs)
     made.append(timeline)
     submit_group_message(beating)
-    beating.beat()
+    await beating.beat()
     await asyncio.wait_for(
         asyncio.gather(organs.reply_started.wait(), organs.emoji_started.wait()), timeout=5
     )
@@ -390,7 +388,7 @@ async def test_emoji_selection_runs_parallel_with_replyer(
     await asyncio.wait_for(organs.emoji_done.wait(), timeout=5)
     organs.reply_gate.set()
     await beating.wait_for_thought()
-    beating.beat()
+    await beating.beat()
 
     assert any(
         message.kind is MessageKind.REPLY and message.content == "好的。" for message in sent
@@ -409,14 +407,14 @@ async def test_emoji_selection_past_grace_is_skipped(
     )
     made.append(timeline)
     submit_group_message(beating)
-    beating.beat()
+    await beating.beat()
     await asyncio.wait_for(
         asyncio.gather(organs.reply_started.wait(), organs.emoji_started.wait()), timeout=5
     )
 
     organs.reply_gate.set()
     await beating.wait_for_thought()
-    beating.beat()
+    await beating.beat()
 
     assert organs.emoji_cancelled.is_set()
     assert [message.content for message in sent if message.kind is MessageKind.REPLY] == ["好的。"]

@@ -139,7 +139,7 @@ class ChatHistory:
             update={"metadata": {**record.metadata, "chat_references": references}}
         )
 
-    def project(self, record: TimelineRecord) -> TimelineRecord | None:
+    async def project(self, record: TimelineRecord) -> TimelineRecord | None:
         """把成功段投影为发言，未确认段仅提示状态，撤回的原件不可见。"""
         if record.event_type not in CHAT_EVENTS:
             return record
@@ -151,7 +151,7 @@ class ChatHistory:
             return None
         if meta.get(INTERNAL_REPLY_RECORD):
             total = len(meta.get("reply_segments") or [None])
-            settled = self.timeline.query(
+            settled = await self.timeline.async_query(
                 TimelineQuery(
                     event_types=CHAT_EVENTS[1:], metadata={"reply_id": record.id}, limit=-1
                 )
@@ -178,6 +178,8 @@ class ChatHistory:
             and (outgoing or "inbox_message_id" in meta)
         ):
             original = self.store.find_platform_message(key, meta.get("message_id", ""))
+            if not self.allows(key):
+                return None
             if original is None or original.perception.visibility is not record.visibility:
                 return None
             if outgoing and (
@@ -190,11 +192,11 @@ class ChatHistory:
                 return None
         return record.model_copy(update={"event_type": EVENT_MESSAGE}) if outgoing else record
 
-    def pending(
+    async def pending(
         self, key: ConversationKey, visibility: VisibilityScope, limit: int
     ) -> list[TimelineRecord]:
         """未结清草稿只投影状态，不挤占工作记忆压缩和学习的经历数。"""
-        drafts = self.timeline.query(
+        drafts = await self.timeline.async_query(
             TimelineQuery(
                 event_type=EVENT_MESSAGE,
                 visibility=visibility,
@@ -210,7 +212,7 @@ class ChatHistory:
                 },
             )
         )
-        return [status for draft in drafts if (status := self.project(draft)) is not None]
+        return [status for draft in drafts if (status := await self.project(draft)) is not None]
 
     @staticmethod
     def _status(record: TimelineRecord, text: str) -> TimelineRecord:

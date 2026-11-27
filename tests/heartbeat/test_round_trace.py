@@ -49,9 +49,9 @@ async def test_stage_timings_present_and_monotonic(
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    heartbeat.beat()
+    await heartbeat.beat()
     await heartbeat.wait_for_thought()
-    heartbeat.beat()
+    await heartbeat.beat()
     [reference] = harness.records(EVENT_REPLY_REFERENCE)
     before_delivery = reference.metadata["stage_timings"]
     assert before_delivery == {
@@ -68,15 +68,19 @@ async def test_stage_timings_present_and_monotonic(
     monotonic += 1
     first.confirm_delivery()
     first.confirm_delivery()
+    monotonic += 0.25
+    await heartbeat.beat()
     [first_record] = harness.records(EVENT_REPLY_DELIVERED)
     assert first_record.metadata["stage_timings"] == {**before_delivery, "first_delivery_ms": 6000}
 
     harness.clock.advance(timedelta(seconds=3600))
-    heartbeat.beat()
+    await heartbeat.beat()
     second = harness.sent[-1]
     assert second.content == "第二段。" and second.confirm_delivery is not None
-    monotonic += 0.5
+    monotonic += 0.25
     second.confirm_delivery()
+    monotonic += 1
+    await heartbeat.beat()
     _, last_record = harness.records(EVENT_REPLY_DELIVERED)
     assert last_record.metadata["stage_timings"] == {
         **before_delivery,

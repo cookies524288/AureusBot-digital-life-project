@@ -57,7 +57,7 @@ async def test_feedback_store_is_assembled_by_default(paths: AureusPaths) -> Non
 async def test_confidence_shows_no_data_on_the_assembled_heartbeat(paths: AureusPaths) -> None:
     with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
         core.heartbeat.wake_up()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         state = core.heartbeat.cognitive_state
     assert state is not None
     assert state.planning_confidence is None
@@ -69,5 +69,5 @@ async def test_feedback_switch_off_creates_no_store(paths: AureusPaths) -> None:
     with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
         assert core.feedback is None
         core.heartbeat.wake_up()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         assert core.heartbeat.cognitive_state is not None

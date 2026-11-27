@@ -448,7 +448,7 @@ async def test_working_memory_preview_matches_partitioned_summary_http_request(
         "message", "乙区新发言", ActorType.PERSON, "模拟乙", visibility=VisibilityScope.PUBLIC
     )
     timeline.append("message", "保留焦点", ActorType.USER, visibility=VisibilityScope.USER_ONLY)
-    batch = memory.prepare(rig.clock.now(), ModelPreference.CHEAPEST)
+    batch = await memory.prepare(rig.clock.now(), ModelPreference.CHEAPEST)
     assert batch is not None
 
     captured: list[list[dict[str, str]]] = []
@@ -912,9 +912,9 @@ async def test_live_chat_http_uses_fixed_maibot_prompt_fragments(
                     MessageRoute("模拟账号", "group", "当前群", "42"),
                 )
             )
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
-            heart.beat()
+            await heart.beat()
 
             plan, continued, reply = captured
             assert [message["role"] for message in plan] == ["system", "user"]
@@ -1046,9 +1046,9 @@ async def _check_derived_recall(
                         MessageRoute("模拟接收账号", "group", "当前群", "42"),
                     )
                 )
-                heart.beat()
+                await heart.beat()
                 await heart.wait_for_thought()
-                heart.beat()
+                await heart.beat()
             else:
                 await env.exchange(heart, trust=trust, visibility=scope)
             assert [req.organ_id for req in env.organs.requests] == [

@@ -1,6 +1,5 @@
 """核心组装的测试：用假器官和临时数据根目录，不调用模型、不碰真实的数据。"""
 
-import asyncio
 import logging
 import os
 import textwrap
@@ -83,15 +82,13 @@ async def test_periodic_emoji_maintenance_refreshes_real_candidates(paths: Aureu
 
         async def advance_maintenance() -> None:
             clock.advance(timedelta(minutes=10))
-            core.heartbeat.beat()
-            await next(
-                task
-                for task in asyncio.all_tasks()
-                if task.get_name() == "aureus-emoji-maintenance"
-            )
+            await core.heartbeat.beat()
+            maintenance = core.heartbeat._emoji_maintenance
+            assert maintenance is not None
+            await maintenance.wait()
 
         core.heartbeat.wake_up()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         assert [item.digest for item in store.candidates()] == [entry.digest]
         await advance_maintenance()
         assert not store.candidates()

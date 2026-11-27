@@ -134,9 +134,9 @@ class Rig:
                 trust=TrustLevel.VERIFIED_USER,
             )
         )
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         await self.heartbeat.wait_for_thought()
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         await self.settle_judgments()
 
     async def settle_judgments(self, timeout: float = 6.0) -> None:
@@ -144,7 +144,7 @@ class Rig:
         pending = self.heartbeat._pending_judgments
         if pending:
             await asyncio.wait({item.task for item in pending}, timeout=timeout)
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
 
     def records(self, event_type: str) -> list[TimelineRecord]:
         return list(self.timeline.query(TimelineQuery(event_type=event_type, limit=100)))
@@ -326,10 +326,10 @@ async def test_late_judgment_keeps_the_round_key_and_does_not_extend_typing(
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.wait_for(started.wait(), timeout=5)
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     records = rig.records(EVENT_MESSAGE)
     user = next(record for record in records if record.actor_type is ActorType.USER)
@@ -392,14 +392,14 @@ async def test_emergency_stop_cancels_pending_judgment_without_state(
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.wait_for(started.wait(), timeout=5)
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     rig.heartbeat.halt("测试急停")
     for _ in range(50):
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         if not rig.heartbeat._pending_judgments:
             break
         await asyncio.sleep(0)
@@ -430,10 +430,10 @@ async def test_shutdown_cancels_pending_judgment_without_deadlock(
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.wait_for(started.wait(), timeout=5)
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     await asyncio.wait_for(rig.heartbeat.shut_down(), timeout=5)
 
@@ -467,10 +467,10 @@ async def test_lost_source_permission_discards_late_judgment(
             route=MessageRoute("bot", "group", "group-1", "message-1"),
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.wait_for(started.wait(), timeout=5)
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     [pending] = rig.heartbeat._pending_judgments
     inbox = FakeInbox()
@@ -478,7 +478,7 @@ async def test_lost_source_permission_discards_late_judgment(
     rig.heartbeat._platform_inbox = cast(Any, inbox)
     gate.set()
     await asyncio.wait({pending.task}, timeout=5)
-    rig.heartbeat._collect_finished_judgments()
+    await rig.heartbeat._collect_finished_judgments()
 
     assert organs.cancelled is False  # 任务本身跑完了，是采纳前复核时发现来源已撤权
     assert rig.heartbeat._pending_judgments == []
@@ -498,16 +498,16 @@ async def test_invalidated_round_discards_late_judgment(made: list[Rig], tmp_pat
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.wait_for(started.wait(), timeout=5)
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     [pending] = rig.heartbeat._pending_judgments
     # 防抖重开、抢占和撤权都走这条路径：轮次作废后，迟到的判断不再写状态。
     rig.heartbeat._invalidate_judgments(round_trace=pending.round_trace)
     await asyncio.wait({pending.task}, timeout=5)
-    rig.heartbeat._collect_finished_judgments()
+    await rig.heartbeat._collect_finished_judgments()
 
     assert organs.cancelled
     assert rig.heartbeat._pending_judgments == []

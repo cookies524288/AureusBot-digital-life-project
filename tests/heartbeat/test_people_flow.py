@@ -85,11 +85,11 @@ class Rig:
     async def settle(self) -> None:
         """把现在排着的事一件件想完、处理完。"""
         for _ in range(10):
-            self.heartbeat.beat()
+            await self.heartbeat.beat()
             if not self.heartbeat.is_thinking:
                 return
             await self.heartbeat.wait_for_thought()
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
 
     def replies_to(self, recipient: str) -> list[str]:
         return [
@@ -144,9 +144,7 @@ async def test_an_incoming_display_name_names_a_new_contact(
     made: list[Rig], tmp_path: Path
 ) -> None:
     rig = make_rig(made, tmp_path)
-    perception = Perception(
-        CHANNEL, STRANGER, "你好", VisibilityScope.GROUP, TrustLevel.UNVERIFIED
-    )
+    perception = Perception(CHANNEL, STRANGER, "你好", VisibilityScope.GROUP, TrustLevel.UNVERIFIED)
     message = InboxMessage(
         id=1,
         conversation=ConversationKey(CHANNEL, "bot", "private", STRANGER),
@@ -158,7 +156,7 @@ async def test_an_incoming_display_name_names_a_new_contact(
     )
     rig.heartbeat._pending.append((perception, message))
 
-    rig.heartbeat._take_in_perceptions()
+    await rig.heartbeat._take_in_perceptions()
 
     person = rig.people.find(CHANNEL, STRANGER)
     assert person is not None and person.name == "群友小甲"
@@ -324,10 +322,10 @@ async def test_a_user_message_waits_for_the_reply_in_progress(
     rig = make_rig(made, tmp_path)
     rig.organs.gate = asyncio.Event()
     rig.say(STRANGER, "在吗", TrustLevel.VERIFIED_CONTACT)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.sleep(0)  # 让后台的想法开始等
     rig.say(USER_ID, "急事", TrustLevel.VERIFIED_USER)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     # 用户的消息不打断正在回别人的那条：只调用了一次，用户的消息在排队。
     assert len(rig.organs.requests) == 1

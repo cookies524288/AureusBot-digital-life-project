@@ -91,13 +91,13 @@ class Rig:
 
     async def beat(self) -> None:
         """跳一拍，并让出一下执行权，让刚开始的想法有机会去调用器官。"""
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         await asyncio.sleep(0)
 
     async def settle(self) -> None:
         """等进行中的想法有结果，再跳一拍把它处理掉。"""
         await self.heartbeat.wait_for_thought()
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
 
     def records(self, event_type: str) -> list[TimelineRecord]:
         return list(self.timeline.query(TimelineQuery(event_type=event_type, limit=100)))
@@ -169,16 +169,16 @@ async def test_high_fatigue_holds_the_reply_then_answers_all_messages_together(
     rig.say("在吗")
     await rig.beat()
     assert rig.organs.requests == []  # 先等着
-    assert rig.heartbeat.seconds_until_next_beat() == pytest.approx(BATCH_SECONDS)
+    assert await rig.heartbeat.seconds_until_next_beat() == pytest.approx(BATCH_SECONDS)
 
     rig.clock.advance(timedelta(seconds=8))
     rig.say("我想问个事")
     await rig.beat()
     assert rig.organs.requests == []
-    assert rig.heartbeat.seconds_until_next_beat() == pytest.approx(BATCH_SECONDS - 8)
+    assert await rig.heartbeat.seconds_until_next_beat() == pytest.approx(BATCH_SECONDS - 8)
 
     rig.clock.advance(timedelta(seconds=12))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.settle()
 
     assert [request.organ_id for request in rig.organs.requests] == ["planner", "replyer"]
@@ -215,13 +215,13 @@ async def test_high_stress_triggers_one_self_check_that_names_the_facts(
 ) -> None:
     rig = make_rig(made, tmp_path)
     rig.say("你好")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.settle()  # 先有过一次对话，自检才知道告诉谁
     rig.sent.clear()
     rig.record_calls(12, succeeded=False)  # 12/20 = 60%，刚好偏高
 
-    rig.heartbeat.beat()
-    rig.heartbeat.beat()  # 第二拍不会再发
+    await rig.heartbeat.beat()
+    await rig.heartbeat.beat()  # 第二拍不会再发
 
     [record] = rig.records(EVENT_SELF_CHECK)
     assert record.visibility is VisibilityScope.PRIVATE
@@ -237,13 +237,13 @@ async def test_self_check_fires_again_only_after_stress_has_eased(
 ) -> None:
     rig = make_rig(made, tmp_path)
     rig.record_calls(12, succeeded=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.records(EVENT_SELF_CHECK)) == 1
 
     rig.record_calls(20)  # 最近 20 次全成功，压力回到 0
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     rig.record_calls(12, succeeded=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     assert len(rig.records(EVENT_SELF_CHECK)) == 2
 
@@ -252,10 +252,10 @@ async def test_a_backlog_of_messages_alone_raises_stress(made: list[Rig], tmp_pa
     rig = make_rig(made, tmp_path)
     rig.organs.gate = asyncio.Event()  # 模型很慢：后面的消息只能排队
     rig.say("第 0 条")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     for index in range(1, 6):
         rig.say(f"第 {index} 条")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     [record] = rig.records(EVENT_SELF_CHECK)
     assert record.metadata["backlog"] >= 5
@@ -268,7 +268,7 @@ async def test_a_backlog_of_messages_alone_raises_stress(made: list[Rig], tmp_pa
 async def test_disabled_stress_never_self_checks(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, stress_enabled=False)
     rig.record_calls(20, succeeded=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.records(EVENT_SELF_CHECK) == []
 
 
@@ -277,7 +277,7 @@ async def test_self_check_is_recorded_even_with_nobody_to_tell(
 ) -> None:
     rig = make_rig(made, tmp_path)
     rig.record_calls(20, succeeded=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.records(EVENT_SELF_CHECK)) == 1
     assert rig.notices() == []
 
@@ -296,7 +296,7 @@ async def test_high_stress_lowers_the_reply_approach_by_one_tier(
     rig = make_rig(made, tmp_path)
     rig.record_calls(12, succeeded=False)  # 压力 60%，偏高
     rig.say("你好")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.settle()
 
     strategy = last_strategy(rig)
@@ -311,16 +311,16 @@ async def test_lowered_tier_recovers_only_after_stress_eases_below_half(
 ) -> None:
     rig = make_rig(made, tmp_path)
     rig.record_calls(12, succeeded=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     rig.record_calls(5)  # 最近 20 次里还有 7 次失败：35%，低于偏高线但高于一半（30%）
     rig.say("在吗")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.settle()
     assert last_strategy(rig)["stress_lowered"] is True
 
     rig.record_calls(20)  # 全成功，压力 0
     rig.say("还在吗")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.settle()
     assert last_strategy(rig)["stress_lowered"] is False
 
@@ -329,7 +329,7 @@ async def test_stress_lowering_can_be_switched_off(made: list[Rig], tmp_path: Pa
     rig = make_rig(made, tmp_path, stress_lowers_tier=False)
     rig.record_calls(12, succeeded=False)
     rig.say("你好")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.settle()
 
     assert last_strategy(rig)["stress_lowered"] is False
@@ -341,33 +341,33 @@ async def test_stress_lowering_can_be_switched_off(made: list[Rig], tmp_path: Pa
 
 async def test_beats_slow_down_at_night_and_not_by_day(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, start=NIGHT)
-    rig.heartbeat.beat()
-    assert rig.heartbeat.seconds_until_next_beat() == NIGHT_TICK
+    await rig.heartbeat.beat()
+    assert await rig.heartbeat.seconds_until_next_beat() == NIGHT_TICK
 
     rig.clock.advance(timedelta(hours=5))  # 08:00，不是夜里了
-    rig.heartbeat.beat()
-    assert rig.heartbeat.seconds_until_next_beat() == TICK
+    await rig.heartbeat.beat()
+    assert await rig.heartbeat.seconds_until_next_beat() == TICK
 
 
 async def test_disabled_sleep_keeps_the_normal_rhythm_at_night(
     made: list[Rig], tmp_path: Path
 ) -> None:
     rig = make_rig(made, tmp_path, start=NIGHT, sleep_enabled=False)
-    rig.heartbeat.beat()
-    assert rig.heartbeat.seconds_until_next_beat() == TICK
+    await rig.heartbeat.beat()
+    assert await rig.heartbeat.seconds_until_next_beat() == TICK
 
 
 async def test_night_never_makes_beats_faster_than_the_day_rhythm(
     made: list[Rig], tmp_path: Path
 ) -> None:
     rig = make_rig(made, tmp_path, start=NIGHT, night_tick_interval_seconds=1.0)
-    rig.heartbeat.beat()
-    assert rig.heartbeat.seconds_until_next_beat() == TICK
+    await rig.heartbeat.beat()
+    assert await rig.heartbeat.seconds_until_next_beat() == TICK
 
 
 async def test_a_new_message_wakes_the_heartbeat_at_night(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, start=NIGHT)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     rig.say("夜里好")
     # 夜里定时拍很慢（5 分钟），但 submit 会叫醒等待中的心跳，这里不会等到超时。
     await asyncio.wait_for(rig.heartbeat._wait_for_next_beat(), timeout=1.0)

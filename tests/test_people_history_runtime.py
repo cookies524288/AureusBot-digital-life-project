@@ -138,9 +138,9 @@ async def test_replyer_reads_history_after_restart(
             assert core.heartbeat.submit(
                 Perception("qq", sender, "聊聊今天吧", visibility, TrustLevel.VERIFIED_CONTACT)
             )
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
             await core.heartbeat.wait_for_thought()
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
             reply = next(request for request in requests if request.context["task"] == "reply")
             assert "不是你的用户" in reply.system_context
             text = dialogue_text(reply)

@@ -5,7 +5,7 @@
 想一想的做法由精力档位定（D59）：正常档先调规划器、再调回复器，低档位合并成一次调用。
 急停中（D54）照常收感知、记时间线，但不调用器官、不回复，只发系统通知。
 
-一拍里只有很短的同步操作。慢的器官调用放进后台任务，心跳照常跳；同一时间只想一件事
+拍内等待读写时让出事件循环。慢的器官调用放进后台任务，同一时间只想一件事
 （D34：前额叶是串行的）。所有状态写入都在拍里完成，后台任务只负责等器官的建议，
 有了结果就叫醒心跳，由下一拍处理。
 """
@@ -90,7 +90,6 @@ from aureus.heartbeat.events import (
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_PLANNING_INTERRUPTED,
     EVENT_REPLY_DECLINED,
-    EVENT_REPLY_DELIVERED,
     EVENT_REPLY_DELIVERY_FAILED,
     EVENT_REPLY_REFERENCE,
     EVENT_SELF_CHECK,
@@ -536,6 +535,9 @@ class Heartbeat:
             has_exploration_organ,
         )
         self._pending: deque[tuple[Perception, InboxMessage | None]] = deque()
+        self._beat_lock = asyncio.Lock()
+        self._deferred_records: deque[Callable[[], Awaitable[None]]] = deque()
+        self._bound_arrivals = 0
         self._unanswered: Inbox[_Heard] = Inbox()  # 记进时间线了、还没开始回复；用户先回（1.8）
         self._web_inbound_queue_limit = web_inbound_queue_limit
         self._thought: _Thought | None = None
@@ -686,7 +688,7 @@ class Heartbeat:
         """
         if perception.channel not in self._sinks:
             raise ValueError(f"通道 {perception.channel} 没有接到心跳上")
-        if self._maintenance_paused or self._phase in (_Phase.STOPPING, _Phase.STOPPED):
+        if self._stop_requested or self._maintenance_paused or self._phase is _Phase.STOPPED:
             logger.info("心跳正在关闭，没有收下来自 %s 的消息", perception.channel)
             return False
         if perception.channel == WEB_CHANNEL_NAME and self._web_inbound_full():
@@ -813,6 +815,7 @@ class Heartbeat:
                 self._observe_debounce(message)
             if allowed and inbox.is_priority(message.perception):
                 if inbox.preempts(message.perception):
+                    self._bound_arrivals += 1
                     self._preempt_inbox(inbox, message.conversation)
                 self._wake.set()
             if message.conversation == self._inbox_followup_key():
@@ -897,6 +900,30 @@ class Heartbeat:
 
     def describe_state(self) -> str:
         """此刻的状态，几行中文，给终端的 /state 之类的观察命令用。"""
+        empathy = self._empathy_focus.active_sync()
+        read = (
+            self._prepare_mood(
+                None,
+                viewer_is_user=True,
+                outcomes=self._mood_outcomes(self._clock.now() - self._mood.lookback()),
+            )
+            if self._mood is not None
+            else None
+        )
+        mood = read(self._clock.now(), empathy) if read is not None else None
+        return self._describe_state(empathy, self._describe_agenda_counts(), mood)
+
+    async def async_describe_state(self) -> str:
+        """为网页组装同一份状态说明；只把数据库读操作交给线程。"""
+        empathy = await self._empathy_focus.active()
+        agenda_line = await self._timeline.async_read(self._describe_agenda_counts)
+        read = await self._async_prepare_mood(None, viewer_is_user=True)
+        mood = read(self._clock.now(), empathy) if read is not None else None
+        return self._describe_state(empathy, agenda_line, mood)
+
+    def _describe_state(
+        self, empathy: Sequence[HormoneTrigger], agenda_line: str, mood: MoodReading | None
+    ) -> str:
         state = self._cognitive_state
         lines = [state.self_awareness_statement() if state else "还没有跳过第一拍。"]
         if state is not None:
@@ -907,16 +934,14 @@ class Heartbeat:
             )
             lines.append(f"{energy}，信心 {state.confidence_note}")
         lines.extend(self._describe_signals())
-        levels = self._hormone_levels()
+        levels = self._hormone_levels(empathy)
         if levels is not None:
             lines.append(
                 "激素："
                 + "，".join(f"{_HORMONE_NAMES[kind]} {level:.2f}" for kind, level in levels.items())
             )
-        agenda_line = self._describe_agenda_counts()
         if agenda_line:
             lines.append(agenda_line)
-        mood = self._read_mood(None, viewer_is_user=True)
         if mood is not None:
             caution = "，谨慎中" if mood.cautious else ""
             lines.append(f"心情 {mood.valence:+.2f}{caution}")
@@ -958,7 +983,7 @@ class Heartbeat:
         """工作记忆启用时返回生效的配置容量。"""
         return self._config.working_memory_capacity if self._config.working_memory_enabled else None
 
-    def working_memory_focus(self) -> tuple[int, int | None] | None:
+    async def working_memory_focus(self) -> tuple[int, int | None] | None:
         """管理网页所见的工作记忆容量和最早焦点；停用时沿用对话窗口。"""
         if (
             self._working_memory is None
@@ -966,7 +991,7 @@ class Heartbeat:
             or not self._working_memory.is_ready
         ):
             return None
-        return self._config.working_memory_capacity, self._working_memory.focus_boundary()
+        return self._config.working_memory_capacity, await self._working_memory.focus_boundary()
 
     def _describe_signals(self) -> list[str]:
         """疲劳、压力、夜间的一行读数；关掉的信号注明已关闭。"""
@@ -1059,7 +1084,13 @@ class Heartbeat:
         reason = SHUTDOWN_REQUESTED
         try:
             while not self._stop_requested:
-                self.beat()
+                beat = asyncio.create_task(self.beat(), name="aureus-beat")
+                try:
+                    await asyncio.shield(beat)
+                except asyncio.CancelledError:
+                    self.request_stop()
+                    await beat
+                    raise
                 await self._wait_for_next_beat()
         except asyncio.CancelledError:
             reason = SHUTDOWN_INTERRUPTED
@@ -1232,14 +1263,19 @@ class Heartbeat:
         logger.warning("上一条设定修改记录里的版本号读不懂，从头找用户的修改")
         return 0
 
-    def beat(self) -> None:
-        """跳一拍。只做很短的同步操作；要在事件循环里调用（会创建后台任务）。
+    async def beat(self) -> None:
+        """跳一拍；等待读写时让出循环，但不让另一拍并行改状态。
 
         Raises:
             RuntimeError: 心跳没有在运行。
         """
-        if self._phase is not _Phase.RUNNING:
-            raise RuntimeError("心跳没有在运行，不能跳")
+        async with self._beat_lock:
+            if self._phase is not _Phase.RUNNING:
+                raise RuntimeError("心跳没有在运行，不能跳")
+            await self._beat()
+
+    async def _beat(self) -> None:
+        await self._flush_deferred_records()
         pending_cancel = self._maintenance_task
         if pending_cancel is not None and pending_cancel.done():
             if not pending_cancel.cancelled():
@@ -1251,31 +1287,35 @@ class Heartbeat:
             self._emoji_maintenance.maybe_start(self._clock.now())
         self._initiative.begin_beat(self._clock.now())
         self._exploration.begin_beat(self._clock.now())
-        self._watch_emergency_stop()
+        await self._watch_emergency_stop()
         inbox = self._platform_inbox
         if inbox is not None:
-            self._take_inbox_priority(inbox)
+            await self._take_inbox_priority(inbox)
         # D76：先收下已到的来信，不能把发送前排队的消息算作发送后的回应。
-        self._take_in_perceptions()
+        await self._take_in_perceptions()
         if inbox is not None:
-            self._take_inbox_followups(inbox)
+            await self._take_inbox_followups(inbox)
+        if self._stop_requested or self._maintenance_paused:
+            return
         self._sticker_followups.tick()
         self._reply_outbox.deliver_due()
+        await self._flush_deferred_records()
         had_thought = self._thought is not None
         diary_running = bool(self._thought and self._thought.task.get_name() == "aureus-diary")
-        self._collect_finished_thought()
-        self._collect_finished_judgments()
+        await self._collect_finished_thought()
+        await self._flush_deferred_records()
+        await self._collect_finished_judgments()
         if inbox is not None:
-            self._take_active_inbox(inbox)
-        self._memory.index_more()
+            await self._take_active_inbox(inbox)
+        await self._memory.index_more()
         self._maybe_start_indexing()
         self._read_body()
-        self._check_stress()
+        await self._check_stress()
         self._agenda_hooks._check_agenda()
         expired = inbox is not None and self._expire_inbox_residence(inbox)
-        self._maybe_recheck_chat()
+        await self._maybe_recheck_chat()
         if inbox is not None:
-            self._maybe_select_inbox(inbox, had_thought=had_thought and not expired)
+            await self._maybe_select_inbox(inbox, had_thought=had_thought and not expired)
         thought = self._thought
         if (
             self._unanswered
@@ -1284,18 +1324,18 @@ class Heartbeat:
             and any(self._is_bound_user(heard.perception) for heard in self._unanswered)
         ):
             thought.task.cancel()
-        self._maybe_start_thought()
-        self._maybe_summarize_working_memory()
+        await self._maybe_start_thought()
+        await self._maybe_summarize_working_memory()
         self._maybe_learn_language()
-        self._maybe_start_initiative()
-        self._maybe_start_exploration()
+        await self._maybe_start_initiative()
+        await self._maybe_start_exploration()
         self._maybe_start_diary()
         if not diary_running:
             self._maybe_start_persona_review()
         self._maybe_consolidate_memory()
-        self._broadcast_cognitive_state()
-        self._record_body_sample()
         self._publish_round_state()
+        await self._broadcast_cognitive_state()
+        self._record_body_sample()
 
     async def wait_for_thought(self) -> None:
         """等进行中的想法有结果（结果由下一拍处理）。没有在想就立即返回。"""
@@ -1312,6 +1352,12 @@ class Heartbeat:
         Args:
             reason: 为什么关闭，写进关闭记录。
         """
+        if self._phase is _Phase.RUNNING:
+            self.request_stop()
+        async with self._beat_lock:
+            await self._shut_down(reason)
+
+    async def _shut_down(self, reason: str) -> None:
         if self._phase is _Phase.NOT_STARTED:
             # 没醒来过就没有什么可收尾的；也不写关闭记录，免得下次醒来误以为运行过。
             self._phase = _Phase.STOPPED
@@ -1319,19 +1365,18 @@ class Heartbeat:
         if self._phase is not _Phase.RUNNING:
             return
         self._phase = _Phase.STOPPING
-        # 也叫醒主循环：如果 run() 正在等下一拍，它会马上发现要停，而不是等到定时拍。
-        self.request_stop()
         try:
             try:
                 await self._settle_thought_before_shutdown()
                 await self._settle_judgments_before_shutdown()
-                self._take_in_perceptions()
+                await self._take_in_perceptions()
                 if self._emoji_maintenance is not None:
                     await self._emoji_maintenance.wait()
+                await self._flush_deferred_records()
             except Exception:
                 logger.exception("关闭时没能把进行中的想法或排队的消息记进时间线")
             try:
-                self._timeline.append(
+                await self._timeline.async_append(
                     event_type=EVENT_SHUT_DOWN,
                     content=f"关闭：{reason}。",
                     actor_type=ActorType.ME,
@@ -1349,7 +1394,7 @@ class Heartbeat:
 
     # ---------- 每一拍的步骤 ----------
 
-    def _watch_emergency_stop(self) -> None:
+    async def _watch_emergency_stop(self) -> None:
         """读急停状态：变了就记进时间线；急停中就取消进行中的器官调用（D54）。"""
         status = self._emergency_stop.status()
         previous = self._halt_status
@@ -1361,8 +1406,17 @@ class Heartbeat:
             if self._platform_inbox is not None:
                 self._interrupt_inbox(self._platform_inbox, "急停时取消本批回复，未投递。")
             self._invalidate_all_judgments()
+        thought = self._thought
+        if (
+            status.halted
+            and thought is not None
+            and not thought.task.done()
+            and thought.inbox_discard_reason is None
+        ):
+            thought.task.cancel()
         if status.halted != previous.halted:
-            self._timeline.append(
+            await self._flush_deferred_records()
+            await self._timeline.async_append(
                 event_type=EVENT_EMERGENCY_STOP if status.halted else EVENT_EMERGENCY_RESUME,
                 content=f"急停生效：{status.reason}" if status.halted else "急停解除",
                 actor_type=ActorType.ME,
@@ -1373,30 +1427,22 @@ class Heartbeat:
                 },
             )
             logger.warning("急停%s", f"生效：{status.reason}" if status.halted else "解除")
-        thought = self._thought
-        if (
-            status.halted
-            and thought is not None
-            and not thought.task.done()
-            and thought.inbox_discard_reason is None
-        ):
-            # 取消的结果由 _collect_finished_thought 在下一拍处理（取消完成时会叫醒心跳）。
-            thought.task.cancel()
 
-    def _collect_finished_thought(self) -> None:
+    async def _collect_finished_thought(self) -> None:
         """对结果：想法有结果了，把它说的话记进时间线、发回通道；失败就发系统通知。"""
         thought = self._thought
         if thought is None or not thought.task.done():
             return
         self._thought = None
         try:
-            self._collect_outcome(thought)
+            await self._collect_outcome(thought)
         finally:
             if thought.round_trace:
                 thought.round_trace.cancel_sticker()
 
-    def _collect_outcome(self, thought: _Thought) -> None:
+    async def _collect_outcome(self, thought: _Thought) -> None:
         inbox = self._platform_inbox
+        bound_arrivals = self._bound_arrivals
         residence = thought.replying_to[-1].residence if thought.replying_to else None
         lost_permission = residence is not None and (inbox is None or not inbox.permits(residence))
         if thought.inbox_discard_reason is not None or lost_permission:
@@ -1418,7 +1464,7 @@ class Heartbeat:
             return
         if thought.task.cancelled():
             # 先看是不是被取消的：急停取消不该清掉重开上限（D138）。
-            self._record_abandoned(thought, halted=self._halt_status.halted)
+            await self._record_abandoned(thought, halted=self._halt_status.halted)
             return
         if (conversation := self._thought_conversation(thought)) is not None:
             self._planner_restarts.pop(conversation, None)
@@ -1440,12 +1486,22 @@ class Heartbeat:
                 and self.allows_emoji_delivery()
                 and self._permissions.check(ACTION_CALL_ORGAN).allowed
             ):
-                self._submit_inbox(inbox.read_selection(outcome, now=self._clock.now()))
-                self._take_in_perceptions(browsing=True, residence=inbox.residence)
+                messages = await inbox.read_selection(
+                    outcome,
+                    now=self._clock.now(),
+                    can_enter=lambda: (
+                        self._bound_arrivals == bound_arrivals
+                        and self.allows_emoji_delivery()
+                        and self._permissions.check(ACTION_CALL_ORGAN).allowed
+                    ),
+                )
+                self._submit_inbox(messages)
+                await self._take_in_perceptions(browsing=True, residence=inbox.residence)
             return
         if isinstance(outcome, SummaryOutcome):
             assert self._working_memory is not None
-            self._collect_trimmed_learning(self._working_memory.finish(outcome, self._clock.now()))
+            trimmed = await self._working_memory.finish(outcome, self._clock.now())
+            self._collect_trimmed_learning(trimmed)
             return
         if isinstance(outcome, ConsolidationOutcome):
             assert self._memory_consolidator is not None
@@ -1526,12 +1582,16 @@ class Heartbeat:
             ):
                 plan = replace(plan, stay_in_conversation=False)
             was_active = inbox.active_conversation == target_key and target_key is not None
-            inbox.apply_plan(plan, target, selected.record, now=self._clock.now())
+            await inbox.apply_plan(plan, target, selected.record, now=self._clock.now())
             if inbox.residence is not None and inbox.residence.conversation == target_key:
                 residence = inbox.residence
                 if was_active and inbox.active_conversation is None:
                     self._discard_residence_batches(residence, "已离开会话，未开始这批规划。")
-        self._record_reply_reference(thought, outcome.reference_plan, target)
+        await self._flush_deferred_records()
+        await self._record_reply_reference(thought, outcome.reference_plan, target)
+        if self._bound_arrivals != bound_arrivals:
+            self._record_interrupted_round(thought, "绑定用户的来信抢占了注意力，未投递。")
+            return
         if outcome.declined:
             if (
                 outcome.plan
@@ -1545,7 +1605,7 @@ class Heartbeat:
             if outcome.plan is not None:
                 if self._hormones is not None:
                     self._hormones.note_decline(person_id, self._clock.now())
-                self._record_declined(thought, outcome.plan, outcome.effects)
+                await self._record_declined(thought, outcome.plan, outcome.effects)
             return
         if outcome.response is None and outcome.emoji is None and outcome.qq_action is None:
             if outcome.notice:
@@ -1558,7 +1618,7 @@ class Heartbeat:
         if not reply_permission.allowed:
             # 器官已经返回了，但此刻不允许说话：这句话不进时间线（它没有说出口）。
             logger.warning("回复被权限检查拦下：%s", reply_permission.reason)
-            self._record_round_delivery_block(thought, "回复权限检查未通过，未投递。")
+            await self._record_round_delivery_block(thought, "回复权限检查未通过，未投递。")
             self._deliver(
                 target,
                 f"{reply_permission.reason}。这条消息已经记下，没有回复。",
@@ -1610,12 +1670,17 @@ class Heartbeat:
                 message_type=target.route.kind,
                 temporary_group_id=target.route.temporary_group_id,
             )
-        reply_record = self._timeline.append(
+        reply_record = await self._timeline.async_append(
             event_type=EVENT_MESSAGE,
             content=text,
             actor_type=ActorType.ME,
             visibility=target.visibility,
             metadata=metadata,
+        )
+
+        acknowledged = False
+        graceful_local_delivery = (
+            self._phase is _Phase.STOPPING and target_key is None and residence is None
         )
 
         def can_deliver() -> bool:
@@ -1624,7 +1689,7 @@ class Heartbeat:
                 and (target_key is None or inbox is None or inbox.allows(target_key))
                 and self._conversation.source_available(selected)
                 and self._conversation.history_current(thought.round_trace)
-                and (trace is None or self._chat_round_current(trace, selected, reply_record.id))
+                and (trace is None or self._chat_round_current(trace, selected, acknowledged))
                 and self.allows_emoji_delivery()
             )
 
@@ -1674,16 +1739,30 @@ class Heartbeat:
         elif outcome.emoji_task is not None:
             outcome.emoji_task.cancel()
 
-        acknowledged = False
+        confirmed_segments: set[int] = set()
 
         def after_receipt(segment: int | None, accepted: bool) -> None:
             nonlocal acknowledged
             if receipt is not None:
                 receipt(segment, accepted)
-            if accepted and segment is not None and not acknowledged:
+            if not accepted or segment is None:
+                return
+            confirmed_segments.add(segment)
+            if not acknowledged:
                 acknowledged = True
                 self._after_reply_delivery(selected, outcome.plan, person_id, reply_record)
+            chat = self._conversation.chat_plugins
+            if chat is not None and target_key is not None:
+                if nudge_id := metadata.get("chat_nudge_id"):
+                    chat.consume_nudge(target_key, nudge_id)
+                if len(confirmed_segments) == len(segments) and (
+                    seconds := metadata.get("followup_seconds")
+                ):
+                    chat.recheck("followup", target, seconds)
 
+        if self._bound_arrivals != bound_arrivals:
+            self._record_interrupted_round(thought, "绑定用户的来信抢占了注意力，未投递。")
+            return
         self._deliver_reply(
             target,
             reply_record,
@@ -1691,7 +1770,7 @@ class Heartbeat:
             emoji=outcome.emoji,
             qq_action=outcome.qq_action,
             quote_source=outcome.plan is not None and outcome.plan.quote_source,
-            can_deliver=can_deliver if residence is not None or target_key is not None else None,
+            can_deliver=None if graceful_local_delivery else can_deliver,
             on_receipt=after_receipt,
             timing=trace.timing if trace is not None else None,
         )
@@ -1736,10 +1815,6 @@ class Heartbeat:
         def confirmed() -> None:
             if on_receipt is not None:
                 on_receipt(segment, True)
-            if segment is not None and (
-                "chat_nudge_id" in record.metadata or "followup_seconds" in record.metadata
-            ):
-                self._chat_part_confirmed(target, record)
 
         confirm, fail = delivery_callbacks(
             self._timeline,
@@ -1749,6 +1824,7 @@ class Heartbeat:
             on_confirm=confirmed,
             on_failure=(lambda: on_receipt(segment, False)) if on_receipt else None,
             timing=timing,
+            defer=self._defer_record,
         )
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if not permission.allowed:
@@ -1786,26 +1862,6 @@ class Heartbeat:
             fail("通道没有接收这段回复，未投递。")
         return delivered
 
-    def _chat_part_confirmed(self, target: Perception, record: TimelineRecord) -> None:
-        chat = self._conversation.chat_plugins
-        if not chat or not target.route:
-            return
-        if nudge_id := record.metadata.get("chat_nudge_id"):
-            chat.consume_nudge(ConversationKey.from_perception(target), nudge_id)
-        if seconds := record.metadata.get("followup_seconds"):
-            total = len(record.metadata.get("reply_segments") or [record.content])
-            confirmed = self._timeline.query(
-                TimelineQuery(
-                    event_type=EVENT_REPLY_DELIVERED, metadata={"reply_id": record.id}, limit=-1
-                )
-            )
-            if {
-                item.metadata.get("segment")
-                for item in confirmed
-                if item.metadata.get("segment") is not None
-            } == set(range(1, total + 1)):
-                chat.recheck("followup", target, seconds)
-
     def _after_reply_delivery(
         self,
         heard: _Heard,
@@ -1829,7 +1885,7 @@ class Heartbeat:
                 )
 
     def _record_discarded_reply(self, record: TimelineRecord, segment: int | None) -> None:
-        _, fail = delivery_callbacks(self._timeline, record, "", segment)
+        _, fail = delivery_callbacks(self._timeline, record, "", segment, defer=self._defer_record)
         fail("还在等待的回复分段已取消，未投递。")
 
     def _deliver_reply(
@@ -1895,7 +1951,7 @@ class Heartbeat:
         self._pending_judgments.append(pending)
         pending.task.add_done_callback(self._on_thought_done)
 
-    def _collect_finished_judgments(self) -> None:
+    async def _collect_finished_judgments(self) -> None:
         """收取跑完的判断；来源权限失效或轮次作废的迟到建议只丢弃，不写状态（D110）。"""
         if not self._pending_judgments:
             return
@@ -1920,23 +1976,27 @@ class Heartbeat:
                 logger.exception("判断任务出错，丢弃这次结果")
                 continue
             if attempt is not None:
-                self._adopt_judgment(pending, attempt)
+                await self._adopt_judgment(pending, attempt)
         self._pending_judgments = remaining
 
-    def _adopt_judgment(self, pending: _PendingJudgment, attempt: _JudgeAttempt) -> None:
+    async def _adopt_judgment(self, pending: _PendingJudgment, attempt: _JudgeAttempt) -> None:
         """在心跳这一拍采纳判断：按采纳时的时钟算触发，再走既有接口写状态（D110）。"""
         triggers = (
-            self._conversation.judgment_triggers(
+            await self._conversation.judgment_triggers(
                 attempt.judgment, pending.messages, pending.person_id
             )
             if attempt.judgment is not None
             else ()
         )
-        record = self._record_adopted_judgment(pending, attempt)
-        self._record_triggers(triggers)
+        if pending.invalidated or not self._judgment_source_allowed(pending):
+            return
+        record = await self._record_adopted_judgment(pending, attempt)
+        if pending.invalidated or not self._judgment_source_allowed(pending):
+            return
+        await self._record_triggers(triggers)
         self._record_affinity(pending.person_id, attempt.judgment, record)
 
-    def _record_adopted_judgment(
+    async def _record_adopted_judgment(
         self, pending: _PendingJudgment, attempt: _JudgeAttempt
     ) -> TimelineRecord:
         """判断记录沿用原轮次的 round_id 和来源，允许晚于回复出现（D68、D110）。"""
@@ -1949,7 +2009,7 @@ class Heartbeat:
         else:
             content = f"没判断出刚收到的消息里的情绪：{attempt.failure}"
             metadata["failure"] = attempt.failure
-        return self._timeline.append(
+        return await self._timeline.async_append(
             event_type=EVENT_JUDGMENT,
             content=content,
             actor_type=ActorType.ME,
@@ -2021,13 +2081,13 @@ class Heartbeat:
             return ""
         return describe_affinity(self._affinity.current(person_id), is_user=is_user)
 
-    def _record_triggers(self, triggers: Sequence[HormoneTrigger]) -> None:
+    async def _record_triggers(self, triggers: Sequence[HormoneTrigger]) -> None:
         """普通触发写入基线；共情只留痕，由工作记忆焦点决定是否叠加。"""
         if self._hormones is None or not triggers:
             return
         baseline = [trigger for trigger in triggers if not trigger.is_empathy]
         for trigger in baseline:
-            self._timeline.append(
+            await self._timeline.async_append(
                 event_type=EVENT_HORMONE_TRIGGERED,
                 content=f"{trigger.kind.value} 上涨 {trigger.rise:.2f}：{trigger.reason}",
                 actor_type=ActorType.ME,
@@ -2038,54 +2098,68 @@ class Heartbeat:
             self._hormones.add(baseline, self._clock.now())
             if self._mood is not None:
                 self._mood.add_triggers(baseline, self._clock.now())
-        self._empathy_focus.record(trigger for trigger in triggers if trigger.is_empathy)
+        await self._empathy_focus.record(trigger for trigger in triggers if trigger.is_empathy)
 
-    def _read_mood(
+    async def _async_read_mood(
         self, person_id: int | None, *, viewer_is_user: bool, strict: bool = False
     ) -> MoodReading | None:
-        """此刻的心情（D73）：激素贡献在内存里，反馈结果从反馈表读，再减去此刻压力。
+        read = await self._async_prepare_mood(
+            person_id, viewer_is_user=viewer_is_user, strict=strict
+        )
+        return read(self._clock.now(), await self._empathy_focus.active()) if read else None
 
-        反馈表读不了时当作没有结果，不让心情这一步拖垮回复。
-        """
-        read = self._prepare_mood(person_id, viewer_is_user=viewer_is_user, strict=strict)
-        return read(self._clock.now(), self._empathy_focus.active()) if read is not None else None
-
-    def _prepare_mood(
+    async def _async_prepare_mood(
         self, person_id: int | None, *, viewer_is_user: bool, strict: bool = False
     ) -> Callable[[datetime, Sequence[HormoneTrigger]], MoodReading] | None:
         mood = self._mood
         if mood is None:
             return None
-        now = self._clock.now()
-        outcomes: list[FeedbackOutcome] = []
-        if self._feedback is not None:
-            try:
-                records = self._feedback.outcomes_since(now - mood.lookback())
-            except sqlite3.Error:
-                if strict:
-                    raise
-                logger.exception("心情：反馈表读不了，这次不算反馈结果")
-                records = []
-            outcomes = [
-                FeedbackOutcome(
-                    at=record.outcome_at,
-                    succeeded=record.outcome is Outcome.SUCCESS,
-                    category=record.category,
-                )
-                for record in records
-                if record.outcome_at is not None
-            ]
+        outcomes = (
+            await self._timeline.async_read(
+                self._mood_outcomes, self._clock.now() - mood.lookback(), strict=strict
+            )
+            if self._feedback is not None
+            else []
+        )
+        return self._prepare_mood(person_id, viewer_is_user=viewer_is_user, outcomes=outcomes)
+
+    def _mood_outcomes(self, since: datetime, *, strict: bool = False) -> list[FeedbackOutcome]:
+        if self._feedback is None:
+            return []
+        try:
+            records = self._feedback.outcomes_since(since)
+        except sqlite3.Error:
+            if strict:
+                raise
+            logger.exception("心情：反馈表读不了，这次不算反馈结果")
+            return []
+        return [
+            FeedbackOutcome(
+                at=record.outcome_at,
+                succeeded=record.outcome is Outcome.SUCCESS,
+                category=record.category,
+            )
+            for record in records
+            if record.outcome_at is not None
+        ]
+
+    def _prepare_mood(
+        self, person_id: int | None, *, viewer_is_user: bool, outcomes: list[FeedbackOutcome]
+    ) -> Callable[[datetime, Sequence[HormoneTrigger]], MoodReading] | None:
+        mood = self._mood
+        if mood is None:
+            return None
         reading = self._reading
         stress = reading.stress.level if reading is not None and reading.stress.enabled else 0.0
         return mood.prepare_reading(
-            now,
+            self._clock.now(),
             outcomes,
             stress_level=stress,
             person_id=person_id,
             viewer_is_user=viewer_is_user,
         )
 
-    def _record_reply_reference(
+    async def _record_reply_reference(
         self, thought: _Thought, plan: Plan | None, target: Perception
     ) -> None:
         metadata: dict[str, Any] = {
@@ -2113,7 +2187,7 @@ class Heartbeat:
                 message_type=target.route.kind,
                 temporary_group_id=target.route.temporary_group_id,
             )
-        self._timeline.append(
+        await self._timeline.async_append(
             event_type=EVENT_REPLY_REFERENCE,
             content=content,
             actor_type=ActorType.ME,
@@ -2140,10 +2214,9 @@ class Heartbeat:
             return
         self._invalidate_judgments(round_trace=trace)
         target = thought.replying_to[-1].perception
-        self._timeline.append(
+        self._defer_timeline(
             EVENT_PLANNING_INTERRUPTED,
             reason,
-            ActorType.ME,
             visibility=target.visibility,
             metadata={
                 **self._round_metadata(thought),
@@ -2154,9 +2227,9 @@ class Heartbeat:
             },
         )
 
-    def _record_round_delivery_block(self, thought: _Thought, reason: str) -> None:
+    async def _record_round_delivery_block(self, thought: _Thought, reason: str) -> None:
         target = thought.replying_to[-1].perception
-        self._timeline.append(
+        await self._timeline.async_append(
             EVENT_REPLY_DELIVERY_FAILED,
             reason,
             ActorType.SYSTEM,
@@ -2164,7 +2237,7 @@ class Heartbeat:
             metadata={**self._round_metadata(thought), "channel": target.channel},
         )
 
-    def _record_declined(
+    async def _record_declined(
         self,
         thought: _Thought,
         plan: Plan,
@@ -2180,13 +2253,37 @@ class Heartbeat:
         if effects is not None:
             # 写明当时的怒气，回头查「为什么没回」时分得清是冷处理还是别的原因（D69 第 3 条）。
             metadata["hormones"] = effects.to_metadata()
-        self._timeline.append(
+        await self._timeline.async_append(
             event_type=EVENT_REPLY_DECLINED,
             content=f"看了刚收到的消息，决定不回复：{reason}",
             actor_type=ActorType.ME,
             visibility=VisibilityScope.PRIVATE,
             metadata=metadata,
         )
+
+    def _defer_record(self, write: Callable[[], Awaitable[None]]) -> None:
+        """通道回执和同步权限回调只交接落库；由心跳记录并报告写入失败。"""
+        self._deferred_records.append(write)
+        self._wake.set()
+
+    def _defer_timeline(
+        self, event: str, content: str, *, visibility: VisibilityScope, metadata: dict[str, Any]
+    ) -> None:
+        async def write() -> None:
+            await self._timeline.async_append(
+                event, content, ActorType.ME, visibility=visibility, metadata=metadata
+            )
+
+        self._defer_record(write)
+
+    async def _flush_deferred_records(self) -> None:
+        while self._deferred_records:
+            await self._deferred_records.popleft()()
+
+    async def flush_channel_records(self) -> None:
+        """保存已交回的通道结果，不开始新的一拍。"""
+        async with self._beat_lock:
+            await self._flush_deferred_records()
 
     def _submit_inbox(self, messages: Sequence[InboxMessage]) -> None:
         existing_ids = {message.id for _, message in self._pending if message is not None}
@@ -2239,7 +2336,7 @@ class Heartbeat:
             monotonic_now=timing_now(),
         )
 
-    def _take_inbox_priority(self, inbox: InboxAttention) -> None:
+    async def _take_inbox_priority(self, inbox: InboxAttention) -> None:
         if inbox.residence is not None and not (
             inbox.permits(inbox.residence)
             and self._permissions.check(ACTION_CALL_ORGAN).allowed
@@ -2247,15 +2344,20 @@ class Heartbeat:
         ):
             self._clear_planner_restarts(inbox.residence.conversation)
             self._interrupt_inbox(inbox, "会话已失去处理权限，未投递。")
-        messages = inbox.priority_messages()
-        for message in messages:
+        batch = await inbox.priority_messages()
+        for message in batch.messages:
             if inbox.preempts(message.perception):
                 self._preempt_inbox(inbox, message.conversation)
-        self._submit_inbox(messages)
+        self._submit_inbox(batch.messages)
         # D145：优先来信单独处理，提交后按会话把未读水位推到最大入站消息；
         # 同会话更早或同时段的普通未读不再逐条追赶，也不会混进这一批优先回复。
-        for conversation in dict.fromkeys(message.conversation for message in messages):
-            inbox.store.read_latest_and_clear(conversation, limit=inbox.read_limit)
+        for conversation in dict.fromkeys(message.conversation for message in batch.messages):
+            await asyncio.to_thread(
+                inbox.store.read_latest_and_clear,
+                conversation,
+                limit=inbox.read_limit,
+                through=batch.through[conversation],
+            )
 
     def _preempt_inbox(self, inbox: InboxAttention, conversation: ConversationKey) -> None:
         reason = "绑定用户的来信抢占了注意力，未投递。"
@@ -2293,10 +2395,9 @@ class Heartbeat:
         queued = [heard for heard in self._unanswered if heard.residence is residence]
         if queued:
             target = queued[-1].perception
-            self._timeline.append(
+            self._defer_timeline(
                 EVENT_PLANNING_INTERRUPTED,
                 reason,
-                ActorType.ME,
                 visibility=target.visibility,
                 metadata={
                     "round_id": queued[0].record.id,
@@ -2313,7 +2414,7 @@ class Heartbeat:
             self._thought = replace(thought, inbox_discard_reason=reason)
             thought.task.cancel()
 
-    def _take_inbox_followups(self, inbox: InboxAttention) -> None:
+    async def _take_inbox_followups(self, inbox: InboxAttention) -> None:
         if self._halt_status.halted or self._stop_requested:
             return
         conversation = self._inbox_followup_key()
@@ -2321,12 +2422,12 @@ class Heartbeat:
         if inbox.active_conversation is not None:
             # D116：活跃会话不再提前返回，防抖窗口和规划期间的新未读并入当前批次。
             if conversation is not None and conversation in arrivals:
-                self._submit_inbox(inbox.active_messages(now=self._clock.now()))
-            self._take_in_perceptions(browsing=True, residence=inbox.residence)
+                self._submit_inbox(await inbox.active_messages(now=self._clock.now()))
+            await self._take_in_perceptions(browsing=True, residence=inbox.residence)
         else:
             if conversation is not None and conversation in arrivals:
-                self._submit_inbox(inbox.debounce_messages(conversation))
-            self._take_in_perceptions(browsing=True)
+                self._submit_inbox(await inbox.debounce_messages(conversation))
+            await self._take_in_perceptions(browsing=True)
         if (
             not self._config.planner_message_steering
             or conversation is None
@@ -2342,7 +2443,7 @@ class Heartbeat:
         ):
             self._planner_restarts[conversation] = count + 1
 
-    def _take_active_inbox(self, inbox: InboxAttention) -> None:
+    async def _take_active_inbox(self, inbox: InboxAttention) -> None:
         conversation = inbox.active_conversation
         if (
             conversation is not None
@@ -2351,8 +2452,8 @@ class Heartbeat:
             and self._permissions.check(ACTION_CALL_ORGAN).allowed
         ):
             # D116：思考或待回复批次进行中同样补读新到未读，交给 _maybe_start_thought 合入下一批。
-            self._submit_inbox(inbox.active_messages(now=self._clock.now()))
-            self._take_in_perceptions(browsing=True, residence=inbox.residence)
+            self._submit_inbox(await inbox.active_messages(now=self._clock.now()))
+            await self._take_in_perceptions(browsing=True, residence=inbox.residence)
 
     def _restart_planner(self) -> bool:
         thought = self._thought
@@ -2400,10 +2501,10 @@ class Heartbeat:
         if conversation is not None:
             self._planner_restarts.pop(conversation, None)
 
-    def _maybe_select_inbox(self, inbox: InboxAttention, *, had_thought: bool) -> None:
-        reading = self._reading
-        candidates = inbox.browse(
-            can_browse=(
+    async def _maybe_select_inbox(self, inbox: InboxAttention, *, had_thought: bool) -> None:
+        def can_browse() -> bool:
+            reading = self._reading
+            return (
                 not had_thought
                 and self._thought is None
                 and not self._unanswered
@@ -2412,9 +2513,11 @@ class Heartbeat:
                 and not self._residence_waiting_for_delivery()
                 and (reading is None or not reading.sleep.night)
                 and self._permissions.check(ACTION_CALL_ORGAN).allowed
-            ),
-        )
-        if not candidates:
+            )
+
+        bound_arrivals = self._bound_arrivals
+        candidates = await inbox.browse(can_browse=can_browse())
+        if not candidates or not can_browse() or self._bound_arrivals != bound_arrivals:
             return
         strategy = self._current_strategy()
         task = asyncio.create_task(
@@ -2431,13 +2534,14 @@ class Heartbeat:
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task=task, replying_to=(), strategy=strategy)
 
-    def _take_in_perceptions(
+    async def _take_in_perceptions(
         self, *, browsing: bool = False, residence: InboxResidence | None = None
     ) -> None:
         """收感知：把新消息记进时间线。先记再出队，记不进去时消息还留在队里。"""
+        await self._flush_deferred_records()
         inbox = self._platform_inbox
         received_for_residence = False
-        while self._pending:
+        for _ in range(len(self._pending)):
             perception, inbox_message = self._pending[0]
             message_residence = (
                 residence
@@ -2447,7 +2551,7 @@ class Heartbeat:
                 else None
             )
             if inbox_message is not None and inbox is not None:
-                previous = self._timeline.query(
+                previous = await self._timeline.async_query(
                     TimelineQuery(
                         event_type=EVENT_MESSAGE,
                         metadata={"inbox_message_id": inbox_message.id},
@@ -2456,7 +2560,7 @@ class Heartbeat:
                 )
                 if previous:
                     if message_residence is None:
-                        inbox.store.mark_read([inbox_message.id])
+                        await inbox.store.async_mark_read([inbox_message.id])
                     self._pending.popleft()
                     continue
             person = self._identify(
@@ -2491,7 +2595,7 @@ class Heartbeat:
                     metadata["inbox_browsed"] = True
                 if person is not None and person.name:
                     metadata["person_name"] = person.name
-            record = self._timeline.append(
+            record = await self._timeline.async_append(
                 event_type=EVENT_MESSAGE,
                 content=perception.content,
                 actor_type=_actor_type_of(perception),
@@ -2500,9 +2604,9 @@ class Heartbeat:
                 metadata=metadata,
             )
             received_for_residence |= message_residence is not None
-            self._pending.popleft()
             if inbox_message is not None and inbox is not None and message_residence is None:
-                inbox.store.mark_read([inbox_message.id])
+                await inbox.store.async_mark_read([inbox_message.id])
+            self._pending.popleft()
             priority = self._reply_priority(perception, person)
             if priority is None:
                 # 确认不了身份（或通道和档案对不上）就不回，朝安全方向倒。
@@ -2555,7 +2659,7 @@ class Heartbeat:
         return self._people.meet(perception.channel, perception.sender_id, sender_name)
 
     def _chat_round_current(
-        self, trace: _RoundTrace, selected: _Heard, reply_id: int | None = None
+        self, trace: _RoundTrace, selected: _Heard, confirmed: bool = False
     ) -> bool:
         chat = self._conversation.chat_plugins
         if chat is None:
@@ -2565,17 +2669,9 @@ class Heartbeat:
         nudge = trace.owner_nudge
         if not nudge or chat.nudge(nudge.target) == nudge:
             return True
-        return bool(
-            reply_id
-            and chat.nudge_authorized(nudge)
-            and self._timeline.query(
-                TimelineQuery(
-                    event_type=EVENT_REPLY_DELIVERED, metadata={"reply_id": reply_id}, limit=1
-                )
-            )
-        )
+        return confirmed and chat.nudge_authorized(nudge)
 
-    def _maybe_recheck_chat(self) -> None:
+    async def _maybe_recheck_chat(self) -> None:
         chat = self._conversation.chat_plugins
         if (
             not chat
@@ -2595,7 +2691,7 @@ class Heartbeat:
         item, anchor = due
         if item.target.platform not in self._sinks:
             return
-        records = self._timeline.query(
+        records = await self._timeline.async_query(
             TimelineQuery(
                 event_type=EVENT_MESSAGE, metadata={"inbox_message_id": anchor.id}, limit=1
             )
@@ -2605,7 +2701,7 @@ class Heartbeat:
         heard = _Heard(
             anchor.perception, records[0], anchor.perception.trust is TrustLevel.VERIFIED_USER
         )
-        attempt = self._timeline.append(
+        attempt = await self._timeline.async_append(
             "chat_recheck",
             "到期，仅重新判断原会话。",
             ActorType.SYSTEM,
@@ -2615,7 +2711,14 @@ class Heartbeat:
         timing = RoundTiming(heard.queued_at)
         trace = _RoundTrace(attempt.id, timed_chat=item, used_platform_history=True, timing=timing)
         with timing.phase("context_ms"):
-            job = replace(self._reply_job((heard,)), round_trace=trace, media_sources=())
+            job = replace(await self._reply_job((heard,)), round_trace=trace, media_sources=())
+        if (
+            self._stop_requested
+            or self._maintenance_paused
+            or not self._permissions.check(ACTION_CALL_ORGAN).allowed
+            or not chat.current(item, heard.perception)
+        ):
+            return
         task = asyncio.create_task(self._conversation._think(job), name="aureus-chat-recheck")
         task.add_done_callback(self._on_thought_done)
         self._thought = _Thought(task, (heard,), job.strategy, round_trace=trace)
@@ -2640,7 +2743,7 @@ class Heartbeat:
         self._discard_residence_batches(residence, "会话驻留到期，未开始这批规划。")
         return True
 
-    def _maybe_start_thought(self) -> None:
+    async def _maybe_start_thought(self) -> None:
         """定焦点、想一想：有没回复的消息、又没在想别的，就在后台调用器官。"""
         if self._thought is not None or not self._unanswered or self._stop_requested:
             return
@@ -2648,7 +2751,7 @@ class Heartbeat:
         if not permission.allowed:
             self._decline_unanswered(permission.reason)
             return
-        if self._batch_wait_remaining() > 0:
+        if await self._batch_wait_remaining() > 0:
             return  # 疲劳偏高：再等等，攒几条一起回（到点后下一拍会开始）
         inbox = self._platform_inbox
         active = inbox.active_conversation if inbox is not None else None
@@ -2717,7 +2820,18 @@ class Heartbeat:
             timing=timing,
         )
         with timing.phase("context_ms"):
-            job = replace(self._reply_job(batch), round_trace=trace)
+            bound_arrivals = self._bound_arrivals
+            job = replace(await self._reply_job(batch), round_trace=trace)
+        if (
+            self._stop_requested
+            or self._maintenance_paused
+            or self._bound_arrivals != bound_arrivals
+        ):
+            return
+        if not self._permissions.check(ACTION_CALL_ORGAN).allowed:
+            return
+        if residence is not None and (inbox is None or not inbox.permits(residence)):
+            return
         self._unanswered.remove(batch)
         if debouncer is not None:
             # 批次已经取走：清掉这一批的起点和截止时间，保留上一条供下一批判断（D142）。
@@ -2861,7 +2975,7 @@ class Heartbeat:
             default=None,
         )
 
-    def _maybe_start_initiative(self) -> None:
+    async def _maybe_start_initiative(self) -> None:
         """只在这里读取主动需要的材料；失败就跳过这一拍（D78）。"""
         now = self._clock.now()
         tracker = self._initiative
@@ -2895,7 +3009,7 @@ class Heartbeat:
                 )
             reading = self._reading
             social = reading.social_need if reading is not None else None
-            mood = self._read_mood(person_id, viewer_is_user=True, strict=True)
+            mood = await self._async_read_mood(person_id, viewer_is_user=True, strict=True)
             decision = decide(
                 now=now,
                 config=tracker.config,
@@ -2930,7 +3044,7 @@ class Heartbeat:
                 else ""
             )
             job = _InitiativeJob(
-                conversation=self._conversation_job(
+                conversation=await self._conversation_job(
                     target,
                     (),
                     person_id,
@@ -2944,6 +3058,8 @@ class Heartbeat:
                 due_item_ids=tuple(item.id for item in due),
                 finding_id=finding.id if finding is not None else None,
             )
+            if self._stop_requested or self._maintenance_paused or self._pending:
+                return
             tracker.start(now)
             task = asyncio.create_task(self._initiate(job), name="aureus-initiative")
             task.add_done_callback(self._on_thought_done)
@@ -2951,12 +3067,12 @@ class Heartbeat:
         except Exception:
             logger.exception("主动联系的材料读不了，这一拍不主动")
 
-    def _maybe_start_exploration(self) -> None:
+    async def _maybe_start_exploration(self) -> None:
         """用户来信和主动联系之后才考虑探索，与它们共用一个任务槽（D79）。"""
         tracker, reading = self._exploration, self._reading
         if not tracker.config.enabled:
             return
-        mood = self._read_mood(None, viewer_is_user=True)
+        mood = await self._async_read_mood(None, viewer_is_user=True)
         started = tracker.prepare(
             self._clock.now(),
             tier=self._current_strategy().effective_tier,
@@ -3021,7 +3137,7 @@ class Heartbeat:
             task.add_done_callback(self._on_thought_done)
             self._thought = _Thought(task, (), self._current_strategy())
 
-    def _maybe_summarize_working_memory(self) -> None:
+    async def _maybe_summarize_working_memory(self) -> None:
         tracker = self._working_memory
         if (
             tracker is None
@@ -3036,8 +3152,10 @@ class Heartbeat:
         strategy = self._current_strategy()
         if strategy.effective_tier is EnergyTier.OVERDRAFT:
             return
-        batch = tracker.prepare(self._clock.now(), strategy.model_preference)
-        if batch is not None:
+        batch = await tracker.prepare(self._clock.now(), strategy.model_preference)
+        if batch is not None and not (
+            self._stop_requested or self._maintenance_paused or self._pending
+        ):
             task = asyncio.create_task(summarize(batch, self._call_organ), name=WORKING_MEMORY_TASK)
             task.add_done_callback(self._on_thought_done)
             self._thought = _Thought(task, (), strategy)
@@ -3393,7 +3511,7 @@ class Heartbeat:
         except Exception:
             logger.exception("身体信号样本没写进去，跳过这一行")
 
-    def _check_stress(self) -> None:
+    async def _check_stress(self) -> None:
         """压力刚变成偏高时做一次自检：记进时间线，并告诉用户（04 号文档第 5 节，D57）。"""
         reading = self._reading
         if reading is None or self._body is None:
@@ -3411,7 +3529,7 @@ class Heartbeat:
             return
         self._stress_alarmed = True
         text = describe_self_check(reading)
-        self._timeline.append(
+        await self._timeline.async_append(
             event_type=EVENT_SELF_CHECK,
             content=text,
             actor_type=ActorType.ME,
@@ -3427,7 +3545,7 @@ class Heartbeat:
         if self._last_user_contact is not None:
             self._deliver(self._last_user_contact, text, MessageKind.NOTICE)
 
-    def _batch_wait_remaining(self) -> float:
+    async def _batch_wait_remaining(self) -> float:
         """疲劳偏高时，最早没回复的那条消息还要再等多少秒才开始回；0 表示现在就回。
 
         只拖延开始，不丢消息：到点后同一个人的几条消息一起回，少调用几次，让负荷降下来。
@@ -3435,7 +3553,7 @@ class Heartbeat:
         reading = self._reading
         if reading is None or self._body is None or not reading.fatigue.high:
             return 0.0
-        if self._surprised():
+        if await self._surprised():
             # 惊讶时这件事的注意力优先级上升：不等疲劳攒消息，马上处理（D69 第 3 条）。
             return 0.0
         oldest = self._unanswered.peek_oldest()
@@ -3458,30 +3576,29 @@ class Heartbeat:
         due = sum(1 for item in items if item.is_due(now))
         return f"日程：未完成 {len(items)} 条，其中已到期 {due} 条"
 
-    def _hormone_levels(self) -> dict[str, float] | None:
+    def _hormone_levels(self, empathic: Sequence[HormoneTrigger]) -> dict[str, float] | None:
         """此刻各激素的浓度，键是激素名；激素没开时是 None。"""
         hormones = self._hormones
         if hormones is None:
             return None
         now = self._clock.now()
-        empathic = self._empathy_focus.active()
         return {
             kind.value: hormones.level(kind, now, extra=empathic)
             for kind in HormoneKind
             if kind_enabled(kind, hormones.config)
         }
 
-    def _surprised(self) -> bool:
+    async def _surprised(self) -> bool:
         """惊讶达到阈值了吗。"""
         hormones = self._hormones
         if hormones is None:
             return False
         level = hormones.level(
-            HormoneKind.SURPRISE, self._clock.now(), extra=self._empathy_focus.active()
+            HormoneKind.SURPRISE, self._clock.now(), extra=await self._empathy_focus.active()
         )
         return level >= hormones.config.surprise_at
 
-    def seconds_until_next_beat(self) -> float:
+    async def seconds_until_next_beat(self) -> float:
         """到下一个定时拍还有多少秒：夜里放慢；攒消息等到点的话，提前到点那一刻。"""
         interval = self._config.tick_interval_seconds
         reading = self._reading
@@ -3508,7 +3625,7 @@ class Heartbeat:
                 interval = min(interval, chat.remaining())
             address = (None, active) if active is not None else None
             remaining = max(
-                self._batch_wait_remaining(),
+                await self._batch_wait_remaining(),
                 self._debounce_remaining(self._unanswered.peek_batch(address)),
             )
             if remaining > 0:
@@ -3525,20 +3642,21 @@ class Heartbeat:
             return 0.0
         return max(0.0, debouncer.deadline - self._clock.now().timestamp())
 
-    def _broadcast_cognitive_state(self) -> None:
+    async def _broadcast_cognitive_state(self) -> None:
         """广播认知状态：每拍都算；自述变了才写进时间线（D34、D41 第 4 条）。"""
         context: dict[str, Any] = {"task_name": TASK_IDLE}
         if self._thought is not None:
             context = {"task_name": TASK_REPLYING, "focus_target": self._identity.user.name}
         energy = self._reading.energy if self._reading is not None else None
-        state = self._observer.observe(context, energy, self._hormone_levels())
+        empathic = await self._empathy_focus.active()
+        state = self._observer.observe(context, energy, self._hormone_levels(empathic))
         self._cognitive_state = state
         if not self._config.broadcast_cognitive_state:
             return
         statement = state.self_awareness_statement()
         if statement == self._last_broadcast:
             return
-        self._timeline.append(
+        await self._timeline.async_append(
             event_type=EVENT_COGNITIVE_STATE,
             content=statement,
             actor_type=ActorType.ME,
@@ -3589,14 +3707,15 @@ class Heartbeat:
         tier = self._reading.energy.tier if self._reading is not None else None
         return choose_strategy(tier, self._config, stress_high=self._stress_lowering)
 
-    def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
+    async def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
         changes = tuple(self._live_identity_changes)
 
-        def build(*args: Any, **kwargs: Any) -> _ReplyJob:
-            return self._conversation_job(*args, **kwargs, live_changes=changes)
+        async def build(*args: Any, **kwargs: Any) -> _ReplyJob:
+            return await self._conversation_job(*args, **kwargs, live_changes=changes)
 
-        job = _reply_job(batch, build)
-        self._live_identity_changes.clear()
+        job = await _reply_job(batch, build)
+        if changes == tuple(self._live_identity_changes):
+            self._live_identity_changes.clear()
         inbox = self._platform_inbox
         if job.residence is not None and inbox is not None:
             # D145 的已读水位与待答队列是两回事；已经上桌的提及也要纳入摘要。
@@ -3605,13 +3724,13 @@ class Heartbeat:
                 for heard in self._unanswered
                 if type(message_id := heard.record.metadata.get("inbox_message_id")) is int
             )
-            mentions = inbox.mention_pull_summary(
+            mentions = await inbox.mention_pull_summary(
                 job.residence.conversation, limit=None, pending_ids=pending_ids
             )
             job = with_mention_pull(job, mentions, self._clock.now())
         return job
 
-    def _conversation_job(
+    async def _conversation_job(
         self,
         target: Perception,
         messages: Sequence[TimelineRecord],
@@ -3624,7 +3743,7 @@ class Heartbeat:
         live_changes: Sequence[IdentityLayer] | None = None,
         frozen_history: _ReplyJob | None = None,
     ) -> _ReplyJob:
-        return self._conversation._conversation_job(
+        return await self._conversation._conversation_job(
             target,
             messages,
             person_id,
@@ -3648,16 +3767,21 @@ class Heartbeat:
                 person_id, is_user=target.trust is TrustLevel.VERIFIED_USER
             ),
             read_mood=(
-                self._prepare_mood(
+                await self._async_prepare_mood(
                     person_id, viewer_is_user=target.trust is TrustLevel.VERIFIED_USER
                 )
                 if mood_state is None
                 else None
             ),
-            agenda_for_context=self._agenda_hooks._agenda_for_context,
+            agenda_for_context=self._agenda_for_context,
             can_quote=bool(messages) and self._can_quote_reply(target),
             inbox_attention=self._inbox_attention_enabled(),
         )
+
+    async def _agenda_for_context(self, person_id: int | None) -> str:
+        if self._agenda is None or person_id is None:
+            return ""
+        return await self._timeline.async_read(self._agenda_hooks._agenda_for_context, person_id)
 
     def _downtime_for_context(self) -> Downtime | None:
         """放进系统上下文的停机情况。睡眠信号关掉后不告诉它睡了多久（04 号文档第 7 节）。"""
@@ -3676,7 +3800,7 @@ class Heartbeat:
     async def _wait_for_next_beat(self) -> None:
         """等到有事（新感知、想法有结果、要求停下）或者到了定时拍。"""
         with contextlib.suppress(TimeoutError):
-            timeout = None if self._maintenance_paused else self.seconds_until_next_beat()
+            timeout = None if self._maintenance_paused else await self.seconds_until_next_beat()
             if timeout is not None and self._has_language_organ():
                 due = self._language_due_at()
                 now = self._clock.now()
@@ -3700,17 +3824,17 @@ class Heartbeat:
             if not thought.task.done():
                 logger.warning("器官调用取消后 %s 秒还没停下，不再等它", _CANCEL_WAIT_SECONDS)
         if thought.task.done() and not thought.task.cancelled():
-            self._collect_finished_thought()
+            await self._collect_finished_thought()
             return
         self._thought = None
-        self._record_abandoned(thought, halted=False)
+        await self._record_abandoned(thought, halted=False)
 
     async def _settle_judgments_before_shutdown(self) -> None:
         """关闭前给后台判断一段时间，收下已完成的有效结果，再取消其余的（D41、D110）。"""
         running = {pending.task for pending in self._pending_judgments if not pending.task.done()}
         if running:
             await asyncio.wait(running, timeout=self._config.shutdown_grace_seconds)
-        self._collect_finished_judgments()
+        await self._collect_finished_judgments()
         remaining = [pending for pending in self._pending_judgments if not pending.task.done()]
         for pending in remaining:
             pending.invalidated = True
@@ -3723,7 +3847,7 @@ class Heartbeat:
                 logger.warning("判断任务取消后 %s 秒还没停下，不再等它", _CANCEL_WAIT_SECONDS)
         self._pending_judgments.clear()
 
-    def _record_abandoned(self, thought: _Thought, *, halted: bool) -> None:
+    async def _record_abandoned(self, thought: _Thought, *, halted: bool) -> None:
         """记下被取消的想法：网关没机会记账，这次可能用掉的 token 不在账本里（0.8 已知缺口）。
 
         Args:
@@ -3749,7 +3873,8 @@ class Heartbeat:
             return
         cause = "急停时" if halted else "关闭时等不到进行中的器官调用，只好"
         self._record_interrupted_round(thought, "急停或关闭时取消，未投递。")
-        self._timeline.append(
+        await self._flush_deferred_records()
+        await self._timeline.async_append(
             event_type=EVENT_ORGAN_CALL_ABANDONED,
             content=f"{cause}取消了进行中的器官调用；这次可能已经用掉的 token 没有记进账本。",
             actor_type=ActorType.ME,

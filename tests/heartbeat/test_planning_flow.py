@@ -105,9 +105,9 @@ class Rig:
                 trust=TrustLevel.VERIFIED_USER,
             )
         )
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         await self.heartbeat.wait_for_thought()
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
 
     def records(self, event_type: str) -> list[TimelineRecord]:
         return list(self.timeline.query(TimelineQuery(event_type=event_type, limit=100)))
@@ -192,7 +192,7 @@ async def test_context_message_limit_follows_the_current_energy_tier(
         low_message_limit=3,
     )
     assert rig.heartbeat.context_message_limit() == 18  # 第一拍之前还没有身体读数。
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     count = rig.timeline.count_records()
     assert rig.heartbeat.context_message_limit() == expected
     assert rig.timeline.count_records() == count
@@ -357,9 +357,9 @@ async def test_group_prompt_keeps_speaker_persona_and_silence(
             CHANNEL, "group-member", incoming, VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     plan_messages = assemble_messages(rig.organs.requests[0])
     assert "小雨：门外还在下。" in plan_messages[1]["content"]

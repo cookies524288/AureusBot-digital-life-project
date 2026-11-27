@@ -115,9 +115,9 @@ async def test_fast_model_only_gets_final_reply_through_gateway(
         )
     )
     try:
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         expected = ["plan", "reply", "plan", "reply", "reply_segments"]
         assert [item.context["task"] for item in script.requests] == (
             expected if allow_review else expected[:3]

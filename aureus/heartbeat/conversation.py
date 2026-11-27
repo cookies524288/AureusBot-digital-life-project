@@ -252,7 +252,9 @@ class _ReplyJob:
     round_trace: "_RoundTrace | None" = None
     # 多人同批消息的真实候选；规划器只能从这些时间线记录中选一个。
     target_candidates: tuple[_Heard, ...] = ()
-    target_builder: Callable[[_Heard, Sequence[TimelineRecord]], "_ReplyJob"] | None = None
+    target_builder: Callable[[_Heard, Sequence[TimelineRecord]], Awaitable["_ReplyJob"]] | None = (
+        None
+    )
 
 
 _RECENT_CONVERSATION_ACTIVITY = timedelta(minutes=5)
@@ -463,19 +465,21 @@ class _PlannerRun:
     restart_requested: bool = False
 
 
-def _reply_job(batch: Sequence[_Heard], conversation_job: Callable[..., _ReplyJob]) -> _ReplyJob:
+async def _reply_job(
+    batch: Sequence[_Heard], conversation_job: Callable[..., Awaitable[_ReplyJob]]
+) -> _ReplyJob:
     """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
     last = batch[-1]
     records = tuple(heard.record for heard in batch)
     candidates = tuple(batch) if last.perception.channel == "qq" and last.perception.route else ()
 
-    def build(
+    async def build(
         heard: _Heard,
         messages: Sequence[TimelineRecord],
         *,
         frozen_history: _ReplyJob | None = None,
     ) -> _ReplyJob:
-        return conversation_job(
+        return await conversation_job(
             heard.perception,
             messages,
             _person_id_of(heard.record),
@@ -496,9 +500,9 @@ def _reply_job(batch: Sequence[_Heard], conversation_job: Callable[..., _ReplyJo
         common = replace(
             last.perception, sender_id="本批候选，尚未选定", trust=TrustLevel.VERIFIED_CONTACT
         )
-        job = conversation_job(common, records, None, viewer_is_user=False, agenda_state="")
+        job = await conversation_job(common, records, None, viewer_is_user=False, agenda_state="")
     else:
-        job = build(last, records)
+        job = await build(last, records)
     job = replace(
         job,
         residence=batch[-1].residence,
@@ -608,7 +612,7 @@ class ConversationFlow:
         history = self.platform_history
         return history is None or history.allows is None or history.permits(key)
 
-    def _working_context(
+    async def _working_context(
         self, memory: WorkingMemory, target: Perception, batch_ids: set[int], limit: int
     ) -> tuple[Sequence[TimelineRecord], str, tuple[int, ...]]:
         """用同一份近期焦点组装对话历史、其他经历与摘要（D96）。"""
@@ -629,10 +633,10 @@ class ConversationFlow:
             target.trust is TrustLevel.VERIFIED_USER
             and target.visibility is VisibilityScope.USER_ONLY
         )
-        focus = memory.dialogue_focus(owner=owner, route=scope, exclude=batch_ids)
+        focus = await memory.dialogue_focus(owner=owner, route=scope, exclude=batch_ids)
         history = [record for record in focus if record.event_type == EVENT_MESSAGE][-limit:]
         if route is not None:
-            pending = self.chat_history.pending(
+            pending = await self.chat_history.pending(
                 ConversationKey.from_perception(target), target.visibility, limit
             )
             history = sorted((*history, *pending), key=lambda record: record.id)[-limit:]
@@ -640,7 +644,7 @@ class ConversationFlow:
         material = memory.describe_context(owner=owner, route=scope, focus=experiences)
         return history, material, tuple(record.id for record in experiences)
 
-    def _recent_history(self, target: Perception, limit: int) -> Sequence[TimelineRecord]:
+    async def _recent_history(self, target: Perception, limit: int) -> Sequence[TimelineRecord]:
         """停用工作记忆时沿用按精力档位查询对话的规则（D59、D61、D84）。"""
         if target.route is None:
             if (
@@ -661,7 +665,7 @@ class ConversationFlow:
         visible = []
         before_id = None
         while len(visible) < limit:
-            page = self._timeline.query(
+            page = await self._timeline.async_query(
                 TimelineQuery(
                     event_types=CHAT_EVENTS,
                     visibility=target.visibility,
@@ -672,7 +676,7 @@ class ConversationFlow:
                 )
             )
             for record in reversed(page):
-                if (projected := self.chat_history.project(record)) is not None:
+                if (projected := await self.chat_history.project(record)) is not None:
                     visible.append(projected)
                     if len(visible) == limit:
                         break
@@ -681,7 +685,7 @@ class ConversationFlow:
             before_id = page[0].id
         return visible[::-1]
 
-    def _conversation_job(
+    async def _conversation_job(
         self,
         target: Perception,
         messages: Sequence[TimelineRecord],
@@ -699,7 +703,7 @@ class ConversationFlow:
         findings: FindingStore | None,
         affinity_for_context: Callable[[int | None], str],
         read_mood: Callable[[datetime, Sequence[HormoneTrigger]], MoodReading] | None,
-        agenda_for_context: Callable[[int | None], str],
+        agenda_for_context: Callable[[int | None], Awaitable[str]],
         initiative_note: str = "",
         mood_state: str | None = None,
         agenda_state: str | None = None,
@@ -719,11 +723,11 @@ class ConversationFlow:
                 (),
             )
         elif memory is not None and memory.config.working_memory_enabled and memory.is_ready:
-            history, working_context, experience_ids = self._working_context(
+            history, working_context, experience_ids = await self._working_context(
                 memory, target, batch_ids, strategy.message_limit
             )
         else:
-            recent = self._recent_history(target, strategy.message_limit)
+            recent = await self._recent_history(target, strategy.message_limit)
             history = [record for record in recent if record.id not in batch_ids]
             working_context, experience_ids = "", ()
         body_state = self._body_state_for_context(strategy, body, reading)
@@ -742,7 +746,7 @@ class ConversationFlow:
 
         affinity_state = affinity_for_context(person_id)
         if agenda_state is None:
-            agenda_state = agenda_for_context(person_id)
+            agenda_state = await agenda_for_context(person_id)
         interests_state = interest_changes.interest_context(
             interests,
             findings,
@@ -849,14 +853,14 @@ class ConversationFlow:
                 if frozen_history is not None
                 else [
                     record
-                    for record in self._recent_history(target, EMOJI_CONTEXT_LIMIT)
+                    for record in await self._recent_history(target, EMOJI_CONTEXT_LIMIT)
                     if record.id not in batch_ids
                 ]
                 if self.emoji_selector is not None and target.channel == "qq" and target.route
                 else None
             ),
         )
-        job = self._apply_hormones(job, (), now=now)
+        job = await self._apply_hormones(job, (), now=now)
         owner_private = not contact and target.visibility is VisibilityScope.USER_ONLY
         if (
             messages
@@ -880,7 +884,7 @@ class ConversationFlow:
                 job = replace(job, judge_context=build_judge_context(identity, state))
         return job
 
-    def _apply_hormones(
+    async def _apply_hormones(
         self, job: _ReplyJob, extra: Sequence[HormoneTrigger], *, now: datetime
     ) -> _ReplyJob:
         """把激素的影响放进这次回复：摘要和行为说明进上下文，低落时回复长度降一档（D69 第 3 条）。
@@ -892,7 +896,9 @@ class ConversationFlow:
             now: 本次计算激素影响使用的时钟时间。
         """
         hormones = self._hormones
-        empathic = self._empathy_focus.active(trigger for trigger in extra if trigger.is_empathy)
+        empathic = await self._empathy_focus.active(
+            trigger for trigger in extra if trigger.is_empathy
+        )
         if not job.empathy_detail_for_all:
             visible_ids = set(job.history_ids)
             empathic = tuple(
@@ -1060,7 +1066,7 @@ class ConversationFlow:
             effects=outcome.effects or job.effects,
         )
 
-    def _targeted_job(self, job: _ReplyJob, plan: Plan) -> _ReplyJob | None:
+    async def _targeted_job(self, job: _ReplyJob, plan: Plan) -> _ReplyJob | None:
         """核对原件、发言者和权限，用其自己的身份构造回复上下文。"""
         if not job.target_candidates:
             return job if plan.target_record_id is None else None
@@ -1100,7 +1106,7 @@ class ConversationFlow:
                 ),
                 messages=tuple(row for row in job.messages if row.id == target.record.id),
             )
-        rebuilt = job.target_builder(target, job.messages)
+        rebuilt = await job.target_builder(target, job.messages)
         return replace(
             rebuilt,
             history=(
@@ -1175,7 +1181,7 @@ class ConversationFlow:
 
         async def reply(decision: Plan, memory: _Recall | None) -> _ThoughtOutcome:
             with _time_phase(job, "context_ms"):
-                selected = self._targeted_job(job, decision)
+                selected = await self._targeted_job(job, decision)
             if selected is None:
                 _trace_action(job, PlannerAction("reply", "rejected", "回复对象已失效"))
                 return _ThoughtOutcome(declined=True)
@@ -1382,7 +1388,7 @@ class ConversationFlow:
                 "recipient_id": key.recipient_id,
                 "chat_play": True,
             }
-            if self._timeline.query(
+            if await self._timeline.async_query(
                 TimelineQuery(
                     event_type=EVENT_REPLY_DELIVERED,
                     metadata=route,
@@ -1618,7 +1624,7 @@ class ConversationFlow:
             return _JudgeAttempt(failure="返回的内容看不懂")
         return _JudgeAttempt(judgment=judgment)
 
-    def judgment_triggers(
+    async def judgment_triggers(
         self,
         judgment: Judgment,
         messages: Sequence[TimelineRecord],
@@ -1643,9 +1649,9 @@ class ConversationFlow:
             if person_id is not None
             else []
         )
-        return (*direct, *self._empathy_from(judgment, messages, hormones, now))
+        return (*direct, *await self._empathy_from(judgment, messages, hormones, now))
 
-    def _empathy_from(
+    async def _empathy_from(
         self,
         judgment: Judgment,
         messages: Sequence[TimelineRecord],
@@ -1655,8 +1661,8 @@ class ConversationFlow:
         empathy = self._empathy
         if empathy is None or not empathy.enabled or not judgment.others:
             return ()
-        focus = self._empathy_focus.source_ids()
-        candidates = self._empathy_focus.candidates(focus)
+        focus = await self._empathy_focus.source_ids()
+        candidates = await self._empathy_focus.candidates(focus)
         sources = {record.id: record for record in messages if record.id in focus}
         used = {
             (trigger.source_record_id, trigger.empathy_for.casefold())

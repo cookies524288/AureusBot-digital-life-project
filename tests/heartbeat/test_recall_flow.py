@@ -204,9 +204,9 @@ class MemoryEnv:
                 visibility=visibility,
             )
         )
-        rig.beat()
+        await rig.beat()
         await rig.wait_for_thought()
-        rig.beat()
+        await rig.beat()
 
 
 @pytest_asyncio.fixture
@@ -242,18 +242,18 @@ async def test_sleep_consolidation_keeps_messages_out_of_legacy_sorting(
         env.timeline.append(
             "message", "合成材料", ActorType.USER, visibility=VisibilityScope.USER_ONLY
         )
-        rig.beat()
+        await rig.beat()
         assert not rig.is_thinking
         env.clock.advance(timedelta(hours=3))
-        rig.beat()
+        await rig.beat()
         await rig.wait_for_thought()
-        rig.beat()
+        await rig.beat()
         assert env.index.consolidated_candidates(10) == [] and not env.organs.requests
         env.timeline.append(
             "message", "合成材料", ActorType.USER, visibility=VisibilityScope.USER_ONLY
         )
         env.clock.advance(timedelta(minutes=1))
-        rig.beat()
+        await rig.beat()
         await rig.wait_for_thought()
         assert env.index.consolidated_candidates(10) == [] and not env.organs.requests
     finally:
@@ -875,7 +875,7 @@ async def test_heartbeat_indexes_only_when_enabled(
     rig = env.build(MemoryConfig(enabled=enabled, recall_enabled=recall_enabled, index_batch=7))
     diary = env.timeline.append("diary_written", "日记记下木卫二", ActorType.ME)
     original = env.timeline.append("message", "聊天原句：记住木卫二", ActorType.USER)
-    rig.beat()
+    await rig.beat()
     assert calls == ([7] if enabled else [])
     assert [hit.record_id for hit in env.index.search(["木卫二"], (), 5)] == (
         [diary.id] if enabled else []
@@ -892,17 +892,17 @@ async def test_index_switch_and_failure_stop_without_disabling_search(
     diary = env.timeline.append("diary_written", "日记记下木卫二", ActorType.ME)
     env.timeline.append("message", "聊天原句：记住木卫二", ActorType.USER)
     off = MemoryTracker(env.index, MemoryConfig(enabled=False), env.people, env.findings)
-    off.index_more()
+    await off.index_more()
     assert not env.index.search(["木卫二"], (), 5)
     on = MemoryTracker(env.index, MemoryConfig(recall_enabled=False), env.people, env.findings)
-    on.index_more()
+    await on.index_more()
     assert [hit.record_id for hit in env.index.search(["木卫二"], (), 5)] == [diary.id]
 
     def broken(*args: object) -> int:
         raise OSError("假索引故障")
 
     monkeypatch.setattr(env.index, "index_more", broken)
-    on.index_more()
-    on.index_more()
+    await on.index_more()
+    await on.index_more()
     assert on.failed and caplog.text.count("记忆索引失败，本次运行停止索引") == 1
     assert [hit.record_id for hit in env.index.search(["木卫二"], (), 5)] == [diary.id]

@@ -76,7 +76,7 @@ def saved_samples(paths: AureusPaths) -> list[BodySample]:
 async def test_a_beat_on_the_assembled_core_records_a_sample(paths: AureusPaths) -> None:
     with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
         core.heartbeat.wake_up()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
     [sample] = saved_samples(paths)
     assert sample.timestamp == START
     assert sample.energy_tier == "不限"
@@ -109,5 +109,5 @@ async def test_sample_switch_off_records_nothing_but_still_assembles(paths: Aure
     paths.runtime_config_file.write_text("[body]\nsample_enabled = false\n", encoding="utf-8")
     with open_core(paths, fake_organs=True, clock=ManualClock(START), to_console=False) as core:
         core.heartbeat.wake_up()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
     assert saved_samples(paths) == []

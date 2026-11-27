@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from enum import StrEnum
@@ -230,7 +231,9 @@ class AgendaStore:
             sql += " AND person_id = ?"
             params = (person_id,)
         sql += " ORDER BY due_at IS NULL, due_at, id"
-        return [_item_of(row) for row in self._require_open().execute(sql, params).fetchall()]
+        self._require_open()
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            return [_item_of(row) for row in connection.execute(sql, params).fetchall()]
 
     def recent(self, limit: int = 50) -> list[AgendaItem]:
         """最新的若干条（不管状态），新的在前；给命令行看。"""

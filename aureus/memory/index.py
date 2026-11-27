@@ -1,5 +1,6 @@
 """记忆全文索引：只管增量保存和检索，内容由调用方决定（D80）。"""
 
+import asyncio
 import sqlite3
 from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from contextlib import closing
@@ -302,14 +303,17 @@ class MemoryIndex:
         self, limit: int, describe: Callable[[TimelineRecord], MemoryEntry | None]
     ) -> int:
         """最多看 limit 条；正文与进度同批提交，异常回滚并往外抛。"""
-        conn = self._conn
-        if conn is None:
+        if self._conn is None:
             raise RuntimeError("记忆索引还没有打开")
-        through = conn.execute("SELECT indexed_through FROM memory_index_state WHERE id = 1")
-        records = self._timeline.query(TimelineQuery(since_id=through.fetchone()[0], limit=limit))
-        if not records:
-            return 0
-        with conn:
+        with closing(open_connection(self._db_path)) as conn, conn:
+            # 同步维护与拍内索引各用自己的连接；先拿写锁再读游标，避免重复索引。
+            conn.execute("BEGIN IMMEDIATE")
+            through = conn.execute("SELECT indexed_through FROM memory_index_state WHERE id = 1")
+            records = self._timeline.query(
+                TimelineQuery(since_id=through.fetchone()[0], limit=limit)
+            )
+            if not records:
+                return 0
             for record in records:
                 if record.event_type in MESSAGE_EVENT_TYPES:
                     continue
@@ -335,6 +339,12 @@ class MemoryIndex:
                 (records[-1].id,),
             )
         return len(records)
+
+    async def async_index_more(
+        self, limit: int, describe: Callable[[TimelineRecord], MemoryEntry | None]
+    ) -> int:
+        """在工作线程推进索引，描述函数也只能用该线程自己的连接。"""
+        return await asyncio.to_thread(self.index_more, limit, describe)
 
     def publish(
         self,

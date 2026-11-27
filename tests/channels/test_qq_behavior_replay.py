@@ -102,9 +102,9 @@ class Replay:
             self.core.heartbeat._submit_inbox([message])
 
     async def step(self) -> None:
-        self.core.heartbeat.beat()
+        await self.core.heartbeat.beat()
         await self.core.heartbeat.wait_for_thought()
-        self.core.heartbeat.beat()
+        await self.core.heartbeat.beat()
 
     def records(self, kind: str = "message") -> list[TimelineRecord]:
         return list(self.core.timeline.query(TimelineQuery(event_type=kind, limit=100)))
@@ -282,9 +282,10 @@ async def test_qq_recall_receipts_only_mark_successful_text_parts(
         await replay.fake.messages.get()
         await asyncio.gather(*channel._sending)
         clock.advance(timedelta(seconds=10))
-        replay.core.heartbeat.beat()
+        await replay.core.heartbeat.beat()
         await replay.fake.messages.get()
         await asyncio.gather(*channel._sending)
+        await replay.core.heartbeat.flush_channel_records()
 
         _, answer = replay.records()
         assert answer.metadata["recall_feedback_refs"] == [f"source:{source.encode()}"]
@@ -327,7 +328,7 @@ async def test_qq_reply_parts_quote_only_on_request(
         first = await replay.fake.messages.get()
         assert replay.fake.messages.empty()
         clock.advance(timedelta(seconds=10))
-        replay.core.heartbeat.beat()
+        await replay.core.heartbeat.beat()
         second = await replay.fake.messages.get()
 
         quote = {"type": "reply", "data": {"id": "701"}}

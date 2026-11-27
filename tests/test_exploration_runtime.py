@@ -104,7 +104,7 @@ async def test_runtime_none_search_skips_once_and_roleplay_disables_exploration(
         assert tracker.has_organ
         core.heartbeat.wake_up()
         for _ in range(3):
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
         assert not core.heartbeat.is_thinking and not requests
         if roleplay:
             assert tracker.interests is None

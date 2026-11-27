@@ -43,6 +43,7 @@ async def settle(replay: Replay) -> None:
     channel = replay.core.qq
     assert channel is not None
     await asyncio.gather(*channel._sending)
+    await replay.core.heartbeat.flush_channel_records()
 
 
 async def frame(replay: Replay) -> list[dict]:
@@ -101,7 +102,7 @@ async def test_followup_waits_for_all_text_receipts_and_valid_original(
         assert replay.fake.messages.empty() and (bool(choices) is explicit)
         assert [row.metadata["message_id"] for row in replay.records("reply_delivered")] == ["7101"]
         clock.advance(timedelta(seconds=9))
-        replay.core.heartbeat.beat()
+        await replay.core.heartbeat.beat()
         assert await frame(replay) == [{"type": "text", "data": {"text": "第二段。"}}]
         if explicit or not stop:
             await asyncio.wait_for(select.wait(), 2)
@@ -128,7 +129,7 @@ async def test_followup_waits_for_all_text_receipts_and_valid_original(
         release.set()
         heart = replay.core.heartbeat
         if stop:
-            heart.beat()
+            await heart.beat()
             async with asyncio.timeout(2):
                 while heart._sticker_followups.active:
                     await asyncio.sleep(0.005)
@@ -204,7 +205,7 @@ async def test_discard_after_text_generation_cancels_an_unclaimed_selection(
 
         monkeypatch.setattr(replay.replyer, "process", respond)
         await ask(replay, 6211)
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         if stop == "permission":
             monkeypatch.setattr(channel, "_allows_route", lambda _route: False)
@@ -212,7 +213,7 @@ async def test_discard_after_text_generation_cancels_an_unclaimed_selection(
             heart.halt("合成演练")
         else:
             heart.request_stop()
-        heart.beat()
+        await heart.beat()
         if stop == "shutdown":
             await heart.shut_down()
         await asyncio.wait_for(cancelled.wait(), 2)

@@ -148,14 +148,15 @@ class MemoryTracker:
         self.people, self.findings = people, findings
         self.failed = False
 
-    def index_more(self) -> None:
+    async def index_more(self) -> None:
         """仅开关开启且尚未失败时索引，异常只记一次。"""
         if self.index is None or not self.config.enabled or self.failed:
             return
         try:
-            self.index.index_more(
+            await self.index.async_index_more(
                 self.config.index_batch,
-                lambda r: memory_entry(r, people=self.people, findings=self.findings),
+                # 消息已由索引层跳过；不把人物档案的长连接带到工作线程。
+                lambda record: memory_entry(record, people=None, findings=self.findings),
             )
         except Exception:
             self.failed = True

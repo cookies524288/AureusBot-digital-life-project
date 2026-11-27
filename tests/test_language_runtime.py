@@ -142,7 +142,7 @@ async def test_working_memory_trim_releases_independent_learning_batches(
                     TrustLevel.VERIFIED_USER,
                 )
             )
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         assert not any(request.context["task"].startswith("learn_") for request in requests)
         heart.submit(
@@ -151,7 +151,7 @@ async def test_working_memory_trim_releases_independent_learning_batches(
             )
         )
         for _ in range(8):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         by_task = {request.context["task"]: request for request in requests}
         assert list(by_task).index("working_memory_summary") < list(by_task).index("learn_style")
@@ -205,12 +205,12 @@ async def test_continuous_language_learning_preserves_safety_gates(
                 )
             )
             if index == 21:
-                heart.beat()
+                await heart.beat()
                 await heart.wait_for_thought()
         if gate == "missing":
             heart.update_available_organs(frozenset({"planner", "replyer"}))
         for _ in range(8):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         learned = [
             request.context["task"]
@@ -255,7 +255,7 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
         inbox = core.inbox_store
         assert inbox is not None
 
-        def submit(text: str, number: str) -> None:
+        async def submit(text: str, number: str) -> None:
             message = Perception(
                 "qq",
                 "100",
@@ -268,13 +268,13 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
             stored = inbox.add(message)
             assert stored is not None
             heart.on_inbox_message(stored)
-            heart.beat()
+            await heart.beat()
 
         for number in range(101, 113):
-            submit(f"月兔冲线 月兔冲线 第 {number} 次", str(number))
+            await submit(f"月兔冲线 月兔冲线 第 {number} 次", str(number))
             await heart.wait_for_thought()
         for _ in range(8):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         first_count = sum(
             request.context["task"] in {"learn_style", "learn_jargon"} for request in requests
@@ -298,12 +298,12 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
 
         async def feed(first: int, last: int, text: str) -> None:
             for number in range(first, last + 1):
-                submit(f"{text} 第 {number} 次", str(number))
+                await submit(f"{text} 第 {number} 次", str(number))
                 await heart.wait_for_thought()
 
         async def settle() -> None:
             for _ in range(8):
-                heart.beat()
+                await heart.beat()
                 await heart.wait_for_thought()
 
         clock.advance(language_runner.LEARNING_COOLDOWN - timedelta(seconds=1))
@@ -333,7 +333,7 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
 
         async def beat_until_started() -> None:
             for _ in range(8):
-                heart.beat()
+                await heart.beat()
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(heart.wait_for_thought(), timeout=0.3)
                 if started.is_set():
@@ -346,7 +346,7 @@ async def test_learning_cooldown_frequency_and_cancelled_batch_retries(
         assert heart.language_learning_status()["pending"] == pending_blocked
         heart.update_available_organs(frozenset({"planner", "replyer"}))
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert heart.language_learning_status()["pending"] == pending_blocked
         assert not heart.is_thinking
         started.clear()
@@ -402,7 +402,7 @@ async def test_language_learning_batches_by_trusted_conversation(
                 stored = inbox.add(sample, sender_name="同昵称", conversation_name="同会话名称")
                 assert stored is not None
                 heart._submit_inbox([stored])
-                heart.beat()
+                await heart.beat()
                 await heart.wait_for_thought()
                 if index % 8 == 0:
                     assert heart.submit(
@@ -416,7 +416,7 @@ async def test_language_learning_batches_by_trusted_conversation(
                     )
                 index += 1
         for _ in range(24):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         await heart.shut_down()
 
@@ -515,7 +515,7 @@ async def test_online_expression_filter_runs_before_write(
             stored.append(row)
         heart._submit_inbox(stored)
         for _ in range(len(original) + 24):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
 
         records = core.timeline.query(TimelineQuery(event_type="message"))
@@ -696,7 +696,7 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
             assert target.route is not None
             assert heart.submit(message(target.route.kind, target.route.recipient_id, 2))
             for _ in range(3):
-                heart.beat()
+                await heart.beat()
                 await heart.wait_for_thought()
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
@@ -718,7 +718,7 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
         requests.clear()
         assert heart.submit(message("group", "10", 3))
         for _ in range(3):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         reply = next(request for request in requests if request.context["task"] == "reply")
         assert all(
@@ -738,9 +738,7 @@ async def test_explicit_language_scope_filters_real_planner_and_replyer_requests
             },
         )
         assert removed.json()["after"] == []
-    assert not store.expression_reference(
-        "跑步", "庆祝跑步成绩", (), "", conversation_key=keys[0]
-    )
+    assert not store.expression_reference("跑步", "庆祝跑步成绩", (), "", conversation_key=keys[0])
 
 
 @pytest.mark.asyncio
@@ -895,7 +893,7 @@ async def test_same_language_in_reply_depends_on_explicit_package_grant(
         heart.wake_up()
         assert heart.submit(group)
         for _ in range(3):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         await heart.shut_down()
     plan = next(request for request in requests if request.context["task"] == "plan")
@@ -962,7 +960,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             [sample for sample in [*stored_samples, stored_samples[0]] if sample is not None]
         )
         for _ in range(len(samples) + 16):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         entries = store.entries(LanguageKind.EXPRESSION)
         assert [entry.text for entry in entries] == ["月兔冲线"]
@@ -991,7 +989,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
         heart.wake_up()
         heart._submit_inbox([sample for sample in stored_samples if sample is not None])
         for _ in samples:
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         assert not requests
         assert store.entries(LanguageKind.EXPRESSION) == entries
@@ -1027,7 +1025,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             requests.clear()
             submit(kind, recipient, "gg，来聊跑步。", number)
             for _ in range(3):
-                heart.beat()
+                await heart.beat()
                 await heart.wait_for_thought()
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
@@ -1052,7 +1050,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             requests.clear()
             submit("group", "20", "gg，来聊跑步。", number)
             for _ in range(3):
-                heart.beat()
+                await heart.beat()
                 await heart.wait_for_thought()
             plan = next(request for request in requests if request.context["task"] == "plan")
             reply = next(request for request in requests if request.context["task"] == "reply")
@@ -1062,11 +1060,11 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
             assert ("月兔冲线" in dialogue_text(reply)) is expected
         submit("group", "10", "陌生主题。", "104")
         requests.clear()
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert not any("习得表达（" in dialogue_text(request) for request in requests)
         if recall:
             assert core.language is not None
@@ -1092,7 +1090,7 @@ async def test_language_normal_inbound_across_group_and_private_after_restart(
                 requests.clear()
                 submit("group", "20", "GG，来聊跑步。", number)
                 for _ in range(3):
-                    heart.beat()
+                    await heart.beat()
                     await heart.wait_for_thought()
                 plan = next(item for item in requests if item.context["task"] == "plan")
                 reply = next(item for item in requests if item.context["task"] == "reply")

@@ -98,9 +98,9 @@ async def converse(core: Core, text: str) -> None:
         )
     )
     assert accepted
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
     await core.heartbeat.wait_for_thought()
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
 
 
 def all_records(core: Core) -> list:

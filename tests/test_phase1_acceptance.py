@@ -94,11 +94,11 @@ def terminal_says(core: Core, text: str) -> None:
 
 async def settle(core: Core) -> None:
     for _ in range(10):
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         if not core.heartbeat.is_thinking:
             return
         await core.heartbeat.wait_for_thought()
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
 
 
 def start(core: Core) -> list[OutgoingMessage]:

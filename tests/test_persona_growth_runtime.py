@@ -46,9 +46,9 @@ async def test_runtime_growth_default_and_roleplay_gates(
             "message", "请多体谅", ActorType.USER, visibility=VisibilityScope.USER_ONLY
         )
         clock.advance(timedelta(hours=10))
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         await core.heartbeat.wait_for_thought()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         assert bool(requests) is (enabled and not roleplay)
         tracker = core.heartbeat._persona_growth
         assert tracker is not None and tracker.config.enabled is (enabled and not roleplay)
@@ -65,7 +65,7 @@ async def test_missing_persona_organ_logs_once(tmp_path: Path) -> None:
     ) as core:
         core.heartbeat.wake_up()
         for _ in range(3):
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
         assert not core.timeline.query(TimelineQuery(event_type="persona_changed"))
         await core.heartbeat.shut_down()
     assert (paths.log_dir / LOG_FILE_NAME).read_text(encoding="utf-8").count(

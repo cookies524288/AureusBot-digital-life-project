@@ -131,7 +131,7 @@ def _read_timeline_page(
 class HeartbeatView(Protocol):
     """时间线和总览只读的心跳接口；所有调用留在事件循环线程。"""
 
-    def describe_state(self) -> str:
+    async def async_describe_state(self) -> str:
         """当前状态的文字说明。"""
         ...
 
@@ -147,7 +147,7 @@ class HeartbeatView(Protocol):
         """当前配置启用的工作记忆容量。"""
         ...
 
-    def working_memory_focus(self) -> tuple[int, int | None] | None:
+    async def working_memory_focus(self) -> tuple[int, int | None] | None:
         """启用工作记忆时返回容量和全局焦点边界。"""
         ...
 
@@ -217,7 +217,7 @@ def register_timeline_routes(
             _conversation_metadata(conversation) if conversation is not None else None,
             recall_feedback_enabled,
         )
-        focus = heartbeat.working_memory_focus()
+        focus = await heartbeat.working_memory_focus()
         if focus is None:
             message_limit = heartbeat.context_message_limit()
             context = await timeline.async_read(
@@ -246,7 +246,7 @@ def register_timeline_routes(
         state = heartbeat.cognitive_state
         return {
             "version": __version__,
-            "state_text": heartbeat.describe_state(),
+            "state_text": await heartbeat.async_describe_state(),
             "thinking": heartbeat.is_thinking,
             "energy_level": state.energy_level if state else None,
             "energy_tier": state.energy_state if state else "",

@@ -52,7 +52,8 @@ class Organs:
         return OrganResponse(organ_id=request.organ_id, suggestion=suggestion)
 
 
-def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
@@ -87,11 +88,11 @@ def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> No
     for number in range(45):
         save("backlog", str(number))
     save("busy", "newest")
-    assert attention.browse(can_browse=True) == []
+    assert await attention.browse(can_browse=True) == []
     clock.advance(timedelta(minutes=5))
-    candidates = attention.browse(can_browse=True)
+    candidates = await attention.browse(can_browse=True)
     assert [item.key.recipient_id for item in candidates] == ["busy", "backlog"]
-    rows = attention.read_selection(InboxSelection(candidates[1].key, 35), now=clock.now())
+    rows = await attention.read_selection(InboxSelection(candidates[1].key, 35), now=clock.now())
     # D145：只读最新的 35 条，更早的未读一并标已读丢弃，返回仍按时间升序。
     assert rows[0].perception.content == "10"
     assert rows[-1].perception.content == "44"
@@ -143,9 +144,9 @@ async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> N
             is not None
         )
     attention.allows = lambda key: key.recipient_id != "denied"
-    attention.browse(can_browse=True)
+    await attention.browse(can_browse=True)
     clock.advance(timedelta(minutes=5))
-    candidates = attention.browse(can_browse=True)
+    candidates = await attention.browse(can_browse=True)
 
     async def choose(request: OrganRequest) -> OrganResponse:
         assert "denied" not in request.prompt
@@ -158,10 +159,10 @@ async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> N
     assert selection.conversation == candidates[3].key
     assert selection.conversation is not None
     attention.allows = lambda key: key != selection.conversation
-    assert attention.read_selection(selection, now=clock.now()) == []
+    assert await attention.read_selection(selection, now=clock.now()) == []
     assert len(store.list_unread(selection.conversation)) == 2
     attention.allows = lambda key: key.account_id == "bot" and key.recipient_id == "group-two"
-    rows = attention.read_selection(selection, now=clock.now())
+    rows = await attention.read_selection(selection, now=clock.now())
     # D145：count=1 表示读最新 1 条，同会话更早的未读一起清掉。
     assert [row.perception.content for row in rows] == ["message-6"]
     assert store.list_unread(selection.conversation) == []
@@ -223,12 +224,13 @@ async def test_planner_invalid_or_declined_selection_does_not_enter(
         read_limit=4,
         stream=False,
     )
-    assert attention.read_selection(result, now=clock.now()) == []
+    assert await attention.read_selection(result, now=clock.now()) == []
     assert attention.active_conversation is None
     assert store.list_unread(row.conversation) == [row]
 
 
-def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
@@ -264,13 +266,15 @@ def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -
                 )
                 is not None
             )
-        assert [row.perception.content for row in attention.priority_messages()] == ["25"]
+        batch = await attention.priority_messages()
+        assert [row.perception.content for row in batch.messages] == ["25"]
         assert sum(row.unread_count for row in store.list_conversations()) == 26
     finally:
         timeline.close()
 
 
-def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
@@ -303,12 +307,12 @@ def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path
 
     save("first")
     key = ConversationKey("qq", "bot", "group", "active")
-    rows = attention.read_selection(InboxSelection(key, 1), now=clock.now())
+    rows = await attention.read_selection(InboxSelection(key, 1), now=clock.now())
     assert [row.perception.content for row in rows] == ["first"]
     assert attention.residence is not None and attention.residence.read_limit == 1
     for message in ("second", "third", "fourth"):
         save(message)
-    assert [row.perception.content for row in attention.active_messages(now=clock.now())] == [
+    assert [row.perception.content for row in await attention.active_messages(now=clock.now())] == [
         "second",
         "third",
         "fourth",
@@ -316,7 +320,10 @@ def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path
     assert store.list_unread(key) == []
 
 
-def test_busy_group_reads_only_the_latest_limit_and_clears_the_backlog(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_busy_group_reads_only_the_latest_limit_and_clears_the_backlog(
+    tmp_path: Path,
+) -> None:
     """D145：积压 100 条时一轮只读最新 15 条，未读清零；下一轮只看到新到的。"""
     clock = ManualClock(datetime(2026, 11, 26, tzinfo=UTC))
     store = InboxStore(tmp_path / "aureus.db", clock)
@@ -350,20 +357,21 @@ def test_busy_group_reads_only_the_latest_limit_and_clears_the_backlog(tmp_path:
     key = ConversationKey("qq", "bot", "group", "busy")
     for number in range(100):
         save(str(number))
-    rows = attention.read_selection(InboxSelection(key, 15), now=clock.now())
+    rows = await attention.read_selection(InboxSelection(key, 15), now=clock.now())
     assert [row.perception.content for row in rows] == [str(number) for number in range(85, 100)]
     assert store.list_unread(key) == []
 
     save("new-1")
     save("new-2")
-    assert [row.perception.content for row in attention.active_messages(now=clock.now())] == [
+    assert [row.perception.content for row in await attention.active_messages(now=clock.now())] == [
         "new-1",
         "new-2",
     ]
     assert store.list_unread(key) == []
 
 
-def test_debounce_messages_reads_latest_limit_and_clears(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_debounce_messages_reads_latest_limit_and_clears(tmp_path: Path) -> None:
     """D145：防抖补读只取最新一批，同会话更早未读一并清掉。"""
     clock = ManualClock(datetime(2026, 11, 26, tzinfo=UTC))
     store = InboxStore(tmp_path / "aureus.db", clock)
@@ -397,12 +405,13 @@ def test_debounce_messages_reads_latest_limit_and_clears(tmp_path: Path) -> None
     key = ConversationKey("qq", "bot", "group", "busy")
     for number in range(40):
         save(number)
-    rows = attention.debounce_messages(key)
+    rows = await attention.debounce_messages(key)
     assert [row.perception.content for row in rows] == [str(number) for number in range(25, 40)]
     assert store.list_unread(key) == []
 
 
-def test_priority_path_submits_priority_and_clears_same_conversation_backlog(
+@pytest.mark.asyncio
+async def test_priority_path_submits_priority_and_clears_same_conversation_backlog(
     tmp_path: Path,
 ) -> None:
     """D145：优先来信单独回复；同会话更早的未读提交后一并清掉，不堆积。"""
@@ -461,11 +470,11 @@ def test_priority_path_submits_priority_and_clears_same_conversation_backlog(
         )
         inbox = heart._platform_inbox
         assert inbox is not None
-        heart._take_inbox_priority(inbox)
+        await heart._take_inbox_priority(inbox)
         submitted = [perception.content for perception, _ in heart._pending]
         assert submitted == ["紧急"]
         assert store.list_unread(key) == []
-        heart._take_in_perceptions()
+        await heart._take_in_perceptions()
         assert store.list_unread(key) == []
         later = store.add(
             Perception(
@@ -546,7 +555,7 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
     heart.attach_channel("qq", sent.append)
     heart.wake_up()
 
-    def receive(message_id: str, *, sender: str = "visitor", group: str = "ongoing") -> None:
+    async def receive(message_id: str, *, sender: str = "visitor", group: str = "ongoing") -> None:
         result = store.add(
             Perception(
                 "qq",
@@ -559,30 +568,30 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
         )
         assert result is not None
         heart.on_inbox_message(result)
-        heart.beat()
+        await heart.beat()
 
     async def advance_to_planner() -> None:
         # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
         clock.advance(timedelta(seconds=7))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
 
     async def finish_plan() -> None:
         release.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         release.clear()
 
     try:
-        receive("first-alert", sender="owner")
+        await receive("first-alert", sender="owner")
         selected = ConversationKey("qq", "bot", "group", "ongoing")
         other = ConversationKey("qq", "bot", "group", "priority-group")
         assert not heart.is_replying_to(conversation=selected)
         clock.advance(timedelta(seconds=3))
-        receive("second-window")
+        await receive("second-window")
         # 同批换人续发：steady 等 2 秒，从 3 秒前的第二条算起还剩 2 秒。
-        assert not plans and heart.seconds_until_next_beat() == 2
+        assert not plans and await heart.seconds_until_next_beat() == 2
         await advance_to_planner()
         assert heart.is_replying_to(conversation=selected)
         assert not heart.is_replying_to(conversation=other)
@@ -591,10 +600,10 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
         await finish_plan()
         assert not heart.is_replying_to(conversation=selected)
 
-        receive("ongoing-message")
+        await receive("ongoing-message")
         await advance_to_planner()
-        receive("next-batch-first")
-        receive("next-batch-second")
+        await receive("next-batch-first")
+        await receive("next-batch-second")
         # D116：活跃会话规划期间的新消息取消当前规划并合入同一批，旧回复不投递。
         await heart.wait_for_thought()
         assert cancellations == [2]
@@ -608,18 +617,18 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
         )
         await finish_plan()
 
-        receive("priority-elsewhere", sender="owner", group="priority-group")
+        await receive("priority-elsewhere", sender="owner", group="priority-group")
         await advance_to_planner()
         assert not heart.is_replying_to(conversation=selected)
         assert heart.is_replying_to(conversation=other)
         assert "priority-elsewhere" in plans[-1].prompt
         await finish_plan()
-        receive("离开当前群", group="priority-group")
+        await receive("离开当前群", group="priority-group")
         await advance_to_planner()
         await finish_plan()
         assert len(replies) == 3
         assert all(item.route is not None for item in sent if item.kind is MessageKind.REPLY)
-        receive("ordinary-after-leaving", group="priority-group")
+        await receive("ordinary-after-leaving", group="priority-group")
         assert not heart.is_thinking
         assert store.list_unread_conversations()[0].unread_count == 1
     finally:
@@ -681,7 +690,7 @@ async def test_active_conversation_merges_messages_arriving_during_debounce(
     heart.attach_channel("qq", sent.append)
     heart.wake_up()
 
-    def receive(text: str, *, sender: str = "visitor") -> None:
+    async def receive(text: str, *, sender: str = "visitor") -> None:
         result = store.add(
             Perception(
                 "qq",
@@ -695,40 +704,40 @@ async def test_active_conversation_merges_messages_arriving_during_debounce(
         assert result is not None
         received.append(result.id)
         heart.on_inbox_message(result)
-        heart.beat()
+        await heart.beat()
 
     async def advance_to_planner() -> None:
         # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
         clock.advance(timedelta(seconds=7))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
 
     async def finish_plan() -> None:
         release.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         release.clear()
 
     try:
-        receive("暖场", sender="owner")
+        await receive("暖场", sender="owner")
         await advance_to_planner()
         await finish_plan()
         assert len(replies) == 1 and len(sent) == 1
 
-        receive("第一条")
+        await receive("第一条")
         assert len(plans) == 1
         # 上一条暖场在 7 秒前，新批次按活跃开批等 7 秒（D142）。
-        assert heart.seconds_until_next_beat() == 7
+        assert await heart.seconds_until_next_beat() == 7
         clock.advance(timedelta(seconds=2))
-        receive("第二条")
+        await receive("第二条")
         assert len(plans) == 1
-        assert heart.seconds_until_next_beat() == 4
+        assert await heart.seconds_until_next_beat() == 4
         clock.advance(timedelta(seconds=2))
-        heart.beat()
+        await heart.beat()
         assert len(plans) == 1
         clock.advance(timedelta(seconds=2))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
 
@@ -810,7 +819,7 @@ async def test_active_conversation_interrupts_planning_and_merges_batch(
     heart.attach_channel("qq", sent.append)
     heart.wake_up()
 
-    def receive(text: str, *, sender: str = "visitor") -> None:
+    async def receive(text: str, *, sender: str = "visitor") -> None:
         result = store.add(
             Perception(
                 "qq",
@@ -824,41 +833,41 @@ async def test_active_conversation_interrupts_planning_and_merges_batch(
         assert result is not None
         received.append(result.id)
         heart.on_inbox_message(result)
-        heart.beat()
+        await heart.beat()
 
     async def advance_to_planner() -> None:
         # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
         clock.advance(timedelta(seconds=7))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
 
     async def finish_plan() -> None:
         release.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         release.clear()
 
     try:
-        receive("暖场", sender="owner")
+        await receive("暖场", sender="owner")
         await advance_to_planner()
         await finish_plan()
         assert len(sent) == 1
 
-        receive("m1")
+        await receive("m1")
         await advance_to_planner()
         for number in range(2, 6):
-            receive(f"m{number}")
+            await receive(f"m{number}")
             await asyncio.wait_for(cancelled.wait(), timeout=1)
             cancelled.clear()
             await heart.wait_for_thought()
-            heart.beat()
+            await heart.beat()
             assert len(sent) == 1
             await advance_to_planner()
             assert len(plans[-1].context["in_reply_to"]) == number
         assert all(f"m{number}" in plans[-1].prompt for number in range(1, 6))
 
-        receive("m6")
+        await receive("m6")
         await asyncio.sleep(0.05)
         assert not cancelled.is_set()
         assert heart.is_thinking
@@ -866,7 +875,7 @@ async def test_active_conversation_interrupts_planning_and_merges_batch(
 
         release.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         release.clear()
         assert len(sent) == 2
         assert len(replies[-1].context["in_reply_to"]) == 5
@@ -987,15 +996,15 @@ async def test_priority_preemption_discards_stale_selection_reply_or_segments(
 
     try:
         receive("原会话消息", "visitor", "old")
-        heart.beat()
+        await heart.beat()
         clock.advance(timedelta(minutes=5))
-        heart.beat()
+        await heart.beat()
         if phase != "selection":
             await heart.wait_for_thought()
-            heart.beat()
+            await heart.beat()
         if phase == "delivery":
             await heart.wait_for_thought()
-            heart.beat()
+            await heart.beat()
             assert [message.content for message in sent] == ["原会话先发出这一段。"]
             assert sent[0].quote_source is True
             assert timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED)) == []
@@ -1011,9 +1020,9 @@ async def test_priority_preemption_discards_stale_selection_reply_or_segments(
             await asyncio.wait_for(cancelled.wait(), timeout=1)
             await heart.wait_for_thought()
         clock.advance(timedelta(seconds=30))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert len(sent) == (2 if phase == "delivery" else 1)
         assert sent[-1].route is not None and sent[-1].route.recipient_id == "urgent"
         assert sent[-1].confirm_delivery is not None
@@ -1021,6 +1030,7 @@ async def test_priority_preemption_discards_stale_selection_reply_or_segments(
         if phase == "delivery":
             assert sent[0].confirm_delivery is not None
             sent[0].confirm_delivery()
+        await heart.beat()
         references = timeline.query(TimelineQuery(event_type=EVENT_REPLY_REFERENCE))
         interruptions = timeline.query(TimelineQuery(event_type=EVENT_PLANNING_INTERRUPTED))
         receipts = timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED))
@@ -1111,7 +1121,8 @@ def test_mentions_wake_but_do_not_preempt(tmp_path: Path) -> None:
         timeline.close()
 
 
-def test_priority_messages_include_mentions_and_dedupe(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_priority_messages_include_mentions_and_dedupe(tmp_path: Path) -> None:
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
@@ -1148,11 +1159,11 @@ def test_priority_messages_include_mentions_and_dedupe(tmp_path: Path) -> None:
         owner_mentioned = save("owner", "点名主人", mentioned=True)
         mention = save("visitor", "点名助手", mentioned=True)
         ordinary = save("visitor", "普通消息")
-        assert [row.id for row in attention.priority_messages()] == [
+        assert [row.id for row in (await attention.priority_messages()).messages] == [
             owner_mentioned.id,
             mention.id,
         ]
-        assert ordinary.id not in {row.id for row in attention.priority_messages()}
+        assert ordinary.id not in {row.id for row in (await attention.priority_messages()).messages}
     finally:
         timeline.close()
 
@@ -1208,12 +1219,12 @@ async def test_group_mention_wakes_and_is_answered_without_autonomous_browsing(
         message = store.add(perception)
         assert message is not None
         heart.on_inbox_message(message)
-        heart.beat()
+        await heart.beat()
         assert heart.is_thinking
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent[-1].route == perception.route
         assert store.list_unread_conversations() == []
         assert {request.context.get("task") for request in organs.requests} >= {"plan", "reply"}
@@ -1305,9 +1316,9 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
 
         people.ensure_user("主人", [("qq", "owner")])
         owner = receive("owner", "private-only", private=True)
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent[-1].route == owner.route
         organs.plan = (
             '{"reply":true,"intent":"回应","special_contact":true,"stay_in_conversation":false}'
@@ -1315,18 +1326,18 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
         contact = receive(
             "visitor", "private-contact", contact_private=True, attachments=(picture,)
         )
-        heart.beat()
+        await heart.beat()
         clock.advance(timedelta(minutes=4))
-        heart.beat()
+        await heart.beat()
         assert len(sent) == 1
         assert reads == []
         clock.advance(timedelta(minutes=1))
-        heart.beat()
+        await heart.beat()
         assert heart.is_thinking
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent[-1].route == contact.route
         assert reads == [(contact, picture)]
         assert "识别出的内容" in organs.requests[-2].prompt
@@ -1339,14 +1350,14 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
 
         clock.advance(timedelta(hours=17))
         ordinary = receive("other-visitor", "night-ordinary")
-        heart.beat()
+        await heart.beat()
         assert not heart.is_thinking
-        assert heart.seconds_until_next_beat() > 60
+        assert await heart.seconds_until_next_beat() > 60
         priority = receive("visitor", "priority")
-        heart.beat()
+        await heart.beat()
         assert heart.is_thinking
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent[-1].route == priority.route
         # D145：优先来信提交后清空同会话未读，先前那条普通消息一并标已读，不再留成积压。
         assert sum(row.unread_count for row in store.list_conversations()) == 0
@@ -1356,21 +1367,21 @@ async def test_read_unread_when_idle_and_wake_for_special_contact(tmp_path: Path
 
         heart.set_maintenance_paused(True)
         buffered = receive("owner", "maintenance-buffered", private=True)
-        heart.beat()
+        await heart.beat()
         assert heart.maintenance_paused and not heart.is_thinking
         assert not any(item.route == buffered.route for item in sent)
         assert sum(row.unread_count for row in store.list_conversations()) == 1
 
         heart.set_maintenance_paused(False)
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         heart.set_maintenance_paused(True)
-        heart.beat()
+        await heart.beat()
         assert not any(item.route == buffered.route for item in sent)
         heart.set_maintenance_paused(False)
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent[-1].route == buffered.route
         await heart.shut_down()
     finally:
@@ -1429,22 +1440,22 @@ async def test_idle_residence_makes_room_for_a_mention_in_another_group(tmp_path
 
     try:
         receive("暖场", sender="owner", group="one")
-        heart.beat()
+        await heart.beat()
         clock.advance(timedelta(seconds=4))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         inbox = heart._platform_inbox
         assert inbox is not None
         assert sent[-1].route is not None and sent[-1].route.recipient_id == "one"
         assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "one")
 
         receive("在吗", group="two", mentioned=True)
-        heart.beat()
+        await heart.beat()
         clock.advance(timedelta(seconds=4))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent[-1].route is not None and sent[-1].route.recipient_id == "two"
         assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "two")
     finally:
@@ -1518,32 +1529,33 @@ async def test_pending_segments_survive_a_mention_from_another_group(tmp_path: P
 
     try:
         receive("暖场", sender="owner", group="one")
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert [item.content for item in sent] == ["第一段"]
         inbox = heart._platform_inbox
         assert inbox is not None
         assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "one")
 
         receive("在吗", group="two", mentioned=True)
-        heart.beat()
+        await heart.beat()
         await asyncio.sleep(0)
         assert [item.content for item in sent] == ["第一段"]
         assert inbox.active_conversation == ConversationKey("qq", "bot", "group", "one")
 
         clock.advance(timedelta(seconds=30))
-        heart.beat()
+        await heart.beat()
         assert [item.content for item in sent] == ["第一段", "第二段"]
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent[-1].route is not None and sent[-1].route.recipient_id == "two"
     finally:
         await heart.shut_down()
         timeline.close()
 
 
-def test_priority_messages_put_identity_before_old_mentions(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_priority_messages_put_identity_before_old_mentions(tmp_path: Path) -> None:
     """D137：一条用户来信不能被 20 条旧提及挤出优先名单。"""
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
@@ -1580,7 +1592,7 @@ def test_priority_messages_put_identity_before_old_mentions(tmp_path: Path) -> N
 
         mentions = [save(number, "visitor", mentioned=True) for number in range(20)]
         owner = save(99, "owner")
-        result = attention.priority_messages()
+        result = (await attention.priority_messages()).messages
         assert result[0].id == owner.id
         assert len(result) == 20
         assert {row.id for row in result[1:]} == {row.id for row in mentions[:19]}
@@ -1588,7 +1600,8 @@ def test_priority_messages_put_identity_before_old_mentions(tmp_path: Path) -> N
         timeline.close()
 
 
-def test_new_attention_recovers_unread_mentions_but_skips_disallowed_routes(
+@pytest.mark.asyncio
+async def test_new_attention_recovers_unread_mentions_but_skips_disallowed_routes(
     tmp_path: Path,
 ) -> None:
     """D137：重启后新实例补收未读提及；已移出范围的会话和已处理的提及不再返回。"""
@@ -1628,7 +1641,7 @@ def test_new_attention_recovers_unread_mentions_but_skips_disallowed_routes(
             mention_pull_enabled=True,
         )
         attention.allows = lambda key: key.recipient_id == "allowed"
-        assert [row.id for row in attention.priority_messages()] == [allowed.id]
+        assert [row.id for row in (await attention.priority_messages()).messages] == [allowed.id]
 
         timeline.append(
             "message",
@@ -1636,12 +1649,13 @@ def test_new_attention_recovers_unread_mentions_but_skips_disallowed_routes(
             ActorType.PERSON,
             metadata={"inbox_message_id": allowed.id},
         )
-        assert attention.priority_messages() == []
+        assert (await attention.priority_messages()).messages == []
     finally:
         timeline.close()
 
 
-def test_group_member_cannot_become_a_special_contact(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_group_member_cannot_become_a_special_contact(tmp_path: Path) -> None:
     """D137：特别关心只在普通私聊里生效，群聊里的建议一律忽略。"""
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
@@ -1680,11 +1694,11 @@ def test_group_member_cannot_become_a_special_contact(tmp_path: Path) -> None:
             TrustLevel.VERIFIED_CONTACT,
             route=MessageRoute("bot", "private", "visitor", "two"),
         )
-        attention.apply_plan(plan, group, source, now=clock.now())
+        await attention.apply_plan(plan, group, source, now=clock.now())
         assert timeline.query(TimelineQuery(event_type="special_contact_changed")) == []
         assert person.id not in attention._special
 
-        attention.apply_plan(plan, private, source, now=clock.now())
+        await attention.apply_plan(plan, private, source, now=clock.now())
         [change] = timeline.query(TimelineQuery(event_type="special_contact_changed"))
         assert change.metadata["person_id"] == person.id
         assert change.metadata["add"] is True
@@ -1693,7 +1707,8 @@ def test_group_member_cannot_become_a_special_contact(tmp_path: Path) -> None:
         timeline.close()
 
 
-def test_take_in_perceptions_queues_mentions_before_contacts(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_take_in_perceptions_queues_mentions_before_contacts(tmp_path: Path) -> None:
     """D137：提及排在普通消息之前，但仍排在用户和特别关心之后。"""
     clock = ManualClock(datetime(2026, 11, 23, tzinfo=UTC))
     database = tmp_path / "aureus.db"
@@ -1739,7 +1754,7 @@ def test_take_in_perceptions_queues_mentions_before_contacts(tmp_path: Path) -> 
         mention_row = store.add(mention)
         assert ordinary_row is not None and mention_row is not None
         heart._pending.extend([(ordinary, ordinary_row), (mention, mention_row)])
-        heart._take_in_perceptions()
+        await heart._take_in_perceptions()
         [first] = heart._unanswered.peek_batch()
         assert first.perception.content == "被点名"
     finally:

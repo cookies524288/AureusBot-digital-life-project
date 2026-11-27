@@ -93,14 +93,14 @@ async def test_open_core_wires_initiative_and_disables_it_in_roleplay(
                 trust=TrustLevel.VERIFIED_USER,
             )
         )
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         await core.heartbeat.wait_for_thought()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         before = len(requests)
         clock.advance(timedelta(hours=20))
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         await core.heartbeat.wait_for_thought()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         considered = core.timeline.query(TimelineQuery(event_type="initiative_considered"))
         if roleplay:
             assert core.heartbeat._body is None
@@ -180,9 +180,9 @@ async def test_cortisol_only_defers_optional_contact_after_real_agenda_settlemen
         heartbeat.attach_channel("terminal", receive)
         heartbeat.wake_up()
         assert heartbeat.submit(message)
-        heartbeat.beat()
+        await heartbeat.beat()
         await heartbeat.wait_for_thought()
-        heartbeat.beat()
+        await heartbeat.beat()
         source = core.timeline.query(TimelineQuery(event_type="message"))[0]
         user = core.people.find("terminal", "local")
         agenda = heartbeat._agenda
@@ -207,7 +207,7 @@ async def test_cortisol_only_defers_optional_contact_after_real_agenda_settlemen
             is not None
         )
         clock.advance(settled_at - clock.now())
-        heartbeat.beat()
+        await heartbeat.beat()
         result = feedback.get(record_id)
         assert result is not None and result.source_id == source.id
         failed = scenario in {"morning", "evening"}
@@ -220,7 +220,7 @@ async def test_cortisol_only_defers_optional_contact_after_real_agenda_settlemen
         timing = heartbeat._cortisol
         level_at_peak = timing.level(peak) if timing is not None else None
         before = len(requests)
-        assert heartbeat._hormone_levels() == dict(anger=0.0, joy=0.0, hurt=0.0, surprise=0.0)
+        assert heartbeat._hormone_levels(()) == dict(anger=0.0, joy=0.0, hurt=0.0, surprise=0.0)
         assert delivered == [NOW]
         delivered.clear()
         checks: list[datetime] = []
@@ -233,7 +233,7 @@ async def test_cortisol_only_defers_optional_contact_after_real_agenda_settlemen
 
         monkeypatch.setattr(heartbeat._initiative, "consider", observe)
         for _ in range(delay_minutes + 1):
-            heartbeat.beat()
+            await heartbeat.beat()
             if heartbeat.is_thinking:
                 break
             assert heartbeat._initiative.state.last_considered_at is None
@@ -244,7 +244,7 @@ async def test_cortisol_only_defers_optional_contact_after_real_agenda_settlemen
         assert checks == [peak + timedelta(minutes=m) for m in range(delay_minutes + 1)]
         assert heartbeat._initiative.state.last_considered_at == release
         await heartbeat.wait_for_thought()
-        heartbeat.beat()
+        await heartbeat.beat()
         assert delivered == [release]
         assert [r.context.get("task") for r in requests[before:]] == [
             "initiative_plan",

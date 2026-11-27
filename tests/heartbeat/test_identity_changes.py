@@ -89,9 +89,9 @@ class Rig:
                 CHANNEL, "local", "你好", VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER
             )
         )
-        heartbeat.beat()
+        await heartbeat.beat()
         await heartbeat.wait_for_thought()
-        heartbeat.beat()
+        await heartbeat.beat()
         return self.organs.requests[-1].system_context
 
     def close(self) -> None:

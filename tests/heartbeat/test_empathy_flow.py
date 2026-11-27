@@ -132,9 +132,9 @@ class Env:
                 trust=self.trust,
             )
         )
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         await rig.heartbeat.wait_for_thought()
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         await rig.settle_judgments()
 
     def close(self) -> None:
@@ -334,9 +334,9 @@ async def test_batched_judgment_uses_the_explicit_source_and_not_the_last_messag
                 trust=TrustLevel.VERIFIED_USER,
             )
         )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.settle_judgments()
 
     [record] = rig.records(EVENT_EMPATHY)
@@ -360,10 +360,10 @@ async def test_late_empathy_is_dropped_when_the_source_left_the_focus(env: Env) 
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.wait_for(started.wait(), timeout=5)
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.replies()) == 1
 
     for index in range(6):

@@ -164,9 +164,9 @@ async def test_publish_memory_profiles_and_recall_after_restart(
                     "qq", sender, "今天聊聊吧", VisibilityScope.GROUP, TrustLevel.VERIFIED_CONTACT
                 )
             )
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
             await core.heartbeat.wait_for_thought()
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
             reply = next(request for request in requests if request.context["task"] == "reply")
             text = dialogue_text(reply)
             assert all(item in text for item in expected)

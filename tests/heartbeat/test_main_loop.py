@@ -138,9 +138,9 @@ class Harness:
         """用户说几句，跳一拍开始想，等想完，再跳一拍把回复说出来。"""
         for line in lines:
             assert self.heartbeat.submit(said(line))
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         await self.heartbeat.wait_for_thought()
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
 
 
 class Factory:
@@ -216,7 +216,7 @@ async def test_waking_twice_is_a_programming_error(harness: Harness) -> None:
 
 async def test_beating_before_waking_is_a_programming_error(factory: Factory) -> None:
     with pytest.raises(RuntimeError, match="没有在运行"):
-        factory.make().heartbeat.beat()
+        await factory.make().heartbeat.beat()
 
 
 # ---------- 收感知、想、说 ----------
@@ -305,20 +305,20 @@ async def test_history_is_limited_and_excludes_other_visibility(factory: Factory
 async def test_messages_arriving_while_thinking_are_answered_together(harness: Harness) -> None:
     harness.organs.gate = asyncio.Event()
     harness.heartbeat.submit(said("在吗"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     await asyncio.sleep(0)  # 让后台的想法开始等
     harness.heartbeat.submit(said("想问你个事"))
     harness.heartbeat.submit(said("算了，明天说"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     assert len(harness.organs.requests) == 1  # 同一时间只想一件事
     assert len(harness.records(EVENT_MESSAGE)) == 3  # 但新消息照样马上记进时间线
 
     harness.organs.gate.set()
     await harness.heartbeat.wait_for_thought()
-    harness.heartbeat.beat()  # 说出第一次的回复，并开始想后两句
+    await harness.heartbeat.beat()  # 说出第一次的回复，并开始想后两句
     await harness.heartbeat.wait_for_thought()
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     assert [request.organ_id for request in harness.organs.requests] == [
         "planner",
@@ -341,7 +341,7 @@ async def test_messages_arriving_while_thinking_are_answered_together(harness: H
 
 async def test_unverified_sender_is_recorded_but_not_answered(harness: Harness) -> None:
     harness.heartbeat.submit(said("你好", trust=TrustLevel.UNVERIFIED))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     [record] = harness.records(EVENT_MESSAGE)
     assert record.actor_type is ActorType.PERSON
@@ -405,7 +405,7 @@ async def test_a_broken_channel_does_not_stop_the_heartbeat(factory: Factory) ->
 
     harness.heartbeat._sinks[CHANNEL] = broken  # 换成会出错的通道
     await harness.exchange("你好")
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     assert harness.records(EVENT_MESSAGE)[-1].actor_type is ActorType.ME
 
@@ -460,9 +460,9 @@ async def test_with_the_real_gateway_a_budget_rejection_reaches_the_user(
 
         for line in ("你好", "在吗", "还在吗"):
             heartbeat.submit(said(line))
-            heartbeat.beat()
+            await heartbeat.beat()
             await heartbeat.wait_for_thought()
-            heartbeat.beat()
+            await heartbeat.beat()
 
         # 第 1、2 次各用 6 个；第 2 次之后已用 12，超过上限 10，第 3 次被拒绝。
         assert [m.kind for m in sent] == [MessageKind.REPLY, MessageKind.REPLY, MessageKind.NOTICE]
@@ -481,7 +481,7 @@ async def test_cognitive_state_is_written_only_when_the_statement_changes(
     harness: Harness,
 ) -> None:
     for _ in range(5):
-        harness.heartbeat.beat()
+        await harness.heartbeat.beat()
     idle = harness.records(EVENT_COGNITIVE_STATE)
     assert len(idle) == 1
     assert idle[0].content.startswith(f"我现在在{TASK_IDLE}")
@@ -489,7 +489,7 @@ async def test_cognitive_state_is_written_only_when_the_statement_changes(
     assert idle[0].metadata["current_task"] == TASK_IDLE
 
     await harness.exchange("你好")
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     tasks = [r.metadata["current_task"] for r in harness.records(EVENT_COGNITIVE_STATE)]
     assert tasks == [TASK_IDLE, TASK_REPLYING, TASK_IDLE]
@@ -497,7 +497,7 @@ async def test_cognitive_state_is_written_only_when_the_statement_changes(
 
 async def test_cognitive_state_is_always_available_in_memory(harness: Harness) -> None:
     assert harness.heartbeat.cognitive_state is None
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     state = harness.heartbeat.cognitive_state
     assert state is not None
@@ -509,7 +509,7 @@ async def test_broadcast_switch_turns_off_timeline_records(factory: Factory) -> 
     harness = factory.make(broadcast_cognitive_state=False)
     harness.heartbeat.wake_up()
 
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     assert harness.records(EVENT_COGNITIVE_STATE) == []
     assert harness.heartbeat.cognitive_state is not None  # 内存里照样有
@@ -574,7 +574,7 @@ async def test_shutdown_waits_for_a_thought_that_finishes_in_time(harness: Harne
     harness.organs.gate = asyncio.Event()
     harness.organs.outcomes = ["晚安。"]
     harness.heartbeat.submit(said("我去睡了"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     shutting = asyncio.create_task(harness.heartbeat.shut_down())
     await asyncio.sleep(0)
@@ -593,7 +593,7 @@ async def test_shutdown_cancels_a_thought_that_takes_too_long(factory: Factory) 
     harness.heartbeat.wake_up()
     harness.organs.gate = asyncio.Event()  # 永远不打开
     harness.heartbeat.submit(said("在吗"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     await asyncio.sleep(0)
 
     await harness.heartbeat.shut_down()
@@ -684,7 +684,7 @@ async def test_if_the_request_cannot_be_built_the_messages_stay_queued(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     harness.heartbeat.submit(said("你好"))
-    harness.heartbeat.beat()  # 记进时间线，开始想
+    await harness.heartbeat.beat()  # 记进时间线，开始想
     await harness.heartbeat.wait_for_thought()
     harness.heartbeat.submit(said("还在吗"))
 
@@ -693,12 +693,12 @@ async def test_if_the_request_cannot_be_built_the_messages_stay_queued(
 
     monkeypatch.setattr(harness.heartbeat, "_reply_job", broken)
     with pytest.raises(RuntimeError):
-        harness.heartbeat.beat()
+        await harness.heartbeat.beat()
     monkeypatch.undo()
 
-    harness.heartbeat.beat()  # 恢复之后，那条消息还在，照样回复
+    await harness.heartbeat.beat()  # 恢复之后，那条消息还在，照样回复
     await harness.heartbeat.wait_for_thought()
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert (
         "还在吗"
         in dialogue_text(harness.organs.requests[-1]).split("刚收到、还没回复的消息：", 1)[1]
@@ -733,7 +733,7 @@ async def test_a_locked_database_stops_the_beat_instead_of_losing_the_message(
         assert harness.heartbeat.submit(said("你好"))
         started = time.monotonic()
         with pytest.raises(sqlite3.OperationalError, match="locked"):
-            harness.heartbeat.beat()
+            await harness.heartbeat.beat()
         assert time.monotonic() - started < 1.0
     finally:
         holder.close()
@@ -751,7 +751,7 @@ async def test_halted_messages_are_recorded_but_not_answered(harness: Harness) -
     harness.heartbeat.halt("测试急停")
 
     assert harness.heartbeat.submit(said("在吗"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     [user] = harness.records(EVENT_MESSAGE)
     assert user.content == "在吗"
@@ -765,14 +765,14 @@ async def test_halted_messages_are_recorded_but_not_answered(harness: Harness) -
 
 async def test_halting_and_resuming_are_recorded_once_each(harness: Harness) -> None:
     harness.heartbeat.halt("先停一下")
-    harness.heartbeat.beat()
-    harness.heartbeat.beat()  # 再跳一拍不重复记
+    await harness.heartbeat.beat()
+    await harness.heartbeat.beat()  # 再跳一拍不重复记
     [stopped] = harness.records(EVENT_EMERGENCY_STOP)
     assert stopped.visibility is VisibilityScope.PRIVATE
     assert stopped.metadata["reason"] == "先停一下"
 
     harness.heartbeat.resume()
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     [resumed] = harness.records(EVENT_EMERGENCY_RESUME)
     assert resumed.content == "急停解除"
 
@@ -781,7 +781,7 @@ async def test_replies_resume_after_the_halt_is_lifted(harness: Harness) -> None
     harness.organs.outcomes = ["我回来了。"]
     harness.heartbeat.halt()
     harness.heartbeat.submit(said("在吗"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert harness.organs.requests == []
 
     harness.heartbeat.resume()
@@ -800,7 +800,7 @@ async def test_one_notice_per_sender_even_if_they_say_several_things(harness: Ha
     harness.heartbeat.halt()
     for line in ("一", "二", "三"):
         harness.heartbeat.submit(said(line))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     assert len(harness.records(EVENT_MESSAGE)) == 3
     assert len(notices(harness)) == 1
@@ -809,14 +809,14 @@ async def test_one_notice_per_sender_even_if_they_say_several_things(harness: Ha
 async def test_halt_cancels_a_call_in_progress_and_discards_the_answer(harness: Harness) -> None:
     harness.organs.gate = asyncio.Event()
     harness.heartbeat.submit(said("想个很久的问题"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert harness.heartbeat.is_thinking
     await asyncio.sleep(0)  # 让器官调用真的开始，停在 gate 上
 
     harness.heartbeat.halt()
-    harness.heartbeat.beat()  # 看到急停，取消进行中的调用
+    await harness.heartbeat.beat()  # 看到急停，取消进行中的调用
     await harness.heartbeat.wait_for_thought()
-    harness.heartbeat.beat()  # 收尾
+    await harness.heartbeat.beat()  # 收尾
 
     assert harness.organs.cancelled
     assert not harness.heartbeat.is_thinking
@@ -831,11 +831,11 @@ async def test_an_answer_that_arrives_during_a_halt_is_not_spoken(harness: Harne
     # 想法已经做完、还没说出口时急停：回复权限检查把它拦下，不进时间线。
     harness.organs.outcomes = ["这句不该说出口"]
     harness.heartbeat.submit(said("你好"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     await harness.heartbeat.wait_for_thought()
 
     harness.heartbeat.halt()
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     assert [m for m in harness.sent if m.kind is MessageKind.REPLY] == []
     assert [r.actor_type for r in harness.records(EVENT_MESSAGE)] == [ActorType.USER]
@@ -843,10 +843,10 @@ async def test_an_answer_that_arrives_during_a_halt_is_not_spoken(harness: Harne
 
 async def test_describe_state_mentions_the_halt(harness: Harness) -> None:
     harness.heartbeat.halt("看看状态")
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert "急停中：看看状态" in harness.heartbeat.describe_state()
     harness.heartbeat.resume()
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert "急停中" not in harness.heartbeat.describe_state()
 
 
@@ -854,7 +854,7 @@ async def test_a_halt_set_from_another_process_is_noticed(harness: Harness) -> N
     # aureus halt 是另一个进程写的标记文件，心跳不经过 halt() 也要发现。
     harness.emergency_stop.engage("外面设的")
     harness.heartbeat.submit(said("在吗"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     assert harness.organs.requests == []
     assert len(harness.records(EVENT_EMERGENCY_STOP)) == 1

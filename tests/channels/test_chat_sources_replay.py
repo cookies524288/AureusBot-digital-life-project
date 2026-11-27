@@ -133,6 +133,7 @@ async def test_recalled_delivery_drops_from_prompt_focus_and_saved_summary(
         await replay.step()
         await asyncio.wait_for(replay.fake.messages.get(), 2)
         await asyncio.gather(*channel._sending)
+        await replay.core.heartbeat.flush_channel_records()
         [delivered] = replay.records("reply_delivered")
         assert delivered.metadata["message_id"] == "7401"
         working = heartbeat._working_memory
@@ -140,7 +141,7 @@ async def test_recalled_delivery_drops_from_prompt_focus_and_saved_summary(
         scope = route_scope(
             VisibilityScope.GROUP, key.platform, key.account_id, key.kind, key.recipient_id, None
         )
-        working.finish(
+        await working.finish(
             SummaryOutcome(
                 delivered.id,
                 {scope: "紫色的合成门牌"},
@@ -148,7 +149,7 @@ async def test_recalled_delivery_drops_from_prompt_focus_and_saved_summary(
             ),
             clock.now(),
         )
-        assert "紫色的合成门牌" in working.context(owner=False, route=scope, exclude=set())
+        assert "紫色的合成门牌" in await working.context(owner=False, route=scope, exclude=set())
         await replay.fake.send(
             replay.remote,
             post_type="notice",
@@ -162,7 +163,9 @@ async def test_recalled_delivery_drops_from_prompt_focus_and_saved_summary(
         async with asyncio.timeout(2):
             while store.find_platform_message(key, "7401") is not None:
                 await asyncio.sleep(0.005)
-        assert "紫色的合成门牌" not in working.context(owner=False, route=scope, exclude=set())
+        assert "紫色的合成门牌" not in await working.context(
+            owner=False, route=scope, exclude=set()
+        )
         await replay.receive(event(5101, 2251, "你能看到你刚才那句吗？", group=GROUP))
         await replay.step()
         await asyncio.wait_for(replay.fake.messages.get(), 2)
@@ -331,7 +334,7 @@ async def test_quote_in_another_group_waits_for_the_active_reply(
             ),
         )
         await asyncio.wait_for(replay.accepted.get(), 2)
-        heartbeat.beat()
+        await heartbeat.beat()
         try:
             await asyncio.wait_for(started.wait(), 2)
             await replay.fake.send(
@@ -348,12 +351,12 @@ async def test_quote_in_another_group_waits_for_the_active_reply(
                 ),
             )
             await asyncio.wait_for(replay.accepted.get(), 2)
-            heartbeat.beat()
+            await heartbeat.beat()
             assert replay.fake.messages.empty()
         finally:
             finish.set()
         await heartbeat.wait_for_thought()
-        heartbeat.beat()
+        await heartbeat.beat()
         first = await asyncio.wait_for(replay.fake.messages.get(), 2)
         assert first["group_id"] == str(active_group)
         assert first["message"][0] == {"type": "reply", "data": {"id": "5251"}}

@@ -26,7 +26,8 @@ def _append(timeline: TimelineDatabase, text: str) -> None:
     timeline.append("message", text, ActorType.USER, visibility=VisibilityScope.USER_ONLY)
 
 
-def test_draft_does_not_shrink_learning_window(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_draft_does_not_shrink_learning_window(tmp_path: Path) -> None:
     clock = ManualClock(NOW)
     timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
     timeline.open()
@@ -40,9 +41,9 @@ def test_draft_does_not_shrink_learning_window(tmp_path: Path) -> None:
             "message", "不会提前变成第二个样本", ActorType.ME, metadata={"outbox_internal": True}
         )
         _append(timeline, "第二位群友的样本")
-        assert memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
+        assert await memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
         timeline.append("reply_delivered", "说出口后才算一次", ActorType.ME)
-        batch = memory.prepare(clock.now(), ModelPreference.PREFERRED)
+        batch = await memory.prepare(clock.now(), ModelPreference.PREFERRED)
         assert batch is not None
         assert [record.content for record in batch.trimmed] == [
             "第一位群友的样本",
@@ -69,15 +70,15 @@ async def test_default_window_rolls_and_restores(tmp_path: Path) -> None:
     memory.restore()
     for index in range(49):
         _append(timeline, str(index))
-    assert memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
+    assert await memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
     _append(timeline, "49")
-    first = memory.prepare(clock.now(), ModelPreference.PREFERRED)
+    first = await memory.prepare(clock.now(), ModelPreference.PREFERRED)
     assert first is not None
     material = json.loads(first.requests[0][1].prompt)
     assert material["旧摘要"] == ""
     assert [entry["content"] for entry in material["经历"]] == list(map(str, range(30)))
-    memory.finish(await summarize(first, _summary), clock.now())
-    data = json.loads(memory.context(owner=True, route=None, exclude=()).split("\n", 1)[1])
+    await memory.finish(await summarize(first, _summary), clock.now())
+    data = json.loads((await memory.context(owner=True, route=None, exclude=())).split("\n", 1)[1])
     assert data["滚动摘要"] == ["摘要：0"]
     assert [entry["content"] for entry in data["近期焦点"]] == list(map(str, range(30, 50)))
     timeline.close()
@@ -90,7 +91,7 @@ async def test_default_window_rolls_and_restores(tmp_path: Path) -> None:
         assert restored.summaries() == {"用户私聊": "摘要：0"}
         for index in range(50, 80):
             _append(timeline, str(index))
-        second = restored.prepare(clock.now(), ModelPreference.PREFERRED)
+        second = await restored.prepare(clock.now(), ModelPreference.PREFERRED)
         assert second is not None
         material = json.loads(second.requests[0][1].prompt)
         assert material["旧摘要"] == "摘要：0"
@@ -135,20 +136,22 @@ async def test_scope_isolation_and_failed_batch_retry(tmp_path: Path) -> None:
         return await _summary(request)
 
     try:
-        batch = memory.prepare(clock.now(), ModelPreference.PREFERRED)
+        batch = await memory.prepare(clock.now(), ModelPreference.PREFERRED)
         assert batch is not None and len(batch.requests) == 4
-        memory.finish(await summarize(batch, invalid), clock.now())
+        await memory.finish(await summarize(batch, invalid), clock.now())
         assert memory.summaries() == {}
-        assert memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
+        assert await memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
         clock.advance(timedelta(minutes=5))
-        assert memory.prepare(clock.now(), ModelPreference.PREFERRED) == batch
-        memory.finish(await summarize(batch, _summary), clock.now())
+        assert await memory.prepare(clock.now(), ModelPreference.PREFERRED) == batch
+        await memory.finish(await summarize(batch, _summary), clock.now())
         for visibility, channel, kind, recipient in routes:
             route = route_scope(visibility, channel, "bot", kind, recipient, None)
-            material = memory.context(owner=False, route=route, exclude=()).split("\n", 1)[1]
+            material = (await memory.context(owner=False, route=route, exclude=())).split("\n", 1)[
+                1
+            ]
             assert json.loads(material)["滚动摘要"] == [f"摘要：{channel}:{recipient}"]
-        assert "用户的私事" in memory.context(owner=True, route=None, exclude=())
-        assert memory.context(owner=False, route=None, exclude=()) == ""
+        assert "用户的私事" in await memory.context(owner=True, route=None, exclude=())
+        assert await memory.context(owner=False, route=None, exclude=()) == ""
     finally:
         timeline.close()
 
@@ -184,17 +187,17 @@ async def test_legacy_summary_is_preserved_until_success(
         return OrganResponse(request.organ_id, f" {'新' * 500}\n")
 
     try:
-        batch = memory.prepare(clock.now(), ModelPreference.PREFERRED)
+        batch = await memory.prepare(clock.now(), ModelPreference.PREFERRED)
         assert batch is not None
         assert json.loads(batch.requests[0][1].prompt)["旧摘要"] == old
-        memory.finish(await summarize(batch, invalid_result), clock.now())
+        await memory.finish(await summarize(batch, invalid_result), clock.now())
         assert memory.summaries() == {"用户私聊": old}
-        assert old in memory.context(owner=True, route=None, exclude=())
+        assert old in await memory.context(owner=True, route=None, exclude=())
         query = TimelineQuery(event_type="working_memory_checkpoint", latest=True, limit=1)
         assert timeline.query(query)[0].id == prior.id
         clock.advance(timedelta(minutes=5))
-        assert memory.prepare(clock.now(), ModelPreference.PREFERRED) == batch
-        memory.finish(await summarize(batch, at_limit), clock.now())
+        assert await memory.prepare(clock.now(), ModelPreference.PREFERRED) == batch
+        await memory.finish(await summarize(batch, at_limit), clock.now())
         assert memory.summaries() == {"用户私聊": "新" * 500}
         assert timeline.query(query)[0].metadata["through"] == batch.through
     finally:
@@ -298,18 +301,18 @@ async def test_actual_planner_and_replyer_get_saved_summary(
             _append(timeline, text)
         _append(timeline, "保留焦点的对话")
         boundary_id = timeline.get_latest_id()
-        heart.beat()
+        await heart.beat()
         await asyncio.sleep(0)
         assert not organs.requests
         heart.update_available_organs(frozenset({"utils", "summarizer", "planner", "replyer"}))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(organs.started.wait(), 1)
-        heart.beat()
+        await heart.beat()
         assert heart.working_memory_summaries() == {}
         if not interrupt:
             organs.release.set()
             await heart.wait_for_thought()
-            heart.beat()
+            await heart.beat()
             assert heart.working_memory_summaries()["用户私聊"] == "摘要：已压缩的对话"
             await _assert_timeline_focus(heart, timeline, clock, boundary_id)
             await heart.shut_down()
@@ -322,10 +325,10 @@ async def test_actual_planner_and_replyer_get_saved_summary(
         assert heart.submit(
             Perception("web", "user", "请回我", VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER)
         )
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         if interrupt:
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
             assert heart.working_memory_summaries() == {}
         requests = [req for req in organs.requests if req.organ_id in {"planner", "replyer"}]
@@ -366,9 +369,9 @@ async def test_pending_replies_above_working_memory_capacity_drop_the_oldest(
                     "web", "user", message, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER
                 )
             )
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         records = timeline.query(TimelineQuery(event_type="message"))
         message_ids = [record.id for record in records if record.content in messages]
@@ -383,7 +386,7 @@ async def test_pending_replies_above_working_memory_capacity_drop_the_oldest(
                 assert sum(message in text for message in messages) == 2
                 assert all(message not in text for message in messages[:-2])
         # 更早的 3 条已经丢弃出上下文，下一拍不会重新开始一轮。
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         assert len([request for request in organs.requests if request.organ_id == "planner"]) == 1
         assert len([request for request in organs.requests if request.organ_id == "replyer"]) == 1
@@ -411,9 +414,9 @@ async def test_context_keeps_only_the_latest_capacity_messages(tmp_path: Path) -
                     "web", "user", message, VisibilityScope.USER_ONLY, TrustLevel.VERIFIED_USER
                 )
             )
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         records = timeline.query(TimelineQuery(event_type="message"))
         message_ids = [record.id for record in records if record.content in messages]
@@ -427,7 +430,7 @@ async def test_context_keeps_only_the_latest_capacity_messages(tmp_path: Path) -
                 assert all(message in text for message in messages[-50:])
                 assert all(message not in text for message in messages[:10])
         # 更早的 10 条不在下一轮队列里：再跳一拍没有新的规划。
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         assert len([request for request in organs.requests if request.organ_id == "planner"]) == 1
         assert len([request for request in organs.requests if request.organ_id == "replyer"]) == 1

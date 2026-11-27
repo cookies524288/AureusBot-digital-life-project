@@ -128,7 +128,7 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
     heart.update_available_organs(frozenset({"utils", "planner", "replyer"}))
     heart.wake_up()
 
-    def receive(number: str, sender: str, name: str, text: str) -> None:
+    async def receive(number: str, sender: str, name: str, text: str) -> None:
         saved = store.add(
             Perception(
                 "qq",
@@ -142,17 +142,17 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
         )
         assert saved is not None
         heart.on_inbox_message(saved)
-        heart.beat()
+        await heart.beat()
 
     async def start_plan(number: int) -> None:
         # steady：安静开批 4 秒、活跃开批 7 秒；多拨一点，保证已过截止时间（D142）。
         clock.advance(timedelta(seconds=7))
-        heart.beat()
+        await heart.beat()
         assert await asyncio.wait_for(organs.started.get(), timeout=2) == number
 
     async def finish_thought() -> None:
         await asyncio.wait_for(heart.wait_for_thought(), timeout=2)
-        heart.beat()
+        await heart.beat()
 
     try:
         for group, text in (("home-group", "约过周末碰面"), ("other-group", "别群的私事")):
@@ -174,23 +174,23 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
         timeline.append(
             EVENT_MESSAGE, "尚未压缩的私事", ActorType.USER, visibility=VisibilityScope.USER_ONLY
         )
-        heart.beat()
+        await heart.beat()
         await finish_thought()
         assert "滚动小结：约过周末碰面" in heart.working_memory_summaries().values()
 
-        receive("101", "owner", "阿明", "周末还是老地方吗")
+        await receive("101", "owner", "阿明", "周末还是老地方吗")
         await start_plan(1)
-        receive("102", "visitor", "小雨", "我说的是周六下午")
+        await receive("102", "visitor", "小雨", "我说的是周六下午")
         assert await asyncio.wait_for(organs.cancelled.get(), timeout=2) == 1
         organs.old_result.set()
         await finish_thought()
         assert sent == organs.replies == []
 
         await start_plan(2)
-        receive("103", "visitor", "小雨", "已经用完一次打断")
+        await receive("103", "visitor", "小雨", "已经用完一次打断")
         organs.current_result.set()
         assert await asyncio.wait_for(organs.started.get(), timeout=2) == 3
-        receive("104", "visitor", "小雨", "再审中的后来消息")
+        await receive("104", "visitor", "小雨", "再审中的后来消息")
         organs.review_result.set()
         await finish_thought()
 

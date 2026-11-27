@@ -127,6 +127,7 @@ def peer(monkeypatch: pytest.MonkeyPatch) -> ActionPeer:
 async def settle(replay: Replay) -> None:
     assert replay.core.qq is not None
     await asyncio.gather(*replay.core.qq._sending)
+    await replay.core.heartbeat.flush_channel_records()
 
 
 def choose(replay: Replay, kind: str, **arguments: Any) -> None:
@@ -325,7 +326,7 @@ async def test_mention_quotes_the_current_request_but_tags_the_quoted_member_onl
         await replay.step()
         await settle(replay)
         clock.advance(timedelta(seconds=20))
-        replay.core.heartbeat.beat()
+        await replay.core.heartbeat.beat()
         await settle(replay)
         if invalid:
             assert not peer.writes
@@ -399,7 +400,7 @@ async def test_no_typing_delay_still_waits_for_first_mention_receipt(
             await replay.receive(event(7220, SENDER, "请喊我一下", group=GROUP))
             await replay.step()
             await asyncio.wait_for(peer.seen.wait(), 2)
-            replay.core.heartbeat.beat()
+            await replay.core.heartbeat.beat()
             assert len(peer.writes) == 1 and not replay.records("reply_delivered")
             assert peer.writes[0][1]["message"][0] == {"type": "at", "data": {"qq": str(SENDER)}}
             assert outbox.has_pending_conversation(KEY)
@@ -407,7 +408,7 @@ async def test_no_typing_delay_still_waits_for_first_mention_receipt(
         finally:
             peer.hold.set()
         await settle(replay)
-        replay.core.heartbeat.beat()
+        await replay.core.heartbeat.beat()
         await settle(replay)
         assert not outbox.has_pending_conversation(KEY)
         if reject:

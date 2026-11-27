@@ -107,7 +107,7 @@ async def test_strangers_and_groups_cannot_change_or_see_interests(
             trust=trust,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert len(tracker.interests.active()) == 1 and not rig.records("interest_changed")
     assert all(
@@ -224,7 +224,7 @@ async def test_contact_profile_cannot_change_interests_with_user_trust(env: Inte
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     # 联系人的规划工具不声明 interest 参数，多余的兴趣参数被丢弃，回复照常（D115）。
     assert tracker.interests is not None and not tracker.interests.active()

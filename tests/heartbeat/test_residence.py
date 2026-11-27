@@ -5,6 +5,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, get_ident
+from typing import Any
 
 import pytest
 
@@ -83,20 +85,23 @@ def save(
     return row
 
 
-def test_sliding_window_renews_on_message(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_sliding_window_renews_on_message(tmp_path: Path) -> None:
     clock, inbox = make_attention(tmp_path)
     first = save(inbox.store, "current", "first")
-    assert inbox.read_selection(InboxSelection(first.conversation, 1), now=clock.now()) == [first]
+    assert await inbox.read_selection(InboxSelection(first.conversation, 1), now=clock.now()) == [
+        first
+    ]
     residence = inbox.residence
     assert residence is not None
     assert inbox.deadline == clock.now() + WINDOW
 
     clock.advance(timedelta(minutes=4))
     save(inbox.store, "other", "unrelated")
-    assert inbox.active_messages(now=clock.now()) == []
+    assert await inbox.active_messages(now=clock.now()) == []
     assert inbox.deadline == clock.now() + timedelta(minutes=1)
     latest = save(inbox.store, "current", "latest")
-    assert inbox.active_messages(now=clock.now()) == [latest]
+    assert await inbox.active_messages(now=clock.now()) == [latest]
     assert inbox.deadline == clock.now() + WINDOW
     assert inbox.residence is residence and inbox.permits(residence)
 
@@ -109,20 +114,22 @@ def test_sliding_window_renews_on_message(tmp_path: Path) -> None:
     assert not inbox.expire_if_due(clock.now())
 
 
-def test_expiry_allows_immediate_browse(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_expiry_allows_immediate_browse(tmp_path: Path) -> None:
     clock, inbox = make_attention(tmp_path)
     first = save(inbox.store, "current", "first")
     waiting = save(inbox.store, "other", "waiting")
-    assert inbox.browse(can_browse=True) == []
-    assert inbox.read_selection(InboxSelection(first.conversation, 1), now=clock.now())
+    assert await inbox.browse(can_browse=True) == []
+    assert await inbox.read_selection(InboxSelection(first.conversation, 1), now=clock.now())
     clock.advance(WINDOW)
-    assert inbox.browse(can_browse=True) == []
+    assert await inbox.browse(can_browse=True) == []
     assert inbox.expire_if_due(clock.now())
-    assert inbox.browse(can_browse=False) == []
-    assert [item.key for item in inbox.browse(can_browse=True)] == [waiting.conversation]
+    assert await inbox.browse(can_browse=False) == []
+    assert [item.key for item in await inbox.browse(can_browse=True)] == [waiting.conversation]
 
 
-def test_planner_stay_renews(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_planner_stay_renews(tmp_path: Path) -> None:
     clock, inbox = make_attention(tmp_path)
     first = save(inbox.store, "current", "first")
     source = TimelineRecord(
@@ -133,13 +140,13 @@ def test_planner_stay_renews(tmp_path: Path) -> None:
         visibility=VisibilityScope.GROUP,
     )
     plan = Plan(True, "回应", None, "", stay_in_conversation=True)
-    inbox.apply_plan(plan, first.perception, source, now=clock.now())
+    await inbox.apply_plan(plan, first.perception, source, now=clock.now())
     residence = inbox.residence
     assert residence is not None
     assert inbox.active_conversation == first.conversation
     assert inbox.deadline == clock.now() + WINDOW
     clock.advance(timedelta(minutes=4))
-    inbox.apply_plan(plan, first.perception, source, now=clock.now())
+    await inbox.apply_plan(plan, first.perception, source, now=clock.now())
     assert inbox.residence is residence
     assert inbox.deadline == clock.now() + WINDOW
 
@@ -148,10 +155,11 @@ def test_planner_stay_renews(tmp_path: Path) -> None:
     assert not inbox.permits(residence)
 
 
-def test_residence_disabled_by_zero(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_residence_disabled_by_zero(tmp_path: Path) -> None:
     clock, inbox = make_attention(tmp_path, HeartbeatConfig(inbox_residence_seconds=0))
     first = save(inbox.store, "current", "first")
-    assert inbox.read_selection(InboxSelection(first.conversation, 1), now=clock.now())
+    assert await inbox.read_selection(InboxSelection(first.conversation, 1), now=clock.now())
     clock.advance(timedelta(hours=1))
     inbox.renew(clock.now())
     assert inbox.deadline is None
@@ -159,7 +167,8 @@ def test_residence_disabled_by_zero(tmp_path: Path) -> None:
     assert inbox.active_conversation == first.conversation
 
 
-def test_mention_counts_exclude_recalled_and_deduplicate_pending_ids(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_mention_counts_exclude_recalled_and_deduplicate_pending_ids(tmp_path: Path) -> None:
     _, inbox = make_attention(tmp_path)
     read = save(inbox.store, "allowed", "已读待答", mentioned=True)
     inbox.store.mark_read([read.id])
@@ -173,7 +182,7 @@ def test_mention_counts_exclude_recalled_and_deduplicate_pending_ids(tmp_path: P
     current = save(inbox.store, "current", "本会话", mentioned=True)
     inbox.allows = lambda key: key.recipient_id != "denied"
 
-    [summary] = inbox.mention_pull_summary(
+    [summary] = await inbox.mention_pull_summary(
         current.conversation, pending_ids=[read.id, read.id, unread.id, recalled.id]
     )
     assert (summary.conversation, summary.name, summary.count) == (
@@ -281,9 +290,9 @@ def active_inbox(heart: Heartbeat) -> InboxAttention:
 
 
 async def finish_round(heart: Heartbeat) -> None:
-    heart.beat()
+    await heart.beat()
     await heart.wait_for_thought()
-    heart.beat()
+    await heart.beat()
 
 
 def immediate_config(**fields: object) -> HeartbeatConfig:
@@ -305,9 +314,9 @@ async def test_mention_pull_summary_has_no_content(tmp_path: Path, enabled: bool
     async with running_heart(tmp_path, config, organs) as (heart, store, clock, _):
         heart.set_inbox_route_filter(lambda key: key.recipient_id != "excluded")
         heart.on_inbox_message(save(store, "current", "入场", mentioned=True))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert len(organs.plans) == 1 and "收件箱动态" not in organs.plans[0].prompt
 
         heart.on_inbox_message(save(store, "current", "继续聊天"))
@@ -317,7 +326,7 @@ async def test_mention_pull_summary_has_no_content(tmp_path: Path, enabled: bool
                     save(store, group, f"私密原文 {offset}", mentioned=True, sender="sender-secret")
                 )
         save(store, "excluded", "范围外原文", mentioned=True)
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         assert len(organs.plans) == 2
         prompt = organs.plans[-1].prompt
@@ -331,7 +340,7 @@ async def test_mention_pull_summary_has_no_content(tmp_path: Path, enabled: bool
             assert "当前会话最近 5 分钟有 2 条新消息" in prompt
         else:
             assert "收件箱动态" not in prompt
-        heart.beat()
+        await heart.beat()
         records = heart._timeline.query(TimelineQuery(event_type="reply_reference"))
         metadata = records[-1].metadata
         assert "residence_deadline" not in records[0].metadata
@@ -361,7 +370,7 @@ async def test_mention_pull_planner_can_leave_or_stay(tmp_path: Path) -> None:
 
         other = save(store, "other", "别群点名", mentioned=True)
         heart.on_inbox_message(other)
-        heart.beat()
+        await heart.beat()
         assert heart._thought is None and inbox.active_conversation == current.conversation
         assert store.list_unread(other.conversation) == []
         for text in ("第一轮继续", "第二轮继续"):
@@ -405,7 +414,7 @@ async def test_special_contact_and_mention_cannot_preempt_even_without_window(
 
         organs.wait = asyncio.Event()
         heart.on_inbox_message(save(store, "current", "当前正在谈"))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(organs.entered.wait(), timeout=2)
         thought = heart._thought
         assert thought is not None
@@ -420,15 +429,15 @@ async def test_special_contact_and_mention_cannot_preempt_even_without_window(
         heart.on_inbox_message(
             save(store, "other", "未认证账号", sender="owner", trust=TrustLevel.UNVERIFIED)
         )
-        heart.beat()
+        await heart.beat()
         assert heart._thought is thought and not thought.task.cancelling()
         assert inbox.residence is residence
         if summary:
             heart.on_inbox_message(save(store, "current", "带提醒继续一轮"))
-            heart.beat()
+            await heart.beat()
         organs.wait.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         if summary:
             await heart.wait_for_thought()
             prompt = organs.plans[-1].prompt
@@ -436,13 +445,18 @@ async def test_special_contact_and_mention_cannot_preempt_even_without_window(
             assert '群"会话 mention-first" 点名 1 条' in prompt
             assert "特别关心正文" not in prompt and "两种条件都满足" not in prompt
             assert "friend" not in prompt
-            heart.beat()
+            await heart.beat()
             assert inbox.residence is residence
             organs.stay = False
             heart.on_inbox_message(save(store, "current", "让出注意力"))
             await finish_round(heart)
         await finish_round(heart)
-        assert sent[-1].route and sent[-1].route.recipient_id == "mention-first"
+        waiting_replies = [
+            message.route.recipient_id
+            for message in sent
+            if message.route and message.route.recipient_id in {"mention-first", "special"}
+        ]
+        assert waiting_replies[0] == "mention-first"
 
 
 @pytest.mark.asyncio
@@ -456,7 +470,7 @@ async def test_bound_account_preempts_before_any_residence_exists(tmp_path: Path
     ):
         organs.wait = asyncio.Event()
         heart.on_inbox_message(save(store, "current", "本轮尚未驻留", mentioned=True))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(organs.entered.wait(), timeout=2)
         assert active_inbox(heart).residence is None
         thought = heart._thought
@@ -470,6 +484,96 @@ async def test_bound_account_preempts_before_any_residence_exists(tmp_path: Path
         await finish_round(heart)
         assert "绑定账号的群来信" in organs.plans[-1].prompt
         assert "不是你的用户" in organs.plans[-1].system_context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupt", ["bound_user", "emergency_stop"])
+async def test_slow_draft_write_does_not_delay_delivery_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupt: str
+) -> None:
+    async with running_heart(tmp_path, immediate_config(), Organs()) as (heart, store, _, sent):
+        timeline = heart._timeline
+        loop = asyncio.get_running_loop()
+        loop_thread = get_ident()
+        started = asyncio.Event()
+        release = Event()
+        original_write = timeline._write_record
+
+        def slow_draft(
+            listener_loop: asyncio.AbstractEventLoop | None,
+            timestamp: datetime,
+            event_type: str,
+            content: str,
+            actor_type: ActorType,
+            *args: Any,
+            **kwargs: Any,
+        ) -> TimelineRecord:
+            if event_type == "message" and actor_type is ActorType.ME:
+                assert get_ident() != loop_thread
+                loop.call_soon_threadsafe(started.set)
+                assert release.wait(timeout=5)
+            return original_write(
+                listener_loop, timestamp, event_type, content, actor_type, *args, **kwargs
+            )
+
+        monkeypatch.setattr(timeline, "_write_record", slow_draft)
+        heart.on_inbox_message(save(store, "current", "等待回复", mentioned=True))
+        await heart.beat()
+        await heart.wait_for_thought()
+        settling = asyncio.create_task(heart.beat())
+        try:
+            async with asyncio.timeout(2):
+                await started.wait()
+                assert await timeline.async_query(TimelineQuery(event_type="message"))
+                assert not settling.done()
+                if interrupt == "bound_user":
+                    owner = await asyncio.to_thread(save, store, "next", "换一会儿", sender="owner")
+                    heart.on_inbox_message(owner)
+                else:
+                    assert heart.halt("不投递旧回复")
+        finally:
+            release.set()
+            await settling
+        assert not sent
+        assert not timeline.query(TimelineQuery(event_type="reply_delivered"))
+
+
+@pytest.mark.asyncio
+async def test_priority_read_keeps_messages_beyond_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organs = Organs()
+    organs.stay = False
+    async with running_heart(tmp_path, immediate_config(), organs) as (heart, store, _, _):
+        first = save(store, "current", "第一条提及", mentioned=True)
+        save(store, "current", "快照里的普通来信")
+        heart.on_inbox_message(first)
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        release = Event()
+        original_list = store.list_attention_unread
+
+        def slow_read(*args: Any, **kwargs: Any) -> list[InboxMessage]:
+            rows = original_list(*args, **kwargs)
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(timeout=5)
+            return rows
+
+        monkeypatch.setattr(store, "list_attention_unread", slow_read)
+        reading = asyncio.create_task(heart.beat())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            late = await asyncio.to_thread(save, store, "current", "迟到的提及", mentioned=True)
+            heart.on_inbox_message(late)
+        finally:
+            release.set()
+            await reading
+        assert [row.id for row in store.list_unread(first.conversation)] == [late.id]
+        await heart.wait_for_thought()
+        await heart.beat()
+        await heart.wait_for_thought()
+        assert "迟到的提及" in organs.plans[-1].prompt
+        assert store.list_unread(first.conversation) == []
 
 
 @pytest.mark.asyncio
@@ -512,14 +616,14 @@ async def test_idle_expiry_does_not_cut_active_thought(tmp_path: Path) -> None:
         organs.wait = asyncio.Event()
 
         heart.on_inbox_message(save(store, "current", "慢规划"))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(organs.entered.wait(), timeout=2)
         thought = heart._thought
         assert thought is not None
         deadline = inbox.deadline
         clock.advance(WINDOW)
         heart.on_inbox_message(save(store, "other", "别群点名", mentioned=True))
-        heart.beat()
+        await heart.beat()
         assert heart._thought is thought and not thought.task.cancelling()
         assert inbox.active_conversation == current.conversation and inbox.deadline == deadline
         assert len(organs.plans) == 2
@@ -527,7 +631,7 @@ async def test_idle_expiry_does_not_cut_active_thought(tmp_path: Path) -> None:
         organs.stay = None
         organs.wait.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert inbox.active_conversation is None and inbox.deadline is None
         await heart.wait_for_thought()
         assert len(organs.plans) == 3 and "别群点名" in organs.plans[-1].prompt
@@ -543,14 +647,14 @@ async def test_window_expires_into_immediate_selection(tmp_path: Path) -> None:
         inbox = active_inbox(heart)
         waiting = save(store, "other", "等会儿再看")
         clock.advance(WINDOW - timedelta(seconds=1))
-        heart.beat()
-        assert heart.seconds_until_next_beat() == 1
+        await heart.beat()
+        assert await heart.seconds_until_next_beat() == 1
         assert inbox.active_conversation == current.conversation
         clock.advance(timedelta(seconds=1))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         assert organs.selections == 1 and inbox.active_conversation is None
-        heart.beat()
+        await heart.beat()
         assert inbox.active_conversation == waiting.conversation
 
 
@@ -579,12 +683,12 @@ async def test_planner_leave_stops_new_batches_and_finishes_segments(tmp_path: P
         organs.response = "留下第一段<n>留下第二段"
         organs.wait = asyncio.Event()
         heart.on_inbox_message(save(store, "current", "离开前最后一轮"))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(organs.entered.wait(), timeout=2)
         ignored = save(store, "current", "不再开批")
         heart.on_inbox_message(ignored)
         heart.on_inbox_message(save(store, "other", "下一会话", mentioned=True))
-        heart.beat()
+        await heart.beat()
         organs.wait.set()
         await finish_round(heart)
         assert active_inbox(heart).active_conversation is None
@@ -592,7 +696,7 @@ async def test_planner_leave_stops_new_batches_and_finishes_segments(tmp_path: P
         assert [item.content for item in sent] == ["收到。", "留下第一段"]
 
         clock.advance(timedelta(seconds=30))
-        heart.beat()
+        await heart.beat()
         assert heart._thought is None
         assert sent[-1].content == "留下第二段"
         for message in sent[1:]:
@@ -626,7 +730,7 @@ async def test_reply_delivery_renews_window_only_on_success(tmp_path: Path, resu
         inbox = active_inbox(heart)
         assert inbox.deadline == clock.now() + WINDOW
         clock.advance(WINDOW)
-        heart.beat()
+        await heart.beat()
         if result in {"sync_rejected", "no_receipt"}:
             assert inbox.active_conversation is None
             return
@@ -635,12 +739,12 @@ async def test_reply_delivery_renews_window_only_on_success(tmp_path: Path, resu
         if result == "accepted":
             assert sent[0].confirm_delivery is not None
             sent[0].confirm_delivery()
-            heart.beat()
+            await heart.beat()
             assert inbox.deadline == clock.now() + WINDOW
         else:
             assert sent[0].report_delivery_failure is not None
             sent[0].report_delivery_failure("合成平台拒收")
-            heart.beat()
+            await heart.beat()
             assert inbox.active_conversation is None
 
 
@@ -703,6 +807,6 @@ async def test_residence_ends_immediately_when_access_is_lost(
             levels[ACTION_CALL_ORGAN] = PermissionLevel.FORBIDDEN
         else:
             assert heart._emergency_stop.engage("合成急停")
-        heart.beat()
+        await heart.beat()
         assert inbox.residence is None and inbox.deadline is None
         assert clock.now() < current.timestamp + WINDOW

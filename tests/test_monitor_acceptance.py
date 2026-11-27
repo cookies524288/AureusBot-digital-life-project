@@ -85,11 +85,11 @@ async def chat_once(core: Core, clock: ManualClock, text: str) -> None:
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
     await core.heartbeat.wait_for_thought()
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
     clock.advance(SAMPLE_INTERVAL)
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
 
 
 def latest_sample(paths: AureusPaths) -> BodySample:

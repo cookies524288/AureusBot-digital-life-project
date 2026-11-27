@@ -71,7 +71,7 @@ async def test_unsent_reply_is_not_an_effective_conversation(
                 return await original(request)
 
             monkeypatch.setattr(env.organs, "call", reply)
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         await rig.heartbeat.wait_for_thought()
         if failure == "channel":
 
@@ -81,7 +81,7 @@ async def test_unsent_reply_is_not_an_effective_conversation(
             rig.heartbeat._sinks[CHANNEL] = broken
         elif failure == "disconnected":
             rig.heartbeat._sinks.clear()
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
     assert rig.heartbeat._last_conversation_at is None
     assert not any(message.kind is MessageKind.REPLY for message in rig.sent)
 
@@ -97,9 +97,9 @@ async def test_contact_reply_does_not_count_as_user_conversation(env: Env) -> No
             trust=TrustLevel.VERIFIED_CONTACT,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.replies() and rig.heartbeat._last_conversation_at is None
 
 
@@ -110,7 +110,7 @@ async def test_restart_restores_last_effective_conversation(env: Env) -> None:
     env.clock.advance(timedelta(hours=12))
     restored, _, _ = env.build([], agenda_enabled=False)
     assert restored.heartbeat._last_conversation_at == NOW
-    restored.heartbeat.beat()
+    await restored.heartbeat.beat()
     assert restored.heartbeat._reading is not None
     assert restored.heartbeat._reading.social_need.hours_since == 12
 
@@ -126,10 +126,10 @@ async def test_conversation_time_is_delivery_time_not_arrival_time(env: Env) -> 
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
     env.clock.advance(timedelta(hours=1))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.heartbeat._last_conversation_at == env.clock.now()
     assert rig.records("message")[-1].timestamp == env.clock.now()
 

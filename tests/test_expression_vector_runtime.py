@@ -203,7 +203,7 @@ async def test_local_expression_vectors_reach_actual_reply(
             )
         )
         for _ in range(3):
-            heart.beat()
+            await heart.beat()
             await heart.wait_for_thought()
         return reply_prompts[-1]
 

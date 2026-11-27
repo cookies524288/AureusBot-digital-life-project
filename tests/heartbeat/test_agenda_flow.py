@@ -153,8 +153,8 @@ async def test_due_item_is_noticed_once_and_shows_up_next_time(env: Env) -> None
     assert agenda is not None
     await rig.exchange("到时候提醒我")
     env.clock.advance(timedelta(hours=3))
-    rig.heartbeat.beat()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     [due] = rig.records("agenda_due")
     assert "到期" in due.content
     assert "已到期 1 条" in rig.heartbeat.describe_state()
@@ -203,7 +203,7 @@ async def test_unanswered_promise_expires_as_a_failure(env: Env) -> None:
     await rig.exchange("到时候提醒我")
     [item] = agenda.open_items()
     env.clock.advance(timedelta(days=4))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     finished = agenda.get(item.id)
     assert finished is not None and finished.status is ItemStatus.EXPIRED

@@ -139,10 +139,10 @@ async def test_idle_exploration_records_start_fetches_second_page_and_saves_find
 ) -> None:
     rig = env.exploring()
     tracker = rig.heartbeat._exploration
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     [started] = rig.records("exploration_started")
     assert started.metadata == {"interest_id": 1, "query": "天文"}
-    assert not env.search.calls and tracker.state.explorations_today == 1
+    assert not rig.records("exploration_result") and tracker.state.explorations_today == 1
     await finish(rig)
     assert env.search.calls == [("天文", 5)]
     assert env.fetches == [
@@ -201,7 +201,7 @@ async def test_unsuccessful_exploration_still_uses_one_attempt(
         env.search.results = [SearchResult("失败", "https://example.com/bad", "")] * 3
     else:
         env.summary.summary = '{"interesting":true,"finding":"", "action":"add"}'
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     [record] = rig.records("exploration_result")
     assert record.metadata["outcome"] == outcome
@@ -221,7 +221,7 @@ async def test_rejected_or_failed_summary_is_not_saved(
 ) -> None:
     rig = env.exploring()
     env.summary.summary = summary
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert rig.records("exploration_result")[0].metadata["outcome"] == "summary_failed"
 
@@ -268,12 +268,12 @@ async def test_write_failure_stops_exploration_for_this_run(
             patch.setattr(tracker.findings, "add", broken)
         else:
             patch.setattr(rig.timeline, "append", append)
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         await finish(rig)
     assert tracker.failed
     before = len(env.search.calls)
     env.clock.advance(timedelta(hours=5))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(env.search.calls) == before and not rig.heartbeat.is_thinking
     if failing == "start":
         assert not env.search.calls and not env.summary.requests
@@ -291,13 +291,13 @@ async def test_daily_limit_and_interval_and_restart_restore_each_interest(
     tracker = rig.heartbeat._exploration
     assert tracker.interests is not None
     tracker.interests.add("音乐", "seed")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     env.clock.advance(timedelta(hours=3))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(env.search.calls) == 1 and not rig.heartbeat.is_thinking
     env.clock.advance(timedelta(hours=1))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert [r.metadata["interest_id"] for r in rig.records("exploration_started")] == [1, 2]
     restored = ExplorationTracker(
@@ -314,10 +314,10 @@ async def test_daily_limit_and_interval_and_restart_restore_each_interest(
     assert restored.state == tracker.state
     assert restored.last_explored == tracker.last_explored == {1: NOW, 2: NOW + timedelta(hours=4)}
     env.clock.advance(timedelta(hours=4))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(env.search.calls) == 2 and not rig.heartbeat.is_thinking
     env.clock.advance(timedelta(hours=16))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert env.search.calls[-1][0] == "天文" and tracker.state.explorations_today == 1
 
@@ -343,9 +343,9 @@ async def test_restore_read_failure_retries_next_beat_and_full_scan_is_conservat
 
     with monkeypatch.context() as patch:
         patch.setattr(rig.timeline, "query", query)
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         assert tracker.failed and not env.search.calls
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not tracker.failed and tracker.state.explorations_today == 100
     assert not env.search.calls
 
@@ -363,7 +363,7 @@ async def test_runtime_gates_do_not_start_exploration(env: ExplorationEnv, block
         env.clock.advance(timedelta(hours=13))
     elif blocked == "saving":
         rig.ledger.record("fake", [CallAttempt("fake", "fake", 60000, 0)])
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.heartbeat.is_thinking and not env.search.calls
     assert not rig.records("exploration_started")
 
@@ -371,9 +371,8 @@ async def test_runtime_gates_do_not_start_exploration(env: ExplorationEnv, block
 async def test_user_message_and_existing_thought_take_priority(env: ExplorationEnv) -> None:
     rig = env.exploring()
     submit(rig)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.heartbeat.is_thinking and not rig.records("exploration_started")
-    rig.heartbeat.beat()
     assert not env.search.calls
     await finish(rig)
     # 用户回复已收完，这一拍才可进入探索。
@@ -388,10 +387,10 @@ async def test_queued_user_message_waits_for_existing_exploration_then_is_answer
 ) -> None:
     rig = env.exploring()
     env.search.release = asyncio.Event()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await env.search.entered.wait()
     submit(rig)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.replies() and len(rig.heartbeat._unanswered) == 1
     env.search.release.set()
     await finish(rig)
@@ -403,7 +402,7 @@ async def test_queued_user_message_waits_for_existing_exploration_then_is_answer
 async def test_shutdown_cancels_exploration_without_result_or_notice(env: ExplorationEnv) -> None:
     rig = env.exploring()
     env.search.release = asyncio.Event()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await env.search.entered.wait()
     await rig.heartbeat.shut_down()
     assert len(rig.records("exploration_started")) == 1
@@ -421,7 +420,7 @@ async def test_missing_service_only_logs_once(
     else:
         tracker.has_organ = False
     for _ in range(3):
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
     message = "没配搜索服务" if missing == "search" else "没配总结器官"
     assert sum(message in record.message for record in caplog.records) == 1
     assert not env.search.calls and not rig.records("exploration_started")
@@ -432,10 +431,10 @@ async def test_emergency_stop_cancels_running_exploration_without_result(
 ) -> None:
     rig = env.exploring()
     env.search.release = asyncio.Event()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await env.search.entered.wait()
     rig.heartbeat.halt("停下探索")
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert not rig.records("exploration_result") and not env.summary.requests
 
@@ -447,7 +446,7 @@ async def test_initiative_gets_the_slot_before_exploration(env: ExplorationEnv) 
     await rig.exchange("你好")
     tracker.config = tracker.config.model_copy(update={"enabled": True})
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.heartbeat._thought is not None and rig.heartbeat._thought.initiative is not None
     assert not env.search.calls and not rig.records("exploration_started")
     await finish(rig)
@@ -466,7 +465,7 @@ async def test_initiative_appends_oldest_recent_finding_and_marks_after_message(
     await rig.exchange("你好")
     env.summary.requests.clear()
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert tracker.findings.oldest_unshared(env.clock.now() - timedelta(days=3)) == finding
     await finish(rig)
     [considered] = rig.records("initiative_considered")
@@ -497,7 +496,7 @@ async def test_initiative_without_saved_message_does_not_mark_finding(
     elif failure == "reply":
         env.summary.replies = [OSError("假回复失败")]
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
 
     def broken(*args, **kwargs):
@@ -508,7 +507,7 @@ async def test_initiative_without_saved_message_does_not_mark_finding(
             rig.heartbeat._sinks.clear()
         elif failure == "message":
             patch.setattr(rig.heartbeat._initiative, "record_message", broken)
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
     assert findings.recent(1)[0].shared_at is None
     [considered] = rig.records("initiative_considered")
     assert not considered.metadata["sent"] and "message_id" not in considered.metadata
@@ -526,7 +525,7 @@ async def test_saved_message_marks_finding_even_if_channel_send_fails(env: Explo
 
     rig.heartbeat._sinks[CHANNEL] = broken
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     [considered] = rig.records("initiative_considered")
     assert not considered.metadata["sent"]
@@ -548,7 +547,7 @@ async def test_finding_io_failure_does_not_change_existing_initiative(
 
     monkeypatch.setattr(findings, "oldest_unshared" if failure == "read" else "mark_shared", broken)
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     [considered] = rig.records("initiative_considered")
     assert considered.metadata["sent"] and findings.recent(1)[0].shared_at is None
@@ -561,7 +560,7 @@ async def test_finding_does_not_create_a_reason_to_start_contact(env: Exploratio
     findings.add(1, FINDING, "木星资料", "https://example.com")
     await rig.exchange("你好")
     env.summary.requests.clear()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not env.summary.requests and not rig.records("initiative_considered")
     assert findings.recent(1)[0].shared_at is None
 
@@ -591,7 +590,7 @@ async def test_recent_findings_only_enter_user_private_context(
             visibility=visibility,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert env.summary.requests
     for request in env.summary.requests:
@@ -617,7 +616,7 @@ async def test_contact_profile_cannot_receive_findings_with_user_trust(env: Expl
             visibility=VisibilityScope.USER_ONLY,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await finish(rig)
     assert env.summary.requests
     assert all(

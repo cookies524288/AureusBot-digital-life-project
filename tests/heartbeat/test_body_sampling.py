@@ -136,7 +136,7 @@ def make_rig(
 
 async def test_first_beat_records_a_sample(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     [sample] = rig.samples()
     assert sample.timestamp == START
     assert sample.energy_tier == "不限"
@@ -146,35 +146,35 @@ async def test_first_beat_records_a_sample(made: list[Rig], tmp_path: Path) -> N
 
 async def test_samples_follow_the_interval(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     rig.clock.advance(timedelta(seconds=INTERVAL - 1))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.samples()) == 1  # 还没到间隔
     rig.clock.advance(timedelta(seconds=1))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.samples()) == 2
     rig.clock.advance(timedelta(seconds=INTERVAL * 3))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.samples()) == 3  # 跳过的间隔不补记
 
 
 async def test_sample_switch_off_records_nothing(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, sample_enabled=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     rig.clock.advance(timedelta(seconds=INTERVAL * 2))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.samples() == []
 
 
 async def test_heartbeat_without_a_store_still_beats(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, with_store=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.samples() == []
 
 
 async def test_disabled_signals_are_stored_as_none(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, fatigue_enabled=False, stress_enabled=False, sleep_enabled=False)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     [sample] = rig.samples()
     assert sample.fatigue_level is None
     assert sample.stress_level is None and sample.backlog is None
@@ -183,7 +183,7 @@ async def test_disabled_signals_are_stored_as_none(made: list[Rig], tmp_path: Pa
 
 async def test_enabled_signals_are_stored_as_numbers(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     [sample] = rig.samples()
     assert sample.fatigue_level == 0.0
     assert sample.stress_level == 0.0 and sample.backlog == 0
@@ -195,11 +195,11 @@ async def test_sample_counts_waiting_messages_and_names_the_focus(
 ) -> None:
     rig = make_rig(made, tmp_path)
     rig.say("在吗")
-    rig.heartbeat.beat()  # 开始回复，器官被拦着不返回
+    await rig.heartbeat.beat()  # 开始回复，器官被拦着不返回
     await asyncio.sleep(0)
     rig.clock.advance(timedelta(seconds=INTERVAL))
     rig.say("还有一件事")
-    rig.heartbeat.beat()  # 回复中又来一条：在收件箱里排队
+    await rig.heartbeat.beat()  # 回复中又来一条：在收件箱里排队
     latest = rig.store.latest()
     assert latest is not None
     assert latest.inbox_count >= 1
@@ -209,20 +209,20 @@ async def test_sample_counts_waiting_messages_and_names_the_focus(
 async def test_failed_write_does_not_stop_the_heartbeat(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, broken=True)
     assert isinstance(rig.store, BrokenStore)
-    rig.heartbeat.beat()
-    rig.heartbeat.beat()
-    rig.heartbeat.beat()  # 都没有抛异常
+    await rig.heartbeat.beat()
+    await rig.heartbeat.beat()
+    await rig.heartbeat.beat()  # 都没有抛异常
     # 失败后也算记过一次：没到间隔不重试，免得库出问题时每拍刷日志。
     assert rig.store.attempts == 1
     rig.clock.advance(timedelta(seconds=INTERVAL))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.store.attempts == 2
 
 
 async def test_clock_moving_backwards_records_again(made: list[Rig], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     # ManualClock 不能往回拨，所以直接造出时钟回拨后的状态：上次记样本在「现在」之后。
     rig.heartbeat._last_sample_at = START + timedelta(hours=1)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert len(rig.samples()) == 2

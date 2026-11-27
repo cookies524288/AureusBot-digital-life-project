@@ -88,11 +88,11 @@ async def chat(core: Core, clock: ManualClock, text: str) -> list[OutgoingMessag
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
     await core.heartbeat.wait_for_thought()
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
     clock.advance(SAMPLE_INTERVAL)
-    core.heartbeat.beat()
+    await core.heartbeat.beat()
     return sent
 
 
@@ -171,9 +171,9 @@ async def test_the_monthly_limit_still_rejects_in_roleplay_mode(
                     trust=TrustLevel.VERIFIED_USER,
                 )
             )
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
             await core.heartbeat.wait_for_thought()
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
     # 安全检查不归身体管：每次 6 个 token，第三次超过上限 10，被拒绝。
     assert len(requests) == 2
     assert sent[-1].kind is MessageKind.NOTICE

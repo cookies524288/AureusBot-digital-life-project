@@ -1,6 +1,6 @@
 """将通道逐段投递的事实追加到时间线（3.15），不改写已存在的回复记录。"""
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from aureus.heartbeat.events import (
@@ -31,6 +31,7 @@ def delivery_callbacks(
     on_confirm: Callable[[], None] | None = None,
     on_failure: Callable[[], None] | None = None,
     timing: RoundTiming | None = None,
+    defer: Callable[[Callable[[], Awaitable[None]]], None] | None = None,
 ) -> tuple[DeliveryConfirm, Callable[[str], None]]:
     """最多保留一个投递结果；网页同一条发给多个连接时不重复记录。"""
     fields: dict[str, Any] = {"channel": reply.metadata.get("channel", ""), "reply_id": reply.id}
@@ -50,6 +51,36 @@ def delivery_callbacks(
         fields["segment_total"] = len(reply.metadata.get("reply_segments") or [content])
     settled = False
 
+    async def record_confirmed(details: dict[str, Any]) -> None:
+        await timeline.async_append(
+            EVENT_REPLY_DELIVERED,
+            content,
+            ActorType.ME,
+            visibility=reply.visibility,
+            metadata=details,
+        )
+        if on_confirm is not None:
+            on_confirm()
+        if segment is not None and reply.metadata.get("recall_feedback_refs"):
+            await timeline.async_append(
+                EVENT_RECALL_REPLY_DELIVERED,
+                "一段带召回参考的回复已投递。",
+                ActorType.SYSTEM,
+                visibility=reply.visibility,
+                metadata={"reply_id": reply.id, "segment": segment},
+            )
+
+    async def record_failed(reason: str) -> None:
+        await timeline.async_append(
+            EVENT_REPLY_DELIVERY_FAILED,
+            reason,
+            ActorType.SYSTEM,
+            visibility=reply.visibility,
+            metadata=fields,
+        )
+        if on_failure is not None:
+            on_failure()
+
     def confirm(platform_message_id: str = "") -> None:
         nonlocal settled
         if settled:
@@ -58,10 +89,16 @@ def delivery_callbacks(
         if platform_message_id:
             details["message_id"] = platform_message_id
         if timing is not None:
-            total = 0 if reply.metadata.get("nontext_reply") else len(
-                reply.metadata.get("reply_segments") or [reply.content]
+            total = (
+                0
+                if reply.metadata.get("nontext_reply")
+                else len(reply.metadata.get("reply_segments") or [reply.content])
             )
             details["stage_timings"] = timing.observe_delivery(segment, total)
+        if defer is not None:
+            settled = True
+            defer(lambda: record_confirmed(details))
+            return
         timeline.append(
             EVENT_REPLY_DELIVERED,
             content,
@@ -84,6 +121,10 @@ def delivery_callbacks(
     def fail(reason: str) -> None:
         nonlocal settled
         if settled:
+            return
+        if defer is not None:
+            settled = True
+            defer(lambda: record_failed(reason))
             return
         timeline.append(
             EVENT_REPLY_DELIVERY_FAILED,

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -292,15 +293,13 @@ class FeedbackStore:
 
         给心情用（D73 第 2 条）：成功和失败按补写结果的时刻算。
         """
-        rows = (
-            self._require_open()
-            .execute(
+        self._require_open()
+        with closing(open_connection(self._db_path, read_only=True)) as connection:
+            rows = connection.execute(
                 "SELECT * FROM feedback_records WHERE outcome != ? AND outcome_at >= ?"
                 " ORDER BY outcome_at, id",
                 (Outcome.UNKNOWN.value, _format_timestamp(moment)),
-            )
-            .fetchall()
-        )
+            ).fetchall()
         return [_record_of(row) for row in rows]
 
     def commitment_failures(self, since: datetime, until: datetime) -> list[FeedbackRecord]:

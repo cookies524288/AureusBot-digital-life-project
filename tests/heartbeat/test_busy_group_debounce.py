@@ -57,7 +57,7 @@ async def test_busy_group_starts_planning_at_the_eight_second_batch_limit(tmp_pa
     heart.attach_channel("qq", sent.append)
     heart.wake_up()
 
-    def receive(text: str, *, sender: str = "visitor") -> None:
+    async def receive(text: str, *, sender: str = "visitor") -> None:
         result = store.add(
             Perception(
                 "qq",
@@ -70,34 +70,34 @@ async def test_busy_group_starts_planning_at_the_eight_second_batch_limit(tmp_pa
         )
         assert result is not None
         heart.on_inbox_message(result)
-        heart.beat()
+        await heart.beat()
 
     try:
-        receive("暖场", sender="owner")
+        await receive("暖场", sender="owner")
         clock.advance(timedelta(seconds=4))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert len(sent) == 1
         sent.clear()
 
         # 每 2 秒续发一条：活跃开批 7 秒会被不断续长，但整批最多 8 秒。
-        receive("第 1 条")
+        await receive("第 1 条")
         clock.advance(timedelta(seconds=2))
-        receive("第 2 条")
+        await receive("第 2 条")
         clock.advance(timedelta(seconds=2))
-        receive("第 3 条")
+        await receive("第 3 条")
         clock.advance(timedelta(seconds=2))
-        receive("第 4 条")
+        await receive("第 4 条")
         clock.advance(timedelta(seconds=1.9))
-        heart.beat()
+        await heart.beat()
         assert not heart.is_thinking
         clock.advance(timedelta(seconds=0.1))
-        heart.beat()
+        await heart.beat()
         assert heart.is_thinking
 
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent and sent[-1].route is not None
         assert sent[-1].route.recipient_id == "busy"
     finally:
@@ -132,7 +132,7 @@ async def test_busy_group_replies_to_the_latest_batch_without_chasing_the_backlo
     heart.attach_channel("qq", sent.append)
     heart.wake_up()
 
-    def receive(
+    async def receive(
         text: str, *, sender: str = "visitor", message_id: str | None = None, beat: bool = True
     ) -> None:
         result = store.add(
@@ -148,27 +148,27 @@ async def test_busy_group_replies_to_the_latest_batch_without_chasing_the_backlo
         assert result is not None
         heart.on_inbox_message(result)
         if beat:
-            heart.beat()
+            await heart.beat()
 
     try:
-        receive("暖场", sender="owner")
+        await receive("暖场", sender="owner")
         clock.advance(timedelta(seconds=4))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert len(sent) == 1
         sent.clear()
 
         key = ConversationKey("qq", "bot", "group", "busy")
         for number in range(100):
-            receive(f"第{number}条", message_id=f"busy-{number}", beat=False)
+            await receive(f"第{number}条", message_id=f"busy-{number}", beat=False)
         clock.advance(timedelta(seconds=10))
-        heart.beat()
+        await heart.beat()
         # 只读最新 15 条；更早的未读在读取时一并标已读，不逐条追最老。
         assert store.list_unread(key) == []
 
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         plans = [request for request in organs.requests if request.context.get("task") == "plan"]
         assert len(plans[-1].context["in_reply_to"]) == 15
         assert all(f"第{number}条" in plans[-1].prompt for number in range(85, 100))
@@ -219,18 +219,18 @@ async def test_a_mention_starts_within_one_second(tmp_path: Path) -> None:
         )
         assert message is not None
         heart.on_inbox_message(message)
-        heart.beat()
+        await heart.beat()
         assert not heart.is_thinking
 
         clock.advance(timedelta(seconds=0.9))
-        heart.beat()
+        await heart.beat()
         assert not heart.is_thinking
         clock.advance(timedelta(seconds=0.1))
-        heart.beat()
+        await heart.beat()
         assert heart.is_thinking
 
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent and sent[-1].route is not None
         assert sent[-1].route.recipient_id == "busy"
     finally:
@@ -357,7 +357,7 @@ async def test_steering_interrupt_limit_completes_and_delivers(tmp_path: Path) -
     heart.attach_channel("qq", sent.append)
     heart.wake_up()
 
-    def receive(text: str, *, sender: str = "owner") -> None:
+    async def receive(text: str, *, sender: str = "owner") -> None:
         result = store.add(
             Perception(
                 "qq",
@@ -370,33 +370,33 @@ async def test_steering_interrupt_limit_completes_and_delivers(tmp_path: Path) -
         )
         assert result is not None
         heart.on_inbox_message(result)
-        heart.beat()
+        await heart.beat()
 
     async def finish_interrupt() -> None:
         await asyncio.wait_for(cancelled.wait(), timeout=1)
         cancelled.clear()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
 
     try:
-        receive("第一条")
+        await receive("第一条")
         assert not heart.is_thinking
         clock.advance(timedelta(seconds=4))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
 
-        receive("打断一")
+        await receive("打断一")
         await finish_interrupt()
         clock.advance(timedelta(seconds=7))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
         assert len(plans) == 2
         assert len(plans[-1].context["in_reply_to"]) == 2
         assert "打断一" in plans[-1].prompt
 
-        receive("打断二")
+        await receive("打断二")
         await asyncio.sleep(0.05)
         assert not cancelled.is_set()
         assert heart.is_thinking
@@ -404,7 +404,7 @@ async def test_steering_interrupt_limit_completes_and_delivers(tmp_path: Path) -
 
         release.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent and sent[-1].route is not None
         assert sent[-1].route.recipient_id == "busy"
     finally:
@@ -480,10 +480,10 @@ async def test_planner_is_not_interrupted_when_zero_limit_or_steering_off(
             )
             assert message is not None
             heart.on_inbox_message(message)
-            heart.beat()
+            await heart.beat()
             if number == 1:
                 clock.advance(timedelta(seconds=4))
-                heart.beat()
+                await heart.beat()
                 await asyncio.wait_for(started.wait(), timeout=1)
                 started.clear()
         await asyncio.sleep(0.05)
@@ -493,7 +493,7 @@ async def test_planner_is_not_interrupted_when_zero_limit_or_steering_off(
 
         release.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent and sent[-1].route is not None
         assert sent[-1].route.recipient_id == "busy"
     finally:
@@ -547,7 +547,7 @@ async def test_off_mode_still_interrupts_with_quick_reaction(tmp_path: Path) -> 
     heart.attach_channel("qq", sent.append)
     heart.wake_up()
 
-    def receive(number: int, text: str) -> None:
+    async def receive(number: int, text: str) -> None:
         message = store.add(
             Perception(
                 "qq",
@@ -560,18 +560,18 @@ async def test_off_mode_still_interrupts_with_quick_reaction(tmp_path: Path) -> 
         )
         assert message is not None
         heart.on_inbox_message(message)
-        heart.beat()
+        await heart.beat()
 
     try:
-        receive(1, "第一条")
+        await receive(1, "第一条")
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
         assert heart._debouncers == {}
 
-        receive(2, "打断")
+        await receive(2, "打断")
         await asyncio.wait_for(cancelled.wait(), timeout=1)
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=1)
         started.clear()
         assert len(plans) == 2
@@ -581,7 +581,7 @@ async def test_off_mode_still_interrupts_with_quick_reaction(tmp_path: Path) -> 
 
         release.set()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert sent and sent[-1].route is not None
         assert sent[-1].route.recipient_id == "busy"
     finally:
@@ -634,16 +634,16 @@ async def test_emergency_stop_cancel_keeps_the_restart_budget(tmp_path: Path) ->
         )
         assert message is not None
         heart.on_inbox_message(message)
-        heart.beat()
+        await heart.beat()
         heart._planner_restarts[key] = 2
         clock.advance(timedelta(seconds=4))
-        heart.beat()
+        await heart.beat()
         await asyncio.wait_for(started.wait(), timeout=2)
 
         heart.halt("测试急停")
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         assert heart._planner_restarts[key] == 2
     finally:
         await heart.shut_down()

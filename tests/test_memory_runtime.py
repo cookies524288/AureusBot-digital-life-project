@@ -50,11 +50,11 @@ async def test_runtime_opens_memory_and_diary_in_roleplay(
         original = core.timeline.append("message", "曾经说过木卫二", ActorType.USER)
         experience = core.timeline.append("diary_written", "记录木卫二观测计划", ActorType.ME)
         clock.advance(timedelta(hours=10))
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         assert [hit.record_id for hit in index.search(["木卫二"], (), 5)] == [experience.id]
         assert core.timeline.get(original.id) == original
         await core.heartbeat.wait_for_thought()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         assert (paths.diary_dir / "2026-11-17.md").is_file()
         await core.heartbeat.shut_down()
 
@@ -90,7 +90,7 @@ async def test_index_open_failure_disables_recall_and_core_continues(
         paths, fake_organs=True, clock=ManualClock(NOW), to_console=False
     ) as core:
         core.heartbeat.wake_up()
-        core.heartbeat.beat()
+        await core.heartbeat.beat()
         assert core.heartbeat._memory.index is None
         assert not core.heartbeat._conversation._can_recall()
         await core.heartbeat.shut_down()
@@ -105,7 +105,7 @@ async def test_missing_diary_organ_logs_once_at_startup(tmp_path: Path) -> None:
         core.heartbeat.wake_up()
         clock.advance(timedelta(hours=10))
         for _ in range(3):
-            core.heartbeat.beat()
+            await core.heartbeat.beat()
         assert not core.heartbeat.is_thinking
         await core.heartbeat.shut_down()
     text = (paths.log_dir / LOG_FILE_NAME).read_text(encoding="utf-8")

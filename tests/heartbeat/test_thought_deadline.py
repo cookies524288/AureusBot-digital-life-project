@@ -36,10 +36,10 @@ async def test_deadline_cancels_generation_without_fake_reply(
     harness.heartbeat.wake_up()
     harness.organs.gate = asyncio.Event()
     assert harness.heartbeat.submit(said("本轮不会等到模型"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     await asyncio.wait_for(harness.heartbeat.wait_for_thought(), 1)
-    harness.heartbeat.beat()
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
+    await harness.heartbeat.beat()
 
     [incoming] = harness.records(EVENT_MESSAGE)
     [interrupted] = harness.records(EVENT_PLANNING_INTERRUPTED)
@@ -73,7 +73,7 @@ async def test_queued_segments_still_deliver(
     assert len(harness.records(EVENT_PLANNING_INTERRUPTED)) == 1
     assert len(harness.records(EVENT_REPLY_DELIVERED)) == 1
     harness.clock.advance(timedelta(seconds=60))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert [item.content for item in harness.sent] == ["第一段。", "第二段。"]
     assert len(harness.records(EVENT_REPLY_DELIVERED)) == 2
 
@@ -86,13 +86,13 @@ async def test_deadline_disabled_by_zero(factory: Factory, monkeypatch: pytest.M
     gate = asyncio.Event()
     harness.organs.gate = gate
     assert harness.heartbeat.submit(said("单轮不设时限"))
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     await asyncio.sleep(0.04)
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert harness.sent == [] and not harness.organs.cancelled
     gate.set()
     await asyncio.wait_for(harness.heartbeat.wait_for_thought(), 1)
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert harness.records(EVENT_PLANNING_INTERRUPTED) == []
     assert len(harness.records(EVENT_REPLY_DELIVERED)) == 1
 

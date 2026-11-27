@@ -34,10 +34,10 @@ async def test_queued_user_message_before_send_is_not_an_answer(env: Env) -> Non
     rig = env.build()
     await rig.exchange("你好")
     env.clock.advance(timedelta(hours=20))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await rig.heartbeat.wait_for_thought()
     submit(rig)
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.records(EVENT_INITIATIVE_RESULT)
     assert env.feedback.confidence(PROACTIVE_CONTACT).samples == 0
     await finish(rig)
@@ -77,7 +77,7 @@ async def test_missing_considered_record_does_not_bypass_daily_limit(
     assert restored.heartbeat._initiative.state.contacts_today == 1
     await restored.exchange("我在")
     env.clock.advance(timedelta(hours=4))
-    restored.heartbeat.beat()
+    await restored.heartbeat.beat()
     assert not restored.heartbeat.is_thinking
     assert not restored.records(EVENT_INITIATIVE_CONSIDERED)  # 不补考虑记录。
     assert len(restored.records(EVENT_INITIATIVE_RESULT)) == 1
@@ -106,11 +106,11 @@ async def test_answer_settlement_survives_restart(
         await rig.exchange("我在")
     assert rig.heartbeat._initiative.state.pending_since is None
     env.clock.advance(timedelta(hours=7))
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert not rig.records(EVENT_INITIATIVE_RESULT)  # 本次运行没有待补材料。
     await rig.heartbeat.shut_down()
     restored = env.build(policy=policy)
-    restored.heartbeat.beat()
+    await restored.heartbeat.beat()
     [result] = restored.records(EVENT_INITIATIVE_RESULT)
     assert result.metadata == {
         "message_id": considered.metadata["message_id"],
@@ -132,10 +132,10 @@ async def test_response_result_is_written_once(env: Env) -> None:
     env.clock.advance(timedelta(hours=1))
     await rig.exchange("我在")
     for _ in range(3):
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
     await rig.heartbeat.shut_down()
     restored = env.build(policy=policy)
-    restored.heartbeat.beat()
+    await restored.heartbeat.beat()
     await restored.exchange("还有事吗")
     assert len(restored.records(EVENT_INITIATIVE_RESULT)) == 1
     assert env.feedback.confidence(PROACTIVE_CONTACT).samples == 1
@@ -184,14 +184,14 @@ async def test_missing_feedback_expectation_does_not_prevent_result(
     if answered:
         await rig.exchange("我在")
     else:
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
     [result] = rig.records(EVENT_INITIATIVE_RESULT)
     assert result.metadata["answered"] is answered
     assert env.feedback.find_by_source(PROACTIVE_CONTACT, considered.metadata["message_id"]) is None
     assert env.feedback.confidence(PROACTIVE_CONTACT).samples == 0
     await rig.heartbeat.shut_down()
     restored = env.build(policy=policy)
-    restored.heartbeat.beat()
+    await restored.heartbeat.beat()
     assert len(restored.records(EVENT_INITIATIVE_RESULT)) == 1
     assert env.feedback.find_by_source(PROACTIVE_CONTACT, considered.metadata["message_id"]) is None
 

@@ -138,10 +138,10 @@ async def test_diary_then_growth_records_before_version_and_next_reply_uses_it(
 
     monkeypatch.setattr(env.history, "record_self_change", checked)
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     await env.finish(rig)
     assert env.records("diary_written") and not env.growth_calls() and not rig.is_thinking
-    rig.beat()
+    await rig.beat()
     await env.finish(rig)
     [record] = env.records("persona_changed")
     assert record.visibility is VisibilityScope.PRIVATE and record.actor_type is ActorType.ME
@@ -180,9 +180,9 @@ async def test_stranger_and_group_induction_evidence_is_rejected(
                     visibility=visibility,
                 )
             )
-            rig.beat()
+            await rig.beat()
             await rig.wait_for_thought()
-            rig.beat()
+            await rig.beat()
     foreign_ids = [r.id for r in env.records("message") if r.actor_type is ActorType.PERSON]
     assert len(foreign_ids) == 10
     foreign_reply_ids = [
@@ -193,7 +193,7 @@ async def test_stranger_and_group_induction_evidence_is_rejected(
     assert len(foreign_reply_ids) == 10
     env.suggest((foreign_ids if evidence_source == "incoming" else foreign_reply_ids)[:1])
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     assert rig._persona_growth is not None
     assert not (set(foreign_ids) & rig._persona_growth._material_ids)
     assert not (set(foreign_reply_ids) & rig._persona_growth._material_ids)
@@ -211,7 +211,7 @@ async def test_current_lock_and_cooldown_are_rechecked(env: GrowthEnv, blocked: 
     env.suggest([env.user_material()])
     env.summary.growth_block = asyncio.Event()
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     await env.summary.growth_entered.wait()
     if blocked == "locked":
         changed = rig.identity.model_copy(
@@ -245,15 +245,15 @@ async def test_result_once_today_and_after_restart(
     env.user_material()
     env.summary.growth_text = output
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     await env.finish(rig)
     kind = "persona_review_failed" if failure else "persona_unchanged"
     [record] = env.records(kind)
     assert record.metadata == {"day": "2026-11-17", **({"failure": failure} if failure else {})}
-    rig.beat()
+    await rig.beat()
     await rig.shut_down()
     restarted = env.growth()
-    restarted.beat()
+    await restarted.beat()
     assert len(env.growth_calls()) == 1 and not restarted.is_thinking
 
 
@@ -261,11 +261,11 @@ async def test_accepted_change_is_not_repeated_after_restart(env: GrowthEnv) -> 
     rig = env.growth()
     env.suggest([env.user_material()])
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     await env.finish(rig)
     await rig.shut_down()
     restarted = env.growth()
-    restarted.beat()
+    await restarted.beat()
     assert restarted.identity.persona.expression_style == NEW
     assert len(env.growth_calls()) == 1
 
@@ -292,9 +292,9 @@ async def test_failed_write_keeps_identity_and_does_not_retry(
 
         monkeypatch.setattr(env.history, "record_self_change", fail_version)
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     await env.finish(rig)
-    rig.beat()
+    await rig.beat()
     assert rig.identity.persona.expression_style == OLD
     assert env.history.latest_self_change(LAYER) is None
     assert bool(env.records("persona_changed")) is (fail_at == "history")
@@ -306,12 +306,12 @@ async def test_cancelled_review_has_no_result_and_can_retry_after_restart(env: G
     env.suggest([env.user_material()])
     env.summary.growth_block = asyncio.Event()
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     await env.summary.growth_entered.wait()
     rig.halt("测试取消")
-    rig.beat()
+    await rig.beat()
     await asyncio.sleep(0)
-    rig.beat()
+    await rig.beat()
     assert not any(
         env.records(kind)
         for kind in ("persona_changed", "persona_unchanged", "persona_review_failed")
@@ -321,7 +321,7 @@ async def test_cancelled_review_has_no_result_and_can_retry_after_restart(env: G
     rig.resume()
     env.summary.growth_block = None
     restarted = env.growth()
-    restarted.beat()
+    await restarted.beat()
     await env.finish(restarted)
     assert len(env.growth_calls()) == 2 and env.records("persona_changed")
 
@@ -331,7 +331,7 @@ async def test_empty_material_does_not_call_and_missing_organ_logs_once(
 ) -> None:
     rig = env.growth()
     env.hour(17, 22)
-    rig.beat()
+    await rig.beat()
     assert (
         not env.growth_calls()
         and env.records("persona_unchanged")[0].content == "今天没有和用户的经历"
@@ -339,7 +339,7 @@ async def test_empty_material_does_not_call_and_missing_organ_logs_once(
     await rig.shut_down()
     missing = env.growth(has_organ=False)
     for _ in range(3):
-        missing.beat()
+        await missing.beat()
     assert caplog.text.count("没有总结器官，不做人设回顾") == 1
 
 

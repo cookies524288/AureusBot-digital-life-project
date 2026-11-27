@@ -1,5 +1,6 @@
 """心跳如何选择平台收件箱里的未读消息（D94）。"""
 
+import asyncio
 import json
 import logging
 from collections import defaultdict
@@ -54,6 +55,14 @@ class MentionPull:
     name: str
     count: int
     special_count: int = 0
+
+
+@dataclass(frozen=True)
+class PriorityBatch:
+    """优先来信与列出未读会话时见到的入箱上界。"""
+
+    messages: list[InboxMessage]
+    through: dict[ConversationKey, int]
 
 
 async def select_conversations(
@@ -166,7 +175,7 @@ class InboxAttention:
         self._wants_to_read = True
         return True
 
-    def mention_pull_summary(
+    async def mention_pull_summary(
         self,
         exclude: ConversationKey | None,
         *,
@@ -176,8 +185,11 @@ class InboxAttention:
         """只列获准的会话。授权过滤在截断之前，避免泄露范围外的会话数量。"""
         if not self._mention_pull_enabled:
             return ()
-        candidates = self.store.list_mention_conversations(
-            limit=-1, pending_ids=pending_ids, special_accounts=self._special_accounts()
+        candidates = await asyncio.to_thread(
+            self.store.list_mention_conversations,
+            limit=-1,
+            pending_ids=pending_ids,
+            special_accounts=self._special_accounts(),
         )
         return tuple(
             MentionPull(
@@ -268,7 +280,7 @@ class InboxAttention:
             for person_id in self._special:
                 yield from self._people.accounts_of(person_id)
 
-    def priority_messages(self) -> list[InboxMessage]:
+    async def priority_messages(self) -> PriorityBatch:
         """先收绑定用户，再按到达次序收其他优先来信（D149）。"""
         bound: dict[str, set[str]] = defaultdict(set)
         special: dict[str, set[str]] = defaultdict(set)
@@ -279,11 +291,22 @@ class InboxAttention:
             special[platform].add(account_id)
         identity: dict[int, InboxMessage] = {}
         mentions: dict[int, InboxMessage] = {}
-        for item in self.store.list_unread_conversations():
+        through: dict[ConversationKey, int] = {}
+        for item in await asyncio.to_thread(self.store.list_unread_conversations):
             if item.key == self.active_conversation or not self.allows(item.key):
                 continue
             owners = bound[item.key.platform]
-            for row in self._attention_page(item.key, owners, special[item.key.platform]):
+            rows = await self._timeline.async_read(
+                self._attention_page,
+                item.key,
+                owners,
+                special[item.key.platform],
+                item.last_message_id,
+            )
+            if not self.allows(item.key):
+                continue
+            through[item.key] = item.last_message_id
+            for row in rows:
                 if row.perception.sender_id in owners:
                     identity[row.id] = row
                 else:
@@ -292,10 +315,10 @@ class InboxAttention:
             *sorted(identity.values(), key=lambda row: row.id),
             *sorted(mentions.values(), key=lambda row: row.id),
         ]
-        return ordered[:_PRIORITY_LIMIT]
+        return PriorityBatch(ordered[:_PRIORITY_LIMIT], through)
 
     def _attention_page(
-        self, key: ConversationKey, owners: set[str], special: set[str]
+        self, key: ConversationKey, owners: set[str], special: set[str], through: int
     ) -> list[InboxMessage]:
         """每页只查一次时间线，过滤掉已经处理过的未读；身份匹配的行排在最前。"""
         messages: list[InboxMessage] = []
@@ -303,7 +326,7 @@ class InboxAttention:
         while len(messages) < _PRIORITY_LIMIT:
             remaining = _PRIORITY_LIMIT - len(messages)
             rows = self.store.list_attention_unread(
-                key, owners, special_senders=special, after=after, limit=remaining
+                key, owners, special_senders=special, after=after, limit=remaining, through=through
             )
             if not rows:
                 break
@@ -315,7 +338,9 @@ class InboxAttention:
             after = (0 if last.perception.sender_id in owners else 1, last.id)
         return messages
 
-    def browse(self, now: datetime | None = None, *, can_browse: bool) -> list[InboxConversation]:
+    async def browse(
+        self, now: datetime | None = None, *, can_browse: bool
+    ) -> list[InboxConversation]:
         """安全闲暇时取得可选的未读会话，私聊和群聊分别列出。"""
         if not self._enabled or not can_browse or self.active_conversation is not None:
             self._idle_since = None
@@ -328,14 +353,19 @@ class InboxAttention:
             return []
         self._wants_to_read = False
         self._idle_since = now
-        conversations = [
-            item for item in self.store.list_unread_conversations() if self.allows(item.key)
-        ]
+        unread = await asyncio.to_thread(self.store.list_unread_conversations)
+        conversations = [item for item in unread if self.allows(item.key)]
         private = [item for item in conversations if item.key.kind == "private"]
         groups = [item for item in conversations if item.key.kind == "group"]
         return private[:_CANDIDATE_LIMIT] + groups[:_CANDIDATE_LIMIT]
 
-    def read_selection(self, selection: InboxSelection, *, now: datetime) -> list[InboxMessage]:
+    async def read_selection(
+        self,
+        selection: InboxSelection,
+        *,
+        now: datetime,
+        can_enter: Callable[[], bool] | None = None,
+    ) -> list[InboxMessage]:
         """复验选择与路由权限，读取最新一批并清空该会话未读后才占住会话（D145）。
 
         入场条数仍不超过 inbox_read_limit；实际读最新 min(count, 上限) 条，
@@ -351,16 +381,24 @@ class InboxAttention:
             or not self.allows(key)
         ):
             return []
-        messages = self.store.read_latest_and_clear(
-            key, limit=min(selection.count, self.read_limit)
+        previous = self.residence
+        messages = await asyncio.to_thread(
+            self.store.read_latest_and_clear, key, limit=min(selection.count, self.read_limit)
         )
-        if messages:
-            self.residence = InboxResidence(key, selection.count)
-            self._staying = True
-            self.renew(now)
+        if (
+            not messages
+            or self.residence is not previous
+            or self.active_conversation is not None
+            or not self.allows(key)
+            or (can_enter is not None and not can_enter())
+        ):
+            return []
+        self.residence = InboxResidence(key, selection.count)
+        self._staying = True
+        self.renew(now)
         return messages
 
-    def active_messages(self, *, now: datetime) -> list[InboxMessage]:
+    async def active_messages(self, *, now: datetime) -> list[InboxMessage]:
         """读取当前停留会话最新的至多 inbox_read_limit 条未读，并清空该会话未读（D145）。
 
         入场时规划器选的条数只管「进入哪个会话」，后续补读固定按 inbox_read_limit
@@ -369,18 +407,25 @@ class InboxAttention:
         residence = self.residence
         if not self._staying or residence is None or not self.permits(residence):
             return []
-        messages = self.store.read_latest_and_clear(residence.conversation, limit=self.read_limit)
+        messages = await asyncio.to_thread(
+            self.store.read_latest_and_clear, residence.conversation, limit=self.read_limit
+        )
+        if not self.permits(residence):
+            return []
         if messages:
             self.renew(now)
         return messages
 
-    def debounce_messages(self, key: ConversationKey) -> list[InboxMessage]:
+    async def debounce_messages(self, key: ConversationKey) -> list[InboxMessage]:
         """尚未驻留的优先来信读最新一批并清空该会话未读（D145）。"""
-        return (
-            self.store.read_latest_and_clear(key, limit=self.read_limit) if self.allows(key) else []
+        if not self.allows(key):
+            return []
+        messages = await asyncio.to_thread(
+            self.store.read_latest_and_clear, key, limit=self.read_limit
         )
+        return messages if self.allows(key) else []
 
-    def apply_plan(
+    async def apply_plan(
         self, plan: Plan, target: Perception, source: TimelineRecord, *, now: datetime
     ) -> None:
         """采用规划器的翻阅意愿和对本轮已认出联系人的特别关心建议。"""
@@ -408,7 +453,7 @@ class InboxAttention:
         person = self._people.find(target.channel, target.sender_id)
         if person is None or person.is_user or (person.id in self._special) == plan.special_contact:
             return
-        self._timeline.append(
+        await self._timeline.async_append(
             EVENT_SPECIAL_CONTACT,
             "添加特别关心。" if plan.special_contact else "移除特别关心。",
             ActorType.ME,

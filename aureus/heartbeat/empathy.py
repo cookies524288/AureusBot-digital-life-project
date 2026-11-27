@@ -6,7 +6,13 @@ from aureus.attention import WorkingMemory
 from aureus.common import HormonesConfig
 from aureus.heartbeat.events import EVENT_EMPATHY
 from aureus.hormones import HormoneTrigger, kind_enabled
-from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
+from aureus.timeline import (
+    ActorType,
+    TimelineDatabase,
+    TimelineQuery,
+    TimelineRecord,
+    VisibilityScope,
+)
 
 
 class EmpathyFocus:
@@ -22,20 +28,28 @@ class EmpathyFocus:
         self._memory = memory
         self._config = config
 
-    def source_ids(self) -> frozenset[int]:
+    async def source_ids(self) -> frozenset[int]:
         """可用作共情来源的当前经历。"""
         if self._memory is None or self._config is None or not self._config.enabled:
             return frozenset()
-        return self._memory.retained_focus_ids()
+        return await self._memory.async_retained_focus_ids()
 
-    def candidates(self, source_ids: frozenset[int]) -> tuple[HormoneTrigger, ...]:
+    async def candidates(self, source_ids: frozenset[int]) -> tuple[HormoneTrigger, ...]:
         """从原始来源仍在焦点的留痕中取候选。"""
         config = self._config
         if not source_ids or config is None:
             return ()
-        records = self._timeline.query(
-            TimelineQuery(event_type=EVENT_EMPATHY, since_id=min(source_ids), limit=-1)
-        )
+        records = await self._timeline.async_query(self._query(source_ids))
+        return self._triggers(records, source_ids, config)
+
+    @staticmethod
+    def _query(source_ids: frozenset[int]) -> TimelineQuery:
+        return TimelineQuery(event_type=EVENT_EMPATHY, since_id=min(source_ids), limit=-1)
+
+    @staticmethod
+    def _triggers(
+        records: Iterable[TimelineRecord], source_ids: frozenset[int], config: HormonesConfig
+    ) -> tuple[HormoneTrigger, ...]:
         return tuple(
             trigger
             for record in records
@@ -45,11 +59,28 @@ class EmpathyFocus:
             and kind_enabled(trigger.kind, config)
         )
 
-    def active(self, extra: Iterable[HormoneTrigger] = ()) -> tuple[HormoneTrigger, ...]:
+    async def active(self, extra: Iterable[HormoneTrigger] = ()) -> tuple[HormoneTrigger, ...]:
         """同一目标只采用最新来源；同一来源的重复判断不再加量。"""
-        source_ids = self.source_ids()
+        source_ids = await self.source_ids()
+        return self._select(source_ids, (*await self.candidates(source_ids), *extra))
+
+    def active_sync(self) -> tuple[HormoneTrigger, ...]:
+        """供终端同步观察，不走拍内或网页接口。"""
+        config, memory = self._config, self._memory
+        if config is None or not config.enabled or memory is None:
+            return ()
+        source_ids = memory.retained_focus_ids()
+        if not source_ids:
+            return ()
+        records = self._timeline.query(self._query(source_ids))
+        return self._select(source_ids, self._triggers(records, source_ids, config))
+
+    @staticmethod
+    def _select(
+        source_ids: frozenset[int], triggers: Iterable[HormoneTrigger]
+    ) -> tuple[HormoneTrigger, ...]:
         selected: dict[tuple[int | None, str], HormoneTrigger] = {}
-        for trigger in (*self.candidates(source_ids), *extra):
+        for trigger in triggers:
             if trigger.empathy_for is None or trigger.source_record_id not in source_ids:
                 continue
             key = (trigger.person_id, trigger.empathy_for.casefold())
@@ -58,18 +89,18 @@ class EmpathyFocus:
                 selected[key] = trigger
         return tuple(selected.values())
 
-    def record(self, triggers: Iterable[HormoneTrigger]) -> None:
+    async def record(self, triggers: Iterable[HormoneTrigger]) -> None:
         """保留来源的对象、好感和量；同一个来源和目标只记一次。"""
         pending = tuple(triggers)
         if not pending:
             return
-        source_ids = self.source_ids()
-        seen = {_source_key(trigger) for trigger in self.candidates(source_ids)}
+        source_ids = await self.source_ids()
+        seen = {_source_key(trigger) for trigger in await self.candidates(source_ids)}
         for trigger in pending:
             key = _source_key(trigger)
             if trigger.source_record_id not in source_ids or key in seen:
                 continue
-            self._timeline.append(
+            await self._timeline.async_append(
                 EVENT_EMPATHY,
                 f"{trigger.kind.value} 临时上涨 {trigger.rise:.2f}：{trigger.reason}",
                 ActorType.ME,

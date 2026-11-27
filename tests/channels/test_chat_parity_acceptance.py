@@ -139,9 +139,10 @@ async def test_next_turn_hears_acknowledged_segment_but_not_declined_segment(
         await asyncio.wait_for(replay.fake.messages.get(), 2)
         await asyncio.gather(*channel._sending)
         clock.advance(timedelta(seconds=20))
-        replay.core.heartbeat.beat()
+        await replay.core.heartbeat.beat()
         await asyncio.wait_for(replay.fake.messages.get(), 2)
         await asyncio.gather(*channel._sending)
+        await replay.core.heartbeat.flush_channel_records()
         assert [row.content for row in replay.records("reply_delivered")] == ["已经送达甲段"]
         assert len(replay.records("reply_delivery_failed")) == 1
 
@@ -170,7 +171,7 @@ async def test_recall_during_reply_prevents_the_first_visible_qq_frame(
         assert store is not None
         key = ConversationKey("qq", str(ACCOUNT), "group", str(GROUP))
         await replay.receive(event(4301, 2112, "先别发出去", group=GROUP))
-        heartbeat.beat()
+        await heartbeat.beat()
         try:
             await asyncio.wait_for(started.wait(), 2)
             assert store.find_platform_message(key, "4301") is not None
@@ -190,7 +191,7 @@ async def test_recall_during_reply_prevents_the_first_visible_qq_frame(
         finally:
             finish.set()
         await heartbeat.wait_for_thought()
-        heartbeat.beat()
+        await heartbeat.beat()
         channel = replay.core.qq
         assert channel is not None
         await asyncio.gather(*channel._sending)

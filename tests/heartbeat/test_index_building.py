@@ -153,11 +153,8 @@ class Harness:
             timeline=self.timeline,
             organs=self.call,
             identity=make_identity(),
-            config=HeartbeatConfig(
-                qq_emoji_maintenance_enabled=False, split_reply_enabled=False
-            ),
-            indexing=indexing
-            or IndexingConfig(batch_size=2, interval_seconds=0),
+            config=HeartbeatConfig(qq_emoji_maintenance_enabled=False, split_reply_enabled=False),
+            indexing=indexing or IndexingConfig(batch_size=2, interval_seconds=0),
             permissions=PermissionChecker(self.stop),
             emergency_stop=self.stop,
             timezone=UTC,
@@ -174,7 +171,7 @@ class Harness:
         return self.expression_index.coverage(self.language, space, frozenset())
 
     async def beat_and_wait(self) -> None:
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         task = self.heartbeat._indexing_task
         if task is not None:
             await task
@@ -196,7 +193,7 @@ async def test_auto_builder_starts_when_embedding_available(tmp_path: Path) -> N
     harness = Harness(tmp_path, expressions=5)
     harness.call.gate_at = 2
     harness.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     task = harness.heartbeat._indexing_task
     assert task is not None
     await asyncio.wait_for(harness.call.reached.wait(), timeout=5)
@@ -256,18 +253,14 @@ async def test_auto_builder_skips_revoked_sources(tmp_path: Path) -> None:
     harness.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
     await harness.beat_and_wait()
     assert harness.expression_index is not None
-    assert harness.expression_index.coverage(
-        harness.language, SPACE, frozenset({scope})
-    ) == (1, 1)
+    assert harness.expression_index.coverage(harness.language, SPACE, frozenset({scope})) == (1, 1)
 
     add_package("限范围表达二")
     harness.heartbeat.set_inbox_route_filter(lambda _key: False)
     before = len(harness.call.requests)
     await harness.beat_and_wait()
     assert len(harness.call.requests) == before
-    assert harness.expression_index.coverage(
-        harness.language, SPACE, frozenset({scope})
-    ) == (1, 2)
+    assert harness.expression_index.coverage(harness.language, SPACE, frozenset({scope})) == (1, 2)
 
 
 @pytest.mark.asyncio
@@ -278,7 +271,7 @@ async def test_emoji_cache_prebuild_reaches_complete(tmp_path: Path) -> None:
     harness.heartbeat.update_available_organs(
         frozenset({"text_embedding"}), text_spaces=((1, TEXT_SPACE),)
     )
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     task = harness.heartbeat._indexing_task
     assert task is not None
     await asyncio.wait_for(harness.call.reached.wait(), timeout=5)
@@ -351,7 +344,7 @@ async def test_image_backfill_indexes_existing_unindexed_images(tmp_path: Path) 
     harness.heartbeat.set_inbox_route_filter(lambda key: key.recipient_id == "group-1")
     harness.heartbeat.set_inbox_attachment_reader(read)
     harness.heartbeat.set_inbox_image_indexer(images)
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     task = harness.heartbeat._indexing_task
     assert task is not None
     await asyncio.wait_for(harness.call.reached.wait(), timeout=5)
@@ -429,7 +422,7 @@ async def test_auto_builder_stops_on_halt_and_model_removal(tmp_path: Path) -> N
     halted = Harness(tmp_path / "halted", expressions=4)
     halted.call.gate_at = 2
     halted.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
-    halted.heartbeat.beat()
+    await halted.heartbeat.beat()
     task = halted.heartbeat._indexing_task
     assert task is not None
     await asyncio.wait_for(halted.call.reached.wait(), timeout=5)
@@ -438,14 +431,14 @@ async def test_auto_builder_stops_on_halt_and_model_removal(tmp_path: Path) -> N
     with pytest.raises(asyncio.CancelledError):
         await task
     assert halted.coverage() == (2, 4)
-    halted.heartbeat.beat()
+    await halted.heartbeat.beat()
     assert halted.heartbeat._indexing_task is None
     assert len(halted.call.requests) == 2
 
     removed = Harness(tmp_path / "removed", expressions=4)
     removed.call.gate_at = 2
     removed.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
-    removed.heartbeat.beat()
+    await removed.heartbeat.beat()
     task = removed.heartbeat._indexing_task
     assert task is not None
     await asyncio.wait_for(removed.call.reached.wait(), timeout=5)
@@ -453,7 +446,7 @@ async def test_auto_builder_stops_on_halt_and_model_removal(tmp_path: Path) -> N
     with pytest.raises(asyncio.CancelledError):
         await task
     assert removed.coverage() == (2, 4)
-    removed.heartbeat.beat()
+    await removed.heartbeat.beat()
     assert removed.heartbeat._indexing_task is None
     assert len(removed.call.requests) == 2
 
@@ -492,7 +485,7 @@ async def test_auto_build_disabled_falls_back_to_on_demand(tmp_path: Path) -> No
         indexing=IndexingConfig(auto_build_enabled=False, batch_size=2, interval_seconds=0),
     )
     harness.heartbeat.update_available_organs(frozenset(), expression_space=SPACE)
-    harness.heartbeat.beat()
+    await harness.heartbeat.beat()
     assert harness.heartbeat._indexing_task is None
     assert harness.call.requests == []
 

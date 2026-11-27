@@ -104,10 +104,10 @@ class Rig:
         )
         self.heartbeat.live_events.subscribe(self.events.append)
 
-    def start(self) -> None:
+    async def start(self) -> None:
         """醒来并跳第一拍：这时才读到急停状态，开始推送。"""
         self.heartbeat.wake_up()
-        self.heartbeat.beat()
+        await self.heartbeat.beat()
         self.events.clear()
 
     def close(self) -> None:
@@ -190,7 +190,7 @@ async def test_a_paused_hub_drops_events_until_it_resumes() -> None:
 
 
 async def test_a_saved_platform_message_publishes_only_its_inbox_id(inbox_rig: Rig) -> None:
-    inbox_rig.start()
+    await inbox_rig.start()
     assert inbox_rig.inbox is not None
     message = inbox_rig.inbox.add(inbox_perception("私聊正文"), sender_name="对方")
     assert message is not None
@@ -202,22 +202,22 @@ async def test_a_saved_platform_message_publishes_only_its_inbox_id(inbox_rig: R
 
 
 async def test_a_web_reply_publishes_active_and_inactive_round_states(rig: Rig) -> None:
-    rig.start()
+    await rig.start()
     rig.heartbeat.attach_channel(WEB_CHANNEL_NAME, lambda _message: None)
     assert rig.heartbeat.submit(web_said("在吗"))
 
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.events[-1] == LiveEvent(TOPIC_ROUND, {"active": True, "web": True})
 
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     assert rig.events[-1] == LiveEvent(TOPIC_ROUND, {"active": False})
 
 
 async def test_emergency_stop_pauses_publishing_and_resume_restores_it(
     inbox_rig: Rig,
 ) -> None:
-    inbox_rig.start()
+    await inbox_rig.start()
     assert inbox_rig.inbox is not None
     message = inbox_rig.inbox.add(inbox_perception(), sender_name="对方")
     assert message is not None
@@ -236,13 +236,13 @@ async def test_emergency_stop_pauses_publishing_and_resume_restores_it(
 async def test_a_halt_from_another_process_is_noticed_on_the_next_beat(
     inbox_rig: Rig,
 ) -> None:
-    inbox_rig.start()
+    await inbox_rig.start()
     assert inbox_rig.inbox is not None
     message = inbox_rig.inbox.add(inbox_perception(), sender_name="对方")
     assert message is not None
     inbox_rig.emergency_stop.engage("命令行急停")
 
-    inbox_rig.heartbeat.beat()
+    await inbox_rig.heartbeat.beat()
 
     assert inbox_rig.heartbeat.live_events.paused
     inbox_rig.heartbeat.on_inbox_message(message)
@@ -250,7 +250,7 @@ async def test_a_halt_from_another_process_is_noticed_on_the_next_beat(
 
 
 async def test_maintenance_pause_and_shutdown_stop_publishing(rig: Rig) -> None:
-    rig.start()
+    await rig.start()
 
     rig.heartbeat.set_maintenance_paused(True)
     assert rig.heartbeat.live_events.paused
@@ -262,7 +262,7 @@ async def test_maintenance_pause_and_shutdown_stop_publishing(rig: Rig) -> None:
 
 
 async def test_a_finished_language_batch_publishes_a_language_resource(rig: Rig) -> None:
-    rig.start()
+    await rig.start()
     learner = TrimmedLearner(
         LanguageKind.EXPRESSION,
         "web",
@@ -279,7 +279,7 @@ async def test_a_finished_language_batch_publishes_a_language_resource(rig: Rig)
 async def test_an_index_batch_publishes_its_resource(
     rig: Rig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    rig.start()
+    await rig.start()
 
     async def build() -> tuple[bool, bool]:
         return False, True

@@ -131,9 +131,9 @@ class Rig:
 
     async def _think(self) -> None:
         heartbeat = self.core.heartbeat
-        heartbeat.beat()
+        await heartbeat.beat()
         await heartbeat.wait_for_thought()
-        heartbeat.beat()
+        await heartbeat.beat()
 
     async def say_on_terminal(self, text: str) -> None:
         perception = Perception(

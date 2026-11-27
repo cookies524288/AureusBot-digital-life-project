@@ -216,9 +216,9 @@ async def test_blocked_judgment_does_not_hold_the_reply_and_is_adopted_once(env:
                 trust=TrustLevel.VERIFIED_USER,
             )
         )
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         await rig.heartbeat.wait_for_thought()
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
 
     await say("你这个破 AI")
     await asyncio.wait_for(started.wait(), timeout=5)
@@ -269,14 +269,14 @@ async def test_judgment_finishing_first_still_does_not_change_the_current_reply(
             trust=TrustLevel.VERIFIED_USER,
         )
     )
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
     await asyncio.wait_for(started.wait(), timeout=5)
 
     gate.set()
     [pending] = rig.heartbeat._pending_judgments
     await asyncio.wait({pending.task}, timeout=5)
     await rig.heartbeat.wait_for_thought()
-    rig.heartbeat.beat()
+    await rig.heartbeat.beat()
 
     [replyer] = [request for request in organs.requests if request.organ_id == "replyer"]
     assert "怒气" not in replyer.system_context
@@ -303,9 +303,9 @@ async def test_judge_does_not_reuse_private_or_other_group_evidence(env: Env) ->
                 mentioned=True,
             )
         )
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         await rig.heartbeat.wait_for_thought()
-        rig.heartbeat.beat()
+        await rig.heartbeat.beat()
         await rig.settle_judgments()
 
     _, _, _, group_judge = [item for item in rig.organs.requests if item.organ_id == "judge"]

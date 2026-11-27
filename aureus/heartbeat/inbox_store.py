@@ -1,5 +1,6 @@
 """持久收件箱：按会话保留收到的感知和阅读状态。"""
 
+import asyncio
 import json
 from collections.abc import Iterable
 from contextlib import closing
@@ -314,7 +315,7 @@ def _advance_read_range(database: Connection, conversation_id: int, confirmed: s
 
 
 class InboxStore:
-    """使用数据根目录的 SQLite 保存消息，每次操作独立提交。"""
+    """每次操作在调用线程独立开关连接；写事务以 BEGIN IMMEDIATE 串行。"""
 
     def __init__(self, path: Path, clock: Clock) -> None:
         self._path = path
@@ -763,7 +764,7 @@ class InboxStore:
             return messages
 
     def read_latest_and_clear(
-        self, conversation: ConversationKey, *, limit: int
+        self, conversation: ConversationKey, *, limit: int, through: int | None = None
     ) -> list[InboxMessage]:
         """读取最新的 limit 条未读，并在同一事务内清空该会话的全部未读（D145）。
 
@@ -774,6 +775,7 @@ class InboxStore:
         Args:
             conversation: 完整会话路由。
             limit: 本次最多返回几条未读。
+            through: 可选的查询快照上界；清空时保留更新的来信。
 
         Returns:
             最新的至多 limit 条未读，按入箱序号升序（时间顺序）；没有未读时返回空列表。
@@ -781,21 +783,19 @@ class InboxStore:
         with closing(open_connection(self._path)) as database, database:
             database.execute("BEGIN IMMEDIATE")
             rows = database.execute(
-                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD} ORDER BY m.id DESC LIMIT ?",
-                (*conversation.parameters(), limit),
+                f"{_MESSAGES} WHERE {_KEY} AND {_UNREAD}"
+                " AND (? IS NULL OR m.id <= ?) ORDER BY m.id DESC LIMIT ?",
+                (*conversation.parameters(), through, through, limit),
             ).fetchall()
             if not rows:
                 return []
             messages = [_message(row) for row in reversed(rows)]
             database.execute(
-                f"""UPDATE inbox_conversations SET last_read_id = (
-                    SELECT MAX(m.id) FROM inbox_messages m
-                    WHERE m.conversation_id = inbox_conversations.id
-                      AND m.direction = 'incoming'
-                ), first_read_id = COALESCE(first_read_id, (SELECT MIN(m.id) FROM inbox_messages m
+                f"""UPDATE inbox_conversations SET last_read_id = ?,
+                    first_read_id = COALESCE(first_read_id, (SELECT MIN(m.id) FROM inbox_messages m
                     WHERE m.conversation_id = inbox_conversations.id AND m.direction = 'incoming'))
                 WHERE {_KEY}""",
-                conversation.parameters(),
+                (rows[0]["id"], *conversation.parameters()),
             )
             return messages
 
@@ -959,6 +959,7 @@ class InboxStore:
         special_senders: Iterable[str] = (),
         after: tuple[int, int] | None = None,
         limit: int = 50,
+        through: int | None = None,
     ) -> list[InboxMessage]:
         """绑定用户优先，特别关心、提及与引用的来信按入箱顺序（D149）。
 
@@ -968,6 +969,7 @@ class InboxStore:
             special_senders: 该平台上特别关心的账号。
             after: 上一页最后一行的（优先档，入箱序号）；0 是绑定用户，1 是其余优先来信。
             limit: 本页最多几行。
+            through: 可选的查询快照上界。
 
         Returns:
             每条消息只返回一次；两档内部都按入箱序号升序。
@@ -984,6 +986,7 @@ class InboxStore:
                                 THEN 0 ELSE 1 END AS identity_rank
                     FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
                     WHERE {_KEY} AND {_UNREAD} AND m.trust != ?
+                      AND (? IS NULL OR m.id <= ?)
                       AND (m.sender_id IN (SELECT value FROM json_each(?)) OR m.mentioned = 1
                            OR (m.quoted_message_id IS NOT NULL AND EXISTS (
                                SELECT 1 FROM inbox_messages own
@@ -999,6 +1002,8 @@ class InboxStore:
                     json.dumps(owners),
                     *conversation.parameters(),
                     TrustLevel.UNVERIFIED,
+                    through,
+                    through,
                     json.dumps(tuple(senders)),
                     after_rank,
                     after_rank,
@@ -1023,3 +1028,7 @@ class InboxStore:
             ).fetchall()
             for conversation in conversations:
                 _advance_read_range(database, conversation["conversation_id"], confirmed)
+
+    async def async_mark_read(self, ids: Iterable[int]) -> None:
+        """在线程中推进已读水位，不把连接带出该线程。"""
+        await asyncio.to_thread(self.mark_read, tuple(ids))

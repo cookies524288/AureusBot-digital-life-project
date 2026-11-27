@@ -45,7 +45,7 @@ async def test_platform_summary_respects_gates(tmp_path: Path, gate: str) -> Non
             visibility=VisibilityScope.USER_ONLY,
             metadata={"channel": "web", "trust": "verified_user"},
         )
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
         assert [r.context.get("task") for r in env.organs.requests] == (
             ["memory_consolidation"] if gate == "allowed" else []

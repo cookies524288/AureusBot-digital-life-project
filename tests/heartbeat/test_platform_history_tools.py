@@ -186,9 +186,9 @@ async def test_private_fact_reaches_group_planner_and_replyer(
                 route=MessageRoute("bot", "group", "target", "current"),
             )
         )
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         names = [request.organ_id for request in requests]
         if mode == "other_query_revoked":
             assert names == ["planner"]
@@ -417,7 +417,7 @@ async def test_actual_heartbeat_declares_scope_and_uses_tool_message(
         identity=Identity.model_validate(
             {
                 "facts": {"name": "测试", "birthday": "2026-11-24"},
-                "user": {"name": "维护者"},
+                "user": {"name": "维护者", "accounts": [{"platform": "qq", "id": "owner"}]},
                 "persona": {"immutable": "温和。"},
             }
         ),
@@ -436,9 +436,9 @@ async def test_actual_heartbeat_declares_scope_and_uses_tool_message(
         store.mark_read([old.id])
         heart.wake_up()
         heart.submit(perception(KEY, "now", "请查历史"))
-        heart.beat()
+        await heart.beat()
         await heart.wait_for_thought()
-        heart.beat()
+        await heart.beat()
         logs = timeline.query(TimelineQuery(limit=50))
         assert any(tool_name in str(record.metadata) for record in logs)
         assert all("旧文只给工具" not in str(record.metadata) + record.content for record in logs)
