@@ -1,19 +1,25 @@
 """SQLite 连接的测试：被别的进程占着写锁时，等锁有上限（审查 M2）。"""
 
+import asyncio
 import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Barrier, Thread, current_thread
+from typing import Any
 
 import pytest
 
 from aureus.common import BudgetCalendar, ManualClock
 from aureus.common import sqlite as sqlite_support
+from aureus.heartbeat import MessageRoute, Perception, TrustLevel
+from aureus.heartbeat import inbox_store as inbox_module
+from aureus.heartbeat.inbox_store import InboxStore
 from aureus.organs import CallAttempt
 from aureus.safety import Ledger
-from aureus.timeline import ActorType, TimelineDatabase
+from aureus.timeline import ActorType, TimelineDatabase, TimelineQuery, VisibilityScope
 
 START = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
 # 测试里把等锁时间缩到很短，省得每个用例白等一秒。
@@ -80,3 +86,104 @@ def test_ledger_record_gives_up_when_the_write_lock_is_held(tmp_path: Path) -> N
         ledger.record("replyer", [attempt])
     finally:
         ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_timeline_uses_one_writer_and_separate_read_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    timeline = TimelineDatabase(tmp_path / "timeline.db", ManualClock(START))
+    timeline.open()
+    writer_connections: list[tuple[Thread, sqlite3.Connection]] = []
+    original_connection = timeline._connection
+    readers_ready = Barrier(2)
+
+    def track_connection(*, read_only: bool = True) -> sqlite3.Connection:
+        connection = original_connection(read_only=read_only)
+        if not read_only:
+            writer_connections.append((current_thread(), connection))
+        return connection
+
+    def read() -> tuple[Thread, sqlite3.Connection]:
+        result = current_thread(), original_connection()
+        readers_ready.wait(timeout=5)
+        timeline.query(TimelineQuery())
+        assert original_connection() is result[1]
+        return result
+
+    monkeypatch.setattr(timeline, "_connection", track_connection)
+    try:
+        reader_tasks = [asyncio.create_task(timeline.async_read(read)) for _ in range(2)]
+        records = await asyncio.gather(
+            *(timeline.async_append("message", str(index), ActorType.ME) for index in range(8))
+        )
+        reader_connections = await asyncio.gather(*reader_tasks)
+        assert [record.id for record in records] == list(range(1, 9))
+        assert len(writer_connections) == 8
+        assert len(set(writer_connections)) == 1
+        workers = {*writer_connections, *reader_connections}
+        assert len({thread for thread, _ in workers}) == 3
+        assert len({connection for _, connection in workers}) == 3
+        assert all(thread is not current_thread() and thread.is_alive() for thread, _ in workers)
+    finally:
+        timeline.close()
+
+    for thread, connection in workers:
+        assert not thread.is_alive()
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_inbox_operations_open_and_close_each_connection_on_the_calling_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "inbox.db"
+    store = InboxStore(path, ManualClock(START))
+    writers_ready = Barrier(2)
+
+    class TrackedConnection(sqlite3.Connection):
+        owner: Thread
+        closed_on: Thread | None = None
+        immediate = False
+
+        def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
+            if sql == "BEGIN IMMEDIATE":
+                self.immediate = True
+                writers_ready.wait(timeout=5)
+            return super().execute(sql, *args)
+
+        def close(self) -> None:
+            super().close()
+            self.closed_on = current_thread()
+
+    connections: list[TrackedConnection] = []
+
+    def connect(db_path: Path, *, read_only: bool = False) -> TrackedConnection:
+        connection = sqlite3.connect(db_path, factory=TrackedConnection)
+        connection.row_factory = sqlite3.Row
+        connection.owner = current_thread()
+        connections.append(connection)
+        return connection
+
+    def incoming(identifier: str) -> Perception:
+        return Perception(
+            "qq",
+            "fixture-sender",
+            identifier,
+            VisibilityScope.GROUP,
+            TrustLevel.VERIFIED_CONTACT,
+            route=MessageRoute("fixture-bot", "group", "fixture-group", identifier),
+        )
+
+    monkeypatch.setattr(inbox_module, "open_connection", connect)
+    messages = await asyncio.gather(
+        asyncio.to_thread(store.add, incoming("first")),
+        asyncio.to_thread(store.add, incoming("second")),
+    )
+    unread = await asyncio.to_thread(store.list_unread_conversations)
+    assert all(message is not None for message in messages)
+    assert len(unread) == 1 and unread[0].unread_count == 2
+    assert len(connections) == 3
+    assert len({connection.owner for connection in connections if connection.immediate}) == 2
+    assert all(connection.owner is connection.closed_on for connection in connections)
