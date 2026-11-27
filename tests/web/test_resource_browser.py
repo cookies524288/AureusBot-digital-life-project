@@ -788,6 +788,7 @@ def test_inbox_activity_panel_shows_latest_round_and_stops_after_leaving(browser
         """
       await waitFor(() => typeof renderInboxActivity === 'function' && state.loggedIn,
         '活动面板脚本未就绪');
+      pagePrefetchEnabled = false;
       const group = {platform:'qq',account_id:'1',kind:'group',recipient_id:'2'};
       const other = {platform:'qq',account_id:'1',kind:'group',recipient_id:'4'};
       const conversation = {key:group,name:'合成群'};
@@ -818,7 +819,10 @@ def test_inbox_activity_panel_shows_latest_round_and_stops_after_leaving(browser
           timelineRequests.push(path);
           const query = new URLSearchParams(path.split('?')[1]);
           const key = JSON.parse(query.get('conversation'));
-          return {ok:true,data:{records:records[JSON.stringify(key)] || []}};
+          const rows = records[JSON.stringify(key)] || [];
+          const since = Number(query.get('since_id'));
+          return {ok:true,data:{records:rows.filter(row => row.id > since),
+            since_id:rows.at(-1)?.id ?? since, has_more:false}};
         }
         return {ok:true,data:{messages:[],next_before_id:null}};
       };
@@ -848,7 +852,8 @@ def test_inbox_activity_panel_shows_latest_round_and_stops_after_leaving(browser
       const before = timelineRequests.length;
       PAGES.inbox.leave();
       await new Promise(resolve => setTimeout(resolve, 1700));
-      check(timelineRequests.length === before, '离开页面后停止轮询');
+      check(timelineRequests.length === before,
+        '离开页面后停止轮询：' + JSON.stringify(timelineRequests.slice(before)));
     """,
     )
 
