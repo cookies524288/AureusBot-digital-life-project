@@ -2337,7 +2337,10 @@ function trimChatEntries(fromNewest = false) {
 
 function chatScrollAnchor() {
   const log = $('chat-log');
+  const loaded = state.loaded;
   const top = log.getBoundingClientRect().top;
+  const previous = loaded.chatScrollAdjustment;
+  const carry = previous?.top === log.scrollTop ? previous.remainder : 0;
   let start = 0, end = chatEntries.length;
   while (start < end) {
     const middle = Math.floor((start + end) / 2);
@@ -2348,7 +2351,12 @@ function chatScrollAnchor() {
   if (!first) return () => {};
   const before = first.node.getBoundingClientRect().top;
   return () => {
-    if (first.node.parentElement === log) log.scrollTop += first.node.getBoundingClientRect().top - before;
+    delete loaded.chatScrollAdjustment;
+    if (first.node.parentElement !== log) return;
+    const wanted = log.scrollTop + first.node.getBoundingClientRect().top - before + carry;
+    const target = Math.max(0, Math.min(wanted, log.scrollHeight - log.clientHeight));
+    log.scrollTop = target;
+    loaded.chatScrollAdjustment = {top:log.scrollTop, remainder:target - log.scrollTop};
   };
 }
 
@@ -2372,8 +2380,10 @@ function addMessage(message) {
     if (chatEntries.length > CHAT_MAX_ENTRIES && !loaded.chatReadingOlder) loaded.chatHasOlder = true;
     trimChatEntries(loaded.chatReadingOlder);
     renderChatPages(loaded);
-    if (stick && !loaded.chatReadingOlder && !selectionTouches(log)) log.scrollTop = log.scrollHeight;
-    else restore();
+    if (stick && !loaded.chatReadingOlder && !selectionTouches(log)) {
+      delete loaded.chatScrollAdjustment;
+      log.scrollTop = log.scrollHeight;
+    } else restore();
     return;
   }
   chatEntries.push(entry);
@@ -2433,8 +2443,10 @@ function appendChatHistory(items, {initial = false, older = false} = {}) {
   }
   if (!older && chatEntries.length > CHAT_MAX_ENTRIES) loaded.chatHasOlder = true;
   trimChatEntries(older);
-  if (!older && stick && !selectionTouches(log)) log.scrollTop = log.scrollHeight;
-  else restore();
+  if (!older && stick && !selectionTouches(log)) {
+    delete loaded.chatScrollAdjustment;
+    log.scrollTop = log.scrollHeight;
+  } else restore();
 }
 
 function loadChatHistory(detached = false, quiet = false) {
@@ -2495,6 +2507,7 @@ function returnToLatestChat(detached = false) {
 function replaceChatWindow(loaded, items) {
   loaded.chatOlderRequest?.abort();
   delete loaded.chatOlderRequest;
+  delete loaded.chatScrollAdjustment;
   $('chat-older').disabled = false;
   loaded.chatReadingOlder = false;
   loaded.chatHasOlder = items.length >= CHAT_RECOVERY_PAGE_SIZE;

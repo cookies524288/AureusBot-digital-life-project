@@ -176,3 +176,42 @@ def test_chat_reconnect_bounds_recovery_and_reloads_once_only_for_large_gap() ->
         """,
         include_resource_pages=False,
     )
+
+
+def test_repeated_chat_trimming_preserves_fractional_scroll_anchor() -> None:
+    run_page_script(
+        r"""
+        const log = $('chat-log'), step = 72.59375;
+        let top = 0;
+        Object.defineProperty(log, 'scrollTop', {
+          get:() => top, set:value => top = Math.round(value),
+        });
+        Object.defineProperty(log, 'scrollHeight', {get:() => log.children.length * step});
+        log.clientHeight = 200;
+        log.getBoundingClientRect = () => ({top:0});
+        const insert = log.insertBefore;
+        log.insertBefore = function(node, next) {
+          node.getBoundingClientRect = () => {
+            const y = log.children.indexOf(node) * step - log.scrollTop;
+            return {top:y, bottom:y + step};
+          };
+          insert.call(log, node, next);
+        };
+        const row = id => ({id, kind:'me', channel:'web', content:String(id),
+          time:'2026-11-27T12:00:00Z'});
+        appendChatHistory(Array.from({length:500}, (_, index) => ({...row(index+1), who:'me'})));
+        function verifyWithScroll(firstId, position) {
+          log.scrollTop = position;
+          const anchor = chatEntries.find(entry => entry.node.getBoundingClientRect().bottom > 0);
+          const original = anchor.node.getBoundingClientRect().top;
+          for (let id = firstId; id < firstId + 20; id++) {
+            addMessage(row(id));
+            assert.ok(Math.abs(anchor.node.getBoundingClientRect().top - original) <= 0.5);
+          }
+        }
+        verifyWithScroll(501, 18000);
+        verifyWithScroll(521, 13500);
+        assert.equal(chatEntries.length, 500);
+        """,
+        include_resource_pages=False,
+    )
