@@ -466,27 +466,58 @@ async def test_image_backfill_marks_unreadable_and_backs_off(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_image_backfill_reaches_readable_after_unreadable(tmp_path: Path) -> None:
+    """前面的附件读不到也不挡住后面的可读图片，同一批继续写入（D151）。"""
+    harness = Harness(tmp_path, inbox=True)
+    assert harness.inbox is not None
+    harness.inbox.add(image_message("group-1", "m1", "file-1", "file-2"))
+    images = InboxImageIndex(harness.database, harness.call.call, lambda: True)
+
+    async def read(perception: Perception, attachment: MediaReference) -> tuple[bytes, str] | None:
+        if attachment.file_id == "file-1":
+            return None
+        return attachment.file_id.encode(), "image/png"
+
+    more, written = await images.backfill_batch(harness.inbox, read, lambda _key: True, 1)
+
+    assert (more, written) == (True, True)
+    with closing(open_connection(harness.database)) as connection:
+        stored = connection.execute("SELECT attachment FROM inbox_image_vectors").fetchall()
+    assert [row[0] for row in stored] == ["file-2"]
+    assert [row[1] for row in retry_rows(harness.database)] == ["file-1"]
+
+
+@pytest.mark.asyncio
+async def test_image_backfill_no_progress_returns_no_more(tmp_path: Path) -> None:
+    """全部读不到时本批不写任何向量，返回没有更多可做，构建器不再空转（D151）。"""
+    harness = Harness(tmp_path, inbox=True)
+    assert harness.inbox is not None
+    for name, file_id in (("m1", "file-1"), ("m2", "file-2"), ("m3", "file-3")):
+        assert harness.inbox.add(image_message("group-1", name, file_id)) is not None
+    images = InboxImageIndex(harness.database, harness.call.call, lambda: True)
+    reads: list[str] = []
+
+    async def read(perception: Perception, attachment: MediaReference) -> tuple[bytes, str] | None:
+        reads.append(attachment.file_id)
+        return None
+
+    more, written = await images.backfill_batch(harness.inbox, read, lambda _key: True, 2)
+
+    assert (more, written) == (False, False)
+    assert reads == ["file-1", "file-2", "file-3"]
+    assert harness.call.requests == []
+    assert [row[1] for row in retry_rows(harness.database)] == ["file-1", "file-2", "file-3"]
+
+
+@pytest.mark.asyncio
 async def test_image_backfill_stops_after_circuit_skip(tmp_path: Path) -> None:
-    """服务商熔断时本批只尝试一次就停下，返回还有缺项，不抛到心跳（D150）。"""
+    """服务商熔断时本批立即停下，返回（没有更多，是否已写入），不抛到心跳（D150、D151）。"""
     harness = Harness(tmp_path, inbox=True)
     assert harness.inbox is not None
     harness.call.reject = OrganCallError(
         "image_embedding", ["服务商熔断冷却中"], skipped_by_circuit=True
     )
-
-    harness.inbox.add(
-        Perception(
-            "qq",
-            "bot",
-            "图片",
-            VisibilityScope.GROUP,
-            TrustLevel.VERIFIED_CONTACT,
-            route=MessageRoute("bot", "group", "group-1", "m1"),
-            attachments=tuple(
-                MediaReference("image", file_id) for file_id in ("file-1", "file-2", "file-3")
-            ),
-        )
-    )
+    harness.inbox.add(image_message("group-1", "m1", "file-1", "file-2", "file-3"))
     images = InboxImageIndex(harness.database, harness.call.call, lambda: True)
 
     async def read(perception: Perception, attachment: MediaReference) -> tuple[bytes, str]:
@@ -494,10 +525,28 @@ async def test_image_backfill_stops_after_circuit_skip(tmp_path: Path) -> None:
 
     more, written = await images.backfill_batch(harness.inbox, read, lambda _key: True, 5)
 
-    assert (more, written) == (True, False)
+    assert (more, written) == (False, False)
     assert [request.organ_id for request in harness.call.requests] == ["image_embedding"]
     with closing(open_connection(harness.database)) as connection:
         assert connection.execute("SELECT COUNT(*) FROM inbox_image_vectors").fetchone()[0] == 0
+
+    partial = Harness(tmp_path / "partial", inbox=True)
+    assert partial.inbox is not None
+    partial.inbox.add(image_message("group-1", "m1", "file-1", "file-2"))
+    succeed_once = partial.call.call
+
+    async def call(request: OrganRequest) -> OrganResponse:
+        if partial.call.requests:
+            raise OrganCallError("image_embedding", ["服务商熔断冷却中"], skipped_by_circuit=True)
+        return await succeed_once(request)
+
+    images = InboxImageIndex(partial.database, call, lambda: True)
+    more, written = await images.backfill_batch(partial.inbox, read, lambda _key: True, 5)
+
+    assert (more, written) == (False, True)
+    with closing(open_connection(partial.database)) as connection:
+        stored = connection.execute("SELECT attachment FROM inbox_image_vectors").fetchall()
+    assert [row[0] for row in stored] == ["file-1"]
 
 
 @pytest.mark.asyncio

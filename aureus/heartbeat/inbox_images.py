@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 # 退避曲线：读不到的旧附件不必每拍重试；首次 30 分钟，逐次翻倍，封顶 24 小时（D151）。
 _RETRY_BASE_SECONDS = 30 * 60
 _RETRY_MAX_SECONDS = 24 * 60 * 60
+# 每批扫描比写入条数更多的候选，坏附件才不会挡住后面的可读图片（D151）。
+_SCAN_MULTIPLIER = 4
+_SCAN_MIN_CANDIDATES = 64
+_SCAN_MAX_CANDIDATES = 256
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inbox_image_vectors (
@@ -126,27 +130,34 @@ class InboxImageIndex:
     ) -> tuple[bool, bool]:
         """按会话权限回填一批已收到但未建索引的图片（D125）。
 
+        每批可以扫描比写入条数更多的候选，跳过读不到的附件继续往后找（D151）。
+
         Returns:
-            （是否还有未建索引的图片，本批是否写入过向量）。
+            （是否还有未建索引的图片，本批是否写入过向量）；本批没有写入任何向量时
+            两者都为假，构建器结束本轮，不再连续空转。
         """
         if not self._enabled():
             return False, False
         if self._backfilling:
-            return True, False
+            return False, False
         self._backfilling = True
         try:
             now = self._clock.now()
             conversations = await asyncio.to_thread(store.visible_conversation_keys)
             remaining = limit
+            scanned = min(max(limit * _SCAN_MULTIPLIER, _SCAN_MIN_CANDIDATES), _SCAN_MAX_CANDIDATES)
             written = 0
             skipped = 0
             for conversation in conversations:
-                if remaining <= 0:
+                if remaining <= 0 or scanned <= 0:
                     break
                 if not allows(conversation):
                     continue
-                rows = await asyncio.to_thread(self._unindexed_images, conversation, remaining, now)
+                rows = await asyncio.to_thread(self._unindexed_images, conversation, scanned, now)
+                scanned -= len(rows)
                 for message_id, position, file_id in rows:
+                    if remaining <= 0:
+                        break
                     loaded = await asyncio.to_thread(
                         store.get_visible_image, conversation, message_id, position
                     )
@@ -174,8 +185,8 @@ class InboxImageIndex:
                             stop_on_circuit=True,
                         )
                     except OrganCallError:
-                        # 服务商正在熔断冷却：本批立即停下，下一轮心跳再试（D150）。
-                        return True, written > 0
+                        # 服务商正在熔断冷却：本批立即停下，下一拍再试（D150、D151）。
+                        return False, written > 0
                     except SQLiteError:
                         # 数据库本身不可用，写不了退避记录，下一拍再试即可（D151）。
                         logger.exception("图片向量索引写入失败")
@@ -191,7 +202,7 @@ class InboxImageIndex:
                         skipped += 1
             if skipped:
                 logger.debug("图片索引本轮跳过 %s 条暂不可用的附件", skipped)
-            return remaining == 0 or skipped > 0, written > 0
+            return written > 0, written > 0
         finally:
             self._backfilling = False
 
