@@ -118,6 +118,7 @@ class HeartbeatConfig(BaseModel):
     # 说话方式（路线图 1.7，D60）：把一段回复拆成几条短消息发出。关掉后整段一条发出。
     split_reply_enabled: bool = True
     reply_split_mode: Literal["natural", "explicit"] = "natural"
+    short_reply_skip_split_max_chars: int = Field(default=0, ge=0, le=500)
     chat_reminders_enabled: bool = True
     chat_nudges_enabled: bool = True
     chat_rechecks_enabled: bool = True
@@ -133,6 +134,7 @@ class HeartbeatConfig(BaseModel):
     # 一条至少多少个字；更短的句子并进相邻的一句。
     min_message_chars: int = Field(default=4, ge=1)
     typing_delay_enabled: bool = True
+    typing_speed_multiplier: float = Field(default=1.0, ge=0.1, le=10, allow_inf_nan=False)
     typing_han_seconds: float = Field(default=0.9, ge=0, allow_inf_nan=False)
     typing_other_seconds: float = Field(default=0.38, ge=0, allow_inf_nan=False)
     typing_jitter_min_seconds: float = Field(default=0.3, ge=0, allow_inf_nan=False)

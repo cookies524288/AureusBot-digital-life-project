@@ -185,6 +185,48 @@ async def test_switching_splitting_off_sends_the_whole_reply(
     assert rig.replies() == [REPLY]
 
 
+@pytest.mark.parametrize("max_chars", [0, len(REPLY) - 1, len(REPLY)])
+async def test_short_reply_skip_is_opt_in_and_uses_visible_length(
+    made: list[TimelineDatabase], tmp_path: Path, max_chars: int
+) -> None:
+    marked = "<n>".join(PIECES)
+    rig = make_rig(
+        made,
+        tmp_path,
+        replies=[marked],
+        reply_split_mode="explicit",
+        typing_delay_enabled=False,
+        short_reply_skip_split_max_chars=max_chars,
+    )
+    await rig.say("试试短回复")
+    assert rig.replies() == ([REPLY] if max_chars == len(REPLY) else PIECES)
+
+
+@pytest.mark.parametrize(
+    ("enabled", "multiplier", "second_at"), [(True, 1, 2), (True, 2, 1), (False, 2, 0)]
+)
+async def test_typing_speed_multiplier_only_changes_later_enabled_delays(
+    made: list[TimelineDatabase], tmp_path: Path, enabled: bool, multiplier: float, second_at: float
+) -> None:
+    rig = make_rig(
+        made,
+        tmp_path,
+        replies=["首<n>汉字"],
+        reply_split_mode="explicit",
+        typing_delay_enabled=enabled,
+        typing_han_seconds=1,
+        typing_jitter_min_seconds=0,
+        typing_jitter_max_seconds=0,
+        typing_speed_multiplier=multiplier,
+    )
+    await rig.say("试试打字速度")
+    if second_at:
+        assert rig.replies() == ["首"]
+        rig.advance(second_at)
+    assert rig.replies() == ["首", "汉字"]
+    assert rig.delivery_times == [rig.started_at, rig.started_at + timedelta(seconds=second_at)]
+
+
 @pytest.mark.parametrize("marked", [True, False])
 async def test_explicit_mode_strips_private_wrappers_but_protects_quoted_examples(
     made: list[TimelineDatabase],

@@ -1997,6 +1997,35 @@ async def test_remote_calls_reuse_one_client(
 
 
 @pytest.mark.asyncio
+async def test_prompt_measurements_observe_usage_without_logging_prompt(keys: KeyResolver) -> None:
+    absent = make_response("回复", 100, 20)
+    del absent.usage.prompt_tokens_details
+    completion = FakeCompletion(absent, make_response("回复", 100, 20, cached=40))
+    organ = make_organ(completion, keys)
+    prompt = "仅测试用的合成前缀"
+    rows: list[str] = []
+    sink = logger.add(
+        lambda message: rows.append(message.record["message"]),
+        level="DEBUG",
+        filter=lambda record: record["message"].startswith("model_prompt_measurement "),
+    )
+    try:
+        for message in ("一次来信", "另一次来信"):
+            response = await organ.process(OrganRequest("replyer", message, system_context=prompt))
+            assert response.suggestion == "回复"
+    finally:
+        logger.remove(sink)
+    assert len(rows) == 2
+    fields = [dict(item.split("=", 1) for item in row.split()[1:]) for row in rows]
+    assert fields[0]["prefix_tag"] == fields[1]["prefix_tag"]
+    assert fields[0]["prefix_bytes"] == str(len(prompt.encode("utf-8")))
+    assert fields[0]["prompt_tokens"] == fields[1]["prompt_tokens"] == "100"
+    assert [row["cached_tokens"] for row in fields] == ["None", "40"]
+    assert all(prompt not in row and "来信" not in row for row in rows)
+    assert [call["messages"][0]["content"] for call in completion.calls] == [prompt, prompt]
+
+
+@pytest.mark.asyncio
 async def test_remote_chat_still_uses_litellm(
     keys: KeyResolver, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -121,12 +121,12 @@ class ReplyOutbox:
         if not config.typing_delay_enabled:
             return 0.0
         han_characters = sum(_is_han(character) for character in text)
-        return round(
+        delay = (
             han_characters * config.typing_han_seconds
             + (len(text) - han_characters) * config.typing_other_seconds
-            + uniform(config.typing_jitter_min_seconds, config.typing_jitter_max_seconds),
-            6,
+            + uniform(config.typing_jitter_min_seconds, config.typing_jitter_max_seconds)
         )
+        return round(delay / config.typing_speed_multiplier, 6)
 
     def has_pending(self, target: Perception) -> bool:
         """查看目标会话是否还在投递之前的回复。"""

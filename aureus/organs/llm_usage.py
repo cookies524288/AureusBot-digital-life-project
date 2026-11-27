@@ -27,6 +27,7 @@ class TokenUsage:
     # 服务商没返回可信的用量时为 False：extract_usage 这时给出的三个数都是 0，但不代表真的
     # 没花钱。适配器会换成按 06 号文档 12.3 节往多里估的数，known 仍为 False，费用算不出来。
     known: bool = True
+    cache_reported: bool = False
 
 
 def _as_count(value: object) -> int | None:
@@ -61,9 +62,14 @@ def extract_usage(response: Any) -> TokenUsage:
     if prompt is None or completion is None or prompt + completion == 0:
         return TokenUsage(known=False)
     details = getattr(usage, "prompt_tokens_details", None)
-    cached = _as_count(getattr(details, "cached_tokens", None)) or 0
+    cached = _as_count(getattr(details, "cached_tokens", None))
     # 命中缓存的部分不可能比整个输入还多，多了就是数据有问题，按输入的总数封顶。
-    return TokenUsage(prompt, completion, min(cached, prompt))
+    return TokenUsage(
+        prompt,
+        completion,
+        min(cached or 0, prompt),
+        cache_reported=cached is not None and cached <= prompt,
+    )
 
 
 def _local_minutes(moment: datetime, timezone: tzinfo | None) -> int:

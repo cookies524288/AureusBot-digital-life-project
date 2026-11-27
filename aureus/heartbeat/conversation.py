@@ -1440,9 +1440,14 @@ class ConversationFlow:
                         outcome, response=None, notice="模型返回了空回复，这次没有回复。"
                     )
                 text = draft.text.strip()
-                if self._config.split_reply_enabled and explicit:
+                if (
+                    not self._config.split_reply_enabled
+                    or len(text) <= self._config.short_reply_skip_split_max_chars
+                ):
+                    sections = (text,)
+                elif explicit:
                     sections = draft.explicit_segments(self._config.max_reply_messages)
-                elif self._config.split_reply_enabled:
+                else:
                     suggestion = (
                         await self._suggest_reply_splits(job, draft)
                         if self.has_fast_model
@@ -1453,8 +1458,6 @@ class ConversationFlow:
                         max_messages=self._config.max_reply_messages,
                         min_chars=self._config.min_message_chars,
                     )
-                else:
-                    sections = (text,)
             if not sections:
                 return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
             later = None

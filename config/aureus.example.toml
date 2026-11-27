@@ -86,6 +86,8 @@ config_version = 1
 # split_reply_enabled = true
 # natural 保留原有自然分段；explicit 只把代码以外明确的 <n> 作为气泡边界。
 # reply_split_mode = "natural"
+# 不超过此字数时整条发，不调用分段器（0 默认关闭，范围 0～500）。
+# short_reply_skip_split_max_chars = 0
 # 下列聊天工具可分别关闭。到期提醒只是一次发言判断，不保证发消息。
 # chat_reminders_enabled = true
 # chat_nudges_enabled = true
@@ -101,6 +103,8 @@ config_version = 1
 # 首段无需等待打字。开启后，同一回复的后续段按打字时长和随机延迟依次发出。
 # 关掉后跳过打字等待，仍按会话顺序发送。
 # typing_delay_enabled = true
+# 对后续分段应用打字速度倍率（范围 0.1～10，1.0 保持原速度）。
+# typing_speed_multiplier = 1.0
 # 后续段按其中的汉字与其他字符分别累加打字秒数。
 # typing_han_seconds = 0.9
 # typing_other_seconds = 0.38

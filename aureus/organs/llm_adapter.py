@@ -26,10 +26,11 @@ import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from hashlib import sha256
+from hashlib import blake2s, sha256
 from io import BytesIO
 from ipaddress import ip_address
 from math import isfinite
+from secrets import token_bytes
 from types import SimpleNamespace
 from typing import Any, Self
 
@@ -70,6 +71,7 @@ CompletionFunction = Callable[..., Awaitable[Any]]
 SleepFunction = Callable[[float], Awaitable[None]]
 # 估算输入 token 数的函数。默认是 count_prompt_tokens；测试时换成假的，结果固定。
 TokenCounter = Callable[[list[dict[str, str]]], int]
+_PREFIX_FINGERPRINT_KEY = token_bytes(32)
 
 
 def _has_reasoning(value: Any) -> bool:
@@ -655,7 +657,7 @@ _SHARED_CLIENTS: list[_SharedClientEntry] = []
 
 
 def _shared_client(
-    transport: httpx.AsyncBaseTransport | None, *, trust_env: bool
+    transport: httpx.AsyncBaseTransport | None, *, trust_env: bool, provider: str
 ) -> httpx.AsyncClient:
     """取得当前事件循环共用的 HTTP 客户端，保留连接池（D128、D131）。
 
@@ -669,9 +671,11 @@ def _shared_client(
             and entry.trust_env is trust_env
             and not entry.client.is_closed
         ):
+            logger.debug("model_http_client provider={} reused=true", provider)
             return entry.client
     client = httpx.AsyncClient(transport=transport, trust_env=trust_env)
     _SHARED_CLIENTS.append(_SharedClientEntry(loop, transport, trust_env, client))
+    logger.debug("model_http_client provider={} reused=false", provider)
     return client
 
 
@@ -714,6 +718,7 @@ async def _post_embeddings(
     payload: dict[str, Any],
     params: dict[str, Any],
     *,
+    provider: str,
     transport: httpx.AsyncBaseTransport | None = None,
     local: bool = False,
     on_request: Callable[[float], None] | None = None,
@@ -724,6 +729,7 @@ async def _post_embeddings(
         base: 服务商地址，末尾不带斜杠。
         payload: 请求体。
         params: 服务商参数，提供超时和可选的 API 密钥。
+        provider: 配置中的服务商名，仅用于连接池复用日志。
         transport: 测试用的假网络；正式运行传 None。
         local: 回环免费端点，不使用环境里的代理。
         on_request: 收到完整响应后回调这次请求的耗时（秒），测速用。
@@ -732,7 +738,7 @@ async def _post_embeddings(
         带 data 和 usage 的响应；data 由调用方校验。
     """
     headers = {"Authorization": "Bearer " + params["api_key"]} if "api_key" in params else {}
-    client = _shared_client(transport, trust_env=not local)
+    client = _shared_client(transport, trust_env=not local, provider=provider)
     started = _request_time() if on_request is not None else 0.0
     response = await client.post(
         base + "/embeddings", headers=headers, json=payload, timeout=params["timeout"]
@@ -891,28 +897,27 @@ def _chat_headers(api_key: str | None) -> dict[str, str]:
 
 
 async def _post_chat(
+    client: httpx.AsyncClient,
     base: str,
     payload: dict[str, Any],
     timeout: float,
     *,
     api_key: str | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
     on_request: Callable[[float], None] | None = None,
 ) -> Any:
     """直接请求回环 OpenAI 兼容网关的 `/chat/completions`（D131）。
 
     Args:
+        client: 当前事件循环的回环 HTTP 客户端。
         base: 服务商地址，末尾不带斜杠。
         payload: 请求体。
         timeout: 服务商配置的超时（秒）。
         api_key: 有密钥时放进 Authorization 头。
-        transport: 测试用的假网络；正式运行传 None。
         on_request: 收到完整响应后回调这次请求的耗时（秒），测速用。
 
     Returns:
         与 litellm 非流式响应形状一致的响应。
     """
-    client = _shared_client(transport, trust_env=False)
     started = _request_time() if on_request is not None else 0.0
     response = await client.post(
         base + "/chat/completions",
@@ -933,15 +938,14 @@ async def _post_chat(
 
 
 async def _direct_chat_stream(
+    client: httpx.AsyncClient,
     base: str,
     payload: dict[str, Any],
     timeout: float,
     *,
     api_key: str | None = None,
-    transport: httpx.AsyncBaseTransport | None = None,
 ) -> AsyncIterator[Any]:
     """直接读取回环 OpenAI 兼容网关的流式 `/chat/completions`（D131）。"""
-    client = _shared_client(transport, trust_env=False)
     async with client.stream(
         "POST",
         base + "/chat/completions",
@@ -967,14 +971,16 @@ async def _direct_chat_stream(
             yield _stream_chunk(result)
 
 
-def _share_remote_client(library: Any | None, transport: httpx.AsyncBaseTransport | None) -> None:
+def _share_remote_client(
+    library: Any | None, transport: httpx.AsyncBaseTransport | None, provider: str
+) -> None:
     """让 litellm 的 OpenAI 兼容调用复用同一个带连接池的远程客户端（D132）。
 
     远程客户端沿用环境里的代理设置（trust_env=True）；本地回环另走直连，不经过这里。
     litellm 的其它协议由它自己按服务商缓存连接池。
     """
     if library is not None and getattr(library, "__name__", "") == "litellm":
-        library.aclient_session = _shared_client(transport, trust_env=True)
+        library.aclient_session = _shared_client(transport, trust_env=True, provider=provider)
 
 
 async def _send_chat(
@@ -1002,7 +1008,7 @@ async def _send_chat(
     endpoint = local_chat_endpoint(route)
     if endpoint is None:
         assert completion is not None  # 远程路线在构造器官时已加载 litellm。
-        _share_remote_client(library, transport)
+        _share_remote_client(library, transport, route.provider.name)
         return await completion(**kwargs)
     # 除了不进请求体的参数，其余都原样带上：额外参数、思考开关等新字段
     # 不需要在这里逐个登记（D134）。
@@ -1010,12 +1016,11 @@ async def _send_chat(
     payload["model"] = route.model.identifier
     timeout = kwargs["timeout"]
     api_key = kwargs.get("api_key")
+    client = _shared_client(transport, trust_env=False, provider=route.provider.name)
     if payload.get("stream"):
-        return _direct_chat_stream(
-            endpoint, payload, timeout, api_key=api_key, transport=transport
-        )
+        return _direct_chat_stream(client, endpoint, payload, timeout, api_key=api_key)
     return await _post_chat(
-        endpoint, payload, timeout, api_key=api_key, transport=transport, on_request=on_request
+        client, endpoint, payload, timeout, api_key=api_key, on_request=on_request
     )
 
 
@@ -1095,13 +1100,13 @@ async def probe_model(
     library = None if endpoint is not None else await asyncio.to_thread(_import_litellm)
     if library is not None:
         # 嵌入、转写和远程对话都复用同一个远程客户端（D132）。
-        _share_remote_client(library, transport)
+        _share_remote_client(library, transport, provider.name)
     completion: CompletionFunction | None = None
     if not embedding and not transcription and library is not None:
         completion = library.acompletion
     if endpoint is not None:
         # 先把共享客户端建好，测速延迟只从真正发出请求算起（D131）。
-        _shared_client(transport, trust_env=False)
+        _shared_client(transport, trust_env=False, provider=provider.name)
     params["model"] = LITELLM_PREFIX_BY_PROTOCOL[protocol] + model.identifier
     loop = asyncio.get_running_loop()
     started = loop.time()
@@ -1475,6 +1480,7 @@ class EmbeddingOrgan:
                     base,
                     {"model": route.model.identifier, "input": list(inputs)},
                     params,
+                    provider=route.provider.name,
                     transport=self._transport,
                     local=True,
                     on_request=on_request,
@@ -1485,7 +1491,7 @@ class EmbeddingOrgan:
             if protocol == "openai_responses":
                 protocol = "openai"
             library = await asyncio.to_thread(_import_litellm)
-            _share_remote_client(library, self._transport)
+            _share_remote_client(library, self._transport, route.provider.name)
             return await library.aembedding(
                 model=LITELLM_PREFIX_BY_PROTOCOL[protocol] + route.model.identifier,
                 input=list(inputs),
@@ -1503,6 +1509,7 @@ class EmbeddingOrgan:
             base,
             payload,
             params,
+            provider=route.provider.name,
             transport=self._transport,
             local=_loopback_endpoint(route.provider.base_url) is not None,
             on_request=on_request,
@@ -2062,6 +2069,19 @@ class LLMOrgan:
             raise _RouteFailureError(reason, retryable=_retryable(error)) from None
         if not usage.known:
             usage = self._estimate_usage(route, messages, 1, extra_bytes)
+        if self.organ_id != "voice":
+            prefix = messages[0]["content"].encode("utf-8")
+            logger.debug(
+                "model_prompt_measurement provider={} model={} organ={} prefix_bytes={} "
+                "prefix_tag={} prompt_tokens={} cached_tokens={}",
+                route.provider.name,
+                route.model.name,
+                self.organ_id,
+                len(prefix),
+                blake2s(prefix, key=_PREFIX_FINGERPRINT_KEY, digest_size=12).hexdigest(),
+                usage.prompt_tokens if usage.known else None,
+                usage.cached_tokens if usage.cache_reported else None,
+            )
         if text is None and tool_calls == ():
             # 已经用掉了 token 却没有可用内容（比如推理模型把 token 都花在
             # 思考上），这次请求照样要记账。D132：非流式空响应重试一次。
