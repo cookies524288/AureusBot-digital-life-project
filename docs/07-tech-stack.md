@@ -13,9 +13,9 @@
 
 | 用途 | 选择 | 理由 |
 |---|---|---|
-| 语言 | Python 3.12+ | A_memorix 要求 3.12+；AI 生态最好；读起来接近伪代码 |
+| 语言 | Python 3.12+ | 与项目声明的最低版本一致；器官调用、配置与异步任务使用 Python 生态 |
 | 并发 | asyncio | 单线程事件循环，底层基于 select/epoll 等系统调用 |
-| 数据库 | SQLite + aiosqlite | 一个文件就是一个数据库；aiosqlite 让它在事件循环里用而不卡住 |
+| 数据库 | SQLite（Python 标准库 `sqlite3`） | 数据保存在本地文件。时间线追加使用单写线程；异步查询交给读线程，提交后的监听器回到事件循环执行 |
 | 数据结构与配置 | pydantic | 带自动校验的数据结构；配置文件读进来时自动检查 |
 | 调用模型 | litellm + openai（Python SDK） | litellm 是统一的多协议调用库（MIT 协议），支持 OpenAI、OpenAI Responses、Anthropic、Gemini 等 100+ 家，同一套代码切换模型只需改配置；openai SDK 由 litellm 在内部调用 |
 | 网络 | httpx、websockets | 调用 API、连接平台 |
@@ -51,7 +51,7 @@
 
 | 项目 | 用来做什么 | 许可证 | 状态与注意 |
 |---|---|---|---|
-| [A_memorix](https://github.com/A-Dawn/A_memorix) | 记忆后端 | AGPL-3.0 | 2.x 正在从 MaiBot 插件拆成独立包，当前 2.0.0a4 还是测试版。对策：锁定版本，用我们自己的接口包住；备选是 SQLite 全文检索加向量扩展的简易实现 |
+| [A_Memorix](https://github.com/A-Dawn/A_memorix) | 资料迁移与部分检索、整理算法 | AGPL-3.0 | Aureus 自主管理记忆原件及派生索引，不需要启动上游服务或安装同名依赖；移植范围见[第三方代码清单](../THIRD_PARTY.md) |
 | [MaiBot](https://github.com/Mai-with-u/MaiBot) | 参考：拟人说话方式、群聊行为、QQ 官方和微信 ClawBot 适配器 | GPL-3.0 | 非常活跃。只学习和移植，不作为运行依赖 |
 | [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) | 操作电脑（Phase 4） | MIT | 活跃；通过 MCP 调用 |
 | [Ollama](https://github.com/ollama/ollama) | 本地模型服务 | MIT | 活跃 |

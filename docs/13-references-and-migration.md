@@ -11,7 +11,7 @@
 | 借鉴什么 | 项目 | 许可证 | 怎么用 |
 |---|---|---|---|
 | 表达方式、黑话、拟人说话 | [MaiBot](https://github.com/Mai-with-u/MaiBot) | GPL-3.0 | 已移植回复分段与记忆引用格式，详见[第三方代码清单](../THIRD_PARTY.md) |
-| 记忆 | A_memorix | AGPL-3.0 | 作为依赖，外面包一层我们的接口（D4），Phase 3 接入 |
+| 记忆 | A_Memorix | AGPL-3.0 | 移植检索与整理算法，兼容资料迁移；运行时使用 Aureus 的本地存储，不加载上游服务。逐文件来源见[第三方代码清单](../THIRD_PARTY.md) |
 | 自主行动 | OpenClaw | MIT | 可以移植；它是 TypeScript 项目，实际只参考设计 |
 | 自主行动（备选） | VCPToolBox | CC BY-NC-SA 4.0 | 有「非商业」限制，与 AGPL-3.0 不兼容：只读思路，不复制代码 |
 | 自我进化 | Hermes Agent（Nous Research） | MIT | 可以移植；它的技能兼容 agentskills.io 标准，Phase 5 参考 |
@@ -35,7 +35,7 @@ digital-life-core 值得借鉴的设计：用 `genome.json` 声明每种激素�
 |---|---|---|
 | 表达方式 | 主数据库表 `expressions` | `situation`（情景）、`style`（风格）、`content_list`（JSON 字符串数组，真实聊天片段）、`count`、`last_active_time`、`create_time`、`session_id`（空表示全局）、`checked`（是否人工审核）、`modified_by`。另有向量索引文件，是派生数据：导入后重建，不迁移 |
 | 黑话 | 主数据库表 `jargons` | `content`、`meaning`、`evidence_messages`（JSON，证据消息引用）、`session_id_dict`（JSON，各聊天流里的次数）、`count`、`is_jargon`、`is_complete`、`is_global`、`last_inference_count`、`created_by`（AI 或 MANUAL）、创建与更新时间 |
-| 长期记忆 | A_Memorix：配置 `config/a_memorix.toml`，数据 `data/a-memorix/` | 和我们 Phase 3 要接入的是同一个项目。它自带导入指南和脚本（如 `migrate_maibot_memory.py`）；MaiBot 一侧是 2.0.0，版本差异到 Phase 3 再核对 |
+| 长期记忆 | A_Memorix：配置 `config/a_memorix.toml`，数据 `data/a-memorix/` | 这是迁移的来源，不是 Aureus 运行时后端；已核对版本见 2.5 |
 | 人设 | 公开的人设导入协议 v1（`format` 为 `maibot.personality`） | 字段有 `personality`、`behavior_style`、`reply_style`、群聊和私聊提示词等 |
 
 ### 2.3 对应到 AureusBot

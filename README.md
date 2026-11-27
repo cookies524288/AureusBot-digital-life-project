@@ -71,7 +71,7 @@ uv run aureus lab list                         # 列出可离线运行的实验
 | | 激素 | `hormones` | 几分钟尺度的短期情绪：怒气、愉悦、低落、惊讶 |
 | | 心情 | `mood` | 几小时到几天的整体基调 |
 | 我的经历 | 时间线 | `timeline` | 唯一一条只追加的经历记录，每天整理成日记 |
-| | 记忆 | `memory` | 把经历沉淀成以后想得起来的东西，后端用 A_memorix |
+| | 记忆 | `memory` | 把经历存成可检索的原件与索引，由 Aureus 自己的记忆接口管理 |
 | | 人际 | `people` | 认识的每个人一份档案，不管对方用哪个平台 |
 | | 技能 | `skills` | 学会的做事方法，可以自己总结、自己写 |
 | 我怎么想、怎么做 | 心跳 | `heartbeat` | 常驻主循环，每一拍决定接下来做什么 |
@@ -89,7 +89,7 @@ uv run aureus lab list                         # 列出可离线运行的实验
 
 | 用途 | 项目 | 用法 |
 |---|---|---|
-| 长期记忆 | [A_memorix](https://github.com/A-Dawn/A_memorix) | 作为记忆后端，外面包一层我们自己的接口 |
+| 长期记忆 | [A_Memorix](https://github.com/A-Dawn/A_memorix) | 兼容资料导入，移植部分检索与整理算法；运行时不依赖上游服务 |
 | 拟人说话 | [MaiBot](https://github.com/Mai-with-u/MaiBot) | 参考它的规划器/回复器分层、说话方式、群聊行为和平台适配器 |
 | 操作电脑 | [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) | 在隔离环境里做它的"手" |
 | 本地模型 | [Ollama](https://github.com/ollama/ollama) | 在本地显卡上跑向量化和轻量任务 |
