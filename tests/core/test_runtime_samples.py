@@ -57,7 +57,6 @@ def make_sample(moment: datetime, inbox_count: int) -> BodySample:
         daily_quota=None,
         fatigue_level=0.0,
         stress_level=0.0,
-        backlog=0,
         night=False,
         focus="",
         inbox_count=inbox_count,

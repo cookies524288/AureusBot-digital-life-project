@@ -29,17 +29,15 @@ class FatigueReading:
 
 @dataclass(frozen=True)
 class StressReading:
-    """压力：最近调用失败得多不多，加上排队的消息有多少。"""
+    """压力：最近调用失败得多不多。"""
 
     enabled: bool
-    # [0, 1]；失败率和积压两项里较大的一项。取较大而不是相加，是为了说得清：
-    # 压力高就是其中一项高，自检通知能直接指出是哪一项。
+    # [0, 1]；最近调用结果里的失败率。
     level: float = 0.0
     failure_rate: float = 0.0
     # 统计了最近多少次调用、其中失败了几次。
     sampled_calls: int = 0
     failed_calls: int = 0
-    backlog: int = 0
     high: bool = False
     # 最近失败的原因，新的在前，去重，最多 MAX_FAILURE_REASONS 条。
     recent_failure_reasons: tuple[str, ...] = ()
@@ -94,14 +92,13 @@ def compute_fatigue(calls_in_window: int, config: BodyConfig) -> FatigueReading:
 
 
 def compute_stress(
-    recent_outcomes: Sequence[tuple[bool, str | None]], backlog: int, config: BodyConfig
+    recent_outcomes: Sequence[tuple[bool, str | None]], config: BodyConfig
 ) -> StressReading:
-    """按最近的调用结果和排队消息数算压力。
+    """按最近的调用结果算压力。
 
     Args:
         recent_outcomes: 最近的调用，从新到旧，每项是（是否成功，失败原因）；
             只看前 stress_window_calls 条。
-        backlog: 收到了还没回复的消息数。
         config: 身体配置。
     """
     if not config.stress_enabled:
@@ -110,17 +107,13 @@ def compute_stress(
     failures = [reason for succeeded, reason in window if not succeeded]
     # 分母至少是窗口大小：刚启动时调用很少，一次失败不该直接算成压力 100%。
     failure_rate = len(failures) / max(len(window), config.stress_window_calls)
-    backlog = max(backlog, 0)
-    backlog_level = min(backlog / config.stress_backlog_full, 1.0)
-    level = max(failure_rate, backlog_level)
     return StressReading(
         enabled=True,
-        level=level,
+        level=failure_rate,
         failure_rate=failure_rate,
         sampled_calls=len(window),
         failed_calls=len(failures),
-        backlog=backlog,
-        high=level >= config.stress_high_at,
+        high=failure_rate >= config.stress_high_at,
         recent_failure_reasons=_distinct_reasons(failures),
     )
 

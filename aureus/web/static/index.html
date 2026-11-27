@@ -3055,7 +3055,6 @@ const TL_FIELDS = {
   stress: {label:'压力', format: tlPercent},
   failed_calls: {label:'失败调用'},
   sampled_calls: {label:'采样调用'},
-  backlog: {label:'积压'},
   // 日程
   content: {label:'内容'},
   due_at: {label:'到期时间', format: (value, context) => tlTimeText(value, context)},
@@ -3336,7 +3335,7 @@ const TL_EVENT_DETAILS = {
     for (const key of ['reason', 'since']) add(key);
   },
   self_check(metadata, add) {
-    for (const key of ['stress', 'failed_calls', 'sampled_calls', 'backlog']) add(key);
+    for (const key of ['stress', 'failed_calls', 'sampled_calls']) add(key);
   },
   organ_call_rejected(metadata, add) {
     add('organ_id');
@@ -6729,9 +6728,8 @@ const CFG_FIELDS = {
   'body.fatigue_full_calls': ['满疲劳调用数', '统计时段内调用多少次算达到满疲劳。'],
   'body.fatigue_high_at': ['高疲劳门槛', '疲劳值达到多少算偏高。'],
   'body.fatigue_batch_seconds': ['疲劳合并等待（秒）', '疲劳时等多少秒，把收到的消息合在一起回。'],
-  'body.stress_enabled': ['压力调节', '是否根据调用和消息积压情况计算压力。'],
+  'body.stress_enabled': ['压力调节', '是否根据调用失败情况计算压力。'],
   'body.stress_window_calls': ['压力统计次数', '计算压力时参考最近多少次调用。'],
-  'body.stress_backlog_full': ['满压力积压数', '积压多少条消息时，积压这一项算满压力。'],
   'body.stress_high_at': ['高压力门槛', '压力值达到多少算偏高。'],
   'body.stress_lowers_tier': ['高压力降档', '压力偏高时是否降低回复档位。'],
   'body.social_need_enabled': ['社交需求', '是否随独处时间累计社交需求。'],

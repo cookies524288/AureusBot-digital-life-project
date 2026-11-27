@@ -69,11 +69,10 @@ class Body:
         """身体配置（心跳按它决定要不要攒消息、夜里要不要放慢）。"""
         return self._config
 
-    def read(self, backlog: int = 0, last_conversation_at: datetime | None = None) -> BodyReading:
+    def read(self, last_conversation_at: datetime | None = None) -> BodyReading:
         """读全部信号。
 
         Args:
-            backlog: 收到了还没回复的消息数（压力的一项来源，只有心跳知道）。
             last_conversation_at: 上一次和用户有效对话的时刻，由心跳提供（D76）。
 
         Raises:
@@ -82,7 +81,7 @@ class Body:
         return BodyReading(
             energy=self.read_energy(),
             fatigue=self.read_fatigue(),
-            stress=self.read_stress(backlog),
+            stress=self.read_stress(),
             sleep=self.read_sleep(),
             social_need=compute_social_need(last_conversation_at, self._clock.now(), self._config),
         )
@@ -95,13 +94,13 @@ class Body:
         calls = self._ledger.calls_since(self._clock.now() - window)
         return compute_fatigue(calls, self._config)
 
-    def read_stress(self, backlog: int = 0) -> StressReading:
-        """读压力：最近的调用成败（账本）和排队的消息数。"""
+    def read_stress(self) -> StressReading:
+        """读压力：最近的调用成败（账本，D153）。"""
         if not self._config.stress_enabled:
-            return compute_stress([], backlog, self._config)
+            return compute_stress([], self._config)
         entries = self._ledger.latest_entries(self._config.stress_window_calls)
         outcomes = [(entry.succeeded, entry.failure_reason) for entry in entries]
-        return compute_stress(outcomes, backlog, self._config)
+        return compute_stress(outcomes, self._config)
 
     def read_sleep(self) -> SleepReading:
         """读睡眠：现在是不是夜间（当地时间，和预算日历用同一个时区）。"""

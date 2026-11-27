@@ -610,6 +610,22 @@ def test_body_values_from_file_are_used(tmp_path: Path) -> None:
     assert body.user_reserve_fraction == 0.1
 
 
+def test_legacy_stress_backlog_full_is_ignored(tmp_path: Path) -> None:
+    """旧配置写了 stress_backlog_full 时照常启动并忽略该键（D153）。"""
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[body]\nstress_backlog_full = 5\n")
+    config = load_runtime_config(paths)
+    assert "stress_backlog_full" not in config.body.model_dump()
+    assert config.body.stress_window_calls == 20
+
+
+def test_body_unknown_field_is_still_reported(tmp_path: Path) -> None:
+    """丢掉旧键不等于放宽 extra="forbid"：真正未知的键仍要报错（D153）。"""
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(paths, "[body]\nstress_backlog_fullx = 5\n")
+    assert "stress_backlog_fullx" in error_message_of(paths)
+
+
 def test_body_sample_defaults_follow_d64(tmp_path: Path) -> None:
     body = load_runtime_config(AureusPaths(tmp_path)).body
     assert body.sample_enabled is True

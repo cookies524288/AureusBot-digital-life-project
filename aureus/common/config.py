@@ -265,12 +265,10 @@ class BodyConfig(BaseModel):
     # 偏高时，收到消息后先等这么多秒再开始回，攒几条一起回。
     fatigue_batch_seconds: float = Field(default=20.0, ge=0)
 
-    # 压力（D57）：来自最近的调用失败率和排队的消息数。
+    # 压力（D57、D153）：来自最近的调用失败率。
     stress_enabled: bool = True
     # 看最近多少次调用；失败次数不足这么多次时按这个数当分母，免得第一次失败就是 100%。
     stress_window_calls: int = Field(default=20, ge=1)
-    # 排队的消息数达到这么多，积压带来的压力就是 100%。
-    stress_backlog_full: int = Field(default=5, ge=1)
     # 压力达到这个比例算「偏高」，会发一次自检通知。
     stress_high_at: float = Field(default=0.6, gt=0, le=1)
     # 压力偏高时回复做法比精力档位低一档（D70）；回落到偏高线一半以下才恢复。
@@ -300,6 +298,12 @@ class BodyConfig(BaseModel):
     # 样本留多少天，启动时清掉更早的行。样本只是读数、不是经历，
     # 所以不受时间线只追加的规则约束（D64 第 2 条）。
     sample_retention_days: int = Field(default=30, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_legacy_stress_backlog_full(cls, value: object) -> object:
+        """旧配置里的 stress_backlog_full 照常读取、忽略（D153）。"""
+        return drop_legacy_keys(value, ("stress_backlog_full",))
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:

@@ -33,7 +33,6 @@ def make_sample(moment: datetime = START, **overrides: Any) -> BodySample:
         daily_quota=500,
         fatigue_level=0.2,
         stress_level=0.1,
-        backlog=1,
         night=False,
         focus="用户",
         inbox_count=2,
@@ -73,7 +72,6 @@ def test_none_values_stay_none_not_zero(store: BodySampleStore) -> None:
         daily_quota=None,
         fatigue_level=None,
         stress_level=None,
-        backlog=None,
         night=None,
     )
     store.append(sample)
@@ -166,13 +164,13 @@ def test_sample_from_reading_copies_enabled_signals() -> None:
     reading = BodyReading(
         energy=UNLIMITED_READING,
         fatigue=FatigueReading(enabled=True, level=0.4, calls_in_window=24),
-        stress=StressReading(enabled=True, level=0.3, backlog=2),
+        stress=StressReading(enabled=True, level=0.3),
         sleep=SleepReading(enabled=True, night=True),
     )
     sample = sample_from_reading(START, reading, focus="用户", inbox_count=3)
     assert sample.energy_tier == "不限"
     assert sample.energy_fraction is None and sample.daily_quota is None
-    assert (sample.fatigue_level, sample.stress_level, sample.backlog) == (0.4, 0.3, 2)
+    assert (sample.fatigue_level, sample.stress_level) == (0.4, 0.3)
     assert sample.night is True
     assert (sample.focus, sample.inbox_count) == ("用户", 3)
 
@@ -186,8 +184,30 @@ def test_sample_from_reading_stores_none_for_disabled_signals() -> None:
     )
     sample = sample_from_reading(START, reading, focus="", inbox_count=0)
     assert sample.fatigue_level is None
-    assert sample.stress_level is None and sample.backlog is None
+    assert sample.stress_level is None
     assert sample.night is None
+
+
+def test_legacy_backlog_column_is_kept_but_not_read(store: BodySampleStore, tmp_path: Path) -> None:
+    # D153：旧行里的 backlog 原样保留，新行写 NULL；BodySample 不再读它。
+    conn = sqlite3.connect(tmp_path / "aureus.db")
+    try:
+        conn.execute(
+            "INSERT INTO body_samples (timestamp, energy_tier, backlog, focus, inbox_count)"
+            " VALUES (?, '正常', 7, '', 5)",
+            (START.isoformat(timespec="microseconds"),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    store.append(make_sample(START + timedelta(minutes=1), inbox_count=3))
+    conn = sqlite3.connect(tmp_path / "aureus.db")
+    try:
+        rows = conn.execute("SELECT backlog, inbox_count FROM body_samples ORDER BY id").fetchall()
+    finally:
+        conn.close()
+    assert rows == [(7, 5), (None, 3)]
+    assert [sample.inbox_count for sample in store.since(START)] == [5, 3]
 
 
 def test_sample_from_reading_clamps_negative_inbox_count() -> None:

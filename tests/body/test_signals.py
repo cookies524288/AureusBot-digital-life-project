@@ -44,38 +44,37 @@ def test_disabled_fatigue_reads_zero_and_never_high() -> None:
 
 def test_one_failure_among_few_calls_is_not_full_stress() -> None:
     # 分母至少是窗口大小，第一次调用就失败不能直接算成 100%。
-    reading = compute_stress([(False, "超时")], 0, DEFAULTS)
+    reading = compute_stress([(False, "超时")], DEFAULTS)
     assert reading.failure_rate == pytest.approx(1 / 20)
     assert not reading.high
 
 
-def test_stress_takes_the_larger_of_failures_and_backlog() -> None:
+def test_stress_is_the_failure_rate() -> None:
     outcomes = [(False, "超时")] * 2 + [(True, None)] * 18  # 失败率 10%
-    assert compute_stress(outcomes, 0, DEFAULTS).level == pytest.approx(0.1)
-    assert compute_stress(outcomes, 3, DEFAULTS).level == pytest.approx(0.6)
-    assert compute_stress(outcomes, 3, DEFAULTS).high
-    assert compute_stress(outcomes, 99, DEFAULTS).level == 1.0
+    reading = compute_stress(outcomes, DEFAULTS)
+    assert reading.level == pytest.approx(0.1)
+    assert not reading.high
+
+    failures = [(False, "超时")] * 12 + [(True, None)] * 8  # 失败率 60%
+    assert compute_stress(failures, DEFAULTS).level == pytest.approx(0.6)
+    assert compute_stress(failures, DEFAULTS).high
 
 
 def test_stress_only_looks_at_the_latest_window() -> None:
     # 新的在前：最近 20 次全成功，更早的失败不再算。
     outcomes = [(True, None)] * 20 + [(False, "旧的失败")] * 30
-    reading = compute_stress(outcomes, 0, DEFAULTS)
+    reading = compute_stress(outcomes, DEFAULTS)
     assert (reading.failed_calls, reading.sampled_calls, reading.level) == (0, 20, 0.0)
 
 
 def test_failure_reasons_are_distinct_newest_first_and_capped() -> None:
     outcomes = [(False, "超时"), (False, "超时"), (False, None), (False, "限流"), (False, "断网")]
-    reading = compute_stress(outcomes, 0, DEFAULTS)
+    reading = compute_stress(outcomes, DEFAULTS)
     assert reading.recent_failure_reasons == ("超时", "原因没有记录", "限流")
 
 
-def test_negative_backlog_counts_as_zero() -> None:
-    assert compute_stress([], -4, DEFAULTS).level == 0.0
-
-
-def test_disabled_stress_ignores_failures_and_backlog() -> None:
-    reading = compute_stress([(False, "超时")] * 20, 9, BodyConfig(stress_enabled=False))
+def test_disabled_stress_returns_an_invalid_reading() -> None:
+    reading = compute_stress([(False, "超时")] * 20, BodyConfig(stress_enabled=False))
     assert (reading.enabled, reading.level, reading.high) == (False, 0.0, False)
 
 
@@ -157,7 +156,7 @@ def test_stress_reads_recent_outcomes_from_the_ledger(ledger: Ledger, clock: Man
         record_call(ledger, succeeded=False, reason="模型服务 503")
     body = make_body(ledger, clock)
 
-    reading = body.read_stress(backlog=0)
+    reading = body.read_stress()
 
     assert (reading.sampled_calls, reading.failed_calls) == (14, 4)
     assert reading.failure_rate == pytest.approx(4 / 20)
@@ -172,18 +171,11 @@ def test_cancelled_calls_do_not_raise_stress(ledger: Ledger, clock: ManualClock)
         record_call(ledger, succeeded=True, reason=CALL_CANCELLED_REASON)
     body = make_body(ledger, clock)
 
-    reading = body.read_stress(backlog=0)
+    reading = body.read_stress()
 
     assert (reading.sampled_calls, reading.failed_calls) == (15, 0)
     assert reading.level == 0.0
     assert reading.recent_failure_reasons == ()
-
-
-def test_stress_includes_the_backlog_passed_by_the_heartbeat(
-    ledger: Ledger, clock: ManualClock
-) -> None:
-    body = make_body(ledger, clock)
-    assert body.read_stress(backlog=5).level == 1.0
 
 
 def test_night_uses_the_calendar_time_zone(ledger: Ledger) -> None:
@@ -198,7 +190,7 @@ def test_disabled_signals_do_not_touch_the_ledger(ledger: Ledger, clock: ManualC
     body = make_body(ledger, clock, fatigue_enabled=False, stress_enabled=False)
     ledger.close()  # 账本关了：读它会抛异常
 
-    reading = body.read(backlog=2)
+    reading = body.read()
 
     assert not reading.fatigue.enabled
     assert not reading.stress.enabled
@@ -206,8 +198,8 @@ def test_disabled_signals_do_not_touch_the_ledger(ledger: Ledger, clock: ManualC
 
 def test_read_bundles_all_four_signals(ledger: Ledger, clock: ManualClock) -> None:
     record_call(ledger)
-    reading = make_body(ledger, clock).read(backlog=1)
+    reading = make_body(ledger, clock).read()
     assert reading.fatigue.calls_in_window == 1
-    assert reading.stress.backlog == 1
+    assert reading.stress.failed_calls == 0
     assert reading.energy.tier.value == "不限"
     assert reading.sleep.night is False

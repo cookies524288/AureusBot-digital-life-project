@@ -3008,9 +3008,7 @@ class Heartbeat:
             )
             due = [item for item in items if item.is_due(now)]
             if self._body is not None:
-                self._reading = self._body.read(
-                    len(self._unanswered) + len(self._pending), self._last_conversation_at
-                )
+                self._reading = self._body.read(last_conversation_at=self._last_conversation_at)
             reading = self._reading
             social = reading.social_need if reading is not None else None
             mood = await self._async_read_mood(person_id, viewer_is_user=True, strict=True)
@@ -3480,9 +3478,8 @@ class Heartbeat:
         """读身体信号。账本读不了时沿用上一次的读数，不编一个新的。"""
         if self._body is None:
             return
-        backlog = len(self._unanswered) + len(self._pending)
         try:
-            self._reading = self._body.read(backlog, self._last_conversation_at)
+            self._reading = self._body.read(last_conversation_at=self._last_conversation_at)
         except Exception:
             # 为什么不抛：这里只是观察自己，读不到不该让心跳停下；真正的安全检查在网关里。
             logger.exception("读不了身体信号，沿用上一次的读数")
@@ -3542,7 +3539,6 @@ class Heartbeat:
                 "stress": stress.level,
                 "failed_calls": stress.failed_calls,
                 "sampled_calls": stress.sampled_calls,
-                "backlog": stress.backlog,
             },
         )
         logger.warning("压力偏高（%.0f%%），已自检", stress.level * 100)
