@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from sqlite3 import connect
+from threading import Event
+from typing import Any
 
 import pytest
 from argon2 import PasswordHasher
@@ -31,7 +33,7 @@ from aureus.memory import (
 from aureus.memory.emoji import ImportedEmoji
 from aureus.organs import CallPurpose, OrganRequest
 from aureus.people import HistoricalKind, HistoricalRecord
-from aureus.timeline import ActorType, TimelineQuery
+from aureus.timeline import ActorType, TimelineQuery, TimelineRecord
 from aureus.web import PasswordStore
 from aureus.web.assemble import open_web
 from aureus.web.runner import WebServer
@@ -98,7 +100,7 @@ def test_an_enabled_web_channel_is_attached_to_the_heartbeat(paths: AureusPaths)
 
 @pytest.mark.parametrize("limit", [10, 0])
 def test_web_connections_share_the_inbound_limit_and_only_record_accepted_messages(
-    paths: AureusPaths, limit: int
+    paths: AureusPaths, limit: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     password = "correct horse"
     PasswordStore(paths.web_password_file, FAST_HASHER).set_password(password)
@@ -140,10 +142,37 @@ def test_web_connections_share_the_inbound_limit_and_only_record_accepted_messag
                 assert len(set(accepted.values())) == len(accepted)
                 assert client.get("/api/history").json() == []
 
-                client.portal.call(core.heartbeat._take_in_perceptions)
-                first.send_json({"text": "已经写入但还没处理", "request_id": 7})
+                started, release = Event(), Event()
+                write_record = core.timeline._write_record
+
+                def hold_write(*args: Any, **kwargs: Any) -> TimelineRecord:
+                    started.set()
+                    assert release.wait(timeout=5), "测试未按时释放时间线写线程"
+                    return write_record(*args, **kwargs)
+
+                monkeypatch.setattr(core.timeline, "_write_record", hold_write)
+                pending = client.portal.start_task_soon(core.heartbeat._take_in_perceptions)
+                try:
+                    assert started.wait(timeout=5), "第一条来信未提交时间线写线程"
+                    assert client.get("/api/history").json() == []
+                    second.send_json({"text": "写入期间到达", "request_id": 7})
+                    receipt = second.receive_json()
+                    assert receipt["request_id"] == 7
+                    assert not pending.done()
+                    if limit:
+                        assert receipt["type"] == "error"
+                        assert receipt["code"] == "inbound_queue_full"
+                        rejected.append("写入期间到达")
+                    else:
+                        assert receipt["type"] == "accepted"
+                        accepted["写入期间到达"] = receipt["message_key"]
+                finally:
+                    release.set()
+                    pending.result(timeout=5)
+
+                first.send_json({"text": "已经写入但还没处理", "request_id": 8})
                 receipt = first.receive_json()
-                assert receipt["request_id"] == 7
+                assert receipt["request_id"] == 8
                 if limit:
                     assert receipt["code"] == "inbound_queue_full"
                     rejected.append("已经写入但还没处理")
