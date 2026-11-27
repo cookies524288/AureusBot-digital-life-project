@@ -80,7 +80,7 @@ def test_list_mentioned_unread_filters_verified_unread_and_paginates(tmp_path: P
 
 
 def test_list_attention_unread_combines_senders_mentions_and_paginates(tmp_path: Path) -> None:
-    """D137：绑定用户/特别关心排在仅提及之前，两档都按入箱序号分页。"""
+    """D149：特别关心和提及同档，双重身份计一次，绑定用户仍最先。"""
     store = InboxStore(tmp_path / "inbox.db", _clock())
 
     def save(
@@ -108,6 +108,8 @@ def test_list_attention_unread_combines_senders_mentions_and_paginates(tmp_path:
     owner_mentioned = save(5, sender="owner", mentioned=True)
     ordinary = save(6)
     other_group = save(7, sender="owner", mentioned=True, group="2")
+    special = save(8, sender="friend")
+    special_mentioned = save(9, sender="friend", mentioned=True)
     conversation = owner.conversation
 
     assert store.list_attention_unread(conversation, ["owner"]) == [
@@ -115,6 +117,7 @@ def test_list_attention_unread_combines_senders_mentions_and_paginates(tmp_path:
         owner_mentioned,
         mention_old,
         mention_later,
+        special_mentioned,
     ]
     first = store.list_attention_unread(conversation, ["owner"], limit=2)
     assert first == [owner, owner_mentioned]
@@ -129,10 +132,22 @@ def test_list_attention_unread_combines_senders_mentions_and_paginates(tmp_path:
         mention_old,
         mention_later,
         owner_mentioned,
+        special_mentioned,
     ]
     assert unverified.id not in {row.id for row in first}
     assert ordinary.id not in {row.id for row in first}
     assert other_group.id not in {row.id for row in first}
+    assert store.list_attention_unread(conversation, ["owner"], special_senders=["friend"]) == [
+        owner,
+        owner_mentioned,
+        mention_old,
+        mention_later,
+        special,
+        special_mentioned,
+    ]
+    assert store.list_attention_unread(
+        conversation, ["owner"], special_senders=["friend"], after=(1, mention_later.id), limit=2
+    ) == [special, special_mentioned]
 
 
 def test_sparse_legacy_migration_preserves_unread_and_message_ids(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from aureus.heartbeat.perception import MessageRoute
 from aureus.heartbeat.planning import Plan
 from aureus.identity import Identity
 from aureus.organs import OrganRequest, OrganResponse
+from aureus.people import PeopleDirectory
 from aureus.safety import (
     ACTION_CALL_ORGAN,
     ACTION_REPLY_TO_USER,
@@ -217,12 +218,14 @@ async def running_heart(
     confirms_delivery: bool = False,
     reject_first: bool = False,
     levels: dict[str, PermissionLevel] | None = None,
+    special_contact: bool = False,
 ) -> AsyncIterator[tuple[Heartbeat, InboxStore, ManualClock, list[OutgoingMessage]]]:
     clock = ManualClock(datetime(2026, 11, 27, 12, tzinfo=UTC))
     database = tmp_path / "aureus.db"
     timeline = TimelineDatabase(database, clock)
     store = InboxStore(database, clock)
     stop = EmergencyStop(tmp_path / "halt.json", clock)
+    people = PeopleDirectory(database, clock) if special_contact else None
     heart = Heartbeat(
         clock=clock,
         timeline=timeline,
@@ -238,6 +241,7 @@ async def running_heart(
         permissions=PermissionChecker(stop) if levels is None else PermissionChecker(stop, levels),
         emergency_stop=stop,
         inbox_store=store,
+        people=people,
     )
     sent: list[OutgoingMessage] = []
 
@@ -249,12 +253,24 @@ async def running_heart(
     heart.attach_channel("qq", send, confirms_delivery=confirms_delivery)
     timeline.open()
     try:
+        if people is not None:
+            people.open()
+            people.ensure_user("维护者", [("qq", "owner")])
+            friend = people.meet("qq", "friend")
+            timeline.append(
+                "special_contact_changed",
+                "添加特别关心。",
+                ActorType.ME,
+                metadata={"person_id": friend.id, "add": True},
+            )
         heart.wake_up()
         yield heart, store, clock, sent
     finally:
         if organs.wait is not None:
             organs.wait.set()
         await heart.shut_down()
+        if people is not None:
+            people.close()
         timeline.close()
 
 
@@ -308,9 +324,9 @@ async def test_mention_pull_summary_has_no_content(tmp_path: Path, enabled: bool
         assert "继续聊天" in prompt
         assert all(text not in prompt for text in ("私密原文", "sender-secret", "会话 excluded"))
         if enabled:
-            assert '群"会话 first" 3 条' in prompt
-            assert '群"会话 second" 2 条' in prompt
-            assert '群"会话 third" 1 条' in prompt
+            assert '群"会话 first" 点名 3 条' in prompt
+            assert '群"会话 second" 点名 2 条' in prompt
+            assert '群"会话 third" 点名 1 条' in prompt
             assert "另有 1 个会话" in prompt and "会话 fourth" not in prompt
             assert "当前会话最近 5 分钟有 2 条新消息" in prompt
         else:
@@ -351,7 +367,7 @@ async def test_mention_pull_planner_can_leave_or_stay(tmp_path: Path) -> None:
         for text in ("第一轮继续", "第二轮继续"):
             heart.on_inbox_message(save(store, "current", text))
             await finish_round(heart)
-            assert '群"会话 other" 1 条' in organs.plans[-1].prompt
+            assert '群"会话 other" 点名 1 条' in organs.plans[-1].prompt
             assert inbox.active_conversation == current.conversation
             assert all(
                 message.route and message.route.recipient_id == "current" for message in sent
@@ -360,11 +376,100 @@ async def test_mention_pull_planner_can_leave_or_stay(tmp_path: Path) -> None:
         organs.stay = False
         heart.on_inbox_message(save(store, "current", "这一轮聊完"))
         await finish_round(heart)
-        assert '群"会话 other" 1 条' in organs.plans[-1].prompt
+        assert '群"会话 other" 点名 1 条' in organs.plans[-1].prompt
         assert inbox.active_conversation is None
         await finish_round(heart)
         assert "别群点名" in organs.plans[-1].prompt and "收件箱动态" not in organs.plans[-1].prompt
         assert sent[-1].route and sent[-1].route.recipient_id == "other"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("summary", [True, False])
+async def test_special_contact_and_mention_cannot_preempt_even_without_window(
+    tmp_path: Path, summary: bool
+) -> None:
+    organs = Organs()
+    config = immediate_config(mention_pull_enabled=summary, inbox_residence_seconds=0)
+    async with running_heart(tmp_path, config, organs, special_contact=True) as (
+        heart,
+        store,
+        _,
+        sent,
+    ):
+        current = save(store, "current", "入场", mentioned=True)
+        heart.on_inbox_message(current)
+        await finish_round(heart)
+        inbox = active_inbox(heart)
+        residence = inbox.residence
+        assert residence is not None and inbox.deadline is None
+
+        organs.wait = asyncio.Event()
+        heart.on_inbox_message(save(store, "current", "当前正在谈"))
+        heart.beat()
+        await asyncio.wait_for(organs.entered.wait(), timeout=2)
+        thought = heart._thought
+        assert thought is not None
+        heart.on_inbox_message(save(store, "mention-first", "先到的点名", mentioned=True))
+        heart.on_inbox_message(save(store, "special", "特别关心正文", sender="friend"))
+        heart.on_inbox_message(
+            save(store, "special", "两种条件都满足", sender="friend", mentioned=True)
+        )
+        heart.on_inbox_message(
+            save(store, "other", "伪造主人", sender="forged", trust=TrustLevel.VERIFIED_USER)
+        )
+        heart.on_inbox_message(
+            save(store, "other", "未认证账号", sender="owner", trust=TrustLevel.UNVERIFIED)
+        )
+        heart.beat()
+        assert heart._thought is thought and not thought.task.cancelling()
+        assert inbox.residence is residence
+        if summary:
+            heart.on_inbox_message(save(store, "current", "带提醒继续一轮"))
+            heart.beat()
+        organs.wait.set()
+        await heart.wait_for_thought()
+        heart.beat()
+        if summary:
+            await heart.wait_for_thought()
+            prompt = organs.plans[-1].prompt
+            assert '群"会话 special" 点名 1 条，特别关心来信 1 条' in prompt
+            assert '群"会话 mention-first" 点名 1 条' in prompt
+            assert "特别关心正文" not in prompt and "两种条件都满足" not in prompt
+            assert "friend" not in prompt
+            heart.beat()
+            assert inbox.residence is residence
+            organs.stay = False
+            heart.on_inbox_message(save(store, "current", "让出注意力"))
+            await finish_round(heart)
+        await finish_round(heart)
+        assert sent[-1].route and sent[-1].route.recipient_id == "mention-first"
+
+
+@pytest.mark.asyncio
+async def test_bound_account_preempts_before_any_residence_exists(tmp_path: Path) -> None:
+    organs = Organs()
+    async with running_heart(tmp_path, immediate_config(), organs, special_contact=True) as (
+        heart,
+        store,
+        _,
+        _,
+    ):
+        organs.wait = asyncio.Event()
+        heart.on_inbox_message(save(store, "current", "本轮尚未驻留", mentioned=True))
+        heart.beat()
+        await asyncio.wait_for(organs.entered.wait(), timeout=2)
+        assert active_inbox(heart).residence is None
+        thought = heart._thought
+        assert thought is not None and not thought.task.cancelling()
+
+        owner = save(store, "owner-group", "绑定账号的群来信", sender="owner")
+        heart.on_inbox_message(owner)
+        assert thought.task.cancelling()
+        await asyncio.wait({thought.task})
+        organs.wait.set()
+        await finish_round(heart)
+        assert "绑定账号的群来信" in organs.plans[-1].prompt
+        assert "不是你的用户" in organs.plans[-1].system_context
 
 
 @pytest.mark.asyncio

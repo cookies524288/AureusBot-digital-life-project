@@ -54,12 +54,14 @@ def test_timeline_shows_read_only_residence_trace() -> None:
         const time = '2026-11-27T12:00:00Z';
         const deadline = '2026-11-27T12:05:00Z';
         const metadata = {residence_deadline:deadline,
-          mention_pull:{conversations:[{name:'会话 <示例>', count:3}], others:2}};
+          mention_pull:{conversations:[{name:'会话 <示例>', count:3},
+            {name:'仅特别关心', count:0, special_count:4}], others:2}};
         for (const event of ['reply_reference', 'planning_interrupted']) {
           const rows = timelineDetailRows(metadata, event, time);
           assert.deepEqual(rows, [
             {label:'开批时的驻留截止', node:tlTimeText(deadline, {day:tlDayKey(time)})},
-            {label:'其他会话提及', node:'会话 <示例>：3 条；另有 2 个会话'},
+            {label:'其他会话优先来信',
+              node:'会话 <示例>：点名 3 条；仅特别关心：特别关心来信 4 条；另有 2 个会话'},
           ]);
         }
         assert.deepEqual(timelineDetailRows({}, 'reply_reference', time), []);

@@ -919,41 +919,61 @@ class InboxStore:
         return [_message(row) for row in rows]
 
     def list_mention_conversations(
-        self, limit: int = 5, *, pending_ids: Iterable[int] = ()
-    ) -> list[tuple[ConversationKey, str, int]]:
-        """按完整会话统计提及；已读但尚未处理的来信也只计一次。"""
+        self,
+        limit: int = 5,
+        *,
+        pending_ids: Iterable[int] = (),
+        special_accounts: Iterable[tuple[str, str]] = (),
+    ) -> list[tuple[ConversationKey, str, int, int]]:
+        """分开统计提及和仅特别关心；同条来信不因已入队或同时满足两者而多计。"""
         with closing(open_connection(self._path, read_only=True)) as database:
             rows = database.execute(
-                """SELECT c.*, COUNT(*) AS mention_count
+                """SELECT c.*, SUM(m.mentioned) AS mention_count,
+                          COUNT(*) - SUM(m.mentioned) AS special_count
                    FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
-                   WHERE m.direction = 'incoming' AND m.mentioned = 1 AND m.trust != ?
+                   WHERE m.direction = 'incoming' AND m.trust != ?
+                     AND (m.mentioned = 1 OR EXISTS (
+                         SELECT 1 FROM json_each(?) AS account
+                         WHERE json_extract(account.value, '$[0]') = c.platform
+                           AND json_extract(account.value, '$[1]') = m.sender_id))
                      AND (m.id > COALESCE(c.last_read_id, 0)
                           OR m.id IN (SELECT value FROM json_each(?)))
-                   GROUP BY c.id ORDER BY mention_count DESC, MIN(m.id) LIMIT ?""",
-                (TrustLevel.UNVERIFIED, json.dumps(tuple(pending_ids)), limit),
+                   GROUP BY c.id ORDER BY COUNT(*) DESC, MIN(m.id) LIMIT ?""",
+                (
+                    TrustLevel.UNVERIFIED,
+                    json.dumps(tuple(special_accounts)),
+                    json.dumps(tuple(pending_ids)),
+                    limit,
+                ),
             )
-            return [(_conversation(row), row["name"], row["mention_count"]) for row in rows]
+            return [
+                (_conversation(row), row["name"], row["mention_count"], row["special_count"])
+                for row in rows
+            ]
 
     def list_attention_unread(
         self,
         conversation: ConversationKey,
-        sender_ids: Iterable[str],
+        bound_senders: Iterable[str],
         *,
+        special_senders: Iterable[str] = (),
         after: tuple[int, int] | None = None,
         limit: int = 50,
     ) -> list[InboxMessage]:
-        """一次查出绑定用户/特别关心和被点名的未读，身份优先、再按入箱顺序（D137）。
+        """绑定用户优先，特别关心、提及与引用的来信按入箱顺序（D149）。
 
         Args:
             conversation: 完整会话路由。
-            sender_ids: 该平台上绑定用户和特别关心的账号。
-            after: 上一页最后一行的（身份档，入箱序号）；身份档 0 是发送人匹配，1 是仅提及。
+            bound_senders: 该平台上绑定用户的账号。
+            special_senders: 该平台上特别关心的账号。
+            after: 上一页最后一行的（优先档，入箱序号）；0 是绑定用户，1 是其余优先来信。
             limit: 本页最多几行。
 
         Returns:
-            未读消息，先列发送人匹配，再列仅提及；两档内部都按入箱序号升序。
+            每条消息只返回一次；两档内部都按入箱序号升序。
         """
-        senders = json.dumps(tuple(sender_ids))
+        owners = tuple(bound_senders)
+        senders = {*owners, *special_senders}
         after_rank, after_id = after if after is not None else (None, None)
         with closing(open_connection(self._path)) as database:
             rows = database.execute(
@@ -976,10 +996,10 @@ class InboxStore:
                 WHERE ? IS NULL OR identity_rank > ? OR (identity_rank = ? AND id > ?)
                 ORDER BY identity_rank, id LIMIT ?""",
                 (
-                    senders,
+                    json.dumps(owners),
                     *conversation.parameters(),
                     TrustLevel.UNVERIFIED,
-                    senders,
+                    json.dumps(tuple(senders)),
                     after_rank,
                     after_rank,
                     after_rank,

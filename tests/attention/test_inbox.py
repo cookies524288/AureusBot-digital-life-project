@@ -23,15 +23,23 @@ def test_the_same_priority_is_first_come_first_served() -> None:
     assert inbox.take_next() == ["乙1"]
 
 
-def test_special_contact_goes_before_mentions_and_mentions_before_contacts() -> None:
+def test_special_contact_and_mention_share_priority_ahead_of_contacts() -> None:
     inbox: Inbox[str] = Inbox()
     inbox.add("普通消息", Priority.CONTACT, "甲")
     inbox.add("被点名", Priority.MENTION, "乙")
     inbox.add("特别关心", Priority.SPECIAL, "丙")
 
-    assert inbox.take_next() == ["特别关心"]
     assert inbox.take_next() == ["被点名"]
+    assert inbox.take_next() == ["特别关心"]
     assert inbox.take_next() == ["普通消息"]
+
+
+def test_requeued_message_keeps_its_original_order() -> None:
+    inbox: Inbox[str] = Inbox()
+    inbox.add("后到点名", Priority.MENTION, "乙", arrival=4)
+    inbox.add("恢复较早的特别关心", Priority.SPECIAL, "甲", arrival=2)
+    assert inbox.take_next() == ["恢复较早的特别关心"]
+    assert inbox.take_next() == ["后到点名"]
 
 
 def test_the_user_goes_before_someone_who_arrived_earlier() -> None:

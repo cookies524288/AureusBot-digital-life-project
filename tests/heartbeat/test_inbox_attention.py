@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1099,7 +1100,10 @@ def test_mentions_wake_but_do_not_preempt(tmp_path: Path) -> None:
         assert attention.is_priority(mention)
         assert not attention.preempts(mention)
         assert attention.is_priority(owner) and attention.preempts(owner)
-        assert attention.is_priority(special) and attention.preempts(special)
+        assert attention.is_priority(special) and not attention.preempts(special)
+        assert attention.preempts(replace(owner, trust=TrustLevel.VERIFIED_CONTACT))
+        assert not attention.preempts(replace(owner, trust=TrustLevel.UNVERIFIED))
+        assert not attention.preempts(replace(owner, sender_id="unbound"))
         assert not attention.is_priority(unverified)
         assert not attention.preempts(unverified)
     finally:

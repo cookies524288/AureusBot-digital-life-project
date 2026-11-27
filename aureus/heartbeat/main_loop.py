@@ -1264,6 +1264,7 @@ class Heartbeat:
             self._unanswered
             and thought is not None
             and thought.task.get_name() == WORKING_MEMORY_TASK
+            and any(self._is_bound_user(heard.perception) for heard in self._unanswered)
         ):
             thought.task.cancel()
         self._maybe_start_thought()
@@ -1384,9 +1385,10 @@ class Heartbeat:
         if thought.inbox_discard_reason is not None or lost_permission:
             if lost_permission:
                 self._clear_planner_restarts(self._thought_conversation(thought))
-            self._record_interrupted_round(
-                thought, thought.inbox_discard_reason or "会话已失去阅读权限，未投递。"
-            )
+            reason = thought.inbox_discard_reason or "会话已失去阅读权限，未投递。"
+            self._record_interrupted_round(thought, reason)
+            if thought.initiative is not None:
+                self._collect_initiative(thought, _ThoughtOutcome(notice=reason))
             if not thought.task.cancelled():
                 thought.task.exception()
             return
@@ -1491,10 +1493,14 @@ class Heartbeat:
                 self._permissions.check(ACTION_CALL_ORGAN).allowed and self.allows_emoji_delivery()
             ):
                 plan = replace(plan, stay_in_conversation=None)
-            elif target_key is not None and any(
-                _platform_key(heard) not in (None, target_key)
-                and inbox.yields_to_when_idle(heard.perception)
-                for heard in queued
+            elif (
+                target_key is not None
+                and not self._unanswered.peek_batch((None, target_key))
+                and any(
+                    _platform_key(heard) not in (None, target_key)
+                    and inbox.yields_to_when_idle(heard.perception)
+                    for heard in queued
+                )
             ):
                 plan = replace(plan, stay_in_conversation=False)
             was_active = inbox.active_conversation == target_key and target_key is not None
@@ -2219,12 +2225,19 @@ class Heartbeat:
             inbox.store.read_latest_and_clear(conversation, limit=inbox.read_limit)
 
     def _preempt_inbox(self, inbox: InboxAttention, conversation: ConversationKey) -> None:
-        reason = "绑定用户或特别关心的来信抢占了会话，未投递。"
+        reason = "绑定用户的来信抢占了注意力，未投递。"
         if inbox.residence is not None and conversation != inbox.residence.conversation:
             self._interrupt_inbox(inbox, reason)
         thought = self._thought
-        if thought is not None and thought.task.get_name() == SELECTION_TASK:
-            self._discard_inbox_thought(thought, reason)
+        if thought is not None and self._thought_conversation(thought) != conversation:
+            if (
+                thought.replying_to
+                or thought.initiative is not None
+                or thought.task.get_name() == SELECTION_TASK
+            ):
+                self._discard_inbox_thought(thought, reason)
+            elif not thought.task.done():
+                thought.task.cancel()
 
     def _interrupt_inbox(self, inbox: InboxAttention, reason: str) -> None:
         # 这里不清 _planner_restarts：抢占、切换、急停打断都不该重置重开上限，
@@ -2322,15 +2335,32 @@ class Heartbeat:
 
     def _requeue_reply(self, thought: _Thought) -> None:
         for heard in thought.replying_to:
-            priority = Priority.USER if heard.is_user else Priority.CONTACT
-            # 特别关心排在仅提及之前，两者都排在普通消息之前；抢占仍只由用户和特别关心触发（D137）。
-            if priority == Priority.CONTACT and _platform_key(heard) is not None:
-                inbox = self._platform_inbox
-                if inbox is not None and inbox.preempts(heard.perception):
-                    priority = Priority.SPECIAL
-                elif inbox is not None and inbox.is_priority(heard.perception):
-                    priority = Priority.MENTION
-            self._enqueue_reply(heard, priority)
+            person = (
+                self._people.find(heard.perception.channel, heard.perception.sender_id)
+                if self._people is not None
+                else None
+            )
+            priority = self._reply_priority(heard.perception, person)
+            if priority is not None:
+                self._enqueue_reply(heard, priority)
+
+    def _is_bound_user(self, perception: Perception) -> bool:
+        if perception.route is None:
+            return perception.trust is TrustLevel.VERIFIED_USER
+        return self._platform_inbox is not None and self._platform_inbox.preempts(perception)
+
+    def _reply_priority(self, perception: Perception, person: Person | None) -> Priority | None:
+        """首次入队和规划重开共用同一份绑定与优先判断。"""
+        inbox = self._platform_inbox
+        if perception.route is None or inbox is None:
+            return _priority_of(perception, person)
+        if perception.trust is TrustLevel.UNVERIFIED:
+            return None
+        if inbox.preempts(perception):
+            return Priority.USER
+        if perception.trust is TrustLevel.VERIFIED_USER:
+            return None
+        return Priority.MENTION if inbox.is_priority(perception) else Priority.CONTACT
 
     def _clear_planner_restarts(self, conversation: ConversationKey | None) -> None:
         """会话失去阅读权限后忘掉它的重开计数，重新获准后从头计算（D138）。"""
@@ -2440,13 +2470,7 @@ class Heartbeat:
             self._pending.popleft()
             if inbox_message is not None and inbox is not None and message_residence is None:
                 inbox.store.mark_read([inbox_message.id])
-            priority = _priority_of(perception, person)
-            # 特别关心排在仅提及之前，两者都排在普通消息之前；抢占仍只由用户和特别关心触发（D137）。
-            if priority is Priority.CONTACT and inbox_message is not None and inbox is not None:
-                if inbox.preempts(perception):
-                    priority = Priority.SPECIAL
-                elif inbox.is_priority(perception):
-                    priority = Priority.MENTION
+            priority = self._reply_priority(perception, person)
             if priority is None:
                 # 确认不了身份（或通道和档案对不上）就不回，朝安全方向倒。
                 logger.info(
@@ -2456,11 +2480,13 @@ class Heartbeat:
             heard = _Heard(
                 perception,
                 record,
-                person is not None and person.is_user and priority is Priority.USER,
+                person is not None
+                and person.is_user
+                and perception.trust is TrustLevel.VERIFIED_USER,
                 message_residence,
             )
             self._enqueue_reply(heard, priority)
-            if priority is Priority.USER:
+            if priority is Priority.USER and perception.trust is TrustLevel.VERIFIED_USER:
                 self._last_user_contact = perception
                 self._initiative.note_user_message(record.timestamp)
         if received_for_residence and inbox is not None and inbox.residence is residence:
@@ -2477,7 +2503,10 @@ class Heartbeat:
             or (inbox is not None and key == inbox.active_conversation)
         )
         self._unanswered.add(
-            heard, priority, _reply_address(heard.perception, browsed=group_by_route)
+            heard,
+            priority,
+            _reply_address(heard.perception, browsed=group_by_route),
+            arrival=heard.record.id,
         )
 
     def _identify(self, perception: Perception, sender_name: str = "") -> Person | None:
@@ -3532,8 +3561,7 @@ class Heartbeat:
             pending_ids = (
                 message_id
                 for heard in self._unanswered
-                if heard.perception.mentioned
-                and type(message_id := heard.record.metadata.get("inbox_message_id")) is int
+                if type(message_id := heard.record.metadata.get("inbox_message_id")) is int
             )
             mentions = inbox.mention_pull_summary(
                 job.residence.conversation, limit=None, pending_ids=pending_ids

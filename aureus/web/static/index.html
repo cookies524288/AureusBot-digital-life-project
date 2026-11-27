@@ -2657,8 +2657,12 @@ const TL_FIELDS = {
   reach_out: {label:'建议主动联系', format: value => tlText(value)},
   stay_in_conversation: {label:'留在对话里', format: value => tlText(value)},
   residence_deadline: {label:'开批时的驻留截止', format: tlTimeText},
-  mention_pull: {label:'其他会话提及', format: value => {
-    const entries = value.conversations.map(item => `${item.name}：${item.count} 条`);
+  mention_pull: {label:'其他会话优先来信', format: value => {
+    const entries = value.conversations.map(item => {
+      const counts = item.count ? [`点名 ${item.count} 条`] : [];
+      if (item.special_count) counts.push(`特别关心来信 ${item.special_count} 条`);
+      return `${item.name}：${counts.join('，')}`;
+    });
     if (value.others) entries.push(`另有 ${value.others} 个会话`);
     return entries.join('；');
   }},

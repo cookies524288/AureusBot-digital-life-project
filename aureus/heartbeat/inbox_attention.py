@@ -53,6 +53,7 @@ class MentionPull:
     conversation: ConversationKey
     name: str
     count: int
+    special_count: int = 0
 
 
 async def select_conversations(
@@ -175,14 +176,17 @@ class InboxAttention:
         """只列获准的会话。授权过滤在截断之前，避免泄露范围外的会话数量。"""
         if not self._mention_pull_enabled:
             return ()
-        candidates = self.store.list_mention_conversations(limit=-1, pending_ids=pending_ids)
+        candidates = self.store.list_mention_conversations(
+            limit=-1, pending_ids=pending_ids, special_accounts=self._special_accounts()
+        )
         return tuple(
             MentionPull(
                 key,
                 "未命名私聊" if key.kind == "private" and name == key.recipient_id else name,
                 count,
+                special_count,
             )
-            for key, name, count in candidates
+            for key, name, count, special_count in candidates
             if key != exclude and self.allows(key)
         )[:limit]
 
@@ -216,7 +220,7 @@ class InboxAttention:
         """已验证的用户、特别关心或被点名的来信能唤醒心跳（D94、D137）。"""
         if perception.trust is TrustLevel.UNVERIFIED:
             return False
-        if perception.mentioned or self._preempts_verified(perception):
+        if perception.mentioned or self.preempts(perception) or self.is_special(perception):
             return True
         if perception.route is None or not perception.quoted_message_id:
             return False
@@ -232,44 +236,55 @@ class InboxAttention:
         )
 
     def preempts(self, perception: Perception) -> bool:
-        """只有已验证的用户或特别关心的来信能抢占当前会话；提及只唤醒（D95、D137）。"""
+        """只有通过通道验证、仍绑定为用户的账号可以抢占（D149）。"""
         if perception.trust is TrustLevel.UNVERIFIED:
             return False
-        return self._preempts_verified(perception)
-
-    def yields_to_when_idle(self, perception: Perception) -> bool:
-        """点名交由驻留规划判断，只有引用而没有点名的来信仍走 D147。"""
-        return (
-            perception.route is not None
-            and self.allows(ConversationKey.from_perception(perception))
-            and (not self._mention_pull_enabled or not perception.mentioned)
-            and self.is_priority(perception)
-        )
-
-    def _preempts_verified(self, perception: Perception) -> bool:
         if self._people is None:
             return (perception.channel, perception.sender_id) in self._user_accounts
         person = self._people.find(perception.channel, perception.sender_id)
-        return person is not None and (person.is_user or person.id in self._special)
+        return person is not None and person.is_user
 
-    def priority_messages(self) -> list[InboxMessage]:
-        """先收绑定用户、特别关心的未读，再收仅被点名的未读（D94、D137）。"""
-        accounts: dict[str, set[str]] = defaultdict(set)
-        users = self._people.user_accounts() if self._people is not None else self._user_accounts
-        for platform, account_id in users:
-            accounts[platform].add(account_id)
+    def is_special(self, perception: Perception) -> bool:
+        """特别关心只能唤醒和优先排队，不能取得用户权限（D149）。"""
+        if perception.trust is TrustLevel.UNVERIFIED or self._people is None or not self._special:
+            return False
+        person = self._people.find(perception.channel, perception.sender_id)
+        return person is not None and person.id in self._special
+
+    def yields_to_when_idle(self, perception: Perception) -> bool:
+        """摘要开启时，特别关心和点名同级；纯引用保留 D147 的空闲切换。"""
+        return (
+            perception.route is not None
+            and self.allows(ConversationKey.from_perception(perception))
+            and (
+                not self._mention_pull_enabled
+                or not (perception.mentioned or self.is_special(perception))
+            )
+            and self.is_priority(perception)
+        )
+
+    def _special_accounts(self) -> Iterable[tuple[str, str]]:
         if self._people is not None:
             for person_id in self._special:
-                for platform, account_id in self._people.accounts_of(person_id):
-                    accounts[platform].add(account_id)
+                yield from self._people.accounts_of(person_id)
+
+    def priority_messages(self) -> list[InboxMessage]:
+        """先收绑定用户，再按到达次序收其他优先来信（D149）。"""
+        bound: dict[str, set[str]] = defaultdict(set)
+        special: dict[str, set[str]] = defaultdict(set)
+        users = self._people.user_accounts() if self._people is not None else self._user_accounts
+        for platform, account_id in users:
+            bound[platform].add(account_id)
+        for platform, account_id in self._special_accounts():
+            special[platform].add(account_id)
         identity: dict[int, InboxMessage] = {}
         mentions: dict[int, InboxMessage] = {}
         for item in self.store.list_unread_conversations():
             if item.key == self.active_conversation or not self.allows(item.key):
                 continue
-            senders = accounts.get(item.key.platform, set())
-            for row in self._attention_page(item.key, senders):
-                if row.perception.sender_id in senders:
+            owners = bound[item.key.platform]
+            for row in self._attention_page(item.key, owners, special[item.key.platform]):
+                if row.perception.sender_id in owners:
                     identity[row.id] = row
                 else:
                     mentions[row.id] = row
@@ -279,13 +294,17 @@ class InboxAttention:
         ]
         return ordered[:_PRIORITY_LIMIT]
 
-    def _attention_page(self, key: ConversationKey, senders: set[str]) -> list[InboxMessage]:
+    def _attention_page(
+        self, key: ConversationKey, owners: set[str], special: set[str]
+    ) -> list[InboxMessage]:
         """每页只查一次时间线，过滤掉已经处理过的未读；身份匹配的行排在最前。"""
         messages: list[InboxMessage] = []
         after: tuple[int, int] | None = None
         while len(messages) < _PRIORITY_LIMIT:
             remaining = _PRIORITY_LIMIT - len(messages)
-            rows = self.store.list_attention_unread(key, senders, after=after, limit=remaining)
+            rows = self.store.list_attention_unread(
+                key, owners, special_senders=special, after=after, limit=remaining
+            )
             if not rows:
                 break
             known = self._timeline.inbox_message_ids(row.id for row in rows)
@@ -293,7 +312,7 @@ class InboxAttention:
             if len(rows) < remaining:
                 break
             last = rows[-1]
-            after = (0 if last.perception.sender_id in senders else 1, last.id)
+            after = (0 if last.perception.sender_id in owners else 1, last.id)
         return messages
 
     def browse(self, now: datetime | None = None, *, can_browse: bool) -> list[InboxConversation]:

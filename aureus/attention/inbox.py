@@ -7,6 +7,7 @@ Phase 1 只有前面几种会出现，枚举里先只放用得到的两种，别
 不靠大模型。同一时间只处理一个对话里的消息（D34：前额叶是串行的）。
 """
 
+from bisect import insort
 from collections.abc import Hashable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
@@ -16,8 +17,8 @@ class Priority(IntEnum):
     """优先级，数字越小越先处理。数字之间留了空，以后插入新的种类不用改已有的。"""
 
     USER = 0  # 用户本人的消息
-    SPECIAL = 10  # 平台上特别关心的来信
-    MENTION = 15  # 被点名的来信（D137）：排在特别关心之后、普通消息之前
+    MENTION = 15  # 提及与特别关心同级，均优先于普通来信（D149）。
+    SPECIAL = MENTION
     CONTACT = 20  # 其他人的消息
 
 
@@ -38,10 +39,17 @@ class Inbox[T]:
         self._entries: list[_Entry[T]] = []
         self._counter = 0
 
-    def add(self, item: T, priority: Priority, conversation: Hashable) -> None:
+    def add(
+        self, item: T, priority: Priority, conversation: Hashable, *, arrival: int | None = None
+    ) -> None:
         """放进一件待处理的事。"""
-        self._entries.append(_Entry(item, priority, conversation, self._counter))
-        self._counter += 1
+        order = self._counter if arrival is None else arrival
+        entry = _Entry(item, priority, conversation, order)
+        if self._entries and self._entries[-1].order > order:
+            insort(self._entries, entry, key=lambda existing: existing.order)
+        else:
+            self._entries.append(entry)
+        self._counter = max(self._counter, order + 1)
 
     def __len__(self) -> int:
         return len(self._entries)
