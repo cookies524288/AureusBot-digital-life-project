@@ -6,10 +6,12 @@ from tests.web.test_live_foreground import foreground_clock as foreground_clock
 from tests.web.test_page_script import run_page_script
 
 
-@pytest.mark.parametrize('focus', ['body', 'details', 'outside'])
+@pytest.mark.parametrize("focus", ["body", "details", "outside"])
 def test_live_reading(focus: str) -> None:
-    run_page_script(r"""
+    run_page_script(
+        r"""
         state.loggedIn = true; state.page = 'timeline';
+        state.incrementalUpdates = false;
         const list = $('tl-list'), page = $('page-timeline');
         Object.defineProperty(list, 'textContent', {set() { this.replaceChildren(); }});
         const descendants = n => n.children.flatMap(c => [c, ...descendants(c)]);
@@ -51,4 +53,5 @@ def test_live_reading(focus: str) -> None:
         ids = [1,2,3]; await push();
         assert.equal(button(rows()[0]).getAttribute('aria-expanded'), 'false');
         assert.ok(!details(rows()[0]).open);
-    """.replace('FOCUS', focus))
+    """.replace("FOCUS", focus)
+    )

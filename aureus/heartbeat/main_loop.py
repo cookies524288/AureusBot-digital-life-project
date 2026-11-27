@@ -805,8 +805,12 @@ class Heartbeat:
         try:
             allowed = inbox.allows(message.conversation)
             if allowed:
-                # 只带收件箱序号：网页据此让平台页失效并重新拉取，不推正文。
-                self.live_events.publish(LiveEvent(TOPIC_INBOX, {"id": message.id}))
+                self.live_events.publish(
+                    LiveEvent(
+                        TOPIC_INBOX,
+                        {"id": message.id, "conversation": asdict(message.conversation)},
+                    )
+                )
             if allowed and message.direction == "incoming":
                 self._sticker_followups.cancel(message.conversation)
                 if chat := self._conversation.chat_plugins:

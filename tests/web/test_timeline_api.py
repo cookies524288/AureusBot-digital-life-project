@@ -1,7 +1,8 @@
 """时间线和总览接口：假时钟、真数据库，不开网络端口（D84）。"""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -85,7 +86,12 @@ class FakeHeartbeat:
 
 class Rig:
     def __init__(
-        self, tmp_path: Path, *, password_set: bool = True, recall_feedback_enabled: bool = True
+        self,
+        tmp_path: Path,
+        *,
+        password_set: bool = True,
+        recall_feedback_enabled: bool = True,
+        allows: Callable[[ConversationKey], bool] | None = None,
     ) -> None:
         self.clock = ManualClock(NOW)
         self.heartbeat = FakeHeartbeat()
@@ -110,6 +116,7 @@ class Rig:
             maintenance_paused=lambda: self.heartbeat.maintenance_paused,
             set_maintenance_paused=self.heartbeat.set_maintenance_paused,
             recall_feedback_enabled=recall_feedback_enabled,
+            allows_inbox_conversation=allows if allows is not None else lambda _key: True,
         )
         self.client = TestClient(app, client=("127.0.0.1", 50000))
 
@@ -460,8 +467,81 @@ def test_empty_timeline_has_no_boundary_or_next_page(rig: Rig) -> None:
         "summary": {},
         "records": [],
         "next_before_id": None,
+        "since_id": 0,
+        "has_more": False,
         "context": {"message_limit": 2, "boundary_id": None},
     }
+
+
+def test_timeline_since_id_returns_only_new_in_order(rig: Rig) -> None:
+    rig.log_in()
+    for number in range(5):
+        rig.timeline.append("message", f"合成 {number}", ActorType.ME)
+    page = rig.client.get("/api/timeline?since_id=1&limit=2").json()
+    assert [row["id"] for row in page["records"]] == [2, 3]
+    assert page["since_id"] == 3
+    assert page["has_more"] is True
+    assert page["next_before_id"] is None
+    page = rig.client.get("/api/timeline?since_id=3&limit=2").json()
+    assert [row["id"] for row in page["records"]] == [4, 5]
+    assert page["since_id"] == 5
+    assert page["has_more"] is False
+    for invalid in ("since_id=-1", "since_id=1&before_id=4"):
+        assert rig.client.get(f"/api/timeline?{invalid}").status_code == 422
+
+
+def test_scoped_timeline_delta_respects_route_permissions_and_old_round_anchors(
+    tmp_path: Path,
+) -> None:
+    regular = ConversationKey("qq", "account", "private", "peer")
+    temporary = ConversationKey("qq", "account", "private", "peer", "group")
+    allowed = {regular}
+    rig = Rig(tmp_path, allows=allowed.__contains__)
+    try:
+        rig.log_in()
+        regular_meta = {
+            "channel": "qq",
+            "account_id": "account",
+            "message_type": "private",
+            "recipient_id": "peer",
+        }
+        old = rig.timeline.append("message", "普通会话", ActorType.USER, metadata=regular_meta)
+        other = rig.timeline.append(
+            "message",
+            "临时会话",
+            ActorType.USER,
+            metadata={**regular_meta, "temporary_group_id": "group"},
+        )
+        scope = {"conversation": json.dumps(asdict(regular))}
+        first = rig.client.get("/api/timeline", params=scope).json()
+        assert [row["id"] for row in first["records"]] == [old.id]
+        assert first["since_id"] == other.id
+        rig.timeline.append(
+            "judgment", "临时会话判断", ActorType.ME, metadata={"round_id": other.id}
+        )
+        judged = rig.timeline.append(
+            "judgment", "普通会话判断", ActorType.ME, metadata={"round_id": old.id}
+        )
+        page = rig.client.get(
+            "/api/timeline", params={**scope, "since_id": first["since_id"], "limit": 1}
+        ).json()
+        assert page["has_more"] is True and page["records"] == []
+        page = rig.client.get(
+            "/api/timeline", params={**scope, "since_id": page["since_id"], "limit": 1}
+        ).json()
+        assert [row["id"] for row in page["records"]] == [judged.id]
+        assert (
+            rig.client.get(
+                "/api/timeline", params={"conversation": json.dumps(asdict(temporary))}
+            ).status_code
+            == 404
+        )
+        allowed.clear()
+        assert (
+            rig.client.get("/api/timeline", params={**scope, "since_id": old.id}).status_code == 404
+        )
+    finally:
+        rig.close()
 
 
 def test_timeline_returns_latest_working_memory_summary_to_signed_in_user(rig: Rig) -> None:

@@ -93,6 +93,7 @@ function element(tag = 'div') {
       }
       return null;
     },
+    contains(node) { return node === this || this.children.some(child => child.contains(node)); },
     scrollIntoView(options) { this.scrolled = options; },
     remove() {
       if (this.parentElement) {
@@ -171,6 +172,7 @@ def run_page_script(code: str, *, include_resource_pages: bool = True) -> None:
             "resource-management.js",
             "memory-flow-transfer.js",
             "inbox-retention.js",
+            "timeline-live.js",
         )
     ]
     result = subprocess.run(

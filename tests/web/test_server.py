@@ -588,6 +588,7 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
     memory_graph = tmp_path / "memory-graph.js"
     memory_flow = tmp_path / "memory-flow-transfer.js"
     inbox_retention = tmp_path / "inbox-retention.js"
+    timeline_live = tmp_path / "timeline-live.js"
     memory_bundles = tmp_path / "memory-bundles.js"
     tile = tmp_path / "organ-tile.png"
     graph.write_text("first()", encoding="utf-8")
@@ -595,6 +596,7 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
     memory_graph.write_text("graphFirst()", encoding="utf-8")
     memory_flow.write_text("transferFirst()", encoding="utf-8")
     inbox_retention.write_text("retentionFirst()", encoding="utf-8")
+    timeline_live.write_text("timelineFirst()", encoding="utf-8")
     memory_bundles.write_text("bundlesFirst()", encoding="utf-8")
     tile.write_bytes(b"first tile")
     monkeypatch.setattr("aureus.web.server.INDEX_PAGE", page)
@@ -606,6 +608,7 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         memory_graph.write_text("graphSecond()", encoding="utf-8")
         memory_flow.write_text("transferSecond()", encoding="utf-8")
         inbox_retention.write_text("retentionSecond()", encoding="utf-8")
+        timeline_live.write_text("timelineSecond()", encoding="utf-8")
         memory_bundles.write_text("bundlesSecond()", encoding="utf-8")
         tile.write_bytes(b"second tile")
         client = running.client()
@@ -615,6 +618,7 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         assert client.get("/assets/memory-graph.js").text == "graphFirst()"
         assert client.get("/assets/memory-flow-transfer.js").text == "transferFirst()"
         assert client.get("/assets/inbox-retention.js").text == "retentionFirst()"
+        assert client.get("/assets/timeline-live.js").text == "timelineFirst()"
         assert client.get("/assets/memory-bundles.js").text == "bundlesFirst()"
         assert client.get("/assets/organ-tile.png").content == b"first tile"
     finally:
@@ -631,6 +635,7 @@ def test_running_app_keeps_its_own_page_when_the_html_file_changes(
         assert client.get("/assets/memory-graph.js").text == "graphSecond()"
         assert client.get("/assets/memory-flow-transfer.js").text == "transferSecond()"
         assert client.get("/assets/inbox-retention.js").text == "retentionSecond()"
+        assert client.get("/assets/timeline-live.js").text == "timelineSecond()"
         assert client.get("/assets/memory-bundles.js").text == "bundlesSecond()"
         image = client.get("/assets/organ-tile.png")
         assert image.headers["Content-Type"] == "image/png"

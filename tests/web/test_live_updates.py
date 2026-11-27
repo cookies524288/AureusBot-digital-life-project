@@ -6,6 +6,7 @@
 
 import json
 from collections.abc import Iterator
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -22,9 +23,12 @@ from aureus.heartbeat import (
     OutgoingMessage,
     Perception,
 )
+from aureus.heartbeat.inbox_store import ConversationKey
 from aureus.heartbeat.live import (
     RESOURCE_LANGUAGE,
+    TOPIC_INBOX,
     TOPIC_RESOURCES,
+    TOPIC_ROUND,
     LiveEvent,
     LiveEventHub,
 )
@@ -78,6 +82,7 @@ class Rig:
         self.timeline = TimelineDatabase(tmp_path / "aureus.db", self.clock)
         self.timeline.open()
         self.live = LiveEventHub()
+        self.allowed: set[ConversationKey] = set()
         self.heartbeat = RecordingHeartbeat(self.timeline)
         self.channel = WebChannel(self.heartbeat)
         self.heartbeat.channel = self.channel
@@ -89,6 +94,7 @@ class Rig:
             channel=self.channel,
             timeline=self.timeline,
             live_events=self.live,
+            allows_inbox_conversation=self.allowed.__contains__,
         )
         self.client = TestClient(app, client=("127.0.0.1", 50000))
 
@@ -186,3 +192,26 @@ def test_the_subscription_ends_when_the_page_disconnects(rig: Rig) -> None:
         assert rig.live.subscriber_count == 1
     assert rig.live.subscriber_count == 0
     assert rig.channel.subscriber_count == 0
+
+
+def test_conversation_pushes_respect_permissions_at_send_time(rig: Rig) -> None:
+    visible = ConversationKey("qq", "account", "private", "peer")
+    denied = ConversationKey("qq", "account", "private", "peer", "other-group")
+    rig.allowed.add(visible)
+    rig.log_in()
+    with (
+        rig.client as client,
+        client.websocket_connect("/ws?events=1", headers=SAME_ORIGIN) as socket,
+    ):
+        assert client.portal is not None
+        for topic, key in ((TOPIC_INBOX, denied), (TOPIC_ROUND, denied), (TOPIC_INBOX, visible)):
+            client.portal.call(
+                rig.live.publish,
+                LiveEvent(topic, {"active": True, "conversation": asdict(key)}),
+            )
+        assert socket.receive_json() == {
+            "type": "event",
+            "topic": "round",
+            "data": {"active": False},
+        }
+        assert socket.receive_json()["data"]["conversation"] == asdict(visible)

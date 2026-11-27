@@ -5,6 +5,7 @@
 
 import asyncio
 from collections.abc import Iterator
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -189,7 +190,7 @@ async def test_a_paused_hub_drops_events_until_it_resumes() -> None:
 # ---------- 心跳发布 ----------
 
 
-async def test_a_saved_platform_message_publishes_only_its_inbox_id(inbox_rig: Rig) -> None:
+async def test_platform_message_publishes_identifiers_without_content(inbox_rig: Rig) -> None:
     await inbox_rig.start()
     assert inbox_rig.inbox is not None
     message = inbox_rig.inbox.add(inbox_perception("私聊正文"), sender_name="对方")
@@ -197,7 +198,9 @@ async def test_a_saved_platform_message_publishes_only_its_inbox_id(inbox_rig: R
 
     inbox_rig.heartbeat.on_inbox_message(message)
 
-    assert inbox_rig.events == [LiveEvent(TOPIC_INBOX, {"id": message.id})]
+    assert inbox_rig.events == [
+        LiveEvent(TOPIC_INBOX, {"id": message.id, "conversation": asdict(message.conversation)})
+    ]
     assert "私聊正文" not in str(inbox_rig.events)
 
 
@@ -230,7 +233,9 @@ async def test_emergency_stop_pauses_publishing_and_resume_restores_it(
     inbox_rig.heartbeat.resume()
     assert not inbox_rig.heartbeat.live_events.paused
     inbox_rig.heartbeat.on_inbox_message(message)
-    assert inbox_rig.events == [LiveEvent(TOPIC_INBOX, {"id": message.id})]
+    assert inbox_rig.events == [
+        LiveEvent(TOPIC_INBOX, {"id": message.id, "conversation": asdict(message.conversation)})
+    ]
 
 
 async def test_a_halt_from_another_process_is_noticed_on_the_next_beat(

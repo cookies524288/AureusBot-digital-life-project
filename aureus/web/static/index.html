@@ -1377,6 +1377,7 @@ dialog[open]::backdrop{animation:backdrop-in var(--dur-reveal) var(--ease)}
 <script src="/assets/memory-flow-transfer.js"></script>
 <script src="/assets/memory-bundles.js"></script>
 <script src="/assets/inbox-retention.js"></script>
+<script src="/assets/timeline-live.js"></script>
 <script>
 'use strict';
 // ---------- 核心：取元素、请求接口、提示条、页面切换 ----------
@@ -2105,9 +2106,13 @@ function renderOverviewRound(records, ok = true) {
 }
 
 // 只在登录后的总览前台采样；每次读完再计时，以免慢响应叠加或重播整页动效。
-const OVERVIEW_SIGNAL_INTERVAL_MS = 2000;
+const OVERVIEW_SIGNAL_INTERVAL_MS = 10000;
+const LEGACY_OVERVIEW_SIGNAL_INTERVAL_MS = 2000;
 const OVERVIEW_CACHE_MS = 5000;
+const OVERVIEW_ACTIVITY_LIMIT = 3;
+const OVERVIEW_ROUND_LIMIT = 60;
 let overviewSignalTimer;
+let overviewLive;
 function renderOverview(d) {
   $('ov-content').classList.remove('hidden', 'ov-status-only');
   $('ov-missing').classList.add('hidden');
@@ -2150,6 +2155,16 @@ function renderOverviewActivity(data) {
   });
 }
 function loadOverview() {
+  if (state.incrementalUpdates) {
+    const activity = cacheRead('overview-activity', OVERVIEW_CACHE_MS);
+    const round = cacheRead('overview-round', OVERVIEW_CACHE_MS);
+    const snapshot = cacheRead('overview', OVERVIEW_CACHE_MS);
+    overviewLive = {owner:state.loaded, records:round?.data.records, cursor:round?.data.since_id, snapshot:snapshot?.data};
+    if (snapshot) renderOverview(snapshot.data);
+    if (activity || round) renderOverviewActivity(activity?.data ?? {records:round.data.records.slice(-OVERVIEW_ACTIVITY_LIMIT)});
+    if (round) renderOverviewRound(round.data.records);
+    return refreshOverviewLive(round?.fresh === true);
+  }
   clearTimeout(overviewSignalTimer);
   const request = ++overviewRequest;
   const cached = cacheRead('overview', OVERVIEW_CACHE_MS);
@@ -2162,7 +2177,7 @@ function loadOverview() {
   if (cachedActivity) { renderOverviewActivity(cachedActivity.data); activityFresh = cachedActivity.fresh; }
   if (cachedRound) { renderOverviewRound(cachedRound.data.records, true); roundFresh = cachedRound.fresh; }
   const current = () => request === overviewRequest && state.loggedIn && state.page === 'overview';
-  const schedule = () => { overviewSignalTimer = setTimeout(sample, OVERVIEW_SIGNAL_INTERVAL_MS); };
+  const schedule = () => { overviewSignalTimer = setTimeout(sample, LEGACY_OVERVIEW_SIGNAL_INTERVAL_MS); };
   async function sample(reportFailure = false) {
     if (!current()) return;
     if (document.hidden) { schedule(); return; }
@@ -2228,7 +2243,7 @@ $('ov-power').addEventListener('click', async (event) => {
   }
 });
 for (const btn of document.querySelectorAll('[data-go]')) btn.addEventListener('click', () => showPage(btn.dataset.go));
-PAGES.overview = { load: loadOverview };
+PAGES.overview = {load:loadOverview, leave() { clearTimeout(overviewSignalTimer); overviewLive = null; }};
 const showMemoryTab = installResourcePages({$, api, el, fail, fmtTime, openEditor, toast, PAGES});
 // ---------- 私聊：历史加 WebSocket 实时收发 ----------
 // 每条都显示通道（D63 第 8 条）；notice 是系统通知（D35），画成虚线条。
@@ -2565,6 +2580,7 @@ async function recoverChatReplies(ws) {
 // 实时事件（3.43）：/ws?events=1 同时承载聊天与数据变更事件；事件只带类型和最小标识。
 // 收到事件先让相关页面缓存失效，当前页再去抖刷新；非当前页等下次进入时重新取。
 const LIVE_REFRESH_DELAY_MS = 250;
+const LIVE_OVERVIEW_DELAY_MS = 2000;
 const LIVE_TOPIC_CACHE_PREFIXES = {
   timeline: ['timeline:', 'overview-activity', 'overview-round', 'monitor'],
   inbox: ['inbox-conversations', 'inbox-messages:', 'overview-activity', 'monitor'],
@@ -2573,8 +2589,12 @@ const LIVE_TOPIC_CACHE_PREFIXES = {
 };
 const liveRefreshTimers = new Map();
 let socketNeedsCatchUp = false;
+let catchUpChatOnShow = false;
 let timelineGeneration = 0;
 let inboxListGeneration = 0;
+const liveSocketOpen = () => socket !== null && socket.readyState === WebSocket.OPEN;
+let liveRound = null;
+let inboxLiveRefresh = {all:false, keys:new Map()};
 
 function invalidateLiveTopic(topic) {
   if (topic === 'timeline') {
@@ -2592,6 +2612,18 @@ function invalidateLiveTopic(topic) {
 
 // 当前页重新取数的统一入口；刷新函数保留给推送、写操作和内部定时调用（3.43）。
 function refreshCurrentPage() {
+  if (state.incrementalUpdates) {
+    if (state.page === 'overview') return refreshOverviewLive();
+    if (state.page === 'timeline') return loadTimelineSince();
+    if (state.page === 'inbox') {
+      const {all, keys} = inboxLiveRefresh;
+      inboxLiveRefresh = {all:false, keys:new Map()};
+      const jobs = [refreshInboxActivity()];
+      if (all || keys.size) jobs.push(refreshInboxLive(all, keys));
+      return Promise.all(jobs);
+    }
+    if (state.page === 'chat') return recoverChatReplies(socket);
+  }
   switch (state.page) {
     case 'overview': return loadOverview();
     case 'timeline': return loadTimeline(false, false, true, true);
@@ -2606,22 +2638,33 @@ function refreshCurrentPage() {
 
 const LIVE_PAGE_TOPICS = {
   overview: ['timeline', 'inbox', 'round'], timeline: ['timeline'], monitor: ['timeline', 'inbox'],
-  inbox: ['inbox'], memory: ['resources'],
+  inbox: ['inbox', 'timeline', 'round'], memory: ['resources'],
 };
 let liveRefreshPending = false;
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
+    if (state.incrementalUpdates) {
+      clearTimeout(overviewSignalTimer);
+      if (state.page === 'overview' || (state.page === 'timeline' && timelineDelta) ||
+          (state.page === 'inbox' && (!liveSocketOpen() || inboxActivitySession?.request))) liveRefreshPending = true;
+    }
     if (liveRefreshTimers.size) {
-      clearLiveTimers();
+      for (const timer of liveRefreshTimers.values()) clearTimeout(timer);
+      liveRefreshTimers.clear();
       liveRefreshPending = true;
     }
   } else if (liveRefreshPending) {
     liveRefreshPending = false;
     if (state.loggedIn) refreshCurrentPage();
   }
-  if (!document.hidden && state.loggedIn && state.loaded.chatWanted > state.loaded.chatCursor) {
-    loadChatSince(state.loaded.chatCursor);
+  if (!document.hidden && state.loggedIn) {
+    if (catchUpChatOnShow) {
+      catchUpChatOnShow = false;
+      recoverChatReplies(socket);
+    } else if (state.page !== 'chat' && state.loaded.chatWanted > state.loaded.chatCursor) {
+      loadChatSince(state.loaded.chatCursor);
+    }
   }
 });
 
@@ -2630,15 +2673,28 @@ function handleLiveEvent(event) {
   if (topic === 'chat') { chatLiveEvent(event.data); return; }
   if (!LIVE_TOPIC_CACHE_PREFIXES[topic]) return;
   invalidateLiveTopic(topic);
+  if (state.incrementalUpdates && topic === 'round') {
+    liveRound = event.data;
+    if (!document.hidden) applyLiveTyping();
+  }
   if (!state.loggedIn || !LIVE_PAGE_TOPICS[state.page]?.includes(topic)) return;
+  if (!state.incrementalUpdates && state.page === 'inbox' && topic !== 'inbox') return;
+  if (state.incrementalUpdates && state.page === 'inbox' && topic === 'inbox') {
+    const key = event.data?.conversation;
+    if (key) inboxLiveRefresh.keys.set(JSON.stringify(key), key);
+    else inboxLiveRefresh.all = true;
+  }
   if (document.hidden) { liveRefreshPending = true; return; }
-  const previous = liveRefreshTimers.get(topic);
+  const combined = state.incrementalUpdates && ['overview', 'inbox'].includes(state.page);
+  const key = combined ? state.page : topic;
+  const previous = liveRefreshTimers.get(key);
+  if (previous && state.incrementalUpdates && state.page === 'overview') return;
   if (previous) clearTimeout(previous);
-  liveRefreshTimers.set(topic, setTimeout(() => {
-    liveRefreshTimers.delete(topic);
+  liveRefreshTimers.set(key, setTimeout(() => {
+    liveRefreshTimers.delete(key);
     if (document.hidden) liveRefreshPending = true;
     else refreshCurrentPage();
-  }, LIVE_REFRESH_DELAY_MS));
+  }, combined && state.page === 'overview' ? LIVE_OVERVIEW_DELAY_MS : LIVE_REFRESH_DELAY_MS));
 }
 
 // 断线期间后端不重放事件；重连后清空页面缓存，当前页重新取一次（3.43）。
@@ -2646,13 +2702,16 @@ function catchUpLiveUpdates() {
   invalidateLiveTopic('timeline');
   invalidateLiveTopic('inbox');
   clearPageCache();
-  refreshCurrentPage();
+  if (state.incrementalUpdates && state.page === 'inbox') inboxLiveRefresh.all = true;
+  if (document.hidden) liveRefreshPending = true;
+  else return refreshCurrentPage();
 }
 
 function clearLiveTimers() {
   for (const timer of liveRefreshTimers.values()) clearTimeout(timer);
   liveRefreshTimers.clear();
   liveRefreshPending = false;
+  inboxLiveRefresh = {all:false, keys:new Map()};
 }
 
 function openSocket() {
@@ -2661,16 +2720,22 @@ function openSocket() {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(scheme + '://' + location.host + '/ws?events=1');
   socket = ws;
-  followConversationTyping();
+  followConversationTyping(!state.incrementalUpdates);
   setConn('连接中', '');
   ws.onopen = () => {
     if (socket !== ws) return;
     setConn('已连接', 'ok');
     followConversationTyping();
+    followInboxPolling();
+    followOverviewPolling();
     const catchUp = socketNeedsCatchUp;
     socketNeedsCatchUp = false;
-    if (catchUp) catchUpLiveUpdates();
-    if (catchUp || !state.incrementalUpdates) return recoverChatReplies(ws);
+    const recovered = catchUp ? catchUpLiveUpdates() : undefined;
+    if ((catchUp && state.page !== 'chat') || !state.incrementalUpdates) {
+      if (!document.hidden) return recoverChatReplies(ws);
+      catchUpChatOnShow = true;
+    }
+    return recovered;
   };
   ws.onmessage = ev => {
     if (socket !== ws) return;
@@ -2696,8 +2761,14 @@ function openSocket() {
     state.loaded.chatDeltaRequest?.controller.abort();
     delete state.loaded.chatDeltaRequest;
     socketNeedsCatchUp = true;
+    liveRound = null;
     clearTyping();
     setConn('已断开', 'warn');
+    if (state.incrementalUpdates) {
+      followConversationTyping(false);
+      followInboxPolling();
+      followOverviewPolling();
+    }
     reconnectLater();
   };
   ws.onerror = () => { if (socket === ws) clearTyping(); };
@@ -2705,10 +2776,12 @@ function openSocket() {
 function closeSocket() {
   socketWanted = false;
   socketNeedsCatchUp = false;
+  catchUpChatOnShow = false;
   clearLiveTimers();
   const old = socket;
   socket = null;
   pendingChatSend = null;
+  liveRound = null;
   clearTyping();
   if (old) old.close();
   chatEntries.length = 0;
@@ -3470,44 +3543,46 @@ function timelineItem(rec, inContext, {
     feedbackId ? recallFeedback(feedbackId) : null);
 }
 
-function renderTimeline() {
+const timelineGroups = new Map(), timelineFeedback = new Set();
+function renderTimeline(added = null) {
   const list = $('tl-list');
-  list.textContent = '';
   const boundary = tl.context ? tl.context.boundary_id : null;
-  const items = tl.records.slice();
+  const items = added ?? tl.records;
+  if (!added) {
+    list.textContent = '';
+    timelineGroups.clear();
+    timelineFeedback.clear();
+  } else if (list.firstElementChild?.classList.contains('empty')) {
+    list.firstElementChild.remove();
+  }
   if (!items.length) { list.append(el('div', { class: 'empty', text: '这个时间范围里没有记录。' })); return; }
-  const titled = new Set(), feedback = new Set();
   function appendBand(records, inContext) {
-    const groups = new Map();
-    function renderRecord(record) {
+    for (const record of records) {
       const id = record.recall_feedback_reply_id || (record.recall_feedback_available ? record.id : null);
-      const showFeedback = id && !feedback.has(id);
-      if (showFeedback) feedback.add(id);
+      const showFeedback = id && !timelineFeedback.has(id);
+      if (showFeedback) timelineFeedback.add(id);
       const row = timelineItem(record, inContext, {feedbackId: showFeedback ? id : null});
       row.dataset.recordId = String(record.id);
-      return row;
-    }
-    for (const record of records) {
-      if (record.round_id && !groups.has(record.round_id)) groups.set(record.round_id, []);
-      groups.get(record.round_id)?.push(record);
-    }
-    for (const record of records) {
-      if (!record.round_id) { list.append(renderRecord(record)); continue; }
-      const members = groups.get(record.round_id);
-      if (!members) continue;
-      groups.delete(record.round_id);
-      const title = `对话轮次 #${record.round_id}`;
-      list.append(el('section', {class:'tl-round', 'aria-label':title},
-        titled.has(record.round_id) ? null : el('h3', {class:'tl-round-title', text:title}),
-        ...members.map(renderRecord)));
-      titled.add(record.round_id);
+      if (!record.round_id) { list.append(row); continue; }
+      const key = `${record.round_id}:${inContext}`;
+      let group = timelineGroups.get(key);
+      if (!group) {
+        const title = `对话轮次 #${record.round_id}`;
+        group = el('section', {class:'tl-round', 'aria-label':title},
+          timelineGroups.has(`${record.round_id}:${!inContext}`) ? null : el('h3', {class:'tl-round-title', text:title}));
+        timelineGroups.set(key, group);
+        list.append(group);
+      }
+      group.append(row);
     }
   }
   if (boundary === null) { appendBand(items, false); return; }
   const history = items.filter(record => record.id < boundary);
   const current = items.filter(record => record.id >= boundary);
   appendBand(history, false);
-  if (history.length && current.length) list.append(tlDivider());
+  if (current.length && ![...list.children].some(node => node.classList.contains('tl-divider')) && tl.records[0].id < boundary) {
+    list.append(tlDivider());
+  }
   appendBand(current, true);
 }
 // 只在实际替换时读取开关，选中文本延后刷新期间用户仍可改变展开状态。
@@ -3578,28 +3653,37 @@ function timelineScrollablePosition() {
 let timelineRequest = 0;
 let timelineQuery = '';
 let timelineRendered = null;   // 当前 DOM 是根据哪一份第一页数据渲染的
+let timelineCursor = null;
+let timelineReading = null;
+let timelineDelta = null;
 let timelineScrollMemory = null;   // 最近一次页面还能滚动时的位置，列表太短时保留（3.35）
 const TIMELINE_CACHE_MS = 15000;
 // 把一页时间线数据放进页面；scroll 决定渲染后停在哪里：
 // latest 停在最新一条，preserve 按整页比例保留当前位置，anchor 用列表高度差补回。
-function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
+function applyTimelineData(data, {more = false, scroll = 'latest', added = null} = {}) {
   const summary = $('tl-summary');
-  const entries = Object.entries(data.summary || {});
-  summary.replaceChildren(...entries.map(([source, text]) => {
-    const row = el('div');
-    let title = source;
-    if (source.startsWith('[')) {
-      const [, platform, account, kind, recipient, temporaryGroup] = JSON.parse(source);
-      const type = kind === 'group' ? '群聊' : '私聊';
-      title = [platform, account, type + ' ' + recipient, temporaryGroup].filter(Boolean).join(' · ');
-    }
-    row.append(el('h4', {text: title}), el('p', {text}));
-    return row;
-  }));
-  if (!entries.length) summary.textContent = '暂无滚动摘要。';
+  if (!added || JSON.stringify(data.summary) !== JSON.stringify(timelineRendered?.summary)) {
+    const entries = Object.entries(data.summary || {});
+    updateLiveRegion(summary, () => {
+      if (!entries.length) { summary.textContent = '暂无滚动摘要。'; return; }
+      summary.replaceChildren(...entries.map(([source, text]) => {
+        const row = el('div');
+        let title = source;
+        if (source.startsWith('[')) {
+          const [, platform, account, kind, recipient, temporaryGroup] = JSON.parse(source);
+          const type = kind === 'group' ? '群聊' : '私聊';
+          title = [platform, account, type + ' ' + recipient, temporaryGroup].filter(Boolean).join(' · ');
+        }
+        row.append(el('h4', {text: title}), el('p', {text}));
+        return row;
+      }));
+    });
+  }
+  const previousContext = tl.context;
   tl.records = more ? [...new Map(data.records.concat(tl.records).map(record => [record.id, record])).values()] : data.records;
   if (!more) timelineRendered = data;
-  tl.next = data.next_before_id;
+  if (!added) tl.next = data.next_before_id;
+  if (!more) timelineCursor = data.since_id ?? data.records.at(-1)?.id ?? 0;
   tl.context = data.context;
   const button = $('tl-more');
   button.disabled = !tl.next;
@@ -3608,6 +3692,14 @@ function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
   const anchor = more ? timelineScrollAnchor() : null;
   if (more) {
     updateLiveRegion(list, () => { renderTimeline(); restoreTimelineScroll(anchor); });
+  } else if (added && JSON.stringify(previousContext) === JSON.stringify(tl.context) && !pendingLiveUpdates.has(list)) {
+    if (added.length) {
+      const page = $('page-timeline');
+      const stick = page.scrollHeight - page.scrollTop - page.clientHeight < 80 &&
+        !list.contains(document.activeElement) && !selectionTouches(list);
+      renderTimeline(added);
+      if (stick) scrollTimelineToLatest();
+    }
   } else if (scroll === 'live') {
     updateLiveRegion(list, () => renderLiveTimeline(list));
   } else if (scroll === 'preserve') {
@@ -3624,11 +3716,21 @@ function applyTimelineData(data, {more = false, scroll = 'latest'} = {}) {
   }
   list.removeAttribute('aria-busy');
 }
-async function loadTimeline(more, switching = false, force = false, live = false) {
+function timelineParams() {
+  const query = new URLSearchParams({hours:$('tl-hours').value, limit:'100'});
+  if (tl.filter) query.set('types', tl.filter);
+  return query;
+}
+
+function loadTimeline(...args) {
+  const reading = timelineReading = readTimeline(...args);
+  return reading.finally(() => { if (timelineReading === reading) timelineReading = null; });
+}
+
+async function readTimeline(more, switching = false, force = false, live = false) {
   const navigation = pageNavigation;
   const button = $('tl-more');
-  const query = new URLSearchParams({ hours: $('tl-hours').value, limit: '100' });
-  if (tl.filter) query.set('types', tl.filter);
+  const query = timelineParams();
   const base = String(query);
   if (more && (button.disabled || !tl.next || base !== timelineQuery)) return;
   if (more) query.set('before_id', String(tl.next));
@@ -3659,7 +3761,8 @@ async function loadTimeline(more, switching = false, force = false, live = false
     button.classList.add('hidden');
   }
   const res = await api('/api/timeline?' + query);
-  if (request !== timelineRequest || session !== state.loaded || generation !== timelineGeneration ||
+  if (request !== timelineRequest || session !== state.loaded || navigation !== pageNavigation ||
+      (!state.incrementalUpdates && generation !== timelineGeneration) ||
       (live && (navigation !== pageNavigation || state.page !== 'timeline'))) return;
   const missing = $('tl-missing');
   if (notBuilt(res)) {
@@ -3680,11 +3783,12 @@ async function loadTimeline(more, switching = false, force = false, live = false
     else fail(res);
     return;
   }
-  if (!more) cacheWrite('timeline:' + base, res.data, TIMELINE_CACHE_MS);
+  if (!more && generation === timelineGeneration) cacheWrite('timeline:' + base, res.data, TIMELINE_CACHE_MS);
   timelineQuery = base;
   applyTimelineData(res.data, {more, scroll: live && timelineRendered && !replacesFilter ? 'live' :
     more || shownFromCache || switching ? 'preserve' : 'latest'});
 }
+
 $('tl-hours').addEventListener('change', () => loadTimeline(false, true));
 $('tl-more').addEventListener('click', () => loadTimeline(true));
 renderTimelineChips();
@@ -3889,7 +3993,8 @@ function closeInboxImageDialog() {
   if (pinned && ![...inboxImageCache.values()].some(entry => entry.url === pinned)) URL.revokeObjectURL(pinned);
 }
 
-const TYPING_REFRESH_MS = 750;
+const TYPING_REFRESH_MS = 3000;
+const LEGACY_TYPING_REFRESH_MS = 750;
 let typingSession = null;
 function clearTyping() {
   const current = typingSession;
@@ -3922,40 +4027,62 @@ function showInboxTypingBubble() {
   if (stick) list.scrollTop = list.scrollHeight;
 }
 
-function followConversationTyping() {
+function sameInboxKey(first, second) {
+  return first && second && ['platform', 'account_id', 'kind', 'recipient_id', 'temporary_group_id']
+    .every(field => (first[field] ?? null) === (second[field] ?? null));
+}
+
+function showTypingState(current, active, needsMessageRead) {
+  if (current.chat) {
+    if (!active) current.status.replaceChildren();
+    else if (!current.status.firstChild) current.status.append(typingIndicator(true));
+  } else if (!active) {
+    removeInboxTypingBubble();
+    if (active === false && current.wasActive && needsMessageRead) refreshInboxMessages();
+  } else {
+    if (!current.wasActive) current.bubbleReplaced = false;
+    if (!current.bubbleReplaced) showInboxTypingBubble();
+  }
+  if (active !== null) current.wasActive = active;
+}
+
+function applyLiveTyping() {
+  const current = typingSession;
+  if (!current || !liveRound || !liveSocketOpen()) return;
+  current.controller?.abort();
+  clearTimeout(current.timer);
+  const matches = current.chat ? liveRound.web === true : sameInboxKey(current.key, liveRound.conversation);
+  showTypingState(current, liveRound.active === true && Boolean(matches), false);
+}
+
+function followConversationTyping(immediate = true) {
   clearTyping();
   if (!state.loggedIn || document.hidden || !navigator.onLine) return;
   const chat = state.page === 'chat';
   const key = state.page === 'inbox' ? inbox.selected?.key : null;
   if (!chat && !key) return;
-  if (chat && socket?.readyState !== WebSocket.OPEN) return;
+  if (!state.incrementalUpdates && chat && !liveSocketOpen()) return;
   const path = chat ? '/api/chat/typing' : `/api/inbox/typing?${inboxScope(key)}`;
   const current = typingSession = {status:$(chat ? 'chat-typing' : 'inbox-typing'),
-    wasActive:false, bubbleReplaced:false};
+    chat, key, wasActive:false, bubbleReplaced:false};
+  const interval = state.incrementalUpdates ? TYPING_REFRESH_MS : LEGACY_TYPING_REFRESH_MS;
+  if (state.incrementalUpdates && liveSocketOpen() && liveRound) { applyLiveTyping(); return; }
   async function refresh() {
+    if (typingSession !== current) return;
     const controller = current.controller = new AbortController();
-    current.timer = setTimeout(() => controller.abort(), TYPING_REFRESH_MS);
+    current.timer = setTimeout(() => controller.abort(), interval);
     const result = await api(path, undefined, undefined, {}, controller.signal);
     if (typingSession !== current) return;
     clearTimeout(current.timer);
+    if (state.incrementalUpdates && liveSocketOpen() && liveRound) return;
     const active = !controller.signal.aborted && result.ok && typeof result.data?.typing === 'boolean'
       ? result.data.typing : null;
-    if (chat) {
-      if (!active) current.status.replaceChildren();
-      else if (!current.status.firstChild) current.status.append(typingIndicator(true));
-    } else if (!active) {
-      removeInboxTypingBubble();
-      // 输入结束再补拉一次最新一页，回复即使没等到推送也会出现在原位（3.43、3.47）。
-      if (active === false && current.wasActive) refreshInboxMessages();
-    } else {
-      if (!current.wasActive) current.bubbleReplaced = false;
-      if (!current.bubbleReplaced) showInboxTypingBubble();
-    }
+    showTypingState(current, active, !state.incrementalUpdates || !liveSocketOpen());
     if (result.status === 403) current.wasActive = false;
-    else if (active !== null) current.wasActive = active;
-    current.timer = setTimeout(refresh, TYPING_REFRESH_MS);
+    if (!state.incrementalUpdates || !liveSocketOpen()) current.timer = setTimeout(refresh, interval);
   }
-  refresh();
+  if (immediate) refresh();
+  else current.timer = setTimeout(refresh, interval);
 }
 document.addEventListener('visibilitychange', followConversationTyping);
 window.addEventListener('offline', clearTyping);
@@ -4017,7 +4144,8 @@ function selectInboxConversation(conversation) {
 }
 
 // 平台会话的 Bot 活动：只轮询当前会话，按轮次展示来信、判断、规划、回复参考和投递（D123）。
-const INBOX_ACTIVITY_REFRESH_MS = 1500;
+const INBOX_ACTIVITY_REFRESH_MS = 15000;
+const LEGACY_INBOX_ACTIVITY_REFRESH_MS = 1500;
 const INBOX_ACTIVITY_TIMEOUT_MS = 5000;
 const INBOX_ACTIVITY_HOURS = 1;
 const INBOX_ACTIVITY_LIMIT = 60;
@@ -4053,6 +4181,7 @@ function inboxActivityQuery(conversation) {
       account_id: key.account_id,
       kind: key.kind,
       recipient_id: key.recipient_id,
+      temporary_group_id: key.temporary_group_id,
     }),
   });
 }
@@ -4068,7 +4197,8 @@ function startInboxActivity(conversation) {
   }
   $('inbox-activity').classList.remove('hidden');
   inboxActivityStatus('同步中');
-  const current = inboxActivitySession = {controller:null, timer:null, signature:''};
+  const current = inboxActivitySession = {controller:null, timer:null, signature:'', key:conversation.key, records:[], cursor:null};
+  if (state.incrementalUpdates) { refreshInboxActivity(); return; }
   async function refresh() {
     if (inboxActivitySession !== current) return;
     const controller = current.controller = new AbortController();
@@ -4084,10 +4214,11 @@ function startInboxActivity(conversation) {
     } else {
       inboxActivityStatus('重试中');
     }
-    current.timer = setTimeout(refresh, INBOX_ACTIVITY_REFRESH_MS);
+    current.timer = setTimeout(refresh, LEGACY_INBOX_ACTIVITY_REFRESH_MS);
   }
   refresh();
 }
+
 
 // 最新一轮：优先取带 round_id 的最新轮次；还没开始规划的新来信单独当作当前来信显示。
 function inboxActivityLatestRound(records) {
@@ -4186,7 +4317,12 @@ function renderInboxActivity(records, session) {
   if (nearBottom) log.scrollTop = log.scrollHeight;
 }
 
-function followInboxActivity() {
+function followInboxActivity(event) {
+  if (state.incrementalUpdates && inboxActivitySession) {
+    if (document.hidden) clearTimeout(inboxActivitySession.timer);
+    else if (event?.type === 'online') refreshInboxActivity();
+    return;
+  }
   if (document.hidden) {
     stopInboxActivity();
     return;
@@ -4194,7 +4330,10 @@ function followInboxActivity() {
   if (state.page === 'inbox' && inbox.selected?.key) startInboxActivity(inbox.selected);
 }
 document.addEventListener('visibilitychange', followInboxActivity);
-window.addEventListener('offline', stopInboxActivity);
+window.addEventListener('offline', () => {
+  if (state.incrementalUpdates && inboxActivitySession) clearTimeout(inboxActivitySession.timer);
+  else stopInboxActivity();
+});
 window.addEventListener('online', followInboxActivity);
 
 function renderInboxView({keepSelection = false} = {}) {
@@ -4269,12 +4408,12 @@ async function loadInbox() {
 }
 
 // 收到 inbox 事件：先刷新会话列表，再只取当前会话最新一页并追加新消息（3.43、3.47）。
-async function refreshInboxLive() {
+async function refreshInboxLive(all = true, keys = new Map()) {
   if (!state.loggedIn || state.page !== 'inbox' || document.hidden) return;
   const generation = inboxListGeneration;
   await loadInbox();
-  if (generation !== inboxListGeneration) return;
-  await refreshInboxMessages();
+  if (!state.incrementalUpdates && generation !== inboxListGeneration) return;
+  if (all || [...keys.values()].some(key => sameInboxKey(key, inbox.selected?.key))) await refreshInboxMessages();
 }
 
 async function refreshInboxMessages() {

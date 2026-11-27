@@ -43,7 +43,14 @@ from aureus.heartbeat.history_retention import HistoryRetention
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_media import AttachmentReader
 from aureus.heartbeat.inbox_store import ConversationKey, InboxStore
-from aureus.heartbeat.live import TOPIC_CHAT, TOPIC_TIMELINE, LiveEvent, LiveEventHub
+from aureus.heartbeat.live import (
+    TOPIC_CHAT,
+    TOPIC_INBOX,
+    TOPIC_ROUND,
+    TOPIC_TIMELINE,
+    LiveEvent,
+    LiveEventHub,
+)
 from aureus.heartbeat.memory_summary_source import VISIBLE_SUMMARY_SCOPES, WEB_PRIVATE_SCOPE
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD
 from aureus.identity import Identity
@@ -225,6 +232,7 @@ async def _push(
     sessions: SessionStore,
     token: str,
     live_events: LiveEventHub,
+    allows_conversation: Callable[[ConversationKey], bool] | None,
 ) -> None:
     """把心跳交回的消息和实时事件推给这个网页；登录失效了就把它踢下线。
 
@@ -242,9 +250,20 @@ async def _push(
                 return
             if isinstance(item, LiveEvent):
                 if not live_events.paused:
-                    await socket.send_json(
-                        {"type": "event", "topic": item.topic, "data": dict(item.data)}
-                    )
+                    data = dict(item.data)
+                    route = data.get("conversation")
+                    if (
+                        item.topic in (TOPIC_ROUND, TOPIC_INBOX)
+                        and isinstance(route, dict)
+                        and (
+                            allows_conversation is None
+                            or not allows_conversation(ConversationKey(**route))
+                        )
+                    ):
+                        if item.topic == TOPIC_INBOX:
+                            continue
+                        data = {"active": False}
+                    await socket.send_json({"type": "event", "topic": item.topic, "data": data})
             elif item is not None:
                 await socket.send_json(
                     {
@@ -373,6 +392,21 @@ def create_app(
         """发布最小游标；聊天回执有独立的前一条序号，不能用全局序号判断遗漏。"""
         nonlocal last_chat_delivery
         live.publish(LiveEvent(TOPIC_TIMELINE, {"id": record.id, "event_type": record.event_type}))
+        if (
+            config.incremental_updates_enabled
+            and record.event_type == EVENT_REPLY_DELIVERED
+            and record.visibility is not VisibilityScope.PRIVATE
+            and record.metadata.get("channel") == "qq"
+        ):
+            fields = {
+                "platform": "qq",
+                "account_id": record.metadata.get("account_id"),
+                "kind": record.metadata.get("message_type"),
+                "recipient_id": record.metadata.get("recipient_id"),
+                "temporary_group_id": record.metadata.get("temporary_group_id"),
+            }
+            if all(fields[name] for name in ("account_id", "kind", "recipient_id")):
+                live.publish(LiveEvent(TOPIC_INBOX, {"conversation": fields}))
         if (
             config.incremental_updates_enabled
             and record.event_type == EVENT_REPLY_DELIVERED
@@ -656,7 +690,9 @@ def create_app(
                     logger.debug("网页收得太慢，丢掉一条实时事件")
 
             unsubscribe_live = live.subscribe(enqueue_live)
-        pusher = asyncio.create_task(_push(socket, outbox, sessions, token, live))
+        pusher = asyncio.create_task(
+            _push(socket, outbox, sessions, token, live, allows_inbox_conversation)
+        )
         try:
             await _listen(socket, channel, sessions, token)
         except (WebSocketDisconnect, RuntimeError):
@@ -887,6 +923,7 @@ def create_app(
             restart_required=lambda: config_files.restart_required if config_files else False,
             maintenance_paused=maintenance_paused,
             recall_feedback_enabled=recall_feedback_enabled,
+            allows_conversation=allows_inbox_conversation,
         )
         register_recall_feedback_routes(
             app, timeline, require_ready, _same_http_origin, enabled=recall_feedback_enabled
@@ -943,6 +980,7 @@ def create_app(
     memory_graph_ui = INDEX_PAGE.with_name("memory-graph.js").read_bytes()
     memory_flow_ui = INDEX_PAGE.with_name("memory-flow-transfer.js").read_bytes()
     inbox_retention_ui = INDEX_PAGE.with_name("inbox-retention.js").read_bytes()
+    timeline_live_ui = INDEX_PAGE.with_name("timeline-live.js").read_bytes()
     memory_bundles_ui = INDEX_PAGE.with_name("memory-bundles.js").read_bytes()
     organ_tile = INDEX_PAGE.with_name("organ-tile.png").read_bytes()
 
@@ -989,6 +1027,12 @@ def create_app(
     async def memory_bundles_asset() -> Response:
         return Response(
             memory_bundles_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/assets/timeline-live.js", include_in_schema=False)
+    async def timeline_live_asset() -> Response:
+        return Response(
+            timeline_live_ui, media_type="text/javascript", headers={"Cache-Control": "no-store"}
         )
 
     @app.get("/assets/ark-pixel.woff2", include_in_schema=False)
