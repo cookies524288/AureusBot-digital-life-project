@@ -62,6 +62,8 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
         definition = schema["properties"][section]["$ref"].rsplit("/", 1)[-1]
         defaults[section].pop(field, None)
         schema["$defs"][definition]["properties"].pop(field, None)
+    defaults["heartbeat"].pop("chat_meme_glossary")
+    assert data["chat_meme_glossary_count"] == 0
     assert data["config"] == defaults
     assert data["schema"] == schema
     assert "$defs" in data["schema"]
@@ -77,6 +79,7 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
         "qq.token_key",
         "qq.action_timeout_seconds",
         "qq.reconnect_seconds",
+        "heartbeat.chat_meme_glossary",
         *(f"cortisol.{name}" for name in CortisolConfig.model_fields),
         *(
             f"hormones.{name}"
@@ -92,6 +95,58 @@ def test_missing_config_returns_defaults_schema_readonly_and_password_sections(
     assert "工程设定" in data["biochemical_sources"]["hormones.anger_half_life_seconds"]
     assert "工程设定" in data["biochemical_sources"]["mood.half_life_seconds"]
     assert data["password_sections"] == ["safety", "web"]
+
+
+def test_chat_settings_save_scalars_but_only_report_glossary_size(rig: ConfigRig) -> None:
+    path = rig.paths.runtime_config_file
+    original = '[heartbeat.chat_meme_glossary]\n"本机测试词" = "未发布的释义" # 保留\n'
+    path.write_text(original, encoding="utf-8")
+    response = rig.client.get("/api/config")
+    data = response.json()
+    assert data["chat_meme_glossary_count"] == 1
+    assert "chat_meme_glossary" not in data["config"]["heartbeat"]
+    assert "本机测试词" not in response.text and "未发布的释义" not in response.text
+    changes = {
+        "heartbeat": {
+            "qq_emoji_followup_enabled": False,
+            "qq_emoji_followup_seconds": 5.5,
+            "qq_emoji_play_enabled": False,
+            "reply_split_mode": "explicit",
+            "chat_reminders_enabled": False,
+            "chat_nudges_enabled": False,
+            "chat_rechecks_enabled": False,
+            "chat_group_lookup_enabled": False,
+            "chat_meme_lookup_enabled": False,
+            "chat_assets_enabled": False,
+        },
+        "qq": {
+            "chat_actions_enabled": False,
+            "poke_response_enabled": False,
+            "poke_cooldown_seconds": 6.5,
+            "follow_recall_enabled": True,
+        },
+    }
+    response = rig.client.put("/api/config", json={"changes": changes})
+    assert response.status_code == 200 and response.json()["restart_required"] is True
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    for section, fields in changes.items():
+        for key, value in fields.items():
+            assert raw[section][key] == value and type(raw[section][key]) is type(value)
+    assert original in path.read_text(encoding="utf-8")
+    before = path.read_bytes()
+    for value, code in [({"替换": "拒绝"}, 422), ("替换", 403)]:
+        response = rig.client.put(
+            "/api/config", json={"changes": {"heartbeat": {"chat_meme_glossary": value}}}
+        )
+        assert response.status_code == code
+    for field in ["heartbeat.chat_meme_glossary", "qq.endpoint"]:
+        response = rig.client.post("/api/config/restore-default", json={"field": field})
+        assert response.status_code == 403
+    assert path.read_bytes() == before
+    response = rig.client.post("/api/config/restore-defaults", json={"password": GOOD})
+    assert response.status_code == 200 and "未发布的释义" not in response.text
+    assert "chat_meme_glossary" not in response.json()["config"]["heartbeat"]
+    assert original in path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(

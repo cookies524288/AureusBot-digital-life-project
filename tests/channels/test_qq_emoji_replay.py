@@ -66,9 +66,22 @@ async def test_qq_emoji_reply_uses_final_plan_and_counts_only_platform_success(
         }
         requests: list[OrganRequest] = []
         original_process = replay.replyer.process
+        selected = asyncio.Event()
+        selector = replay.core.heartbeat._conversation.emoji_selector
+        assert selector is not None
+        select = selector.select
+
+        async def choose(*args, **kwargs):
+            result = await select(*args, **kwargs)
+            selected.set()
+            return result
+
+        monkeypatch.setattr(selector, "select", choose)
 
         async def reply(request: OrganRequest) -> OrganResponse:
             if request.context.get("task") != "emoji":
+                if before_text:
+                    await selected.wait()
                 return await original_process(request)
             requests.append(request)
             return OrganResponse("replyer", '{"selected": 1}')

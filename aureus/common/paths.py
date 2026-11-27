@@ -103,6 +103,7 @@ class AureusPaths:
     diary_dir: Path = field(init=False)  # 每日日记
     memory_dir: Path = field(init=False)  # 记忆
     skills_dir: Path = field(init=False)  # 技能
+    chat_assets_dir: Path = field(init=False)
     snapshots_dir: Path = field(init=False)  # 定期快照
 
     def __post_init__(self) -> None:
@@ -126,6 +127,7 @@ class AureusPaths:
             "diary_dir": data_dir / "diary",
             "memory_dir": data_dir / "memory",
             "skills_dir": data_dir / "skills",
+            "chat_assets_dir": data_dir / "chat_assets",
             "snapshots_dir": data_dir / "snapshots",
         }
         # 语法：frozen=True 的类不能直接给属性赋值，这里用 object.__setattr__ 填一次，

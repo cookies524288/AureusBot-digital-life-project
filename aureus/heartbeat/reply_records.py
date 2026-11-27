@@ -1,6 +1,7 @@
 """将通道逐段投递的事实追加到时间线（3.15），不改写已存在的回复记录。"""
 
 from collections.abc import Callable
+from typing import Any, Protocol
 
 from aureus.heartbeat.events import (
     EVENT_RECALL_REPLY_DELIVERED,
@@ -12,21 +13,42 @@ from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord
 INTERNAL_REPLY_RECORD = "outbox_internal"
 
 
+class DeliveryConfirm(Protocol):
+    """平台确认某段送达；能返回原件号的通道一并传入。"""
+
+    def __call__(self, platform_message_id: str = "") -> None:
+        """仅在收到肯定回执后调用。"""
+        ...
+
+
 def delivery_callbacks(
     timeline: TimelineDatabase,
     reply: TimelineRecord,
     content: str,
     segment: int | None,
-) -> tuple[Callable[[], None], Callable[[str], None]]:
+    *,
+    on_confirm: Callable[[], None] | None = None,
+    on_failure: Callable[[], None] | None = None,
+) -> tuple[DeliveryConfirm, Callable[[str], None]]:
     """最多保留一个投递结果；网页同一条发给多个连接时不重复记录。"""
-    fields = {"channel": reply.metadata.get("channel", ""), "reply_id": reply.id}
-    if "round_id" in reply.metadata:
-        fields["round_id"] = reply.metadata["round_id"]
+    fields: dict[str, Any] = {"channel": reply.metadata.get("channel", ""), "reply_id": reply.id}
+    for key in (
+        "round_id",
+        "account_id",
+        "recipient_id",
+        "message_type",
+        "temporary_group_id",
+        "to_user",
+        "chat_play",
+    ):
+        if key in reply.metadata:
+            fields[key] = reply.metadata[key]
     if segment is not None:
         fields["segment"] = segment
+        fields["segment_total"] = len(reply.metadata.get("reply_segments") or [content])
     settled = False
 
-    def confirm() -> None:
+    def confirm(platform_message_id: str = "") -> None:
         nonlocal settled
         if settled:
             return
@@ -35,9 +57,13 @@ def delivery_callbacks(
             content,
             ActorType.ME,
             visibility=reply.visibility,
-            metadata=fields,
+            metadata={**fields, "message_id": platform_message_id}
+            if platform_message_id
+            else fields,
         )
         settled = True
+        if on_confirm is not None:
+            on_confirm()
         if segment is not None and reply.metadata.get("recall_feedback_refs"):
             timeline.append(
                 EVENT_RECALL_REPLY_DELIVERED,
@@ -59,5 +85,7 @@ def delivery_callbacks(
             metadata=fields,
         )
         settled = True
+        if on_failure is not None:
+            on_failure()
 
     return confirm, fail

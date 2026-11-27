@@ -48,6 +48,7 @@ from aureus.core.model_runtime import ModelRuntime
 from aureus.core.snapshots import BYTES_PER_MEGABYTE, prune_snapshots
 from aureus.feedback import FeedbackStore
 from aureus.heartbeat import Heartbeat, Perception, registered_templates
+from aureus.heartbeat.chat_assets import ApprovedAssets
 from aureus.heartbeat.inbox_images import InboxImageIndex
 from aureus.heartbeat.inbox_store import InboxStore
 from aureus.heartbeat.language_runner import learning_evidence_available, previous_language_scope
@@ -439,12 +440,21 @@ def open_core(
                 test_group=qq_test_group,
                 inbox_store=inbox_store,
                 on_inbox_message=heartbeat.on_inbox_message,
+                on_social_notice=heartbeat.on_social_notice,
+                clock=the_clock,
                 read_emoji=emoji_store.read_sendable,
+                allows_emoji_asset=emoji_store.allows_send,
                 record_emoji_use=emoji_store.record_use,
                 allows_emoji_delivery=heartbeat.allows_emoji_delivery,
                 bot_names=heartbeat.bot_names,
             )
             heartbeat.set_inbox_route_filter(qq.allows_inbox_conversation)
+            heartbeat.enable_qq_actions(runtime.qq.chat_actions_enabled)
+            heartbeat.set_chat_group_reader(qq.list_groups, is_owner=is_qq_owner)
+            if heartbeat_config.chat_assets_enabled:
+                assets = ApprovedAssets(paths.chat_assets_dir)
+                heartbeat.set_chat_asset_names(assets.names)
+                qq.set_asset_reader(assets.read, assets.allows)
             inbox_images = InboxImageIndex(
                 paths.database_file,
                 gateway.call,

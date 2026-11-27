@@ -162,14 +162,46 @@ class InboxMessage:
     direction: str = "incoming"
     # 消息实际收到的时刻（D142）：防抖按它算批次起点，不用平台给的发送时间。
     received_at: datetime | None = None
+    media_notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class InboxImageNote:
-    """普通图的既有 VLM 文字，或用于查询表情资料的内容摘要。"""
+    """原件某一位置已经取得的说明，或只能用于查询表情库的摘要。"""
 
-    source: Literal["vlm", "emoji_catalog"]
+    source: Literal["vlm", "emoji_catalog", "voice", "document", "video"]
     value: str
+
+
+def _attachment_data(item: MediaReference) -> tuple[str | bool, ...]:
+    base = (item.kind, item.file_id, item.is_emoji)
+    return (*base, item.name) if item.name else base
+
+
+def _note_source(item: MediaReference) -> str:
+    return {
+        "image": "emoji_catalog" if item.is_emoji else "vlm",
+        "record": "voice",
+        "file": "document",
+        "video": "video",
+    }[item.kind]
+
+
+def _note_matches(item: MediaReference, source: str) -> bool:
+    return source == _note_source(item) or (
+        item.kind == "file" and source in ("voice", "vlm", "video")
+    )
+
+
+def _history_notes(perception: Perception, notes: dict[str, list[str]]) -> tuple[str, ...]:
+    labels = {"image": "图片", "record": "语音", "file": "文件", "video": "视频"}
+    result: list[str] = []
+    for position, item in enumerate(perception.attachments):
+        label = "表情" if item.is_emoji else labels[item.kind]
+        source, text = notes.get(str(position), ["", ""])
+        description = text if source != "emoji_catalog" and _note_matches(item, source) else ""
+        result.append(f"[附件 {position + 1} · {label}] {description or '没有已取得的说明'}")
+    return tuple(result)
 
 
 def _conversation(row: Row) -> ConversationKey:
@@ -186,12 +218,13 @@ def _find_visible_message(
     database: Connection, conversation: ConversationKey, identifier: int
 ) -> Row | None:
     return database.execute(
-        f"{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE} AND m.id = ?",
+        f"{_MESSAGES} WHERE {_KEY} AND {USER_VISIBLE_INBOX_MESSAGE} AND m.id = ? "
+        "AND m.direction != 'recalled'",
         (*conversation.parameters(), identifier),
     ).fetchone()
 
 
-def _message(row: Row) -> InboxMessage:
+def _message(row: Row, *, history_notes: bool = False) -> InboxMessage:
     key = _conversation(row)
     perception = Perception(
         key.platform,
@@ -219,6 +252,7 @@ def _message(row: Row) -> InboxMessage:
         "read" if row["is_read"] else "unread",
         row["direction"],
         datetime.fromisoformat(row["received_at"]) if row["received_at"] else None,
+        _history_notes(perception, json.loads(row["image_notes"])) if history_notes else (),
     )
 
 
@@ -248,7 +282,7 @@ def _resolve_components(
         if component.kind == "reply" and component.target_message_id is not None:
             original = database.execute(
                 """SELECT sender_id FROM inbox_messages WHERE conversation_id = ?
-                AND message_id = ? AND visibility = ? AND direction != 'notice'""",
+                AND message_id = ? AND visibility = ? AND direction IN ('incoming','outgoing')""",
                 (conversation_id, component.target_message_id, perception.visibility),
             ).fetchone()
             if original is not None:
@@ -335,6 +369,93 @@ class InboxStore:
         """保存平台已确认的外发消息，不增加未读数。"""
         self._add(perception, sender_name, "", "outgoing")
 
+    def find_platform_message(
+        self, conversation: ConversationKey, platform_message_id: str
+    ) -> InboxMessage | None:
+        """按完整会话查入站或确已送达的原件，不推进已读水位。"""
+        if not platform_message_id:
+            return None
+        with closing(open_connection(self._path, read_only=True)) as database:
+            row = database.execute(
+                f"""{_MESSAGES} WHERE {_KEY} AND m.message_id = ?
+                    AND m.direction IN ('incoming', 'outgoing')""",
+                (*conversation.parameters(), platform_message_id),
+            ).fetchone()
+        return _message(row) if row is not None else None
+
+    def delivered_replies(
+        self, conversation: ConversationKey, source_id: str
+    ) -> list[InboxMessage]:
+        """只返回本账号在本会话里直接回给指定原件的未撤回消息。"""
+        if not source_id:
+            return []
+        with closing(open_connection(self._path, read_only=True)) as database:
+            rows = database.execute(
+                f"""{_MESSAGES} WHERE {_KEY} AND m.direction = 'outgoing'
+                    AND m.sender_id = c.account_id AND m.source_message_id = ?
+                    ORDER BY m.id""",
+                (*conversation.parameters(), source_id),
+            ).fetchall()
+        return [_message(row) for row in rows]
+
+    def history_revision(self, conversation: ConversationKey) -> int:
+        """原件被撤回或清理时让该会话已有的工作记忆摘要失效。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            return database.execute(
+                "SELECT COALESCE(MAX(rowid),0) FROM inbox_history_exclusions WHERE scope=?",
+                (conversation.language_scope_key(),),
+            ).fetchone()[0]
+
+    def nearby_before(self, message: InboxMessage, limit: int) -> list[InboxMessage]:
+        """只读同会话同可见性的近期相邻入站原件；这些旁白不再排入回复队列。"""
+        at = (message.received_at or message.timestamp).timestamp()
+        with closing(open_connection(self._path, read_only=True)) as database:
+            rows = database.execute(
+                f"""{_MESSAGES} WHERE {_KEY} AND m.visibility = ? AND m.direction = 'incoming'
+                    AND m.trust != ? AND m.id < ? AND unixepoch(COALESCE(m.received_at,m.timestamp))
+                    BETWEEN ? AND ? ORDER BY m.id DESC LIMIT ?""",
+                (
+                    *message.conversation.parameters(),
+                    message.perception.visibility,
+                    TrustLevel.UNVERIFIED,
+                    message.id,
+                    at - 300,
+                    at,
+                    limit,
+                ),
+            ).fetchall()
+        return [_message(row) for row in reversed(rows)]
+
+    def has_newer_incoming(self, key: ConversationKey, after_id: int) -> bool:
+        """已有新来信时，旧正文后的附图不再打断当前会话。"""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            return (
+                database.execute(
+                    "SELECT 1 FROM inbox_messages m JOIN inbox_conversations c "
+                    f"ON m.conversation_id=c.id WHERE {_KEY} AND m.id>? "
+                    "AND m.direction='incoming' LIMIT 1",
+                    (*key.parameters(), after_id),
+                ).fetchone()
+                is not None
+            )
+
+    def mark_recalled(self, conversation: ConversationKey, platform_message_id: str) -> None:
+        """记录平台消息撤回，支持通知先到且重复调用不改变收件箱水位。"""
+        if not platform_message_id:
+            return
+        scope = conversation.language_scope_key()
+        with closing(open_connection(self._path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            database.execute(
+                "INSERT OR IGNORE INTO inbox_history_exclusions VALUES (?, 'recalled', ?)",
+                (scope, platform_message_id),
+            )
+            database.execute(
+                f"""UPDATE inbox_messages SET direction = 'recalled' WHERE conversation_id IN
+                    (SELECT id FROM inbox_conversations WHERE {_KEY}) AND message_id = ?""",
+                (*conversation.parameters(), platform_message_id),
+            )
+
     def archive(
         self, perception: Perception, *, sender_name: str, conversation_name: str, notice: bool
     ) -> None:
@@ -361,7 +482,7 @@ class InboxStore:
             if (
                 database.execute(
                     "SELECT 1 FROM inbox_history_exclusions "
-                    "WHERE scope=? AND source='platform' AND source_key=?",
+                    "WHERE scope=? AND source IN ('platform','recalled') AND source_key=?",
                     (key.language_scope_key(), route.message_id),
                 ).fetchone()
                 is not None
@@ -398,12 +519,7 @@ class InboxStore:
                     perception.source_message_id,
                     timestamp.isoformat(),
                     received_at.isoformat(),
-                    json.dumps(
-                        [
-                            (item.kind, item.file_id, item.is_emoji)
-                            for item in perception.attachments
-                        ]
-                    ),
+                    json.dumps([_attachment_data(item) for item in perception.attachments]),
                     direction,
                     json.dumps(_resolve_components(database, conversation_id, perception)),
                 ),
@@ -502,6 +618,19 @@ class InboxStore:
                 ).fetchone()[0]
             )
 
+    def last_incoming(
+        self, key: ConversationKey, *, read_only: bool = False
+    ) -> InboxMessage | None:
+        """回看只认指定会话的真实来信；可要求它已被接收者读过。"""
+        read = f" AND NOT ({_UNREAD})" if read_only else ""
+        with closing(open_connection(self._path, read_only=True)) as database:
+            row = database.execute(
+                f"{_MESSAGES} WHERE {_KEY} AND m.direction='incoming'{read} "
+                "ORDER BY m.id DESC LIMIT 1",
+                key.parameters(),
+            ).fetchone()
+        return _message(row) if row else None
+
     def list_read_history(
         self,
         conversation: ConversationKey,
@@ -516,7 +645,10 @@ class InboxStore:
             rows = database.execute(
                 f"""{_MESSAGES} WHERE {_KEY} AND {_SUMMARY_MESSAGE} AND NOT ({_UNREAD})
                     AND m.visibility = ? AND (? IS NULL OR m.id < ?)
-                    AND (? IS NULL OR instr(lower(m.content), lower(?)) > 0)
+                    AND (? IS NULL OR instr(lower(m.content), lower(?)) > 0 OR EXISTS (
+                        SELECT 1 FROM json_each(m.image_notes) n
+                        WHERE n.value ->> '$[0]' IN ('vlm','voice','document','video')
+                        AND instr(lower(n.value ->> '$[1]'), lower(?)) > 0))
                     ORDER BY m.id DESC LIMIT ?""",
                 (
                     *conversation.parameters(),
@@ -525,10 +657,11 @@ class InboxStore:
                     before_id,
                     keyword,
                     keyword,
+                    keyword,
                     limit,
                 ),
             )
-            return [_message(row) for row in rows]
+            return [_message(row, history_notes=True) for row in rows]
 
     def get_visible_message(
         self,
@@ -579,7 +712,7 @@ class InboxStore:
         if not 0 <= position < len(source.attachments):
             return
         attachment = source.attachments[position]
-        if attachment.kind != "image" or attachment.is_emoji != (note.source == "emoji_catalog"):
+        if not _note_matches(attachment, note.source):
             return
         with closing(open_connection(self._path)) as database, database:
             database.execute(
@@ -596,7 +729,7 @@ class InboxStore:
                     source.route.message_id,
                     *ConversationKey.from_perception(source).parameters(),
                     f"$[{position}]",
-                    json.dumps([attachment.kind, attachment.file_id, attachment.is_emoji]),
+                    json.dumps(_attachment_data(attachment)),
                 ),
             )
 
@@ -724,7 +857,7 @@ class InboxStore:
                 JOIN inbox_conversations c ON c.id = m.conversation_id WHERE {_KEY}
                 AND m.message_id IN (SELECT value FROM json_each(?))
                 UNION SELECT source_key FROM inbox_history_exclusions
-                WHERE scope = ? AND source = 'platform'
+                WHERE scope = ? AND source IN ('platform','recalled')
                 AND source_key IN (SELECT value FROM json_each(?))""",
                 (*conversation.parameters(), encoded, conversation.language_scope_key(), encoded),
             ).fetchall()
@@ -815,7 +948,13 @@ class InboxStore:
                                 THEN 0 ELSE 1 END AS identity_rank
                     FROM inbox_messages m JOIN inbox_conversations c ON c.id = m.conversation_id
                     WHERE {_KEY} AND {_UNREAD} AND m.trust != ?
-                      AND (m.sender_id IN (SELECT value FROM json_each(?)) OR m.mentioned = 1)
+                      AND (m.sender_id IN (SELECT value FROM json_each(?)) OR m.mentioned = 1
+                           OR (m.quoted_message_id IS NOT NULL AND EXISTS (
+                               SELECT 1 FROM inbox_messages own
+                               WHERE own.conversation_id = m.conversation_id
+                               AND own.message_id = m.quoted_message_id
+                               AND own.direction = 'outgoing'
+                               AND own.sender_id = c.account_id AND own.visibility = m.visibility)))
                 )
                 SELECT * FROM candidates
                 WHERE ? IS NULL OR identity_rank > ? OR (identity_rank = ? AND id > ?)

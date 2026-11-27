@@ -403,6 +403,69 @@ def test_read_latest_and_clear_only_advances_to_the_newest_incoming(tmp_path: Pa
     assert store.list_unread(conversation) == [third]
 
 
+def test_find_platform_message_matches_complete_route_without_reading(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    incoming = store.add(_message(1, "1"))
+    other_group = store.add(_message(1, "2"))
+    assert incoming and other_group
+
+    assert store.find_platform_message(incoming.conversation, "1") == incoming
+    assert store.find_platform_message(incoming.conversation, "2") is None
+    assert store.list_unread(incoming.conversation) == [incoming]
+
+    store.add_delivered(_message(3, "1"), sender_name="bot")
+    outgoing = store.find_platform_message(incoming.conversation, "3")
+    assert outgoing is not None and outgoing.direction == "outgoing"
+
+    store.archive(
+        replace(_message(4, "1"), content="平台事件"),
+        sender_name="system",
+        conversation_name="群 1",
+        notice=True,
+    )
+    assert store.find_platform_message(incoming.conversation, "4") is None
+
+
+def test_delivered_replies_only_follows_own_remaining_direct_segments(tmp_path: Path) -> None:
+    store = InboxStore(tmp_path / "inbox.db", _clock())
+    source = store.add(_message(1))
+    assert source is not None
+    for number, group, sender, origin in (
+        (2, "1", "receiver", "1"),
+        (3, "1", "receiver", "1"),
+        (4, "1", "receiver", None),
+        (5, "1", "sender", "1"),
+        (6, "2", "receiver", "1"),
+        (7, "1", "receiver", "9"),
+    ):
+        store.add_delivered(
+            replace(_message(number, group), sender_id=sender, source_message_id=origin),
+            sender_name="bot",
+        )
+    store.mark_recalled(source.conversation, "3")
+    assert [
+        row.perception.content for row in store.delivered_replies(source.conversation, "1")
+    ] == ["2"]
+
+
+def test_mark_recalled_hides_existing_and_future_platform_original(tmp_path: Path) -> None:
+    path = tmp_path / "inbox.db"
+    store = InboxStore(path, _clock())
+    message = store.add(_message(1))
+    assert message is not None
+
+    store.mark_recalled(message.conversation, "1")
+    store.mark_recalled(message.conversation, "1")
+    assert store.find_platform_message(message.conversation, "1") is None
+    [retained] = store.list_messages(message.conversation)
+    assert retained.direction == "recalled" and retained.id == message.id
+    assert store.list_unread(message.conversation) == []
+
+    store.mark_recalled(message.conversation, "2")
+    assert store.add(_message(2)) is None
+    assert store.find_platform_message(message.conversation, "2") is None
+
+
 def test_mark_read_after_clearing_is_idempotent_and_keeps_the_watermark(tmp_path: Path) -> None:
     """D145：清空后再对已读 id 走 mark_read，不报错、不把水位拉回。"""
     path = tmp_path / "inbox.db"

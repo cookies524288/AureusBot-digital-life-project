@@ -58,6 +58,11 @@ config_version = 1
 # QQ 表情收集与回复选择。配置 [organs.emoji] 可使用专门的文字模型。
 # qq_emoji_collection_enabled = false
 # qq_emoji_selection_enabled = true
+# 正文先发；本轮仍有效且所有文字已获回执时，允许稍晚补一张已批准表情。单位：秒。
+# qq_emoji_followup_enabled = true
+# qq_emoji_followup_seconds = 15.0
+# 允许在群友斗图或确实复读时接一次；不把普通私聊变成复读。
+# qq_emoji_play_enabled = true
 # 每 10 分钟核对原件，只影响发送候选；不修改登记或原件。
 # qq_emoji_maintenance_enabled = true
 # qq_emoji_registration_limit = 500
@@ -73,6 +78,16 @@ config_version = 1
 # 分条开启后，已通过再审的回复交给 models.toml 中的 [organs.fast_model] 建议切点。
 # 快速模型只建议在哪里切。缺少可用建议时按文字分段。关掉分条后一条发完。
 # split_reply_enabled = true
+# natural 保留原有自然分段；explicit 只把代码以外明确的 <n> 作为气泡边界。
+# reply_split_mode = "natural"
+# 下列聊天工具可分别关闭。到期提醒只是一次发言判断，不保证发消息。
+# chat_reminders_enabled = true
+# chat_nudges_enabled = true
+# chat_rechecks_enabled = true
+# chat_group_lookup_enabled = true
+# chat_meme_lookup_enabled = true
+# chat_meme_glossary = { "自定义梗" = "可公开的释义和用法" }
+# chat_assets_enabled = true
 # 自动分段时最多拆成几条。回复器指定的强制切点仍会保留。
 # max_reply_messages = 4
 # 自动分段时，切点两侧各至少保留多少个字。
@@ -200,6 +215,12 @@ config_version = 1
 # token_key = "AUREUS_KEY_QQ_ONEBOT"  # 通过 aureus keys set 写入令牌。
 # action_timeout_seconds = 10.0
 # reconnect_seconds = 5.0
+# QQ 原生表情、@、贴表情、戳、撤回和按授权发送素材走同一出站队列。
+# chat_actions_enabled = true
+# poke_response_enabled = true
+# poke_cooldown_seconds = 60.0
+# 跟撤默认关闭；打开后也只处理平台确实通知撤回且与自己的已送达回复直接关联的消息。
+# follow_recall_enabled = false
 
 [web]
 # 网页通道的总开关。关掉后 aureus chat 不启动网页服务。

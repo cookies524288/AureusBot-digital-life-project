@@ -11,7 +11,7 @@
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -99,6 +99,9 @@ class HeartbeatConfig(BaseModel):
     plan_organ: ClassVar[str] = "planner"
     qq_emoji_collection_enabled: bool = False
     qq_emoji_selection_enabled: bool = True
+    qq_emoji_followup_enabled: bool = True
+    qq_emoji_followup_seconds: float = Field(default=15.0, gt=0, le=120)
+    qq_emoji_play_enabled: bool = True
     qq_emoji_maintenance_enabled: bool = True
     qq_emoji_registration_limit: int = Field(default=DEFAULT_EMOJI_REGISTRATION_LIMIT, ge=1)
     qq_emoji_replacement_suggestion_enabled: bool = False
@@ -110,6 +113,17 @@ class HeartbeatConfig(BaseModel):
     low_message_limit: int = Field(default=5, ge=1)
     # 说话方式（路线图 1.7，D60）：把一段回复拆成几条短消息发出。关掉后整段一条发出。
     split_reply_enabled: bool = True
+    reply_split_mode: Literal["natural", "explicit"] = "natural"
+    chat_reminders_enabled: bool = True
+    chat_nudges_enabled: bool = True
+    chat_rechecks_enabled: bool = True
+    chat_group_lookup_enabled: bool = True
+    chat_meme_lookup_enabled: bool = True
+    chat_meme_glossary: dict[
+        Annotated[str, Field(min_length=1, max_length=60)],
+        Annotated[str, Field(min_length=1, max_length=300)],
+    ] = Field(default_factory=dict, max_length=500)
+    chat_assets_enabled: bool = True
     # 一段回复最多拆成几条。
     max_reply_messages: int = Field(default=4, ge=1)
     # 一条至少多少个字；更短的句子并进相邻的一句。
@@ -370,6 +384,10 @@ class QQConfig(BaseModel):
     token_key: str = Field(default="", pattern=r"^(?:AUREUS_KEY_[A-Z0-9_]+)?$")
     action_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     reconnect_seconds: float = Field(default=5.0, gt=0, le=120)
+    chat_actions_enabled: bool = True
+    poke_response_enabled: bool = True
+    poke_cooldown_seconds: float = Field(default=60.0, gt=0, le=3600)
+    follow_recall_enabled: bool = False
 
     @model_validator(mode="after")
     def check_endpoint(self) -> "QQConfig":

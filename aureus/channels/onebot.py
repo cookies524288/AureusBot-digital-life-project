@@ -18,6 +18,8 @@ from aureus.heartbeat import (
     VisibilityScope,
 )
 
+from .qq_rich import card_summary, emoji_id, face_label, file_name, forward_summary
+
 QQ_CHANNEL_NAME = "qq"
 _ACCOUNT_ID = re.compile(r"[1-9][0-9]{0,19}")
 _MESSAGE_ID = re.compile(r"-?[1-9][0-9]{0,19}")
@@ -78,7 +80,8 @@ def decode_message(payload: dict[str, Any], receiving_account: str) -> Perceptio
     )
     if not text:
         if attachments:
-            text = " ".join("[图片]" if item.kind == "image" else "[语音]" for item in attachments)
+            labels = {"image": "[图片]", "record": "[语音]", "file": "[文件]", "video": "[视频]"}
+            text = " ".join(labels[item.kind] + item.name for item in attachments)
         elif any(item.kind == "poke" for item in components):
             text = "[窗口抖动]"
         elif quoted is not None:
@@ -117,6 +120,8 @@ def decode_poke_notice(payload: dict[str, Any], receiving_account: str) -> Perce
         if group is None:
             return None
         actor = account_id(payload.get("user_id"))
+        if actor is None or target is None:
+            return None
         kind, recipient, visibility = "group", group, VisibilityScope.GROUP
     else:
         peer = account_id(payload.get("user_id"))
@@ -146,6 +151,109 @@ def decode_poke_notice(payload: dict[str, Any], receiving_account: str) -> Perce
                 suffix=_notice_text(payload.get("suffix")),
             ),
         ),
+    )
+
+
+def decode_recall_notice(payload: dict[str, Any], receiving_account: str) -> Perception | None:
+    """解码群/好友撤回；原消息号放在组件，不把通知伪装成原消息。"""
+    if (
+        payload.get("post_type") != "notice"
+        or payload.get("notice_type") not in {"group_recall", "friend_recall"}
+        or account_id(payload.get("self_id")) != receiving_account
+    ):
+        return None
+    target = message_id(payload.get("message_id"))
+    if target is None:
+        return None
+    notice_type = payload["notice_type"]
+    if notice_type == "group_recall":
+        recipient = account_id(payload.get("group_id"))
+        actor = account_id(payload.get("operator_id"))
+        original = account_id(payload.get("user_id"))
+        if not recipient or not actor or not original:
+            return None
+        kind, visibility = "group", VisibilityScope.GROUP
+    else:
+        recipient = account_id(payload.get("user_id"))
+        original = None
+        if not recipient or recipient == receiving_account or payload.get("group_id") is not None:
+            return None
+        actor = recipient
+        kind, visibility = "private", VisibilityScope.PRIVATE
+    timestamp = payload.get("time")
+    return Perception(
+        QQ_CHANNEL_NAME,
+        actor,
+        "[消息撤回]",
+        visibility,
+        TrustLevel.UNVERIFIED,
+        route=MessageRoute(receiving_account, kind, recipient, f"recall:{target}"),
+        source_timestamp=timestamp if type(timestamp) is int else None,
+        components=(
+            MessageComponent(
+                "recall",
+                0,
+                target_message_id=target,
+                target_account_id=original,
+                action=notice_type,
+            ),
+        ),
+    )
+
+
+def decode_reaction_notice(payload: dict[str, Any], receiving_account: str) -> Perception | None:
+    """解码 SnowLuma 的群消息贴表情通知，保留目标消息与当前 likes 快照。"""
+    if (
+        payload.get("post_type") != "notice"
+        or payload.get("notice_type") != "group_msg_emoji_like"
+        or account_id(payload.get("self_id")) != receiving_account
+    ):
+        return None
+    group = account_id(payload.get("group_id"))
+    target = message_id(payload.get("message_id"))
+    actor = account_id(payload.get("user_id", payload.get("operator_id")))
+    if not group or not target or not actor or actor == receiving_account:
+        return None
+    likes = payload.get("likes")
+    action = payload.get("sub_type")
+    if not isinstance(likes, list) or action not in ("add", "remove"):
+        return None
+    components = []
+    for like in likes[:32]:
+        if not isinstance(like, dict) or (identifier := emoji_id(like.get("emoji_id"))) is None:
+            continue
+        count = like.get("count")
+        if type(count) is not int or count < 0:
+            continue
+        components.append(
+            MessageComponent(
+                "reaction",
+                len(components),
+                target_message_id=target,
+                target_account_id=actor,
+                emoji_id=identifier,
+                count=count,
+                action=action,
+            )
+        )
+    if not components:
+        return None
+    stamp = payload.get("time") if type(payload.get("time")) is int else None
+    signature = ",".join(f"{part.emoji_id}.{part.count}" for part in components)
+    return Perception(
+        QQ_CHANNEL_NAME,
+        actor,
+        "[消息表情回应]",
+        VisibilityScope.GROUP,
+        TrustLevel.UNVERIFIED,
+        route=MessageRoute(
+            receiving_account,
+            "group",
+            group,
+            f"reaction:{target}:{actor}:{action}:{stamp}:{signature}",
+        ),
+        source_timestamp=stamp,
+        components=tuple(components),
     )
 
 
@@ -193,9 +301,14 @@ def read_message_segments(
                 components.append(
                     MessageComponent("reply", position, target_message_id=target_message)
                 )
-            case "image" | "record" as kind:
+            case "image" | "record" | "video" | "file" as kind:
                 index = None
-                if file_id := media_file_id(data.get("file")):
+                file_value = (
+                    data.get("file_id")
+                    or (data.get("id") if kind == "file" else None)
+                    or data.get("file")
+                )
+                if file_id := media_file_id(file_value):
                     subtype = data.get("sub_type", data.get("subType"))
                     summary = data.get("summary")
                     is_emoji = kind == "image" and (
@@ -203,8 +316,47 @@ def read_message_segments(
                         or (isinstance(summary, str) and summary.strip() not in {"", "[图片]"})
                     )
                     index = len(attachments)
-                    attachments.append(MediaReference(kind, file_id, is_emoji))
-                components.append(MessageComponent(kind, position, attachment_index=index))
+                    attachments.append(
+                        MediaReference(
+                            kind,
+                            file_id,
+                            is_emoji,
+                            file_name(data.get("name")) if kind in {"file", "video"} else "",
+                        )
+                    )
+                components.append(
+                    MessageComponent(
+                        kind,
+                        position,
+                        attachment_index=index,
+                        text=file_name(data.get("name")) or None,
+                    )
+                )
+            case "face":
+                identifier = emoji_id(data.get("id"))
+                if identifier is not None:
+                    parts.append(face_label(identifier, data.get("raw")))
+                components.append(
+                    MessageComponent(
+                        "face",
+                        position,
+                        text=face_label(identifier, data.get("raw"))
+                        if identifier is not None
+                        else None,
+                        emoji_id=identifier,
+                    )
+                )
+            case "forward":
+                forward_id = media_file_id(data.get("id")) or media_file_id(data.get("resid"))
+                summary = forward_summary(data.get("content", data.get("messages")))
+                parts.append(summary)
+                components.append(
+                    MessageComponent("forward", position, text=summary, forward_id=forward_id)
+                )
+            case "json" | "xml":
+                summary = card_summary(data)
+                parts.append(summary)
+                components.append(MessageComponent("card", position, text=summary))
             case "poke":
                 poke_type = data.get("type")
                 components.append(
@@ -221,20 +373,39 @@ def encode_message(
     message: OutgoingMessage, route: MessageRoute, *, image: bytes | None = None
 ) -> dict[str, Any]:
     """按 SnowLuma 的 send_msg 编码；仅按显式请求引用原消息。"""
-    part = (
-        {
+    action = message.qq_action
+    if action is not None and action.kind == "face":
+        identifier = emoji_id(action.emoji_id)
+        if identifier is None:
+            raise ValueError("QQ 原生表情编号无效")
+        part = {"type": "face", "data": {"id": identifier}}
+    elif action is not None and action.kind == "at":
+        target = account_id(action.target_id)
+        if target is None or route.kind != "group":
+            raise ValueError("QQ @ 只支持群内有效账号")
+        part = {"type": "text", "data": {"text": message.content}}
+    elif image is not None and (action is None or action.kind in {"resend_image", "send_asset"}):
+        part = {
             "type": "image",
-            "data": {"file": "base64://" + b64encode(image).decode("ascii"), "sub_type": 1},
+            "data": {
+                "file": "base64://" + b64encode(image).decode("ascii"),
+                **({"sub_type": 1} if message.emoji_digest else {}),
+            },
         }
-        if image is not None
-        else {"type": "text", "data": {"text": message.content}}
-    )
+    elif action is None and message.content.strip():
+        part = {"type": "text", "data": {"text": message.content}}
+    else:
+        raise ValueError("动作没有可发送的消息段")
     segments = [part]
     if message.quote_source:
         segments.insert(0, {"type": "reply", "data": {"id": route.message_id}})
+    if action is not None and action.kind == "at":
+        segments.insert(int(message.quote_source), {"type": "at", "data": {"qq": action.target_id}})
     params: dict[str, Any] = {"message_type": route.kind, "message": segments}
     if route.kind == "group":
         params["group_id"] = route.recipient_id
     else:
         params["user_id"] = route.recipient_id
+        if route.temporary_group_id is not None:
+            params["group_id"] = route.temporary_group_id
     return params

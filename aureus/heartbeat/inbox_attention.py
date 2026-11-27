@@ -153,7 +153,20 @@ class InboxAttention:
         """已验证的用户、特别关心或被点名的来信能唤醒心跳（D94、D137）。"""
         if perception.trust is TrustLevel.UNVERIFIED:
             return False
-        return perception.mentioned or self._preempts_verified(perception)
+        if perception.mentioned or self._preempts_verified(perception):
+            return True
+        if perception.route is None or not perception.quoted_message_id:
+            return False
+        key = ConversationKey.from_perception(perception)
+        if not self.allows(key):
+            return False
+        original = self.store.find_platform_message(key, perception.quoted_message_id)
+        return (
+            original is not None
+            and original.direction == "outgoing"
+            and original.perception.sender_id == key.account_id
+            and original.perception.visibility is perception.visibility
+        )
 
     def preempts(self, perception: Perception) -> bool:
         """只有已验证的用户或特别关心的来信能抢占当前会话；提及只唤醒（D95、D137）。"""

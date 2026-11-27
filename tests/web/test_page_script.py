@@ -154,7 +154,7 @@ main().catch(error => { console.error(error); process.exitCode = 1; });
 """
 
 
-def run_page_script(code: str) -> None:
+def run_page_script(code: str, *, include_resource_pages: bool = True) -> None:
     """用模拟 DOM、请求和定时器执行真实页面；没有 Node 的环境明确跳过。"""
     node = shutil.which("node")
     if node is None:
@@ -163,6 +163,8 @@ def run_page_script(code: str) -> None:
     html = (static / "index.html").read_text(encoding="utf-8")
     scripts = [
         (static / name).read_text(encoding="utf-8")
+        if include_resource_pages or name != "resource-management.js"
+        else "function installResourcePages() { return () => {}; }"
         for name in (
             "organ-graph.js",
             "memory-graph.js",

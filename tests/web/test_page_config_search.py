@@ -114,6 +114,54 @@ def test_biochemical_rows_show_values_defaults_sources_and_toml_recovery(
     )
 
 
+def test_chat_settings_render_typed_controls_and_a_glossary_count(
+    config_response: dict[str, Any],
+) -> None:
+    run_page_script(
+        "const response = " + json.dumps(config_response) + ";"
+        r"""
+        response.chat_meme_glossary_count = 7;
+        applyConfigData(state.loaded, response);
+        cf.tabs.get('heartbeat').button.click();
+        const split = $('cf-field-heartbeat.reply_split_mode');
+        assert.equal(split.tagName, 'SELECT');
+        const choices = Array.from(split.children, opt => [opt.attributes.value, opt.textContent]);
+        assert.deepEqual(choices,
+          [['natural', '自然分段'], ['explicit', '仅按显式标记分段']]);
+        split.value = 'explicit'; split.listeners.change[0]();
+        assert.equal(cf.changes['heartbeat.reply_split_mode'], 'explicit');
+        const term = $('cf-field-heartbeat.chat_meme_glossary');
+        const value = term.closest('.cfg-field').children.at(-1);
+        assert.equal(value.children.length, 1);
+        assert.equal(value.children[0].tagName, 'DIV');
+        assert.match(value.children[0].textContent, /自定义 7 条.*config\/aureus\.toml/);
+        const flags = {heartbeat:['qq_emoji_followup_enabled', 'qq_emoji_play_enabled',
+          'chat_reminders_enabled', 'chat_nudges_enabled', 'chat_rechecks_enabled',
+          'chat_group_lookup_enabled', 'chat_meme_lookup_enabled', 'chat_assets_enabled'],
+          qq:['chat_actions_enabled', 'poke_response_enabled', 'follow_recall_enabled']};
+        for (const [section, fields] of Object.entries(flags)) {
+          cf.tabs.get(section).button.click();
+          for (const field of fields) {
+            const key = `${section}.${field}`;
+            const target = $('cf-field-' + key);
+            assert.equal(target.attributes.type, 'checkbox', key);
+            target.checked = !response.config[section][field]; target.listeners.change[0]();
+            assert.equal(cf.changes[key], target.checked, key);
+          }
+          const key = section === 'qq' ? 'qq.poke_cooldown_seconds' :
+            'heartbeat.qq_emoji_followup_seconds';
+          const seconds = $('cf-field-' + key);
+          assert.equal(seconds.attributes.type, 'number');
+          seconds.value = '4.5'; seconds.listeners.input[0]();
+          assert.equal(cf.changes[key], 4.5);
+        }
+        assert.equal(Object.keys(cf.changes).length, 14);
+        assert.equal($('cf-field-qq.endpoint').className, 'setting-term');
+        """,
+        include_resource_pages=False,
+    )
+
+
 def test_settings_search_uses_real_controls_and_preserves_drafts(
     config_response: dict[str, Any],
 ) -> None:

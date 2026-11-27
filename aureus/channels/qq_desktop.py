@@ -175,6 +175,14 @@ class QQDesktop:
             or target == key.account_id
         ):
             raise DesktopError(422, "只能从当前群聊的消息中选择成员。")
+        return await self.verify_member(socket, key, target)
+
+    async def verify_member(
+        self, socket: ClientConnection, key: ConversationKey, target: str
+    ) -> str:
+        """复核已从本会话原件或戳通知选出的账号是否仍是本群成员。"""
+        if key.kind != "group" or account_id(target) is None or target == key.account_id:
+            raise DesktopError(422, "不是当前群可选的成员。")
         data = await self._call(
             socket,
             "get_group_member_info",
@@ -195,6 +203,19 @@ class QQDesktop:
     async def _quote(
         self, socket: ClientConnection, key: ConversationKey, item: InboxMessage
     ) -> str:
+        return await self.verify_message(socket, key, item)
+
+    async def verify_message(
+        self, socket: ClientConnection, key: ConversationKey, item: InboxMessage
+    ) -> str:
+        """按原会话、原作者及编号复核消息，不能以另一会话同号原件代替。"""
+        data = await self.verified_message_data(socket, key, item)
+        return str(data["message_id"])
+
+    async def verified_message_data(
+        self, socket: ClientConnection, key: ConversationKey, item: InboxMessage
+    ) -> dict[str, Any]:
+        """返回已校验会话、作者和编号的平台原件；调用方只读取指定位置的附件。"""
         route = item.perception.route
         identifier = message_id(route.message_id) if route else None
         if item.conversation != key or identifier is None or item.direction == "notice":
@@ -215,7 +236,7 @@ class QQDesktop:
             or message_id(data.get("message_id")) != identifier
         ):
             raise DesktopError(409, "QQ 未确认这条原文属于当前会话，没有发送。")
-        return identifier
+        return data
 
     async def _call(
         self,

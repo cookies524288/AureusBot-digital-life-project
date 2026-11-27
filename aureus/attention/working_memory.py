@@ -28,6 +28,8 @@ _INTERNAL = "内部经历"
 _PUBLIC = "公开经历"
 _EVENTS = (
     "message",
+    "reply_delivered",
+    "reply_delivery_failed",
     "woke_up",
     "shut_down",
     "identity_changed",
@@ -57,11 +59,14 @@ def route_scope(
 
 
 def _record_scope(record: TimelineRecord) -> str | None:
-    if record.visibility is VisibilityScope.PUBLIC:
+    routed = (
+        record.metadata.get("channel") == "qq" and record.metadata.get("account_id") is not None
+    )
+    if not routed and record.visibility is VisibilityScope.PUBLIC:
         return _PUBLIC
     if record.event_type != "message":
         return _INTERNAL
-    if record.visibility is VisibilityScope.USER_ONLY:
+    if not routed and record.visibility is VisibilityScope.USER_ONLY:
         return _OWNER
     metadata = record.metadata
     channel, account = metadata.get("channel"), metadata.get("account_id")
@@ -126,6 +131,7 @@ def build_working_memory_summary_request(
 class _Checkpoint(BaseModel):
     through: int = Field(ge=0)
     summaries: dict[str, str] = Field(default_factory=dict)
+    revisions: dict[str, int] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -135,6 +141,7 @@ class SummaryBatch:
     through: int
     requests: tuple[tuple[str, OrganRequest], ...]
     trimmed: tuple[TimelineRecord, ...] = ()
+    revisions: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -144,6 +151,7 @@ class SummaryOutcome:
     through: int
     summaries: dict[str, str] | None = None
     trimmed: tuple[TimelineRecord, ...] = ()
+    revisions: tuple[tuple[str, int], ...] = ()
 
 
 class WorkingMemory:
@@ -156,6 +164,8 @@ class WorkingMemory:
         self._retry_at: datetime | None = None
         self._focus: Sequence[TimelineRecord] = ()
         self._seen_id: int | None = None
+        self.project: Callable[[TimelineRecord], TimelineRecord | None] = lambda record: record
+        self.revision: Callable[[str], int | None] = lambda scope: None
 
     def restore(self) -> None:
         """读取最近的检查点，首次启用固定起点。"""
@@ -164,7 +174,21 @@ class WorkingMemory:
         try:
             latest = self.timeline.query(TimelineQuery(event_type=CHECKPOINT, latest=True, limit=1))
             if latest:
-                self._checkpoint = _Checkpoint.model_validate(latest[0].metadata)
+                metadata = latest[0].metadata
+                checkpoint = _Checkpoint.model_validate(metadata)
+                if "revisions" not in metadata and _OWNER in checkpoint.summaries:
+                    owner_qq = self.timeline.query(
+                        TimelineQuery(
+                            event_type="message",
+                            visibility=VisibilityScope.USER_ONLY,
+                            metadata={"channel": "qq"},
+                            before_id=checkpoint.through + 1,
+                            limit=1,
+                        )
+                    )
+                    if owner_qq:
+                        checkpoint.summaries.pop(_OWNER)
+                self._checkpoint = checkpoint
             else:
                 self._save(_Checkpoint(through=self.timeline.get_latest_id()))
         except (sqlite3.Error, ValidationError):
@@ -195,6 +219,7 @@ class WorkingMemory:
                 since_id=checkpoint.through,
                 limit=self.config.working_memory_capacity,
                 latest=latest,
+                without_metadata=("outbox_internal",),
             )
         )
 
@@ -221,7 +246,10 @@ class WorkingMemory:
             logger.exception("工作记忆材料读失败")
             return None
         groups: dict[str, list[TimelineRecord]] = {}
-        for record in oldest:
+        visible = tuple(row for raw in oldest if (row := self.project(raw)) is not None)
+        for record in visible:
+            if record.metadata.get("delivery_status"):
+                continue
             scope = _record_scope(record)
             if scope is not None:
                 groups.setdefault(scope, []).append(record)
@@ -230,25 +258,29 @@ class WorkingMemory:
         requests = tuple(
             (
                 scope,
-                build_working_memory_summary_request(
-                    checkpoint.summaries.get(scope, ""), records, preference
-                ),
+                build_working_memory_summary_request(self._summary(scope), records, preference),
             )
             for scope, records in groups.items()
         )
-        return SummaryBatch(oldest[-1].id, requests, tuple(oldest))
+        revisions = tuple(
+            (scope, stamp) for scope in groups if (stamp := self.revision(scope)) is not None
+        )
+        return SummaryBatch(oldest[-1].id, requests, visible, revisions)
 
     def finish(self, outcome: SummaryOutcome, now: datetime) -> tuple[TimelineRecord, ...]:
         """成功才共同推进摘要及游标；失败保留原先可见内容。"""
         checkpoint = self._checkpoint
         if checkpoint is None or outcome.through <= checkpoint.through:
             return ()
-        if outcome.summaries is not None:
+        if outcome.summaries is not None and all(
+            self.revision(scope) == stamp for scope, stamp in outcome.revisions
+        ):
             try:
                 self._save(
                     _Checkpoint(
                         through=outcome.through,
                         summaries={**checkpoint.summaries, **outcome.summaries},
+                        revisions={**checkpoint.revisions, **dict(outcome.revisions)},
                     )
                 )
                 self._retry_at = None
@@ -273,8 +305,10 @@ class WorkingMemory:
         scopes = self._dialogue_scopes(owner, route)
         return [
             record
-            for record in self._current_focus()
-            if record.id not in exclude and _record_scope(record) in scopes
+            for raw in self._current_focus()
+            if raw.id not in exclude
+            and (record := self.project(raw)) is not None
+            and _record_scope(record) in scopes
         ][-remaining:]
 
     def describe_context(
@@ -285,9 +319,7 @@ class WorkingMemory:
         if checkpoint is None:
             return ""
         summaries = [
-            checkpoint.summaries[scope]
-            for scope in self._dialogue_scopes(owner, route)
-            if scope in checkpoint.summaries
+            text for scope in self._dialogue_scopes(owner, route) if (text := self._summary(scope))
         ]
         if not summaries and not focus:
             return ""
@@ -315,8 +347,16 @@ class WorkingMemory:
     @staticmethod
     def _dialogue_scopes(owner: bool, route: str | None) -> tuple[str, ...]:
         return (
-            (_PUBLIC, _OWNER, _INTERNAL) if owner else tuple(key for key in (_PUBLIC, route) if key)
+            tuple(key for key in (_PUBLIC, _OWNER, _INTERNAL, route) if key)
+            if owner
+            else tuple(key for key in (_PUBLIC, route) if key)
         )
+
+    def _summary(self, scope: str) -> str:
+        checkpoint = self._checkpoint
+        if checkpoint is None or checkpoint.revisions.get(scope) != self.revision(scope):
+            return ""
+        return checkpoint.summaries.get(scope, "")
 
     def _current_focus(self) -> Sequence[TimelineRecord]:
         checkpoint = self._checkpoint
@@ -350,4 +390,4 @@ async def summarize(
             logger.warning("工作记忆压缩器官返回的摘要为空或超过长度上限")
             return SummaryOutcome(batch.through)
         summaries[scope] = text
-    return SummaryOutcome(batch.through, summaries, batch.trimmed)
+    return SummaryOutcome(batch.through, summaries, batch.trimmed, batch.revisions)

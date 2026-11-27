@@ -2,13 +2,14 @@
 
 import json
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from aureus.organs import PromptTemplate
 
 _CODE_DELIMITER = r"`+|(?m:^[ \t]{0,3}~{3,})"
 _CODE = re.compile(_CODE_DELIMITER)
-_TOKEN = re.compile(_CODE_DELIMITER + r"|\\?<n>|\\?<!>")
+_TOKEN = re.compile(r"\\?<n>|\\?<!>")
 _PAIRS = {
     "(": ")",
     "（": "）",
@@ -28,6 +29,14 @@ _PAIRS = {
 }
 _STOPS = "。！？；!?;，,\n"
 _TRAILING_COMMAS = re.compile(r"(?:[,，][ \t]*)+(?=\s*\Z)")
+_WRAPPER = re.compile(r"<(/?)(think|analysis)>", re.I)
+_ROLE = re.compile(r"^\s*(?:<\|assistant\|>|assistant\s*[:：])\s*", re.I)
+_URL = re.compile(
+    r"https?://(?:[^\s<>`\"'“”‘’「」『』]|(?<=[=#?/&])(?:<n>|<!>)|"
+    r"(?:<n>|<!>)(?=[a-z0-9&=%/#?+_.~-]))+",
+    re.I,
+)
+_BLOCK_QUOTE = re.compile(r"^[ \t]{0,3}>[^\n]*", re.M)
 
 SEGMENT_PROMPT = PromptTemplate(
     "reply_segment_selection",
@@ -74,6 +83,15 @@ class ReplyDraft:
             material.append({"protected": section.is_protected, "parts": items})
         return SEGMENT_PROMPT.fill(material=json.dumps(material, ensure_ascii=False))
 
+    def explicit_segments(self, limit: int) -> tuple[str, ...]:
+        """只采用显式气泡边界；切点过多时将余下原文连回最后一段。"""
+        parts = tuple(
+            item.text if item.is_protected else item.text.strip() for item in self.sections
+        )
+        if len(parts) <= limit:
+            return parts
+        return (*parts[: limit - 1], "".join(parts[limit - 1 :]))
+
     def segments(
         self, suggestion: str | None, *, max_messages: int, min_chars: int
     ) -> tuple[str, ...]:
@@ -100,19 +118,42 @@ class ReplyDraft:
         return tuple(result)
 
 
-def prepare_reply(text: str) -> ReplyDraft:
+def _without_wrappers(text: str) -> str:
+    text = _ROLE.sub("", text)
+    if not _WRAPPER.search(text):
+        return text
+    plain = set(_plain_positions(text))
+    pieces: list[str] = []
+    hidden: list[str] = []
+    start = 0
+    for match in _WRAPPER.finditer(text):
+        if match.start() not in plain:
+            continue
+        closing, kind = match[1], match[2].lower()
+        if not hidden:
+            pieces.append(text[start : match.start()])
+        if not closing:
+            hidden.append(kind)
+        elif hidden and hidden[-1] == kind:
+            hidden.pop()
+        start = match.end()
+    if not hidden:
+        pieces.append(text[start:])
+    return _ROLE.sub("", "".join(pieces))
+
+
+def prepare_reply(text: str, *, explicit: bool = False) -> ReplyDraft:
     """读出强制边界和受保护段，行内代码及代码块里的同形字符保留。"""
+    text = _without_wrappers(text)
     sections: list[_Section] = []
     pieces: list[str] = []
     previous = 0
-    code = ""
     is_protected = False
-    for match in _TOKEN.finditer(text):
+    markers = tuple(_TOKEN.finditer(text))
+    plain = set(_plain_positions(text)) if markers else set()
+    for match in markers:
         token = match.group()
-        if not token.endswith(">"):
-            code = _update_code_delimiter(code, token)
-            continue
-        if code:
+        if match.start() not in plain or (explicit and token.startswith("\\")):
             continue
         pieces.append(text[previous : match.start()])
         previous = match.end()
@@ -135,24 +176,39 @@ def _add_section(sections: list[_Section], pieces: list[str], is_protected: bool
 
 def _find_positions(text: str) -> tuple[int, ...]:
     """仅候选自动切点；句末标点须在配对符号和代码的外面。"""
+    return tuple(
+        offset + 1
+        for offset in _plain_positions(text)
+        if text[offset] in _STOPS and offset + 1 < len(text) and text[offset + 1] not in _STOPS
+    )
+
+
+def _plain_positions(text: str) -> Iterator[int]:
     endings: list[str] = []
-    code_spans = iter(_CODE.finditer(text))
-    next_span = next(code_spans, None)
     code = ""
-    positions: list[int] = []
-    for offset, char in enumerate(text):
-        if next_span is not None and offset == next_span.start():
-            code = _update_code_delimiter(code, next_span.group())
-            next_span = next(code_spans, None)
+    offset = 0
+    while offset < len(text):
+        if not code and (quote := _BLOCK_QUOTE.match(text, offset)):
+            offset = quote.end()
+            continue
+        if delimiter := _CODE.match(text, offset):
+            code = _update_code_delimiter(code, delimiter.group())
+            offset = delimiter.end()
+            continue
+        if not code and (url := _URL.match(text, offset)):
+            offset = url.end()
+            continue
+        position, char = offset, text[offset]
+        offset += 1
         if code:
             continue
         if char in "\"'" and (
-            (offset > 0 and text[offset - 1] == "\\")
+            (position > 0 and text[position - 1] == "\\")
             or (
                 char == "'"
-                and 0 < offset < len(text) - 1
-                and text[offset - 1].isalnum()
-                and text[offset + 1].isalnum()
+                and 0 < position < len(text) - 1
+                and text[position - 1].isalnum()
+                and text[position + 1].isalnum()
             )
         ):
             continue
@@ -160,11 +216,8 @@ def _find_positions(text: str) -> tuple[int, ...]:
             endings.pop()
         elif char in _PAIRS and (not endings or endings[-1] not in "\"'"):
             endings.append(_PAIRS[char])
-        elif not endings and char in _STOPS:
-            end = offset + 1
-            if end < len(text) and text[end] not in _STOPS:
-                positions.append(end)
-    return tuple(positions)
+        elif not endings:
+            yield position
 
 
 def _update_code_delimiter(current: str, token: str) -> str:

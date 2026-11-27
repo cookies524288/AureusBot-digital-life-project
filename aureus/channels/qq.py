@@ -5,6 +5,8 @@ import logging
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from datetime import datetime, timedelta
+from hashlib import sha256
 from sqlite3 import Error as SQLiteError
 from types import TracebackType
 from typing import Any, Self
@@ -13,7 +15,7 @@ from pydantic import SecretStr
 from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import WebSocketException
 
-from aureus.common import QQConfig
+from aureus.common import Clock, QQConfig, SystemClock
 from aureus.heartbeat import (
     MediaReference,
     MessageKind,
@@ -31,13 +33,16 @@ from .onebot import (
     account_id,
     decode_message,
     decode_poke_notice,
+    decode_reaction_notice,
+    decode_recall_notice,
     encode_message,
     media_file_id,
     message_id,
     read_message_segments,
 )
 from .onebot_transport import OneBotError, OneBotTransport, decode_media_base64
-from .qq_desktop import QQDesktop
+from .qq_desktop import DesktopError, QQDesktop
+from .qq_rich import attachment_mime, emoji_id, face_label, platform_media_url, short_text
 from .web import HeartbeatHandle
 
 logger = logging.getLogger(__name__)
@@ -78,7 +83,10 @@ class QQChannel:
         test_group: str | None = None,
         inbox_store: InboxStore | None = None,
         on_inbox_message: Callable[[InboxMessage], None] | None = None,
+        on_social_notice: Callable[[Perception], None] | None = None,
+        clock: Clock | None = None,
         read_emoji: Callable[[str], bytes | None] | None = None,
+        allows_emoji_asset: Callable[[str], bool] | None = None,
         record_emoji_use: Callable[[str], None] | None = None,
         allows_emoji_delivery: Callable[[], bool] | None = None,
         bot_names: Callable[[], Sequence[str]] = lambda: (),
@@ -90,7 +98,12 @@ class QQChannel:
         self._consume_command = consume_command
         self._inbox_store = inbox_store
         self._on_inbox_message = on_inbox_message
+        self._on_social_notice = on_social_notice
+        self._clock = clock or SystemClock()
+        self._read_asset: Callable[[ConversationKey, str], tuple[str, bytes] | None] | None = None
+        self._allows_asset: Callable[[ConversationKey, str], bool] | None = None
         self._read_emoji = read_emoji
+        self._allows_emoji_asset = allows_emoji_asset
         self._record_emoji_use = record_emoji_use
         self._allows_emoji_delivery = allows_emoji_delivery
         self._bot_names = bot_names
@@ -101,6 +114,10 @@ class QQChannel:
             self._transport, self.allows_inbox_conversation, self._save_delivered
         )
         self._seen: OrderedDict[tuple[ConversationKey, str], None] = OrderedDict()
+        self._recent_notices: OrderedDict[tuple[ConversationKey, str], Perception] = OrderedDict()
+        self._recent_actions: OrderedDict[tuple[ConversationKey, str], None] = OrderedDict()
+        self._cooldowns: OrderedDict[tuple[ConversationKey, str, str], datetime] = OrderedDict()
+        self._fetching: set[asyncio.Task[None]] = set()
         self._sending: set[asyncio.Task[None]] = set()
         self._last_send: dict[ConversationKey, asyncio.Task[None]] = {}
         self._connection: asyncio.Task[None] | None = None
@@ -117,7 +134,7 @@ class QQChannel:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        tasks = [*self._sending, *self._group_lookups.values()]
+        tasks = [*self._sending, *self._fetching, *self._group_lookups.values()]
         if self._connection is not None:
             tasks.append(self._connection)
         for task in tasks:
@@ -142,8 +159,16 @@ class QQChannel:
 
     def _receive(self, payload: dict[str, Any]) -> None:
         notice = payload.get("post_type") == "notice"
-        decoder = decode_poke_notice if notice else decode_message
-        perception = decoder(payload, self._config.account_id)
+        account = self._config.account_id
+        perception = (
+            (
+                decode_poke_notice(payload, account)
+                or decode_recall_notice(payload, account)
+                or decode_reaction_notice(payload, account)
+            )
+            if notice
+            else decode_message(payload, account)
+        )
         if perception is None or perception.route is None:
             return
         route = perception.route
@@ -163,13 +188,14 @@ class QQChannel:
             return
         if not self._allows_route(route):
             return
-        archived = notice or (
-            not perception.attachments
-            and not any(
-                (item.kind == "text" and item.text and item.text.strip())
-                or (item.kind == "at" and (item.all_members or item.target_account_id))
-                for item in perception.components
-            )
+        if notice:
+            self._receive_notice(perception, route, payload)
+            return
+        archived = not perception.attachments and not any(
+            (item.kind == "text" and item.text and item.text.strip())
+            or (item.kind == "at" and (item.all_members or item.target_account_id))
+            or (item.kind in {"face", "forward", "card"} and item.text)
+            for item in perception.components
         )
         if archived:
             if self._inbox_store is not None:
@@ -182,6 +208,28 @@ class QQChannel:
         key = ConversationKey.from_perception(perception), route.message_id
         if key in self._seen:
             return
+        self._seen[key] = None
+        if len(self._seen) > _RECENT_MESSAGE_LIMIT:
+            self._seen.popitem(last=False)
+        if (
+            any(
+                item.kind == "forward" and item.forward_id and item.text == "[合并转发]"
+                for item in perception.components
+            )
+            and len(self._fetching) < _OUTGOING_LIMIT
+            and self._transport.socket is not None
+        ):
+            task = asyncio.create_task(
+                self._fetch_forward(self._transport.socket, perception, route, payload)
+            )
+            self._fetching.add(task)
+            task.add_done_callback(self._fetching.discard)
+            return
+        self._receive_message(perception, route, payload)
+
+    def _receive_message(
+        self, perception: Perception, route: MessageRoute, payload: dict[str, Any]
+    ) -> None:
         if not (self._consume_command and self._consume_command(perception)):
             if (
                 route.kind == "private"
@@ -192,13 +240,133 @@ class QQChannel:
                     perception, trust=TrustLevel.VERIFIED_USER, visibility=VisibilityScope.USER_ONLY
                 )
             if self._inbox_store is not None:
-                if not self._save_inbox(perception, route, payload):
+                self._save_inbox(perception, route, payload)
+            else:
+                self._heartbeat.submit(perception)
+
+    async def _fetch_forward(
+        self,
+        socket: ClientConnection,
+        perception: Perception,
+        route: MessageRoute,
+        payload: dict[str, Any],
+    ) -> None:
+        segments = list(payload["message"])
+        count = 0
+        for item in perception.components:
+            if (
+                item.kind == "forward"
+                and item.forward_id
+                and item.text == "[合并转发]"
+                and count < 3
+            ):
+                if self._transport.socket is not socket or not self._allows_route(route):
                     return
-            elif not self._heartbeat.submit(perception):
+                count += 1
+                try:
+                    data = await self._transport.call(
+                        socket, "get_forward_msg", {"id": item.forward_id}
+                    )
+                    segments[item.position] = {
+                        "type": "forward",
+                        "data": {"id": item.forward_id, "content": data.get("messages")},
+                    }
+                except (OneBotError, OSError, TimeoutError, WebSocketException):
+                    pass
+        if self._transport.socket is socket and self._allows_route(route):
+            content, _, _, _, components = read_message_segments(segments, route.account_id)
+            self._receive_message(
+                replace(perception, components=components, content=content), route, payload
+            )
+
+    def _cooldown(self, key: ConversationKey, actor: str, kind: str) -> bool:
+        slot, now = (key, actor, kind), self._clock.now()
+        last = self._cooldowns.get(slot)
+        if last is not None and now - last < timedelta(seconds=self._config.poke_cooldown_seconds):
+            return False
+        self._cooldowns[slot] = now
+        self._cooldowns.move_to_end(slot)
+        if len(self._cooldowns) > _RECENT_MESSAGE_LIMIT:
+            self._cooldowns.popitem(last=False)
+        return True
+
+    def _receive_notice(
+        self, perception: Perception, route: MessageRoute, payload: dict[str, Any]
+    ) -> None:
+        key = ConversationKey.from_perception(perception)
+        if route.kind == "private" and self._is_owner(route.recipient_id):
+            perception = replace(perception, visibility=VisibilityScope.USER_ONLY)
+        notice_key = key, route.message_id
+        if notice_key in self._recent_notices:
+            return
+        component = perception.components[0]
+        store = self._inbox_store
+        target = component.target_message_id
+        original = (
+            store.find_platform_message(key, target) if store is not None and target else None
+        )
+        if component.kind == "recall" and target and store is not None:
+            if original is not None and component.target_account_id not in (
+                None,
+                original.perception.sender_id,
+            ):
                 return
-        self._seen[key] = None
-        if len(self._seen) > _RECENT_MESSAGE_LIMIT:
-            self._seen.popitem(last=False)
+            if original is not None and component.target_account_id is None:
+                component = replace(component, target_account_id=original.perception.sender_id)
+                perception = replace(perception, components=(component,))
+            store.mark_recalled(key, target)
+        if store is not None and not self._save_inbox(perception, route, payload, archive="notice"):
+            return
+        self._recent_notices[notice_key] = perception
+        if len(self._recent_notices) > _RECENT_MESSAGE_LIMIT:
+            self._recent_notices.popitem(last=False)
+        if self._on_social_notice is None or perception.sender_id == route.account_id:
+            return
+        if component.kind == "recall":
+            if (
+                self._config.follow_recall_enabled
+                and original is not None
+                and original.direction == "incoming"
+            ):
+                callback = self._on_social_notice
+                sending = self._last_send.get(key)
+                if sending is not None and not sending.done():
+                    sending.add_done_callback(lambda _: callback(perception))
+                else:
+                    callback(perception)
+        elif (
+            component.kind == "poke"
+            and self._config.poke_response_enabled
+            and component.target_account_id == route.account_id
+            and self._cooldown(key, perception.sender_id, "received")
+        ):
+            self._on_social_notice(
+                replace(
+                    perception,
+                    content="对方戳了你一下。",
+                    trust=TrustLevel.VERIFIED_CONTACT,
+                    mentioned=True,
+                )
+            )
+        elif (
+            component.kind == "reaction"
+            and original is not None
+            and original.direction == "outgoing"
+        ):
+            detail = "、".join(
+                f"{face_label(item.emoji_id)}（当前 {item.count}）"
+                for item in perception.components
+                if item.emoji_id is not None
+            )
+            verb = "取消了" if component.action == "remove" else "贴了"
+            self._on_social_notice(
+                replace(
+                    perception,
+                    content=f"对方{verb}你那条消息下的表情：{detail}",
+                    trust=TrustLevel.VERIFIED_CONTACT,
+                    quoted_message_id=target,
+                )
+            )
 
     def allows_inbox_perception(self, perception: Perception) -> bool:
         """恢复未读时重新检查接收账号和当前允许的 QQ 范围。"""
@@ -239,22 +407,91 @@ class QQChannel:
             or not self.allows_inbox_perception(perception)
         ):
             return None
+        key = ConversationKey.from_perception(perception)
+        store, route = self._inbox_store, perception.route
+
+        def current() -> bool:
+            if self._transport.socket is not socket or not self.allows_inbox_perception(perception):
+                return False
+            row = store.find_platform_message(key, route.message_id) if store and route else None
+            return (
+                row is not None
+                and row.perception.sender_id == perception.sender_id
+                and row.perception.visibility == perception.visibility
+                and attachment in row.perception.attachments
+            )
+
+        if not current():
+            return None
         try:
             if attachment.kind == "image":
                 data = await self._transport.download_image(socket, file_id)
-                if mime := _image_mime(data):
+                if current() and (mime := _image_mime(data)):
                     return data, mime
-            else:
+            elif attachment.kind == "record":
                 response = await self._transport.call(
                     socket, "get_record", {"file_id": file_id, "out_format": "mp3"}
                 )
                 data = decode_media_base64(response.get("base64"), _MP3_LIMIT)
-                if data and (
-                    data.startswith(b"ID3")
-                    or (len(data) >= 4 and data[0] == 255 and data[1] >= 224)
+                if (
+                    current()
+                    and data
+                    and (
+                        data.startswith(b"ID3")
+                        or (len(data) >= 4 and data[0] == 255 and data[1] >= 224)
+                    )
                 ):
                     return data, "audio/mpeg"
-        except (OSError, TimeoutError, WebSocketException, OneBotError, SQLiteError) as error:
+            elif store is not None and route is not None and key.temporary_group_id is None:
+                source = store.find_platform_message(key, route.message_id)
+                if source is None:
+                    return None
+                response = await self.desktop.verified_message_data(socket, key, source)
+                segments = response.get("message")
+                if not isinstance(segments, list):
+                    return None
+                matched = next(
+                    (
+                        segment["data"]
+                        for segment in segments
+                        if isinstance(segment, dict)
+                        and segment.get("type") == attachment.kind
+                        and isinstance(segment.get("data"), dict)
+                        and file_id
+                        in (
+                            segment["data"].get("id"),
+                            segment["data"].get("file_id"),
+                            segment["data"].get("file"),
+                        )
+                    ),
+                    None,
+                )
+                if matched is None or not current():
+                    return None
+                if attachment.kind == "file":
+                    method = "get_group_file_url" if key.kind == "group" else "get_private_file_url"
+                    params = {
+                        "group_id" if key.kind == "group" else "user_id": key.recipient_id,
+                        "file_id": file_id,
+                    }
+                    if key.kind == "private" and (
+                        file_hash := media_file_id(matched.get("file_hash"))
+                    ):
+                        params["file_hash"] = file_hash
+                    matched = await self._transport.call(socket, method, params)
+                url = platform_media_url(matched.get("url"))
+                if url and current():
+                    data = await self._transport.download_platform_media(socket, url)
+                    if current() and (mime := attachment_mime(data, attachment.name)):
+                        return data, mime
+        except (
+            OSError,
+            TimeoutError,
+            WebSocketException,
+            OneBotError,
+            DesktopError,
+            SQLiteError,
+        ) as error:
             logger.debug("QQ 附件暂不可用（%s）", type(error).__name__)
         return None
 
@@ -335,6 +572,18 @@ class QQChannel:
             return
         if not self._allows_route(route):
             raise OneBotError("QQ 目的地超出允许范围")
+        if (
+            message.channel != QQ_CHANNEL_NAME
+            or route.kind not in {"group", "private"}
+            or account_id(route.recipient_id) is None
+        ):
+            raise OneBotError("QQ 回址无效")
+        if message.qq_action is not None and (
+            not self._config.chat_actions_enabled
+            or route.temporary_group_id is not None
+            or message.emoji_digest is not None
+        ):
+            raise OneBotError("此会话未获准发送 QQ 动作")
         if message.quote_source and not self.can_quote_reply(route):
             raise OneBotError("此 QQ 回复路由不支持引用")
         if message.emoji_digest is not None and not self._allows_emoji(message, route):
@@ -375,6 +624,45 @@ class QQChannel:
             and self._allows_emoji_delivery()
         )
 
+    def set_asset_reader(
+        self,
+        read: Callable[[ConversationKey, str], tuple[str, bytes] | None],
+        allows: Callable[[ConversationKey, str], bool],
+    ) -> None:
+        """仅接收按完整目的会话复核的素材库。"""
+        self._read_asset, self._allows_asset = read, allows
+
+    async def list_groups(self, perception: Perception) -> list[tuple[str, str]]:
+        """只有仍绑定的主人、本账号普通私聊可读取机器人实际所在群。"""
+        socket = self._transport.socket
+
+        def allowed() -> bool:
+            route = perception.route
+            return bool(
+                socket is not None
+                and self._transport.socket is socket
+                and route is not None
+                and route.kind == "private"
+                and route.temporary_group_id is None
+                and route.recipient_id == perception.sender_id
+                and perception.trust is TrustLevel.VERIFIED_USER
+                and self._is_owner(perception.sender_id)
+                and self.allows_inbox_perception(perception)
+            )
+
+        if socket is None or not allowed():
+            raise OneBotError("群名单不可用")
+        groups = await self._transport.group_list(socket)
+        if not allowed():
+            raise OneBotError("群名单不可用")
+        return [
+            (identifier, name)
+            for item in groups
+            if isinstance(item, dict)
+            and (identifier := account_id(item.get("group_id")))
+            and (name := short_text(item.get("group_name"), 80))
+        ]
+
     async def _send(
         self,
         socket: ClientConnection,
@@ -382,15 +670,59 @@ class QQChannel:
         route: MessageRoute,
         previous: asyncio.Task[None] | None,
     ) -> None:
+        identifier = None
+        digest = message.emoji_digest
+        action = message.qq_action
+        key = ConversationKey(
+            message.channel,
+            route.account_id,
+            route.kind,
+            route.recipient_id,
+            route.temporary_group_id,
+        )
+        store = self._inbox_store
+
+        def authorize() -> None:
+            if (
+                self._transport.socket is not socket
+                or not self.allows_inbox_conversation(key)
+                or (message.can_deliver is not None and not message.can_deliver())
+                or (
+                    (action is not None or digest is not None)
+                    and self._allows_emoji_delivery is not None
+                    and not self._allows_emoji_delivery()
+                )
+                or (
+                    action is not None
+                    and (
+                        not self._config.chat_actions_enabled or key.temporary_group_id is not None
+                    )
+                )
+            ):
+                raise OneBotError("连接、原件或权限已失效")
+            if action is not None and action.kind == "send_asset":
+                if original(route.message_id).perception.has_shared_content:
+                    raise OneBotError("转发或卡片里的引文不是当前发件人的素材请求")
+                if self._allows_asset is None or not self._allows_asset(key, action.target_id):
+                    raise OneBotError("当前会话已无该素材授权")
+            if (
+                digest is not None
+                and self._allows_emoji_asset is not None
+                and not self._allows_emoji_asset(digest)
+            ):
+                raise OneBotError("此表情已失去登记或外发资格")
+
+        def original(identifier: str) -> InboxMessage:
+            row = store.find_platform_message(key, identifier) if store else None
+            if row is None or row.perception.visibility != message.visibility:
+                raise OneBotError("目标原件已不可用")
+            return row
+
         try:
             if previous is not None:
                 await previous
-            if self._transport.socket is not socket or not self._allows_route(route):
-                if message.report_delivery_failure is not None:
-                    message.report_delivery_failure("QQ 连接或目的地已失效，未投递。")
-                return
+            authorize()
             image = None
-            digest = message.emoji_digest
             if digest is not None:
                 if self._read_emoji is None or not self._allows_emoji(message, route):
                     if message.report_delivery_failure is not None:
@@ -405,24 +737,144 @@ class QQChannel:
                     if message.report_delivery_failure is not None:
                         message.report_delivery_failure("表情或 QQ 连接不可用，未投递。")
                     return
-            params = encode_message(message, route, image=image)
-            if message.can_deliver is not None and not message.can_deliver():
-                if message.report_delivery_failure is not None:
-                    message.report_delivery_failure("原会话已切换或不再允许发送，未投递。")
-                return
-            receipt = await self._transport.call(socket, "send_msg", params)
-        except (OSError, TimeoutError, WebSocketException, OneBotError) as error:
+            method = "send_msg"
+            params: dict[str, Any] = {}
+            if action is not None:
+                dedup = (key, f"{route.message_id}:{action}")
+                if dedup in self._recent_actions:
+                    raise OneBotError("同一原件的相同动作已处理")
+                self._recent_actions[dedup] = None
+                if len(self._recent_actions) > _RECENT_MESSAGE_LIMIT:
+                    self._recent_actions.popitem(last=False)
+                if action.kind in {"at", "poke"}:
+                    notice = self._recent_notices.get((key, route.message_id))
+                    received_poke = bool(
+                        notice
+                        and notice.components[0].kind == "poke"
+                        and notice.components[0].target_account_id == key.account_id
+                        and notice.sender_id == action.target_id
+                    )
+                    if received_poke:
+                        if not self._config.poke_response_enabled:
+                            raise OneBotError("被戳回应已关闭")
+                    elif (
+                        original(action.source_message_id or route.message_id).perception.sender_id
+                        != action.target_id
+                    ):
+                        raise OneBotError("动作对象不是消息来源")
+                    if key.kind == "group":
+                        await self.desktop.verify_member(socket, key, action.target_id)
+                    elif (
+                        action.kind != "poke"
+                        or not received_poke
+                        or action.target_id != key.recipient_id
+                    ):
+                        raise OneBotError("私聊只能回戳当前对方")
+                    if not received_poke:
+                        original(action.source_message_id or route.message_id)
+                    if action.kind == "poke":
+                        if not self._cooldown(key, action.target_id, "send"):
+                            raise OneBotError("戳一戳仍在冷却")
+                        method = "send_poke"
+                        params = {"user_id": action.target_id}
+                        if key.kind == "group":
+                            params["group_id"] = key.recipient_id
+                elif action.kind in {"react", "recall", "resend_image"}:
+                    row = original(action.target_id)
+                    if action.kind == "recall" and (
+                        row.direction != "outgoing" or row.perception.sender_id != key.account_id
+                    ):
+                        raise OneBotError("只能撤回自己的已送达消息")
+                    if action.kind == "react" and (
+                        key.kind != "group" or emoji_id(action.emoji_id) is None
+                    ):
+                        raise OneBotError("贴表情的会话或表情无效")
+                    verified = await self.desktop.verified_message_data(socket, key, row)
+                    if action.kind == "recall":
+                        method, params = "delete_msg", {"message_id": action.target_id}
+                    elif action.kind == "react":
+                        method, params = (
+                            "set_msg_emoji_like",
+                            {
+                                "message_id": action.target_id,
+                                "emoji_id": action.emoji_id,
+                                "set": True,
+                            },
+                        )
+                    else:
+                        attachments = row.perception.attachments
+                        index = action.attachment_index
+                        if (
+                            not (0 <= index < len(attachments))
+                            or attachments[index].kind != "image"
+                        ):
+                            raise OneBotError("指定位置没有原图")
+                        attachment = attachments[index]
+                        actual = read_message_segments(verified.get("message"), key.account_id)[3]
+                        if index >= len(actual) or actual[index] != attachment:
+                            raise OneBotError("QQ 未确认指定位置的原图")
+                        media = await self.read_inbox_attachment(row.perception, attachment)
+                        if media is None:
+                            raise OneBotError("指定原图已不可用")
+                        image = media[0]
+                        if attachment.is_emoji:
+                            digest = sha256(image).hexdigest()
+                            if (
+                                self._read_emoji is None
+                                or self._allows_emoji_asset is None
+                                or not self._allows_emoji(message, route)
+                            ):
+                                raise OneBotError("表情原图未获准外发")
+                            image = await asyncio.to_thread(self._read_emoji, digest)
+                            if image is None:
+                                raise OneBotError("表情原图没有已获准的素材原件")
+                            message = replace(message, emoji_digest=digest)
+                    original(action.target_id)
+                elif action.kind == "send_asset":
+                    if self._read_asset is None:
+                        raise OneBotError("没有已授权素材库")
+                    asset = await asyncio.to_thread(self._read_asset, key, action.target_id)
+                    if asset is None or asset[0] != action.target_id:
+                        raise OneBotError("当前会话素材未获准")
+                    name, data = asset
+                    if _image_mime(data):
+                        image = data
+                    else:
+                        await self.desktop.upload_file(key, name, data, authorize)
+                        method = "uploaded"
+            if method == "send_msg":
+                params = encode_message(message, route, image=image)
+            if method != "uploaded":
+                authorize()
+                receipt = await self._transport.call(socket, method, params)
+                if method == "send_msg":
+                    identifier = message_id(receipt.get("message_id"))
+                    if identifier is None:
+                        raise OneBotError("QQ 未返回有效消息编号")
+                    await self._save_delivered(message, route, identifier, params["message"])
+                elif method == "delete_msg" and store is not None and action is not None:
+                    store.mark_recalled(key, action.target_id)
+        except (
+            OSError,
+            TimeoutError,
+            WebSocketException,
+            OneBotError,
+            DesktopError,
+            ValueError,
+            SQLiteError,
+        ) as error:
             logger.warning("QQ 发送失败（%s）", type(error).__name__)
             if message.report_delivery_failure is not None:
                 message.report_delivery_failure("QQ 未确认这段回复投递成功。")
             return
         try:
-            if message.confirm_delivery is not None:
+            if identifier is not None and message.confirm_platform_delivery is not None:
+                message.confirm_platform_delivery(identifier)
+            elif message.confirm_delivery is not None:
                 message.confirm_delivery()
         except SQLiteError:
             logger.exception("QQ 消息已发送，但时间线确认记录写入失败")
         try:
-            await self._save_delivered(message, route, receipt.get("message_id"), params["message"])
             if digest is not None and self._record_emoji_use is not None:
                 await asyncio.to_thread(self._record_emoji_use, digest)
         except SQLiteError:
@@ -437,15 +889,18 @@ class QQChannel:
         if identifier is None:
             logger.warning("QQ 发送回执缺少有效消息键，无法归档外发消息")
             return
-        _, _, quoted, _, components = read_message_segments(segments, route.account_id)
+        text, _, quoted, _, components = read_message_segments(segments, route.account_id)
         perception = Perception(
             message.channel,
             route.account_id,
-            "[表情]" if message.emoji_digest is not None else message.content,
+            "[表情]" if message.emoji_digest is not None else text or message.content or "[图片]",
             message.visibility,
             TrustLevel.VERIFIED_CONTACT,
             route=replace(route, message_id=identifier),
             quoted_message_id=quoted,
+            source_message_id=message_id(route.message_id)
+            if message.timeline_id is not None
+            else None,
             components=components,
         )
         try:

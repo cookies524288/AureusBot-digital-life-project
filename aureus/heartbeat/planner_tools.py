@@ -8,7 +8,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
 from aureus.common.limits import MAX_INTEREST_CHARS
-from aureus.heartbeat.planning import Plan, parse_plan_data
+from aureus.heartbeat.chat_plugins import ChatRequest
+from aureus.heartbeat.planning import Plan, QQActionIntent, parse_plan_data
 from aureus.heartbeat.platform_history import MAX_HISTORY_ROWS, HistoryBoundary, HistoryQuery
 from aureus.organs import OrganRequest, OrganResponse, ToolDefinition, ToolExchange, ToolResult
 from aureus.safety import CallRejectedError
@@ -24,6 +25,8 @@ _TOOL_NAMES = frozenset(
         "read_platform_history",
         "propose_platform_history_cleanup",
         "inbox_attention",
+        "chat_lookup",
+        "wait",
     }
 )
 
@@ -103,6 +106,38 @@ class _Emoji(_Arguments):
     before_text: bool = False
 
 
+class _QQAction(_Arguments):
+    kind: Literal["face", "at", "react", "poke", "recall", "resend_image", "send_asset"]
+    source: Literal["selected", "quoted", "history"] = Field(
+        default="selected",
+        description=(
+            "操作本批选中的来信、其真实引用，或这次 read_platform_history 明确返回的 inbox 原件。"
+        ),
+    )
+    history_record_id: int | None = Field(
+        default=None,
+        ge=1,
+        le=2**63 - 1,
+        description="仅 history 使用返回行的 id，不是 platform_message_id。",
+    )
+    emoji_id: str = Field(
+        default="",
+        pattern=r"^(?:0|[1-9][0-9]{0,9})?$",
+        description="仅 face/react 填；QQ 表情例如微笑14、偷笑20、捂脸264。",
+    )
+    image_number: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="resend_image：该消息的第几张图片，从 1 起；不能以别图替代。",
+    )
+    name: str = Field(
+        default="",
+        max_length=120,
+        description="send_asset：当前会话授权素材的完整文件名，不是路径。",
+    )
+
+
 class _QueryArguments(_Arguments):
     keywords: list[Annotated[str, Field(min_length=2, max_length=20)]] = Field(
         min_length=1, max_length=3, description="与当前聊天相关的关键词，最多三个。"
@@ -113,6 +148,29 @@ class _QueryArguments(_Arguments):
         le=_MAX_QUERY_LIMIT,
         description="最多返回几条相关记忆；不填时使用设置里的查询默认条数（默认 8），范围 1–20。",
     )
+
+
+class _ChatArguments(_Arguments):
+    operation: str
+    text: str = Field(
+        default="",
+        max_length=200,
+        description="查询词、提醒意图，或主人叮嘱；不要写其他会话的原话。",
+    )
+    seconds: int = Field(
+        default=0, ge=0, le=31_536_000, description="距现在多少秒；叮嘱为有效期，最长 3600 秒。"
+    )
+    identifier: int = Field(default=0, ge=0, le=2**63 - 1, description="仅取消提醒使用其实际编号。")
+    target_kind: Literal["group", "private"] | None = Field(
+        default=None, description="仅主人跨流可填；默认原会话。"
+    )
+    target_id: str = Field(
+        default="", max_length=40, description="仅主人跨流时填写明确的目的群号或好友号。"
+    )
+
+
+class _WaitArguments(_Arguments):
+    seconds: int = Field(ge=1, le=300)
 
 
 @dataclass(frozen=True)
@@ -160,6 +218,12 @@ class PlannerToolOptions:
     quote_source: bool = False
     platform_history: bool = False
     platform_cleanup: bool = False
+    target_record_ids: tuple[int, ...] = ()
+    default_reply_target: int | None = None
+    chat_operations: tuple[str, ...] = ()
+    chat_rechecks: bool = False
+    group_play: bool = False
+    qq_actions: bool = False
 
 
 def _interest_only_errors(error: ValidationError) -> bool:
@@ -170,6 +234,17 @@ def _interest_only_errors(error: ValidationError) -> bool:
 
 def _reply(arguments: _Arguments) -> Plan | None:
     data = arguments.model_dump(exclude_none=True)
+    action = QQActionIntent(**settings) if (settings := data.pop("qq_action", None)) else None
+    if action is not None and (
+        (action.source == "history") != (action.history_record_id is not None)
+        or (action.kind in {"face", "react"}) != bool(action.emoji_id)
+        or (action.kind == "send_asset") != bool(action.name)
+        or (action.kind != "resend_image" and action.image_number != 1)
+        or (action.kind in {"face", "send_asset"} and action.source != "selected")
+        or data.get("reply_mode", "text") != "text"
+        or data.get("select_emoji")
+    ):
+        return None
     data.setdefault("intent", data["reply_reference"])
     plan = parse_plan_data({"reply": True, **data})
     if plan is None:
@@ -177,7 +252,13 @@ def _reply(arguments: _Arguments) -> Plan | None:
     if len(data.get("resolve", ())) != len(plan.resolutions):
         return None
     return replace(
-        plan, addressed_to_me=data["addressed_to_me"], quote_source=data.get("quote_source", False)
+        plan,
+        addressed_to_me=data["addressed_to_me"],
+        quote_source=data.get("quote_source", False),
+        target_record_id=data.get("target_record_id"),
+        followup_seconds=data.get("followup_seconds", 0),
+        reply_mode=data.get("reply_mode", "text"),
+        qq_action=action,
     )
 
 
@@ -220,7 +301,7 @@ class PlannerTool:
     name: str
     description: str
     arguments: type[_Arguments]
-    handle: Callable[[_Arguments], Plan | _MemoryQuery | HistoryQuery | date | None]
+    handle: Callable[[_Arguments], Plan | _MemoryQuery | HistoryQuery | ChatRequest | date | None]
 
     def definition(self) -> ToolDefinition:
         """供模型或管理端使用的同源参数声明。"""
@@ -251,6 +332,49 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
                 ),
             )
     extras = dict(inbox)
+    if options.qq_actions:
+        extras["qq_action"] = (
+            _QQAction | None,
+            Field(
+                default=None,
+                description=(
+                    "无需文字时单独发原生 face、群消息贴表情 react、群内戳或回戳 poke、"
+                    "撤回自己已送达原件 recall、重发指定原图 resend_image、"
+                    "发送受托素材 send_asset。at 是群回复首段的真实提及；"
+                    "at/poke 的对象是所选来源的发言者。"
+                    "不要用文字谎称动作已完成。"
+                ),
+            ),
+        )
+    if options.chat_rechecks:
+        extras["followup_seconds"] = (
+            int,
+            Field(
+                default=0,
+                ge=0,
+                le=300,
+                description=(
+                    "确有新内容时，最后一段成功投递后过几秒再判断一次；新来信取消，不需要则为 0。"
+                ),
+            ),
+        )
+    target_ids = options.target_record_ids
+    if target_ids:
+        extras["target_record_id"] = (
+            int,
+            Field(
+                default=options.default_reply_target
+                or (next(iter(target_ids)) if len(target_ids) == 1 else ...),
+                ge=1,
+                description="从本批候选择一条要回应的记录序号，不是平台消息号。",
+                json_schema_extra={"enum": list(target_ids)},
+            ),
+        )
+
+    def targeted_reply(arguments: _Arguments) -> Plan | None:
+        plan = _reply(arguments)
+        return plan if plan and (not target_ids or plan.target_record_id in target_ids) else None
+
     if options.agenda:
         extras.update(
             commit=(
@@ -283,6 +407,18 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
             Field(default=None, description="可供选择习得表达的情景、语气等，只填相关项。"),
         )
     if options.emoji:
+        extras["reply_mode"] = (
+            Literal["text", "sticker", "sticker_duel", "repeat"]
+            if options.group_play
+            else Literal["text", "sticker"],
+            Field(
+                default="text",
+                description=(
+                    "text 说话，sticker 只发一张合适的表情。群友斗图时可选 sticker_duel "
+                    "按情绪接一张，repeat 只跟不同群友确实正在重复的短消息；不合适则沉默。"
+                ),
+            ),
+        )
         extras["select_emoji"] = (
             _Emoji | None,
             Field(
@@ -294,7 +430,7 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
             bool,
             Field(
                 default=False,
-                description="仅有可用平台路由时，选择在本次回复首段引用当前要回复的最新一条消息；默认不引用。",
+                description="在本次回复首段显示对所选消息的引用；默认不显示，不影响回复对象。",
             ),
         )
     tools = [
@@ -302,12 +438,42 @@ def planner_tools(options: PlannerToolOptions = PlannerToolOptions()) -> tuple[P
             "reply",
             "仅在应该对当前会话发出可见回复时使用；提交回复方向，不写最终发言。",
             create_model("ReplyArguments", __base__=_ReplyArguments, **extras),
-            _reply,
+            targeted_reply,
         ),
         PlannerTool(
             "stop", "结束本轮规划并等待新消息，不发言也不设置定时等待。", _Arguments, _stop
         ),
     ]
+    if options.chat_rechecks:
+        tools.append(
+            PlannerTool(
+                "wait",
+                "原会话有人还要接着说：不发言，几秒后仅重看一次，期间收到新来信就放弃。",
+                _WaitArguments,
+                lambda args: replace(_stop(args), wait_seconds=args.model_dump()["seconds"]),
+            )
+        )
+    if options.chat_operations:
+        operations = options.chat_operations
+
+        def chat_request(args: _Arguments) -> ChatRequest | None:
+            data = args.model_dump()
+            return ChatRequest(**data) if data["operation"] in operations else None
+
+        tools.append(
+            PlannerTool(
+                "chat_lookup",
+                "只在当前获准会话使用：groups 实际群名单，meme 通用梗，assets 受托素材名，"
+                "reminders 自己的提醒，create_reminder/cancel_reminder 建立/取消，"
+                "owner_nudge 主人对获准会话的一次限时叮嘱。只承诺登记，不保证发言。",
+                create_model(
+                    "ScopedChatArguments",
+                    __base__=_ChatArguments,
+                    operation=(str, Field(json_schema_extra={"enum": list(operations)})),
+                ),
+                chat_request,
+            )
+        )
     if options.recall:
         tools.append(
             PlannerTool(
@@ -357,6 +523,7 @@ async def dispatch_planner_tools[Recall](
     *,
     actions: list[PlannerAction] | None = None,
     read_history: Callable[[HistoryQuery], Awaitable[str]] | None = None,
+    chat_lookup: Callable[[ChatRequest], Awaitable[str]] | None = None,
     preview_cleanup: Callable[[date], Awaitable[str]] | None = None,
     still_authorized: Callable[[], bool] | None = None,
     history_used: Callable[[], None] | None = None,
@@ -427,6 +594,7 @@ async def dispatch_planner_tools[Recall](
                 if result.should_reply
                 else {
                     "stop": "选择结束规划，不发言",
+                    "wait": "在当前会话等一次，不发言",
                     "inbox_attention": "提交收件箱关注建议，不发言",
                 }[name]
             )
@@ -442,7 +610,9 @@ async def dispatch_planner_tools[Recall](
             evidence.append(PlannerAction(name, "not_run", "本轮已达到查询上限"))
             break
         try:
-            if isinstance(result, HistoryQuery):
+            if isinstance(result, ChatRequest):
+                fetched = (await chat_lookup(result), None) if chat_lookup is not None else None
+            elif isinstance(result, HistoryQuery):
                 fetched = (await read_history(result), None) if read_history is not None else None
             elif isinstance(result, date):
                 fetched = (
@@ -466,7 +636,7 @@ async def dispatch_planner_tools[Recall](
             )
             break
         evidence.append(PlannerAction(name, "completed", "已查询，结果已交给规划器"))
-        if isinstance(result, HistoryQuery):
+        if isinstance(result, (HistoryQuery, ChatRequest)):
             summarize_reply = False
             if history_used is not None:
                 history_used()

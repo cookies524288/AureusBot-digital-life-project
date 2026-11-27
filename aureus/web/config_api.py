@@ -132,7 +132,7 @@ def _confirm_runtime_edit(
     if any(name in READONLY_CONFIG for name in names):
         raise HTTPException(
             403,
-            detail="这一项只能在本机直接编辑 aureus.toml：改错了会让你从网页上进不来。",
+            detail="这一项只能在本机直接编辑 config/aureus.toml。",
         )
     if any(name.split(".")[0] in PASSWORD_SECTIONS for name in names):
         _confirm(auth, body, request)

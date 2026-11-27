@@ -63,6 +63,7 @@ READONLY_CONFIG = (
     "qq.token_key",
     "qq.action_timeout_seconds",
     "qq.reconnect_seconds",
+    "heartbeat.chat_meme_glossary",
     *BIOCHEMICAL_SOURCES,
 )
 PASSWORD_SECTIONS = ("safety", "web")
@@ -147,7 +148,7 @@ def _runtime_restore_fields() -> set[str]:
 
 
 def _visible_runtime_values(config: RuntimeConfig) -> dict[str, Any]:
-    values = config.model_dump(mode="json")
+    values = config.model_dump(mode="json", exclude={"heartbeat": {"chat_meme_glossary"}})
     for key in HIDDEN_CONFIG:
         section, _, field = key.partition(".")
         values[section].pop(field, None)
@@ -408,6 +409,7 @@ class ConfigService:
         return {
             "exists": exists,
             "config": _visible_runtime_values(config),
+            "chat_meme_glossary_count": len(config.heartbeat.chat_meme_glossary),
             "schema": schema,
             "readonly": list(READONLY_CONFIG),
             "biochemical_sources": BIOCHEMICAL_SOURCES,

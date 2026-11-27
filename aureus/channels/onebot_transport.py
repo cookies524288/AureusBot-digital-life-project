@@ -190,6 +190,15 @@ class OneBotTransport:
 
     async def download_image(self, socket: ClientConnection, file_id: str) -> bytes:
         """从已核对的连接取 SnowLuma 缓存中的图片，限制等待时间与字节数。"""
+        return await self._download(socket, _IMAGE_DOWNLOAD_ACTION, {"file_id": file_id})
+
+    async def download_platform_media(self, socket: ClientConnection, url: str) -> bytes:
+        """只由核对原件后的调用方传入平台解析的媒体地址，走同一有界流。"""
+        return await self._download(socket, "download_file_stream", {"file": url})
+
+    async def _download(
+        self, socket: ClientConnection, action: str, params: dict[str, str]
+    ) -> bytes:
         echo = uuid4().hex
         result: asyncio.Future[bytes | None] = asyncio.get_running_loop().create_future()
         self._image_streams[echo] = _ImageStream(result)
@@ -198,8 +207,8 @@ class OneBotTransport:
                 await socket.send(
                     json.dumps(
                         {
-                            "action": _IMAGE_DOWNLOAD_ACTION,
-                            "params": {"file_id": file_id, "chunk_size": _IMAGE_CHUNK_SIZE},
+                            "action": action,
+                            "params": {**params, "chunk_size": _IMAGE_CHUNK_SIZE},
                             "echo": echo,
                         }
                     )
@@ -215,6 +224,17 @@ class OneBotTransport:
         self, socket: ClientConnection, action: str, params: dict[str, Any]
     ) -> dict[str, Any]:
         """发送动作并等待同一连接上对应 echo，出错时结束等待"""
+        data = await self._request(socket, action, params)
+        return data if isinstance(data, dict) else {}
+
+    async def group_list(self, socket: ClientConnection) -> list[Any]:
+        """群列表的成功回执是数组；缺失或错误结构不是成功的空名单。"""
+        data = await self._request(socket, "get_group_list", {})
+        if not isinstance(data, list):
+            raise OneBotError("QQ 未返回有效群名单")
+        return data
+
+    async def _request(self, socket: ClientConnection, action: str, params: dict[str, Any]) -> Any:
         echo = uuid4().hex
         future = asyncio.get_running_loop().create_future()
         self._pending[echo] = future
@@ -230,5 +250,4 @@ class OneBotTransport:
             if response.get("retcode") == 1404:
                 raise OneBotUnsupportedError("当前 OneBot 连接不支持此操作")
             raise OneBotError("OneBot 拒绝了动作")
-        data = response.get("data")
-        return data if isinstance(data, dict) else {}
+        return response.get("data")

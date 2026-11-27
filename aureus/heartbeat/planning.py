@@ -112,6 +112,18 @@ class EmojiIntent:
 
 
 @dataclass(frozen=True)
+class QQActionIntent:
+    """规划器只选本批、实际引用或本轮历史结果，不提供平台消息号。"""
+
+    kind: Literal["face", "at", "react", "poke", "recall", "resend_image", "send_asset"]
+    source: Literal["selected", "quoted", "history"] = "selected"
+    history_record_id: int | None = None
+    emoji_id: str = ""
+    image_number: int = 1
+    name: str = ""
+
+
+@dataclass(frozen=True)
 class Plan:
     """读懂了的规划器建议。"""
 
@@ -139,6 +151,11 @@ class Plan:
     reply_reference: str = ""
     addressed_to_me: Literal["yes", "no", "uncertain"] | None = None
     quote_source: bool = False
+    target_record_id: int | None = None
+    wait_seconds: int = 0
+    followup_seconds: int = 0
+    reply_mode: Literal["text", "sticker", "sticker_duel", "repeat"] = "text"
+    qq_action: QQActionIntent | None = None
 
     def to_metadata(self) -> dict[str, Any]:
         """写进时间线 metadata 的样子。"""
@@ -168,6 +185,10 @@ class Plan:
             }
         if self.quote_source:
             metadata["quote_source"] = True
+        if self.target_record_id is not None:
+            metadata["target_record_id"] = self.target_record_id
+        if self.reply_mode != "text":
+            metadata["reply_mode"] = self.reply_mode
         return metadata
 
 

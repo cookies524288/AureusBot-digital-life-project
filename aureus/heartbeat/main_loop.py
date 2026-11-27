@@ -52,6 +52,7 @@ from aureus.feedback import FeedbackStore, Outcome
 from aureus.heartbeat import exploration_runner, interest_changes, language_runner
 from aureus.heartbeat import persona_growth_runner as growth
 from aureus.heartbeat.agenda_hooks import AgendaHooks
+from aureus.heartbeat.chat_plugins import AssetNames, GroupReader
 from aureus.heartbeat.context import build_initiative_plan_prompt, build_initiative_reply_prompt
 from aureus.heartbeat.conversation import (
     ConversationFlow,
@@ -73,6 +74,7 @@ from aureus.heartbeat.cortisol import CortisolTiming
 from aureus.heartbeat.debounce import MessageDebouncer
 from aureus.heartbeat.diary_runner import DiaryOutcome, DiaryTracker, write_diary
 from aureus.heartbeat.downtime import Downtime, assess_downtime
+from aureus.heartbeat.emoji_followups import StickerFollowups, StickerRound
 from aureus.heartbeat.emoji_maintenance import EmojiMaintenance
 from aureus.heartbeat.emoji_selection import EmojiSelector
 from aureus.heartbeat.empathy import EmpathyFocus
@@ -87,6 +89,7 @@ from aureus.heartbeat.events import (
     EVENT_ORGAN_CALL_ABANDONED,
     EVENT_PLANNING_INTERRUPTED,
     EVENT_REPLY_DECLINED,
+    EVENT_REPLY_DELIVERED,
     EVENT_REPLY_DELIVERY_FAILED,
     EVENT_REPLY_REFERENCE,
     EVENT_SELF_CHECK,
@@ -132,13 +135,14 @@ from aureus.heartbeat.perception import (
     MessageSink,
     OutgoingMessage,
     Perception,
+    QQChatAction,
     TrustLevel,
 )
 from aureus.heartbeat.planner_tools import planner_tools
 from aureus.heartbeat.planning import InitiativePlan, Plan, parse_initiative_plan
 from aureus.heartbeat.platform_history import PlatformHistory
 from aureus.heartbeat.recall import MemoryTracker
-from aureus.heartbeat.reply_outbox import EmojiReplyPart, ReplyOutbox
+from aureus.heartbeat.reply_outbox import AtReplyPart, EmojiReplyPart, PartReceipt, ReplyOutbox
 from aureus.heartbeat.reply_records import INTERNAL_REPLY_RECORD, delivery_callbacks
 from aureus.heartbeat.reply_strategy import ReplyStrategy, choose_strategy
 from aureus.heartbeat.self_check import describe_self_check
@@ -501,11 +505,13 @@ class Heartbeat:
         )
         self._sinks: dict[str, MessageSink] = {}
         self._quote_routes: dict[str, Callable[[MessageRoute], bool]] = {}
+        self._sticker_followups = StickerFollowups(clock)
         self._reply_outbox = ReplyOutbox(
             clock,
             config,
             self._send_reply_part,
             self._record_discarded_reply,
+            lambda: self._wake.set(),
         )
         self._interests = None if config.roleplay_mode else interests
         self._findings = findings
@@ -673,6 +679,8 @@ class Heartbeat:
 
     def set_inbox_route_filter(self, allows: Callable[[ConversationKey], bool]) -> None:
         """让已保存的未读也继续遵守当前通道允许的会话范围。"""
+        if chat := self._conversation.chat_plugins:
+            chat.allows = allows
         if self._platform_inbox is not None:
             self._platform_inbox.allows = allows
         if self._language is not None:
@@ -683,6 +691,68 @@ class Heartbeat:
             self._conversation.platform_history.allows = allows
         if (consolidator := self._memory_consolidator) is not None and consolidator.source:
             consolidator.source.allows = allows
+
+    def set_chat_group_reader(
+        self, reader: GroupReader, *, is_owner: Callable[[str], bool]
+    ) -> None:
+        """绑定通道的当前群名单与热更新后的真实主人身份。"""
+        if chat := self._conversation.chat_plugins:
+            chat.groups, chat.is_owner = reader, is_owner
+
+    def set_chat_asset_names(self, names: AssetNames) -> None:
+        """规划器只能查看当前会话的素材名，不获取路径或文件字节。"""
+        if chat := self._conversation.chat_plugins:
+            chat.assets = names
+
+    def enable_qq_actions(self, enabled: bool) -> None:
+        """只有已装配、允许动作的通道才向规划器开放原生动作。"""
+        self._conversation.qq_actions_enabled = enabled
+
+    def on_social_notice(self, notice: Perception) -> None:
+        """已核定的戳/贴表情可以不理；跟撤只对同会话有直接来源的己方回执。"""
+        inbox = self._platform_inbox
+        if (
+            inbox is None
+            or not notice.components
+            or not notice.route
+            or not self.allows_emoji_delivery()
+        ):
+            return
+        key = ConversationKey.from_perception(notice)
+        if not inbox.allows(key):
+            return
+        component = notice.components[0]
+        if component.kind != "recall":
+            if component.kind in {"poke", "reaction"}:
+                self.submit(notice)
+            return
+        for row in inbox.store.delivered_replies(key, component.target_message_id or ""):
+            if row.perception.route is None:
+                continue
+            action = QQChatAction("recall", row.perception.route.message_id)
+            record = self._timeline.append(
+                EVENT_MESSAGE,
+                "",
+                ActorType.ME,
+                visibility=row.perception.visibility,
+                metadata={
+                    "channel": key.platform,
+                    "account_id": key.account_id,
+                    "recipient_id": key.recipient_id,
+                    "message_type": key.kind,
+                    "temporary_group_id": key.temporary_group_id,
+                    INTERNAL_REPLY_RECORD: True,
+                    "nontext_reply": True,
+                    "qq_action": "follow_recall",
+                },
+            )
+            self._deliver_reply(
+                notice,
+                record,
+                (),
+                qq_action=action,
+                can_deliver=lambda: self.allows_emoji_delivery() and inbox.allows(key),
+            )
 
     def set_inbox_attachment_reader(self, reader: AttachmentReader) -> None:
         """接上通道提供的后台收件箱附件读取器。"""
@@ -707,6 +777,9 @@ class Heartbeat:
                 # 只带收件箱序号：网页据此让平台页失效并重新拉取，不推正文。
                 self.live_events.publish(LiveEvent(TOPIC_INBOX, {"id": message.id}))
             if allowed and message.direction == "incoming":
+                self._sticker_followups.cancel(message.conversation)
+                if chat := self._conversation.chat_plugins:
+                    chat.new_message(message)
                 # 命令、通知和机器人自己不会走到这里；它们由通道直接归档（D142）。
                 self._observe_debounce(message)
             if allowed and inbox.is_priority(message.perception):
@@ -770,6 +843,7 @@ class Heartbeat:
         if engaged:
             # 先停推送，再清理：取消分段时写的记录也不该推给网页。
             self.live_events.pause()
+            self._sticker_followups.clear()
             self._reply_outbox.clear()
             self._cancel_indexing()
         self._wake.set()
@@ -977,6 +1051,7 @@ class Heartbeat:
         self._cancel_indexing()
         if self._platform_inbox is not None:
             self._interrupt_inbox(self._platform_inbox, "关闭时取消本批回复，未投递。")
+        self._sticker_followups.clear()
         self._reply_outbox.clear()
         self._wake.set()
 
@@ -995,6 +1070,7 @@ class Heartbeat:
         if paused:
             self._cancel_indexing()
             self._inbox_followups.clear()
+            self._sticker_followups.clear()
             self._reply_outbox.clear()
             if self._platform_inbox is not None:
                 self._interrupt_inbox(self._platform_inbox, "维护暂停时取消本批回复，未投递。")
@@ -1002,6 +1078,8 @@ class Heartbeat:
             self._indexing_retry_at = None
         if paused and self._thought is not None:
             thought = self._thought
+            if thought.round_trace:
+                thought.round_trace.cancel_sticker()
             is_language_learning = thought.task.get_name() == language_runner.TASK_NAME
             self._thought = None
             self._maintenance_task = thought.task
@@ -1152,6 +1230,7 @@ class Heartbeat:
         self._take_in_perceptions()
         if inbox is not None:
             self._take_inbox_followups(inbox)
+        self._sticker_followups.tick()
         self._reply_outbox.deliver_due()
         had_thought = self._thought is not None
         diary_running = bool(self._thought and self._thought.task.get_name() == "aureus-diary")
@@ -1164,6 +1243,7 @@ class Heartbeat:
         self._read_body()
         self._check_stress()
         self._agenda_hooks._check_agenda()
+        self._maybe_recheck_chat()
         if inbox is not None:
             self._maybe_select_inbox(inbox, had_thought=had_thought)
         thought = self._thought
@@ -1245,6 +1325,7 @@ class Heartbeat:
         self._halt_status = status
         self._update_live_pause()
         if status.halted:
+            self._sticker_followups.clear()
             self._reply_outbox.clear()
             if self._platform_inbox is not None:
                 self._interrupt_inbox(self._platform_inbox, "急停时取消本批回复，未投递。")
@@ -1277,6 +1358,13 @@ class Heartbeat:
         if thought is None or not thought.task.done():
             return
         self._thought = None
+        try:
+            self._collect_outcome(thought)
+        finally:
+            if thought.round_trace:
+                thought.round_trace.cancel_sticker()
+
+    def _collect_outcome(self, thought: _Thought) -> None:
         inbox = self._platform_inbox
         residence = thought.replying_to[-1].residence if thought.replying_to else None
         lost_permission = residence is not None and (inbox is None or not inbox.permits(residence))
@@ -1342,13 +1430,37 @@ class Heartbeat:
         if thought.initiative is not None:
             self._collect_initiative(thought, outcome)
             return
-        target = thought.replying_to[-1].perception
-        target_key = self._thought_conversation(thought)
+        selected = thought.replying_to[-1]
+        if outcome.target_record_id is not None:
+            candidate = next(
+                (
+                    heard
+                    for heard in thought.replying_to
+                    if heard.record.id == outcome.target_record_id
+                ),
+                None,
+            )
+            if candidate is None:
+                return
+            selected = candidate
+        elif (
+            outcome.notice and len(thought.replying_to) > 1 and _platform_key(selected) is not None
+        ):
+            return
+        target, target_key = selected.perception, _platform_key(selected)
+        if not self._conversation.source_available(
+            selected
+        ) or not self._conversation.history_current(thought.round_trace):
+            self._record_interrupted_round(thought, "回复原件已不可用，未投递。")
+            return
         if target_key is not None and inbox is not None and not inbox.allows(target_key):
             self._clear_planner_restarts(target_key)
             self._record_interrupted_round(thought, "会话已失去阅读权限，未投递。")
             return
         trace, retention = thought.round_trace, self.history_retention
+        if trace and not self._chat_round_current(trace, selected):
+            self._record_interrupted_round(thought, "回看已被新来信替代或叮嘱已失效，不投递。")
+            return
         used_platform_history = trace is not None and trace.used_platform_history
         if used_platform_history:
             plan = outcome.plan
@@ -1358,7 +1470,7 @@ class Heartbeat:
             preview, history = trace.cleanup_preview, self._conversation.platform_history
             if preview is not None and history is not None and history.permits(preview.scope.key):
                 retention.publish(preview)
-        person_id = _person_id_of(thought.replying_to[-1].record)
+        person_id = _person_id_of(selected.record)
         if (
             self._platform_inbox is not None
             and outcome.plan is not None
@@ -1372,7 +1484,7 @@ class Heartbeat:
                 for heard in queued
             ):
                 plan = replace(plan, stay_in_conversation=False)
-            self._platform_inbox.apply_plan(plan, target, thought.replying_to[-1].record)
+            self._platform_inbox.apply_plan(plan, target, selected.record)
             if (
                 inbox is not None
                 and inbox.residence is not None
@@ -1381,16 +1493,26 @@ class Heartbeat:
                 residence = inbox.residence
         self._record_reply_reference(thought, outcome.reference_plan, target)
         if outcome.declined:
+            if (
+                outcome.plan
+                and outcome.plan.wait_seconds
+                and trace
+                and not trace.timed_chat
+                and self.allows_emoji_delivery()
+                and (chat := self._conversation.chat_plugins)
+            ):
+                chat.recheck("wait", target, outcome.plan.wait_seconds)
             if outcome.plan is not None:
                 if self._hormones is not None:
                     self._hormones.note_decline(person_id, self._clock.now())
                 self._record_declined(thought, outcome.plan, outcome.effects)
             return
-        if outcome.response is None:
-            self._deliver(target, outcome.notice, MessageKind.NOTICE)
+        if outcome.response is None and outcome.emoji is None and outcome.qq_action is None:
+            if outcome.notice:
+                self._deliver(target, outcome.notice, MessageKind.NOTICE)
             return
         segments = outcome.reply_segments
-        if not segments:
+        if not segments and outcome.emoji is None and outcome.qq_action is None:
             return
         reply_permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if not reply_permission.allowed:
@@ -1408,11 +1530,23 @@ class Heartbeat:
             "channel": target.channel,
             **self._round_metadata(thought),
             INTERNAL_REPLY_RECORD: True,
-            "organ_id": outcome.response.organ_id,
+            "organ_id": outcome.response.organ_id if outcome.response is not None else "planner",
             "strategy": thought.strategy.to_metadata(),
         }
+        if outcome.target_record_id is not None:
+            metadata["in_reply_to"] = [selected.record.id]
+        if not segments:
+            metadata["nontext_reply"] = True
+        if outcome.qq_action is not None:
+            metadata["qq_action"] = outcome.qq_action.kind
+        if outcome.plan and outcome.plan.reply_mode in ("repeat", "sticker_duel"):
+            metadata["chat_play"] = True
         if len(segments) > 1:
             metadata["reply_segments"] = list(segments)
+        if trace and trace.owner_nudge:
+            metadata["chat_nudge_id"] = trace.owner_nudge.id
+        if trace and not trace.timed_chat and outcome.plan and outcome.plan.followup_seconds:
+            metadata["followup_seconds"] = outcome.plan.followup_seconds
         if outcome.plan is not None and not used_platform_history:
             metadata["plan"] = outcome.plan.to_metadata()
         if outcome.recall_keywords:
@@ -1444,25 +1578,81 @@ class Heartbeat:
             metadata=metadata,
         )
 
-        def after_delivery() -> None:
-            self._after_reply_delivery(thought, outcome.plan, person_id, reply_record)
-
         def can_deliver() -> bool:
             return (
-                residence is not None
-                and inbox is not None
-                and inbox.permits(residence)
+                (residence is None or (inbox is not None and inbox.permits(residence)))
+                and (target_key is None or inbox is None or inbox.allows(target_key))
+                and self._conversation.source_available(selected)
+                and self._conversation.history_current(thought.round_trace)
+                and (trace is None or self._chat_round_current(trace, selected, reply_record.id))
                 and self.allows_emoji_delivery()
             )
+
+        receipt: PartReceipt | None = None
+        source_ids = [
+            identifier
+            for heard in thought.replying_to
+            if type(identifier := heard.record.metadata.get("inbox_message_id")) is int
+        ]
+        if (
+            segments
+            and target_key is not None
+            and inbox is not None
+            and outcome.emoji is None
+            and (outcome.emoji_task is not None or outcome.after_text_selection is not None)
+            and source_ids
+            and len(source_ids) == len(thought.replying_to)
+        ):
+            through = max(source_ids)
+            deadline = self._clock.now() + timedelta(seconds=self._config.qq_emoji_followup_seconds)
+
+            def can_add_sticker() -> bool:
+                return (
+                    self._clock.now() < deadline
+                    and can_deliver()
+                    and not inbox.store.has_newer_incoming(target_key, through)
+                )
+
+            def send_sticker(emoji: EmojiReplyPart) -> None:
+                self._deliver_reply(
+                    target, reply_record, (), emoji=emoji, can_deliver=can_add_sticker
+                )
+
+            receipt = self._sticker_followups.add(
+                target_key,
+                StickerRound(
+                    deadline,
+                    can_add_sticker,
+                    send_sticker,
+                    outcome.after_text_selection,
+                    outcome.emoji_task,
+                    len(segments),
+                ),
+            )
+            if trace is not None:
+                trace.sticker_selection = None
+        elif outcome.emoji_task is not None:
+            outcome.emoji_task.cancel()
+
+        acknowledged = False
+
+        def after_receipt(segment: int | None, accepted: bool) -> None:
+            nonlocal acknowledged
+            if receipt is not None:
+                receipt(segment, accepted)
+            if accepted and segment is not None and not acknowledged:
+                acknowledged = True
+                self._after_reply_delivery(selected, outcome.plan, person_id, reply_record)
 
         self._deliver_reply(
             target,
             reply_record,
             segments,
-            after_delivery,
             emoji=outcome.emoji,
+            qq_action=outcome.qq_action,
             quote_source=outcome.plan is not None and outcome.plan.quote_source,
-            can_deliver=can_deliver if residence is not None else None,
+            can_deliver=can_deliver if residence is not None or target_key is not None else None,
+            on_receipt=after_receipt,
         )
 
     def allows_emoji_delivery(self) -> bool:
@@ -1476,14 +1666,47 @@ class Heartbeat:
     def _send_reply_part(
         self,
         target: Perception,
-        part: str | EmojiReplyPart,
+        part: str | EmojiReplyPart | QQChatAction | AtReplyPart,
         record: TimelineRecord,
         quote_source: bool,
         segment: int | None,
         can_deliver: Callable[[], bool] | None,
+        on_receipt: PartReceipt | None = None,
     ) -> bool:
-        content = "发送了表情。" if isinstance(part, EmojiReplyPart) else part
-        confirm, fail = delivery_callbacks(self._timeline, record, content, segment)
+        action = (
+            part.action
+            if isinstance(part, AtReplyPart)
+            else part
+            if isinstance(part, QQChatAction)
+            else None
+        )
+        text = part if isinstance(part, str) else part.text if isinstance(part, AtReplyPart) else ""
+        descriptions = {
+            "face": f"[QQ表情#{action.emoji_id}]" if action else "",
+            "react": "已给指定消息贴表情。",
+            "poke": "已戳了对方一下。",
+            "recall": "已撤回指定的己方消息。",
+            "resend_image": "[重发原图]",
+            "send_asset": "[已发送受托素材]",
+        }
+        content = text or (descriptions.get(action.kind, "") if action else "发送了表情。")
+
+        def confirmed() -> None:
+            if on_receipt is not None:
+                on_receipt(segment, True)
+            if segment is not None and (
+                "chat_nudge_id" in record.metadata or "followup_seconds" in record.metadata
+            ):
+                self._chat_part_confirmed(target, record)
+
+        confirm, fail = delivery_callbacks(
+            self._timeline,
+            record,
+            content,
+            segment,
+            on_confirm=confirmed,
+            on_failure=(lambda: on_receipt(segment, False)) if on_receipt else None,
+        )
         permission = self._permissions.check(ACTION_REPLY_TO_USER)
         if not permission.allowed:
             logger.warning("待发回复被权限检查拦下：%s", permission.reason)
@@ -1497,17 +1720,21 @@ class Heartbeat:
             return False
         quote_source = quote_source and self._can_quote_reply(target)
         is_emoji = isinstance(part, EmojiReplyPart)
-        if is_emoji and (target.channel != "qq" or target.route is None or self._stop_requested):
+        if (is_emoji or action is not None) and (
+            target.channel != "qq" or target.route is None or self._stop_requested
+        ):
             fail("表情不满足发送条件，未投递。")
             return False
         delivered = self._deliver(
             target,
-            "" if isinstance(part, EmojiReplyPart) else part,
+            text,
             MessageKind.REPLY,
             record,
             emoji_digest=part.digest if isinstance(part, EmojiReplyPart) else None,
+            qq_action=action,
             quote_source=quote_source,
             confirm_delivery=confirm,
+            confirm_platform_delivery=confirm,
             report_delivery_failure=fail,
             reply_segment=segment,
             can_deliver=can_deliver,
@@ -1516,14 +1743,33 @@ class Heartbeat:
             fail("通道没有接收这段回复，未投递。")
         return delivered
 
+    def _chat_part_confirmed(self, target: Perception, record: TimelineRecord) -> None:
+        chat = self._conversation.chat_plugins
+        if not chat or not target.route:
+            return
+        if nudge_id := record.metadata.get("chat_nudge_id"):
+            chat.consume_nudge(ConversationKey.from_perception(target), nudge_id)
+        if seconds := record.metadata.get("followup_seconds"):
+            total = len(record.metadata.get("reply_segments") or [record.content])
+            confirmed = self._timeline.query(
+                TimelineQuery(
+                    event_type=EVENT_REPLY_DELIVERED, metadata={"reply_id": record.id}, limit=-1
+                )
+            )
+            if {
+                item.metadata.get("segment")
+                for item in confirmed
+                if item.metadata.get("segment") is not None
+            } == set(range(1, total + 1)):
+                chat.recheck("followup", target, seconds)
+
     def _after_reply_delivery(
         self,
-        thought: _Thought,
+        heard: _Heard,
         plan: Plan | None,
         person_id: int | None,
         reply_record: TimelineRecord,
     ) -> None:
-        heard = thought.replying_to[-1]
         if heard.perception.trust is TrustLevel.VERIFIED_USER:
             self._last_conversation_at = self._clock.now()
         if plan is not None and person_id is not None:
@@ -1552,12 +1798,22 @@ class Heartbeat:
         after_failure: Callable[[], None] | None = None,
         *,
         emoji: EmojiReplyPart | None = None,
+        qq_action: QQChatAction | None = None,
         quote_source: bool = False,
         can_deliver: Callable[[], bool] | None = None,
+        on_receipt: PartReceipt | None = None,
     ) -> bool:
         """投递已记录的各段。返回本次调用中是否已交给通道。"""
-        if self._stop_requested and self._config.typing_delay_enabled and can_deliver is None:
-            delivered = self._send_reply_part(target, parts[0], record, quote_source, 1, None)
+        if (
+            self._stop_requested
+            and self._config.typing_delay_enabled
+            and can_deliver is None
+            and parts
+            and qq_action is None
+        ):
+            delivered = self._send_reply_part(
+                target, parts[0], record, quote_source, 1, None, on_receipt
+            )
             finish = after_delivery if delivered else after_failure
             if finish is not None:
                 finish()
@@ -1569,8 +1825,10 @@ class Heartbeat:
             after_delivery,
             after_failure,
             emoji=emoji,
+            qq_action=qq_action,
             quote_source=quote_source,
             can_deliver=can_deliver,
+            on_receipt=on_receipt,
         )
 
     def _register_judgment(self, pending: _PendingJudgment) -> None:
@@ -1643,6 +1901,8 @@ class Heartbeat:
     def _judgment_source_allowed(self, pending: _PendingJudgment) -> bool:
         """原消息所在的收件会话是否仍有阅读权限；没有就不采纳迟到的判断。"""
         inbox = self._platform_inbox
+        if not self._conversation.history_current(pending.round_trace):
+            return False
         if pending.residence is not None:
             return inbox is not None and inbox.permits(pending.residence)
         if pending.source_key is not None and inbox is not None:
@@ -2115,6 +2375,8 @@ class Heartbeat:
                 )
             if perception.source_message_id:
                 metadata["source_message_id"] = perception.source_message_id
+            if any(component.kind == "reaction" for component in perception.components):
+                metadata["qq_social_notice"] = "reaction"
             if inbox_message is not None:
                 metadata.update(
                     inbox_message_id=inbox_message.id, sender_name=inbox_message.sender_name
@@ -2184,6 +2446,69 @@ class Heartbeat:
             return self._people.find(perception.channel, perception.sender_id)
         return self._people.meet(perception.channel, perception.sender_id, sender_name)
 
+    def _chat_round_current(
+        self, trace: _RoundTrace, selected: _Heard, reply_id: int | None = None
+    ) -> bool:
+        chat = self._conversation.chat_plugins
+        if chat is None:
+            return not (trace.timed_chat or trace.owner_nudge)
+        if trace.timed_chat and not chat.current(trace.timed_chat, selected.perception):
+            return False
+        nudge = trace.owner_nudge
+        if not nudge or chat.nudge(nudge.target) == nudge:
+            return True
+        return bool(
+            reply_id
+            and chat.nudge_authorized(nudge)
+            and self._timeline.query(
+                TimelineQuery(
+                    event_type=EVENT_REPLY_DELIVERED, metadata={"reply_id": reply_id}, limit=1
+                )
+            )
+        )
+
+    def _maybe_recheck_chat(self) -> None:
+        chat = self._conversation.chat_plugins
+        if (
+            not chat
+            or chat.remaining() > 0
+            or self._thought
+            or self._pending
+            or self._unanswered
+            or self._stop_requested
+            or self._halt_status.halted
+            or not self._permissions.check(ACTION_CALL_ORGAN).allowed
+        ):
+            return
+        due = chat.take_due()
+        if due is None:
+            return
+        item, anchor = due
+        if item.target.platform not in self._sinks:
+            return
+        records = self._timeline.query(
+            TimelineQuery(
+                event_type=EVENT_MESSAGE, metadata={"inbox_message_id": anchor.id}, limit=1
+            )
+        )
+        if not records:
+            return
+        heard = _Heard(
+            anchor.perception, records[0], anchor.perception.trust is TrustLevel.VERIFIED_USER
+        )
+        attempt = self._timeline.append(
+            "chat_recheck",
+            "到期，仅重新判断原会话。",
+            ActorType.SYSTEM,
+            visibility=VisibilityScope.PRIVATE,
+            metadata={"kind": item.kind, "anchor_id": records[0].id},
+        )
+        trace = _RoundTrace(attempt.id, timed_chat=item, used_platform_history=True)
+        job = replace(self._reply_job((heard,)), round_trace=trace, media_sources=())
+        task = asyncio.create_task(self._conversation._think(job), name="aureus-chat-recheck")
+        task.add_done_callback(self._on_thought_done)
+        self._thought = _Thought(task, (heard,), job.strategy, round_trace=trace)
+
     def _maybe_start_thought(self) -> None:
         """定焦点、想一想：有没回复的消息、又没在想别的，就在后台调用器官。"""
         if self._thought is not None or not self._unanswered or self._stop_requested:
@@ -2217,6 +2542,12 @@ class Heartbeat:
                 active = None
         address = (None, active) if active is not None else None
         batch = sorted(self._unanswered.peek_batch(address), key=lambda heard: heard.record.id)
+        if batch and _platform_key(batch[0]) is not None:
+            batch = [
+                heard
+                for heard in batch
+                if heard.perception.visibility is batch[0].perception.visibility
+            ]
         if not batch or self._debounce_remaining(batch) > 0:
             return
         residence = batch[-1].residence
@@ -3015,6 +3346,16 @@ class Heartbeat:
             interval = max(interval, self._body.config.night_tick_interval_seconds)
         if self._thought is None:
             active = self._platform_inbox.active_conversation if self._platform_inbox else None
+            if (
+                not self._unanswered
+                and not self._pending
+                and not self._halt_status.halted
+                and not self._stop_requested
+                and not self._maintenance_paused
+                and (chat := self._conversation.chat_plugins)
+                and self._permissions.check(ACTION_CALL_ORGAN).allowed
+            ):
+                interval = min(interval, chat.remaining())
             address = (None, active) if active is not None else None
             remaining = max(
                 self._batch_wait_remaining(),
@@ -3099,7 +3440,14 @@ class Heartbeat:
         return choose_strategy(tier, self._config, stress_high=self._stress_lowering)
 
     def _reply_job(self, batch: Sequence[_Heard]) -> _ReplyJob:
-        return _reply_job(batch, self._conversation_job)
+        changes = tuple(self._live_identity_changes)
+
+        def build(*args: Any, **kwargs: Any) -> _ReplyJob:
+            return self._conversation_job(*args, **kwargs, live_changes=changes)
+
+        job = _reply_job(batch, build)
+        self._live_identity_changes.clear()
+        return job
 
     def _conversation_job(
         self,
@@ -3111,6 +3459,8 @@ class Heartbeat:
         initiative_note: str = "",
         mood_state: str | None = None,
         agenda_state: str | None = None,
+        live_changes: Sequence[IdentityLayer] | None = None,
+        frozen_history: _ReplyJob | None = None,
     ) -> _ReplyJob:
         return self._conversation._conversation_job(
             target,
@@ -3120,13 +3470,16 @@ class Heartbeat:
             initiative_note=initiative_note,
             mood_state=mood_state,
             agenda_state=agenda_state,
+            frozen_history=frozen_history,
             strategy=self._current_strategy(),
             identity=self._identity,
             body=self._body,
             reading=self._reading,
             downtime=self._downtime_for_context(),
             identity_layers=self._identity_changes,
-            live_identity_changes=self._live_identity_changes,
+            live_identity_changes=self._live_identity_changes
+            if live_changes is None
+            else list(live_changes),
             interests=self._interests,
             findings=self._findings,
             affinity_for_context=lambda person_id: self._affinity_for_context(
@@ -3260,8 +3613,10 @@ class Heartbeat:
         record: TimelineRecord | None = None,
         *,
         emoji_digest: str | None = None,
+        qq_action: QQChatAction | None = None,
         quote_source: bool = False,
         confirm_delivery: Callable[[], None] | None = None,
+        confirm_platform_delivery: Callable[[str], None] | None = None,
         report_delivery_failure: Callable[[str], None] | None = None,
         reply_segment: int | None = None,
         can_deliver: Callable[[], bool] | None = None,
@@ -3278,8 +3633,10 @@ class Heartbeat:
             timestamp=record.timestamp if record is not None else self._clock.now(),
             route=target.route,
             emoji_digest=emoji_digest,
+            qq_action=qq_action,
             quote_source=quote_source,
             confirm_delivery=confirm_delivery,
+            confirm_platform_delivery=confirm_platform_delivery,
             can_deliver=can_deliver,
             visibility=target.visibility,
             report_delivery_failure=report_delivery_failure,

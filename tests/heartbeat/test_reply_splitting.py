@@ -185,6 +185,35 @@ async def test_switching_splitting_off_sends_the_whole_reply(
     assert rig.replies() == [REPLY]
 
 
+@pytest.mark.parametrize("marked", [True, False])
+async def test_explicit_mode_strips_private_wrappers_but_protects_quoted_examples(
+    made: list[TimelineDatabase],
+    tmp_path: Path,
+    marked: bool,
+) -> None:
+    first = (
+        '看 https://example.invalid/help?q=<n>&end=<!> 和 `x = "<analysis>"`。'
+        r"还要保留 \<n> 与 \<!>。“<think>是示例，<n>不是切点”。"
+    )
+    code = '```python\nprint("<think>这是示例</think><n>。")\n```'
+    last = "更正一下，是周六！不是周日。"
+    separator = "<n>" if marked else "\n"
+    quote = "> 原话 <analysis>不是后台记录</analysis>，这里的 <n> 不拆。"
+    body = separator.join([first, code, last + "\n" + quote])
+    answer = f"assistant: <think>内部文字</think>{body}\n<analysis>内部尾注</analysis>"
+    rig = make_rig(
+        made,
+        tmp_path,
+        replies=[answer],
+        reply_split_mode="explicit",
+        typing_delay_enabled=False,
+    )
+    await rig.say("链接和代码请照原样给我")
+    assert rig.replies() == ([first, code, last + "\n" + quote] if marked else [body])
+    delivered = rig.timeline.query(TimelineQuery(event_type=EVENT_REPLY_DELIVERED))
+    assert [row.content for row in delivered] == rig.replies()
+
+
 async def test_the_message_limit_is_respected(made: list[TimelineDatabase], tmp_path: Path) -> None:
     rig = make_rig(made, tmp_path, max_reply_messages=2, typing_delay_enabled=False)
     await rig.say("我今天不太顺")
@@ -236,7 +265,7 @@ async def test_typing_uses_han_other_and_each_jitter_draw(
     ]
 
 
-async def test_next_planner_sees_all_parts_and_same_conversation_stays_in_order(
+async def test_next_planner_sees_only_delivered_parts_and_queue_stays_in_order(
     made: list[TimelineDatabase], tmp_path: Path
 ) -> None:
     rig = make_rig(
@@ -257,8 +286,8 @@ async def test_next_planner_sees_all_parts_and_same_conversation_stays_in_order(
     assert rig.replies() == ["首段"]
     prompt = rig.organs.plans[1].prompt
     assert "你（第 1/3 段）：首段" in prompt
-    assert r"你（第 2/3 段）：随时都可以\n  继续说" in prompt
-    assert "你（第 3/3 段）：收尾" in prompt
+    assert "随时都可以" not in prompt and "收尾" not in prompt
+    assert "2 段回复待确认" in prompt
     assert "第二次来信" in prompt
     assert all(marker not in prompt for marker in ("首段，", "收尾,", "<n>", "<!>"))
     rig.advance(1)

@@ -6232,7 +6232,7 @@ const CFG_FIELDS = {
   'heartbeat.broadcast_cognitive_state': ['状态变化记录', '是否把认知状态的变化记进时间线。'],
   'heartbeat.shutdown_grace_seconds': ['关机等待上限（秒）', '关机时最多给正在执行的任务多少秒收尾。'],
   'heartbeat.recent_message_limit': ['常规对话条数', '平时回复时可以参考最近多少条对话。'],
-  'heartbeat.emoji_selection_grace_seconds': ['表情等待宽限（秒）', '回复正文就绪后最多再等表情多久，超时只发文字。保存后重启生效。'],
+  'heartbeat.emoji_selection_grace_seconds': ['表情等待宽限（秒）', '正文就绪后最多等多久让表情一起发。超过时先发文字；启用补发后，仍可在本轮稍后发表情。'],
   'heartbeat.working_memory_enabled': ['工作记忆', '把已感知的近期经历和滚动摘要作为对话资料。保存后重启生效。'],
   'heartbeat.working_memory_capacity': ['工作记忆容量', '每轮上下文最多保留最新这么多条，更早的丢弃出上下文（不删除原件）；累计达到此条数时整理最早的经历。默认 50。保存后重启生效。'],
   'heartbeat.working_memory_retain': ['保留近期经历条数', '每次整理后保留在工作记忆中的原始经历条数。默认 20。保存后重启生效。'],
@@ -6243,6 +6243,9 @@ const CFG_FIELDS = {
   'heartbeat.planner_steering_max_interrupts': ['打断重来上限', '一轮规划最多因新消息打断重来几次，范围 0–20；0 表示从不打断。用尽后本轮不再打断，保证最终回复。保存后重启生效。'],
   'heartbeat.qq_emoji_collection_enabled': ['QQ 表情收集', '允许从收到的 QQ 消息收集表情，并识别表情内容。'],
   'heartbeat.qq_emoji_selection_enabled': ['QQ 回复表情选择', '回复计划需要表情时，允许从可发送的候选中选取。'],
+  'heartbeat.qq_emoji_followup_enabled': ['正文后补发表情', '选图较慢时先发正文。只有正文全部送达、原会话仍有效，才补发这一次表情。'],
+  'heartbeat.qq_emoji_followup_seconds': ['表情补发时限（秒）', '补发表情最多等多久。超过时限就不再补发。'],
+  'heartbeat.qq_emoji_play_enabled': ['群聊斗图与复读', '允许在不同群友接连发同类内容时跟一次表情、图片或短句。'],
   'heartbeat.qq_emoji_maintenance_enabled': ['QQ 表情定期复查', '定期检查表情库候选的可用状态，更新可发送的候选。'],
   'heartbeat.qq_emoji_registration_limit': ['表情登记上限', '限制新增活跃登记；不自动撤销旧登记。'],
   'heartbeat.qq_emoji_replacement_suggestion_enabled': ['表情替换建议', '默认关闭。只在手动请求时通过表情器官建议一个旧登记，可能收费，不自动改动目录。'],
@@ -6252,6 +6255,14 @@ const CFG_FIELDS = {
   'heartbeat.saving_message_limit': ['节省档对话条数', '节省精力时可以参考最近多少条对话。'],
   'heartbeat.low_message_limit': ['低电量对话条数', '低电量时可以参考最近多少条对话。'],
   'heartbeat.split_reply_enabled': ['分条回复', '允许把一次回复拆成多条消息发出。'],
+  'heartbeat.reply_split_mode': ['回复分段方式', '自然分段选合适的停顿；仅按显式标记分段时，没有标记就整条发。关闭分条回复时两种方式都不拆。'],
+  'heartbeat.chat_reminders_enabled': ['聊天提醒', '允许建立、查看和取消自己的提醒。到期后重新判断是否开口，不保证一定发消息。'],
+  'heartbeat.chat_nudges_enabled': ['主人的限时叮嘱', '验证过的主人可在私聊里给获准会话留叮嘱。该会话实际发言成功后，这条叮嘱就用掉。'],
+  'heartbeat.chat_rechecks_enabled': ['稍后回看与续话', '允许等一会儿再看本会话，也可以在正文送达后再看一次。新来信会取消原来的等待。'],
+  'heartbeat.chat_group_lookup_enabled': ['查询 QQ 群', '主人私聊可问账号所在的群；群友只能按完整群名或群号确认当前群，不能列群。'],
+  'heartbeat.chat_meme_lookup_enabled': ['查询通用梗', '只查内置和本机补充的公开释义；未收录时不猜，也不联网。'],
+  'heartbeat.chat_meme_glossary': ['自定义梗词典', '这里只显示本机补充的条数。要添加或更改释义，请编辑数据目录的 config/aureus.toml。'],
+  'heartbeat.chat_assets_enabled': ['受托发送素材', '只发送维护者给当前 QQ 会话放行的普通图片或文件。开启不代表能访问任意本机文件。'],
   'heartbeat.max_reply_messages': ['回复条数上限', '一次回复最多拆成多少条。'],
   'heartbeat.min_message_chars': ['分条字数下限', '拆分时每条至少保留多少个字。'],
   'heartbeat.typing_delay_enabled': ['分段打字延迟', '模拟输入后续分段所需的用时。保存后重启生效。'],
@@ -6407,14 +6418,19 @@ const CFG_FIELDS = {
   'web.qq_avatars_enabled': ['平台会话 QQ 头像', '只通过服务端读取获准会话的 QQ 头像；关闭后显示像素头像。'],
   'qq.action_timeout_seconds': ['QQ 操作超时（秒）', '向 QQ 网关发起一次操作后，最多等待多少秒取得响应。'],
   'qq.reconnect_seconds': ['QQ 重连等待（秒）', '与 QQ 网关断开或连接失败后，等待多久再连接。'],
+  'qq.chat_actions_enabled': ['QQ 原生聊天动作', '允许在获准会话发原生表情、贴表情、戳一戳或撤回自己的消息；平台未确认不算成功。'],
+  'qq.poke_response_enabled': ['回应戳一戳', '收到平台通知有人戳了自己时，允许判断是否回应。'],
+  'qq.poke_cooldown_seconds': ['戳一戳冷却（秒）', '同一会话面对同一个人时，限制发戳与回应被戳的频率，避免反复打扰。'],
+  'qq.follow_recall_enabled': ['原消息撤回时跟撤', '默认关闭。只有平台通知原消息已撤回，才尝试撤掉自己直接关联且已送达的回复。'],
 };
 // 少数 enum 字段的选项在页面上显示中文，值仍是配置里的英文；只影响标签，不改控件语义。
 const CFG_CHOICE_LABELS = {
   'heartbeat.message_debounce_mode': {off:'关闭', fast:'快速', natural:'自然', steady:'沉稳'},
+  'heartbeat.reply_split_mode': {natural:'自然分段', explicit:'仅按显式标记分段'},
 };
 const CFG_FONT = {key:'aureus-font', id:'cf-font', name:'界面字体', hint:'选择这台浏览器显示 Aureus 时使用的字体，切换后立即生效。'};
 // changes 只放改了的字段（键是「节.字段」，顶层字段只写名字）；提交时整理成 {节: {字段: 值}}（2.12b PUT /api/config）。
-const cf = { data: null, schema: null, session: null, readonly: new Set(), biochemicalSources: {}, noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
+const cf = { data: null, schema: null, session: null, readonly: new Set(), biochemicalSources: {}, glossaryCount: null, noDefault: new Set(), pwSections: new Set(), changes: {}, invalid: new Set(), tab: '', busy: false,
   sections: new Map(), tabs: new Map(), searchEntries: [], results: [] };
 const cfKey = (sec, field) => sec ? sec + '.' + field : field;
 const cfResolve = node => (node && node.$ref ? cf.schema.$defs[node.$ref.split('/').pop()] : node) || {};
@@ -6541,10 +6557,15 @@ function cfRow(sec, field) {
   const effect = readonly ? '只读' : '重启后生效';
   const id = 'cf-field-' + key;
   const attributes = {id:readonly ? undefined : id, disabled:readonly, 'aria-label':name, 'aria-describedby':'cf-help-' + key};
-  const value = source
-    ? el('div', { class: 'mono' }, String(cfOriginal(sec, field)),
-        el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) + ' · 来源：' + source }))
-    : cfControl(sec, field, info, attributes);
+  let value;
+  if (key === 'heartbeat.chat_meme_glossary') {
+    value = el('div', {class:'desc', text: (cf.glossaryCount == null ? '条数未知' : `自定义 ${cf.glossaryCount} 条`) + ' · 在数据目录的 config/aureus.toml 中编辑'});
+  } else if (source) {
+    value = el('div', { class: 'mono' }, String(cfOriginal(sec, field)),
+      el('div', { class: 'desc', text: '开发默认值 ' + String(info.def) + ' · 来源：' + source }));
+  } else {
+    value = cfControl(sec, field, info, attributes);
+  }
   return el('div', { class: 'cfg-field' },
     el('div', { class: 'name' }, settingTerm(name, hint + ' ' + effect + '。', key, readonly ? id : undefined), ' ',
       el('span', { class: 'tag', text: effect }), el('div', { class: 'mono cfg-path', text: key })),
@@ -6709,6 +6730,7 @@ function applyConfigData(session, data) {
   cf.schema = data.schema;
   cf.readonly = new Set(data.readonly);
   cf.biochemicalSources = data.biochemical_sources || {};
+  cf.glossaryCount = data.chat_meme_glossary_count;
   cf.noDefault = new Set(data.no_default);
   cf.pwSections = new Set(data.password_sections);
   cf.changes = {};

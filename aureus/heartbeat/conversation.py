@@ -7,7 +7,9 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, tzinfo
+from datetime import date, datetime, timedelta, tzinfo
+from functools import partial
+from hashlib import sha256
 from math import hypot, sumprod
 from typing import Protocol
 from uuid import uuid4
@@ -28,6 +30,9 @@ from aureus.common import (
 )
 from aureus.heartbeat import exploration_runner, interest_changes
 from aureus.heartbeat.body_summary import ROLEPLAY_NOTE, describe_body_state, describe_judge_body
+from aureus.heartbeat.chat_history import CHAT_EVENTS, ChatHistory
+from aureus.heartbeat.chat_play import followup_emotion, group_repeat
+from aureus.heartbeat.chat_plugins import ChatPluginTools, ChatRequest, PendingChat
 from aureus.heartbeat.context import (
     build_judge_context,
     build_judge_prompt,
@@ -37,10 +42,12 @@ from aureus.heartbeat.context import (
 )
 from aureus.heartbeat.diary_runner import DiaryOutcome
 from aureus.heartbeat.downtime import Downtime
+from aureus.heartbeat.emoji_followups import StartSelection
 from aureus.heartbeat.emoji_selection import EMOJI_CONTEXT_LIMIT, EmojiSelector
 from aureus.heartbeat.empathy import EmpathyFocus
 from aureus.heartbeat.events import (
     EVENT_MESSAGE,
+    EVENT_REPLY_DELIVERED,
 )
 from aureus.heartbeat.expression_recall import ExpressionRecall
 from aureus.heartbeat.history_retention import CleanupPreview, HistoryRetention
@@ -54,6 +61,7 @@ from aureus.heartbeat.memory_summary_source import summary_scope_for
 from aureus.heartbeat.people_context import format_people_context
 from aureus.heartbeat.perception import (
     Perception,
+    QQChatAction,
     TrustLevel,
 )
 from aureus.heartbeat.persona_growth_runner import PersonaReviewOutcome
@@ -64,6 +72,7 @@ from aureus.heartbeat.planner_tools import (
     planner_tools,
 )
 from aureus.heartbeat.planning import (
+    EmojiIntent,
     InitiativePlan,
     Plan,
     ReplyLength,
@@ -147,6 +156,16 @@ def _person_id_of(record: TimelineRecord) -> int | None:
     return None
 
 
+def _self_recall(text: str) -> bool:
+    return "我说过" in text or (
+        any(word in text for word in ("记得", "记不记得", "记住", "还记着"))
+        and any(
+            word in text
+            for word in ("我的", "我喜欢", "我爱", "我讨厌", "我以前", "我之前", "我叫")
+        )
+    )
+
+
 def _same_judge_source(record: TimelineRecord, target: Perception) -> bool:
     """判断用的历史只取同一个会话，不使用工作记忆中的跨会话材料。"""
     metadata, route = record.metadata, target.route
@@ -219,6 +238,9 @@ class _ReplyJob:
     # 这批消息所在的收件会话；判断晚到时用它复核来源权限（D110）。
     residence: InboxResidence | None = None
     round_trace: "_RoundTrace | None" = None
+    # 多人同批消息的真实候选；规划器只能从这些时间线记录中选一个。
+    target_candidates: tuple[_Heard, ...] = ()
+    target_builder: Callable[[_Heard, Sequence[TimelineRecord]], "_ReplyJob"] | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +259,17 @@ class _RoundTrace:
     actions: list[PlannerAction] = field(default_factory=list)
     cleanup_preview: CleanupPreview | None = None
     used_platform_history: bool = False
+    timed_chat: PendingChat | None = None
+    owner_nudge: PendingChat | None = None
+    history_stamp: tuple[ConversationKey, int] | None = None
+    action_history: dict[int, str] = field(default_factory=dict)
+    sticker_selection: asyncio.Task[EmojiReplyPart | None] | None = None
+
+    def cancel_sticker(self) -> None:
+        """轮次无效时取消尚未移交给回执队列的选图。"""
+        if self.sticker_selection is not None:
+            self.sticker_selection.cancel()
+            self.sticker_selection = None
 
 
 @dataclass(eq=False)
@@ -283,8 +316,11 @@ class _ThoughtOutcome:
     review_reason: str | None = None
     reply_segments: tuple[str, ...] = ()
     emoji: EmojiReplyPart | None = None
+    qq_action: QQChatAction | None = None
     # 和回复器同时启动的表情选择（D117）；正文整理完后由 _finish_reply 收取或取消。
     emoji_task: asyncio.Task[EmojiReplyPart | None] | None = None
+    after_text_selection: StartSelection | None = None
+    target_record_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -332,14 +368,47 @@ class _PlannerRun:
 
 def _reply_job(batch: Sequence[_Heard], conversation_job: Callable[..., _ReplyJob]) -> _ReplyJob:
     """组装回复要用的材料：做法由精力档位定，人设和醒来信息放系统上下文，对话放提示词。"""
-    job = conversation_job(
-        batch[-1].perception,
-        [heard.record for heard in batch],
-        _person_id_of(batch[-1].record),
-        viewer_is_user=batch[-1].is_user,
+    last = batch[-1]
+    records = tuple(heard.record for heard in batch)
+    candidates = tuple(batch) if last.perception.channel == "qq" and last.perception.route else ()
+
+    def build(
+        heard: _Heard,
+        messages: Sequence[TimelineRecord],
+        *,
+        frozen_history: _ReplyJob | None = None,
+    ) -> _ReplyJob:
+        return conversation_job(
+            heard.perception,
+            messages,
+            _person_id_of(heard.record),
+            viewer_is_user=heard.is_user,
+            frozen_history=frozen_history,
+        )
+
+    mixed = (
+        len(
+            {
+                (heard.perception.sender_id, heard.perception.trust, _person_id_of(heard.record))
+                for heard in candidates
+            }
+        )
+        > 1
     )
-    job = replace(job, residence=batch[-1].residence)
-    if any(heard.perception.attachments for heard in batch):
+    if mixed:
+        common = replace(
+            last.perception, sender_id="本批候选，尚未选定", trust=TrustLevel.VERIFIED_CONTACT
+        )
+        job = conversation_job(common, records, None, viewer_is_user=False, agenda_state="")
+    else:
+        job = build(last, records)
+    job = replace(
+        job,
+        residence=batch[-1].residence,
+        target_candidates=candidates,
+        target_builder=partial(build, frozen_history=job) if mixed else None,
+    )
+    if any(heard.perception.attachments or heard.perception.quoted_message_id for heard in batch):
         return replace(job, media_sources=tuple(heard.perception for heard in batch))
     return job
 
@@ -360,7 +429,7 @@ def _organ_request(
         organ_id=organ_id,
         prompt=prompt,
         context={"task": task, "in_reply_to": [record.id for record in job.messages]},
-        purpose=purpose,
+        purpose=CallPurpose.OPTIONAL if job.round_trace and job.round_trace.timed_chat else purpose,
         system_context=system_context,
         model_preference=job.strategy.model_preference,
     )
@@ -397,6 +466,13 @@ class ConversationFlow:
         inbox_store: InboxStore | None = None,
     ) -> None:
         self._clock, self._timeline, self._config = clock, timeline, config
+        self.inbox_store = inbox_store
+        self.chat_plugins = (
+            ChatPluginTools(inbox_store, clock, config)
+            if inbox_store and not config.roleplay_mode
+            else None
+        )
+        self.qq_actions_enabled = False
         self._call, self._timezone = call, timezone
         self.inbox_media = InboxMedia(
             call, emoji_store if config.qq_emoji_collection_enabled else None, inbox_store
@@ -405,6 +481,7 @@ class ConversationFlow:
         self._empathy, self._empathy_focus, self._agenda = empathy, empathy_focus, agenda
         self._judge_missing_logged = False
         self._memory = memory
+        self._emoji_store = emoji_store
         self.emoji_selector = (
             EmojiSelector(emoji_store, call, clock, config, timezone)
             if config.qq_emoji_selection_enabled and emoji_store is not None
@@ -425,6 +502,14 @@ class ConversationFlow:
         self._working_memory = working_memory
         self.platform_history = platform_history
         self.history_retention = history_retention
+        self.chat_history = ChatHistory(timeline, inbox_store, self._route_allowed)
+        if working_memory is not None:
+            working_memory.project = self.chat_history.project
+            working_memory.revision = self.chat_history.revision
+
+    def _route_allowed(self, key: ConversationKey) -> bool:
+        history = self.platform_history
+        return history is None or history.allows is None or history.permits(key)
 
     def _working_context(
         self, memory: WorkingMemory, target: Perception, batch_ids: set[int], limit: int
@@ -449,6 +534,11 @@ class ConversationFlow:
         )
         focus = memory.dialogue_focus(owner=owner, route=scope, exclude=batch_ids)
         history = [record for record in focus if record.event_type == EVENT_MESSAGE][-limit:]
+        if route is not None:
+            pending = self.chat_history.pending(
+                ConversationKey.from_perception(target), target.visibility, limit
+            )
+            history = sorted((*history, *pending), key=lambda record: record.id)[-limit:]
         experiences = [record for record in focus if record.event_type != EVENT_MESSAGE]
         material = memory.describe_context(owner=owner, route=scope, focus=experiences)
         return history, material, tuple(record.id for record in experiences)
@@ -461,27 +551,38 @@ class ConversationFlow:
                 and target.trust is not TrustLevel.VERIFIED_USER
             ):
                 return ()
-            return recent_dialogue(
-                self._timeline,
-                visibility=target.visibility,
-                limit=limit,
+            route_fields = {}
+        else:
+            key = ConversationKey.from_perception(target)
+            route_fields = {
+                "channel": key.platform,
+                "account_id": key.account_id,
+                "message_type": key.kind,
+                "recipient_id": key.recipient_id,
+                "temporary_group_id": key.temporary_group_id,
+            }
+        visible = []
+        before_id = None
+        while len(visible) < limit:
+            page = self._timeline.query(
+                TimelineQuery(
+                    event_types=CHAT_EVENTS,
+                    visibility=target.visibility,
+                    latest=True,
+                    limit=limit,
+                    before_id=before_id,
+                    metadata=route_fields,
+                )
             )
-        key = ConversationKey.from_perception(target)
-        return self._timeline.query(
-            TimelineQuery(
-                event_type=EVENT_MESSAGE,
-                visibility=target.visibility,
-                latest=True,
-                limit=limit,
-                metadata={
-                    "channel": key.platform,
-                    "account_id": key.account_id,
-                    "message_type": key.kind,
-                    "recipient_id": key.recipient_id,
-                    "temporary_group_id": key.temporary_group_id,
-                },
-            )
-        )
+            for record in reversed(page):
+                if (projected := self.chat_history.project(record)) is not None:
+                    visible.append(projected)
+                    if len(visible) == limit:
+                        break
+            if len(page) < limit:
+                break
+            before_id = page[0].id
+        return visible[::-1]
 
     def _conversation_job(
         self,
@@ -507,13 +608,20 @@ class ConversationFlow:
         agenda_state: str | None = None,
         inbox_attention: bool = False,
         can_quote: bool = False,
+        frozen_history: _ReplyJob | None = None,
     ) -> _ReplyJob:
         """回复和主动联系共用相同的身份、身体、激素、心情和日程背景（D76）。"""
         batch_ids = {record.id for record in messages}
         contact = target.trust is not TrustLevel.VERIFIED_USER
         contact_account = f"{target.channel}:{target.sender_id}" if contact else None
         memory = self._working_memory
-        if memory is not None and memory.config.working_memory_enabled and memory.is_ready:
+        if frozen_history is not None:
+            history, working_context, experience_ids = (
+                frozen_history.history,
+                frozen_history.working_context,
+                (),
+            )
+        elif memory is not None and memory.config.working_memory_enabled and memory.is_ready:
             history, working_context, experience_ids = self._working_context(
                 memory, target, batch_ids, strategy.message_limit
             )
@@ -619,7 +727,7 @@ class ConversationFlow:
             empathy_detail_for_all=viewer_is_user
             and target.visibility is VisibilityScope.USER_ONLY,
             with_interests=bool(interests_state),
-            history_ids=history_ids,
+            history_ids=frozen_history.history_ids if frozen_history is not None else history_ids,
             working_context=working_context,
             people_history=people_history,
             inbox_attention=inbox_attention,
@@ -640,7 +748,9 @@ class ConversationFlow:
                 and target.visibility is VisibilityScope.USER_ONLY
             ),
             emoji_history=(
-                [
+                frozen_history.emoji_history
+                if frozen_history is not None
+                else [
                     record
                     for record in self._recent_history(target, EMOJI_CONTEXT_LIMIT)
                     if record.id not in batch_ids
@@ -757,14 +867,40 @@ class ConversationFlow:
     ) -> _ThoughtOutcome:
         """在后台规划、回复；判断从同一份材料并行启动，不回写本轮状态（D110）。"""
         originals = job.messages
+        if (
+            job.history_route is not None
+            and self.inbox_store is not None
+            and job.round_trace is not None
+        ):
+            key = job.history_route
+            job.round_trace.history_stamp = key, self.inbox_store.history_revision(key)
+        if job.target_candidates:
+            if not all(self.source_available(heard) for heard in job.target_candidates):
+                return _ThoughtOutcome(declined=True)
+            known = {
+                row.metadata["inbox_message_id"]
+                for row in (*job.history, *job.messages)
+                if "inbox_message_id" in row.metadata
+            }
+            job = replace(
+                job,
+                messages=tuple(self.chat_history.references(row, known) for row in job.messages),
+            )
         if job.media_sources:
             messages = await self.inbox_media.enrich(
                 job.messages, job.media_sources, job.strategy.model_preference
             )
             job = replace(job, messages=messages)
-        self._start_judgment(job, register_judgment)
         recall = _RoundRecall()
-        if self._memory_config.heuristic_recall_enabled and self._can_recall():
+        if job.target_builder is None:
+            self._start_judgment(job, register_judgment)
+        if (
+            job.target_builder is None
+            and self._can_recall()
+            and (
+                self._memory_config.heuristic_recall_enabled or _self_recall(originals[-1].content)
+            )
+        ):
             words = heuristic_keywords(originals)
             limit = self._memory_config.heuristic_max_results
             if words and (hits := await self._retrieve(job, words, limit)):
@@ -774,7 +910,7 @@ class ConversationFlow:
             if job.planner_run is not None and job.planner_run.restart_requested:
                 return _ThoughtOutcome(declined=True)
             outcome = (
-                await self._reply_with_review(job, plan, recall, recalled)
+                await self._reply_with_review(job, plan, recall, recalled, register_judgment)
                 if plan is not None and plan.should_reply
                 else _ThoughtOutcome(plan=plan, declined=True)
             )
@@ -801,8 +937,107 @@ class ConversationFlow:
         return replace(
             outcome,
             reference_plan=outcome.reference_plan or plan,
-            effects=job.effects,
+            effects=outcome.effects or job.effects,
         )
+
+    def _targeted_job(self, job: _ReplyJob, plan: Plan) -> _ReplyJob | None:
+        """核对原件、发言者和权限，用其自己的身份构造回复上下文。"""
+        if not job.target_candidates:
+            return job if plan.target_record_id is None else None
+        target = next(
+            (heard for heard in job.target_candidates if heard.record.id == plan.target_record_id),
+            None,
+        )
+        if target is None or not self.source_available(target):
+            return None
+        route = target.perception.route
+        if (
+            route is None
+            or target.perception.visibility is not job.history_visibility
+            or ConversationKey.from_perception(target.perception) != job.history_route
+        ):
+            return None
+        mentions = [
+            part
+            for part in target.perception.components
+            if part.kind == "at" and part.target_account_id
+        ]
+        if (
+            route.kind == "group"
+            and mentions
+            and not target.perception.mentioned
+            and not any(part.target_account_id == route.account_id for part in mentions)
+        ):
+            return None
+        if job.target_builder is None:
+            if target is job.target_candidates[-1]:
+                return job
+            return replace(
+                job,
+                history=(
+                    *job.history,
+                    *(row for row in job.messages if row.id != target.record.id),
+                ),
+                messages=tuple(row for row in job.messages if row.id == target.record.id),
+            )
+        rebuilt = job.target_builder(target, job.messages)
+        return replace(
+            rebuilt,
+            history=(
+                *rebuilt.history,
+                *(row for row in job.messages if row.id != target.record.id),
+            ),
+            messages=tuple(row for row in job.messages if row.id == target.record.id),
+            residence=job.residence,
+            planner_run=job.planner_run,
+            round_trace=job.round_trace,
+        )
+
+    def source_available(self, heard: _Heard) -> bool:
+        """原件被撤回、被清理或路由失权后，不再交付本轮建议。"""
+        if heard.record.metadata.get("qq_social_notice") == "reaction":
+            return self.chat_history.reaction_target(heard.record) is not None
+        route = heard.perception.route
+        if (
+            route is None
+            or self.inbox_store is None
+            or "inbox_message_id" not in heard.record.metadata
+        ):
+            return True
+        key = ConversationKey.from_perception(heard.perception)
+        if (
+            self.platform_history is not None
+            and self.platform_history.allows is not None
+            and not self.platform_history.permits(key)
+        ):
+            return False
+        if self._people is not None:
+            person = self._people.find(key.platform, heard.perception.sender_id)
+            if (person.id if person else None) != _person_id_of(heard.record):
+                return False
+            if heard.perception.trust is TrustLevel.VERIFIED_USER and not (
+                person
+                and person.is_user
+                and key.kind == "private"
+                and key.temporary_group_id is None
+            ):
+                return False
+        row = self.inbox_store.find_platform_message(key, route.message_id)
+        return (
+            row is not None
+            and row.id == heard.record.metadata["inbox_message_id"]
+            and row.direction == "incoming"
+            and row.perception.trust is heard.perception.trust
+            and row.perception.sender_id == heard.perception.sender_id
+            and row.perception.visibility is heard.perception.visibility
+        )
+
+    def history_current(self, trace: _RoundTrace | None) -> bool:
+        """发前复核用过的会话原件，权限或版本变化时放弃旧草稿。"""
+        if trace is None or trace.history_stamp is None or self.inbox_store is None:
+            return True
+        key, revision = trace.history_stamp
+        return self._route_allowed(key) and revision == self.inbox_store.history_revision(key)
 
     async def _reply_with_review(
         self,
@@ -810,9 +1045,91 @@ class ConversationFlow:
         plan: Plan,
         recall: _RoundRecall,
         recalled: _Recall | None,
+        register_judgment: Callable[[_PendingJudgment], None] | None = None,
     ) -> _ThoughtOutcome:
         """把有效的驳回理由交给规划器重审一次。"""
-        outcome = await self._reply(job, plan, recall, recalled)
+
+        async def reply(decision: Plan, memory: _Recall | None) -> _ThoughtOutcome:
+            selected = self._targeted_job(job, decision)
+            if selected is None:
+                _trace_action(job, PlannerAction("reply", "rejected", "回复对象已失效"))
+                return _ThoughtOutcome(declined=True)
+            action = None
+            if decision.qq_action is not None:
+                heard = next(
+                    (
+                        item
+                        for item in job.target_candidates
+                        if item.record.id == decision.target_record_id
+                    ),
+                    None,
+                )
+                action = self._qq_action(job, decision, heard)
+                if action is None:
+                    _trace_action(
+                        job, PlannerAction("reply", "rejected", "动作没有获准的原件、成员或素材")
+                    )
+                    return _ThoughtOutcome(declined=True)
+                if action.kind != "at":
+                    return _ThoughtOutcome(
+                        plan=decision, target_record_id=decision.target_record_id, qq_action=action
+                    )
+            if decision.reply_mode != "text":
+                heard = next(
+                    (
+                        item
+                        for item in job.target_candidates
+                        if item.record.id == decision.target_record_id
+                    ),
+                    None,
+                )
+                result = await self._play_reply(selected, decision, heard)
+                return replace(result, target_record_id=decision.target_record_id)
+            target_recall = recall
+            if job.target_builder is not None:
+                target_recall = _RoundRecall()
+                words = heuristic_keywords(selected.messages)
+                if (
+                    words
+                    and self._can_recall()
+                    and (
+                        self._memory_config.heuristic_recall_enabled
+                        or _self_recall(selected.messages[-1].content)
+                    )
+                ):
+                    hits = await self._retrieve(
+                        selected, words, self._memory_config.query_default_limit
+                    )
+                    if hits:
+                        target_recall.automatic = words, hits
+            result = await self._reply(selected, decision, target_recall, memory)
+            if job.target_builder is not None and result.response is not None:
+                self._start_judgment(selected, register_judgment)
+            choose_after = None
+            if (
+                result.response is not None
+                and decision.emoji is None
+                and action is None
+                and self._config.qq_emoji_followup_enabled
+                and selected.emoji_history is not None
+                and "inbox_message_id" in selected.messages[-1].metadata
+            ):
+                mood = followup_emotion(result.response.suggestion)
+                if mood:
+                    choose_after = partial(
+                        self._start_emoji_selection,
+                        selected,
+                        replace(decision, emoji=EmojiIntent(mood)),
+                    )
+            return replace(
+                result,
+                effects=selected.effects,
+                target_record_id=decision.target_record_id,
+                qq_action=action if result.response is not None else None,
+                after_text_selection=choose_after,
+            )
+
+        outcome = await reply(plan, recalled)
         if outcome.review_reason is None:
             return outcome
         if not outcome.review_reason:
@@ -821,16 +1138,166 @@ class ConversationFlow:
         _trace_action(job, PlannerAction("replyer", "rejected", "回复器要求重新审视"))
         _trace_action(job, PlannerAction("review", "requested", "重新判断是否需要回复"))
         try:
-            revised, recalled = await self._plan(job, recall, review_reason=outcome.review_reason)
+            reason = "请重新判断本批应回应哪句。" if job.target_builder else outcome.review_reason
+            revised, recalled = await self._plan(job, recall, review_reason=reason)
         except CallRejectedError:
             return _ThoughtOutcome(declined=True)
         if revised is None or not revised.should_reply:
             return _ThoughtOutcome(declined=True, reference_plan=revised)
-        outcome = await self._reply(job, revised, recall, recalled)
+        outcome = await reply(revised, recalled)
         if outcome.review_reason is not None:
             _trace_action(job, PlannerAction("replyer", "rejected", "重新审视后仍被驳回，不发言"))
             outcome = _ThoughtOutcome(declined=True)
         return replace(outcome, reference_plan=revised)
+
+    def _qq_action(self, job: _ReplyJob, plan: Plan, heard: _Heard | None) -> QQChatAction | None:
+        intent, key, store = plan.qq_action, job.history_route, self.inbox_store
+        if (
+            not intent
+            or not key
+            or not heard
+            or not store
+            or not self._route_allowed(key)
+            or key.temporary_group_id
+        ):
+            return None
+        source = heard.perception
+        if (
+            not source.route
+            or source.trust is TrustLevel.UNVERIFIED
+            or source.sender_id == key.account_id
+        ):
+            return None
+        if intent.kind == "face":
+            return QQChatAction("face", emoji_id=intent.emoji_id)
+        if intent.kind == "send_asset":
+            chat = self.chat_plugins
+            if (
+                chat
+                and not source.has_shared_content
+                and chat.config.chat_assets_enabled
+                and chat.assets
+                and intent.name in chat.assets(key)
+            ):
+                return QQChatAction("send_asset", target_id=intent.name)
+            return None
+        identifier = source.route.message_id
+        if intent.source == "quoted":
+            identifier = source.quoted_message_id or ""
+        elif intent.source == "history":
+            identifier = (
+                job.round_trace.action_history.get(intent.history_record_id or 0, "")
+                if job.round_trace
+                else ""
+            )
+        received_poke = intent.source == "selected" and any(
+            part.kind == "poke" and part.target_account_id == key.account_id
+            for part in source.components
+        )
+        if received_poke and intent.kind == "poke":
+            return QQChatAction("poke", source.sender_id)
+        original = store.find_platform_message(key, identifier)
+        if (
+            original is None
+            or original.perception.visibility is not source.visibility
+            or original.perception.trust is TrustLevel.UNVERIFIED
+        ):
+            return None
+        if intent.kind in ("at", "poke"):
+            if (
+                key.kind == "group"
+                and original.direction == "incoming"
+                and original.perception.sender_id != key.account_id
+            ):
+                return QQChatAction(
+                    intent.kind, original.perception.sender_id, source_message_id=identifier
+                )
+        elif intent.kind == "react" and key.kind == "group":
+            return QQChatAction("react", identifier, intent.emoji_id)
+        elif (
+            intent.kind == "recall"
+            and original.direction == "outgoing"
+            and original.perception.sender_id == key.account_id
+        ):
+            return QQChatAction("recall", identifier)
+        elif intent.kind == "resend_image":
+            indices = [
+                index
+                for index, attachment in enumerate(original.perception.attachments)
+                if attachment.kind == "image"
+            ]
+            if intent.image_number <= len(indices):
+                return QQChatAction(
+                    "resend_image", identifier, attachment_index=indices[intent.image_number - 1]
+                )
+        return None
+
+    async def _play_reply(
+        self, job: _ReplyJob, plan: Plan, heard: _Heard | None
+    ) -> _ThoughtOutcome:
+        quiet = _ThoughtOutcome(declined=True)
+        if heard is None or not self.source_available(heard) or job.history_route is None:
+            return quiet
+        key, perception = job.history_route, heard.perception
+        if perception.sender_id == key.account_id or self.emoji_selector is None:
+            return quiet
+        if plan.reply_mode in ("repeat", "sticker_duel"):
+            if (
+                key.kind != "group"
+                or not self._config.qq_emoji_play_enabled
+                or self.inbox_store is None
+            ):
+                return quiet
+            route = {
+                "channel": key.platform,
+                "account_id": key.account_id,
+                "message_type": key.kind,
+                "recipient_id": key.recipient_id,
+                "chat_play": True,
+            }
+            if self._timeline.query(
+                TimelineQuery(
+                    event_type=EVENT_REPLY_DELIVERED,
+                    metadata=route,
+                    since_time=self._clock.now() - timedelta(minutes=2),
+                    limit=1,
+                )
+            ):
+                return quiet
+            if not perception.route or not (
+                row := self.inbox_store.find_platform_message(key, perception.route.message_id)
+            ):
+                return quiet
+            if plan.reply_mode == "repeat":
+                repeat = group_repeat(self.inbox_store, row)
+                if repeat is None:
+                    return quiet
+                kind, value = repeat
+                if kind == "face":
+                    return _ThoughtOutcome(
+                        plan=plan, qq_action=QQChatAction("face", emoji_id=value)
+                    )
+                if kind == "text":
+                    return _ThoughtOutcome(
+                        plan=plan, response=OrganResponse("planner", value), reply_segments=(value,)
+                    )
+                if self.inbox_media.read is not None and self._emoji_store is not None:
+                    media = await self.inbox_media.read(perception, perception.attachments[0])
+                    if media is not None:
+                        digest = sha256(media[0]).hexdigest()
+                        if (
+                            await asyncio.to_thread(self._emoji_store.read_sendable, digest)
+                            is not None
+                        ):
+                            return _ThoughtOutcome(plan=plan, emoji=EmojiReplyPart(digest))
+                return quiet
+            if not any(item.kind == "image" and item.is_emoji for item in perception.attachments):
+                return quiet
+        selection = self._start_emoji_selection(
+            job, replace(plan, emoji=plan.emoji or EmojiIntent(plan.intent))
+        )
+        emoji = await selection if selection is not None else None
+        return _ThoughtOutcome(plan=plan, emoji=emoji) if emoji is not None else quiet
 
     async def _finish_reply(
         self, job: _ReplyJob, outcome: _ThoughtOutcome, response: OrganResponse
@@ -838,11 +1305,14 @@ class ConversationFlow:
         """再审通过后才整理实际发言；快速模型只看到要分段的文字。"""
         emoji_task = outcome.emoji_task
         try:
-            draft = prepare_reply(response.suggestion)
+            explicit = self._config.reply_split_mode == "explicit"
+            draft = prepare_reply(response.suggestion, explicit=explicit)
             if not draft.sections:
                 return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
             text = draft.text.strip()
-            if self._config.split_reply_enabled:
+            if self._config.split_reply_enabled and explicit:
+                sections = draft.explicit_segments(self._config.max_reply_messages)
+            elif self._config.split_reply_enabled:
                 suggestion = (
                     await self._suggest_reply_splits(job, draft) if self.has_fast_model else None
                 )
@@ -855,13 +1325,25 @@ class ConversationFlow:
                 sections = (text,)
             if not sections:
                 return replace(outcome, response=None, notice="模型返回了空回复，这次没有回复。")
-            emoji = await self._await_emoji_selection(emoji_task)
+            later = None
+            if (
+                emoji_task is not None
+                and not emoji_task.done()
+                and any("inbox_message_id" in message.metadata for message in job.messages)
+            ):
+                if self._config.qq_emoji_followup_enabled:
+                    later, emoji_task = emoji_task, None
+                    if job.round_trace is not None:
+                        job.round_trace.sticker_selection = later
+                emoji = None
+            else:
+                emoji = await self._await_emoji_selection(emoji_task)
             return replace(
                 outcome,
                 response=replace(response, suggestion=text),
                 reply_segments=sections,
                 emoji=emoji,
-                emoji_task=None,
+                emoji_task=later,
             )
         finally:
             await self._stop_emoji_selection(emoji_task)
@@ -1099,6 +1581,7 @@ class ConversationFlow:
         quote_source: bool,
         platform_history: bool = False,
         platform_cleanup: bool = False,
+        target_record_ids: tuple[int, ...] = (),
     ) -> PlannerToolOptions:
         """把会话范围和已装配的能力合成对话规划的工具选项。"""
         return PlannerToolOptions(
@@ -1111,6 +1594,7 @@ class ConversationFlow:
             special_contact=special_contact,
             stay_in_conversation=stay_in_conversation,
             quote_source=quote_source,
+            target_record_ids=target_record_ids,
             platform_history=(
                 platform_history
                 and self.platform_history is not None
@@ -1138,6 +1622,10 @@ class ConversationFlow:
         """调用有界的工具规划；失败不发言，网关的拒绝照常抛出。"""
         organ_id = self._config.plan_organ
         history, key = self.platform_history, job.history_route
+        chat, trace = self.chat_plugins, job.round_trace
+        timed = trace.timed_chat if trace else None
+        source = job.target_candidates[-1].perception if job.target_candidates else None
+        writable = len(job.target_candidates) == 1 and not timed and not review_reason
 
         def still_authorized() -> bool:
             return (
@@ -1174,6 +1662,37 @@ class ConversationFlow:
             quote_source=job.can_quote,
             platform_history=can_read_history,
             platform_cleanup=job.round_trace is not None and not review_reason,
+            target_record_ids=tuple(heard.record.id for heard in job.target_candidates),
+        )
+        if job.target_builder is not None:
+            options = replace(
+                options, recall=False, agenda=False, interests=False, special_contact=False
+            )
+        elif job.target_candidates:
+            options = replace(options, default_reply_target=job.target_candidates[-1].record.id)
+        if chat and source and trace and still_authorized():
+            if key is not None and not review_reason:
+                trace.owner_nudge = chat.nudge(key)
+            operations = chat.operations(source, writable=bool(writable))
+            if job.target_builder:
+                operations = tuple(name for name in operations if name in ("meme", "assets"))
+            options = replace(
+                options,
+                chat_operations=operations,
+                chat_rechecks=bool(
+                    writable and chat.config.chat_rechecks_enabled and chat.permitted(source)
+                ),
+            )
+        options = replace(
+            options,
+            group_play=bool(key and key.kind == "group" and self._config.qq_emoji_play_enabled),
+            qq_actions=bool(
+                self.qq_actions_enabled
+                and key
+                and key.temporary_group_id is None
+                and source
+                and still_authorized()
+            ),
         )
         tools = planner_tools(options)
         jargon = await self._jargon_reference(job)
@@ -1201,7 +1720,25 @@ class ConversationFlow:
             heuristic_recall=heuristic_recall,
             review_reason=review_reason,
             tools=tools,
+            target_record_ids=tuple(heard.record.id for heard in job.target_candidates),
         )
+        if timed is not None:
+            cause = {
+                "reminder": "定时提醒到期",
+                "wait": "之前决定等待，现在到点回看",
+                "followup": "上次回复已送达，现检查有无新内容",
+            }[timed.kind]
+            prompt += (
+                f"\n【定时回看，并非新来信】{cause}。仅当有值得补充的新内容时才开口，"
+                "不重复上次答复；可以沉默，不能自行再排回看。意图："
+                + json.dumps(timed.note, ensure_ascii=False)
+            )
+        if trace and trace.owner_nudge:
+            trace.used_platform_history = True
+            prompt += (
+                "\n【主人限时叮嘱·仅供本轮参考】不代发或复述私人原话，不覆盖权限；若当前不适合发言就停。"
+                + json.dumps(trace.owner_nudge.note, ensure_ascii=False)
+            )
         request = _organ_request(
             job,
             organ_id=organ_id,
@@ -1239,7 +1776,18 @@ class ConversationFlow:
 
         async def read_history(query: HistoryQuery) -> str:
             assert history is not None and key is not None
-            return await asyncio.to_thread(history.read, key, job.history_visibility, query)
+            result = await asyncio.to_thread(history.read, key, job.history_visibility, query)
+            if trace is not None:
+                trace.action_history = {
+                    row["id"]: row["platform_message_id"]
+                    for row in json.loads(result)["messages"]
+                    if row["source"] == "inbox" and row["platform_message_id"]
+                }
+            return result
+
+        async def chat_lookup(query: ChatRequest) -> str:
+            assert chat and source
+            return await chat.run(source, query, writable=bool(writable))
 
         pending: CleanupPreview | None = None
         trace = job.round_trace
@@ -1269,8 +1817,11 @@ class ConversationFlow:
                 retrieve,
                 actions=trace.actions if trace is not None else None,
                 read_history=read_history if options.platform_history else None,
+                chat_lookup=chat_lookup if options.chat_operations else None,
                 preview_cleanup=preview_cleanup if options.platform_cleanup else None,
-                still_authorized=still_authorized if options.platform_history else None,
+                still_authorized=still_authorized
+                if options.platform_history or options.chat_operations
+                else None,
                 history_used=mark_history_used,
                 summarize_reply=trace is None or not trace.used_platform_history,
             )
@@ -1351,10 +1902,11 @@ class ConversationFlow:
             return None
         try:
             person_keys = None
-            if "我说过" in job.messages[-1].content:
+            if _self_recall(job.messages[-1].content):
                 if job.person_id is None or self._people is None:
                     return []
                 person_keys = self._people.memory_person_keys(job.person_id)
+                words = tuple("喜欢" if "喜欢什么" in term else term for term in words)
             hits = await asyncio.to_thread(
                 self._memory.search,
                 words,
@@ -1392,7 +1944,9 @@ class ConversationFlow:
         return await asyncio.to_thread(self._memory.recheck_summary_hits, hits, job.summary_scope)
 
     async def _require_current_recall(self, job: _ReplyJob, recall: _RoundRecall) -> None:
-        if len(await self._verified_memory(job, recall.seen)) != len(recall.seen):
+        if not self.history_current(job.round_trace) or len(
+            await self._verified_memory(job, recall.seen)
+        ) != len(recall.seen):
             raise _SummaryRecallChangedError
 
     async def _rerank_memory(

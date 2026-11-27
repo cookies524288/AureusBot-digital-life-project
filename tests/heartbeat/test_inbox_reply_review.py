@@ -71,7 +71,10 @@ class _StreamingOrgans:
             }[turn]
             from tests.planner_fixtures import plan_response
 
-            return plan_response(request, plan)
+            choice = json.loads(plan)
+            if choice["reply"]:
+                choice["target_record_id"] = request.context["in_reply_to"][-1]
+            return plan_response(request, choice)
         assert task == "reply" and not request.stream
         self.replies.append(request)
         marker = re.search(r"<(reply_review_[0-9a-f]{32})>", request.prompt)
@@ -198,6 +201,10 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
         assert len(first.context["in_reply_to"]) == 1
         assert len(retried.context["in_reply_to"]) == 2
         assert review.context["in_reply_to"] == retried.context["in_reply_to"]
+        assert all(
+            request.context["in_reply_to"] == [retried.context["in_reply_to"][-1]]
+            for request in organs.replies
+        )
         for request in (retried, review, *organs.replies):
             text = dialogue_text(request)
             assert "滚动小结：约过周末碰面" in text
@@ -208,7 +215,8 @@ async def test_interrupted_group_plan_keeps_review_and_summary_in_its_conversati
             assert "再审中的后来消息" not in text
             for private in ("别群的私事", "维护者的私事", "尚未压缩的私事"):
                 assert private not in text + request.system_context
-            assert (_REVIEW_REASON in text) is (request is review)
+            assert ("请重新判断本批应回应哪句。" in text) is (request is review)
+            assert _REVIEW_REASON not in text
         assert _REVIEW_REASON not in first.prompt
 
         [reference] = timeline.query(TimelineQuery(event_type=EVENT_REPLY_REFERENCE))

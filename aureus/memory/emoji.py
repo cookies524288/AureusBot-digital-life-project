@@ -867,14 +867,20 @@ class EmojiStore:
             return None
         return data if sha256(data).hexdigest() == digest and emoji_media_type(data) else None
 
+    def allows_send(self, digest: str) -> bool:
+        """使用当前登记、封禁、移除和审核状态核对指定内容指纹。"""
+        with closing(open_connection(self._database_file, read_only=True)) as connection:
+            return (
+                connection.execute(
+                    f"SELECT 1 FROM emoji_assets WHERE digest = ? AND {_SENDABLE}",
+                    (digest,),
+                ).fetchone()
+                is not None
+            )
+
     def read_sendable(self, digest: str) -> bytes | None:
         """实际发送时再次核对表情使用资格，并读取完整媒体。"""
-        with closing(open_connection(self._database_file)) as connection:
-            allowed = connection.execute(
-                f"SELECT 1 FROM emoji_assets WHERE digest = ? AND {_SENDABLE}",
-                (digest,),
-            ).fetchone()
-        return self.read_media(digest) if allowed else None
+        return self.read_media(digest) if self.allows_send(digest) else None
 
     def read_catalog_media(self, digest: str) -> bytes | None:
         """读取目录里已有的表情原件，包含未登记或禁用的原件。"""

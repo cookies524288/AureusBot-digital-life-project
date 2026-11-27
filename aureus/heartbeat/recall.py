@@ -42,7 +42,7 @@ def heuristic_keywords(messages: Sequence[TimelineRecord]) -> tuple[str, ...]:
     newest = messages[-1].content
     if not _RECALL_CUES.search(newest):
         return ()
-    query = _RECALL_CUES.sub(" ", newest).rstrip("？?吗么呢。！! ")
+    query = _RECALL_CUES.sub(" ", newest).rstrip("？?。！! ").removesuffix("吗").removesuffix("呢")
     return tuple(dict.fromkeys(_QUERY_WORD.findall(query)))[:3]
 
 

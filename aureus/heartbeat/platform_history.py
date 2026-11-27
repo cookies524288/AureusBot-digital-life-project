@@ -128,7 +128,7 @@ class PlatformHistory:
                         message.sender_name or None,
                         message.direction,
                         perception.route.message_id if perception.route else None,
-                        perception.content,
+                        "\n".join((perception.content, *message.media_notes)),
                     )
                 )
         if len(rows) > limit:

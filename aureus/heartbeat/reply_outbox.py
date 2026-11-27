@@ -9,14 +9,24 @@ from unicodedata import name
 
 from aureus.common import Clock, HeartbeatConfig
 from aureus.heartbeat.inbox_store import ConversationKey
-from aureus.heartbeat.perception import Perception
+from aureus.heartbeat.perception import Perception, QQChatAction
 from aureus.timeline import TimelineRecord
 
 type _Address = ConversationKey | tuple[str, str]
-type _Part = str | EmojiReplyPart
+type _Part = str | EmojiReplyPart | QQChatAction | AtReplyPart
 type _DeliveryGuard = Callable[[], bool]
+type PartReceipt = Callable[[int | None, bool], None]
 type _Send = Callable[
-    [Perception, _Part, TimelineRecord, bool, int | None, _DeliveryGuard | None], bool
+    [
+        Perception,
+        _Part,
+        TimelineRecord,
+        bool,
+        int | None,
+        _DeliveryGuard | None,
+        PartReceipt | None,
+    ],
+    bool,
 ]
 
 
@@ -26,6 +36,14 @@ class EmojiReplyPart:
 
     digest: str
     before_text: bool = False
+
+
+@dataclass(frozen=True)
+class AtReplyPart:
+    """同一首段的提及和文字，只创建一个平台气泡。"""
+
+    text: str
+    action: QQChatAction
 
 
 def _address(target: Perception) -> _Address:
@@ -51,6 +69,8 @@ class _Reply:
     quote_source: bool = False
     delivered: bool = False
     text_parts: int = 0
+    on_receipt: PartReceipt | None = None
+    mention_confirmed: bool | None = True
 
     def fail(self) -> None:
         if not self.delivered and self.on_failed is not None:
@@ -63,7 +83,12 @@ class _ConversationOutbox:
     last_sent_at: datetime
 
     def seconds_until_due(self, now: datetime) -> float:
-        delay = self.replies[0].parts[0][1]
+        reply = self.replies[0]
+        if reply.mention_confirmed is None:
+            return float("inf")
+        if not reply.mention_confirmed:
+            return 0.0
+        delay = reply.parts[0][1]
         return max(0.0, delay - (now - self.last_sent_at).total_seconds())
 
 
@@ -76,11 +101,13 @@ class ReplyOutbox:
         config: HeartbeatConfig,
         send: _Send,
         record_discard: Callable[[TimelineRecord, int | None], None],
+        wake: Callable[[], None],
     ) -> None:
         self._clock = clock
         self._config = config
         self._send = send
         self._record_discard = record_discard
+        self._wake = wake
         self._conversations: dict[_Address, _ConversationOutbox] = {}
 
     def _typing_delay(self, text: str) -> float:
@@ -112,10 +139,16 @@ class ReplyOutbox:
         on_failed: Callable[[], None] | None,
         *,
         emoji: EmojiReplyPart | None = None,
+        qq_action: QQChatAction | None = None,
         quote_source: bool = False,
         can_deliver: _DeliveryGuard | None = None,
+        on_receipt: PartReceipt | None = None,
     ) -> bool:
         """同一次回复的后续段计入打字时间，并立即投递已到期的段。"""
+        if not parts and emoji is None and qq_action is None:
+            return False
+        if qq_action is not None and (emoji is not None or (qq_action.kind == "at") != bool(parts)):
+            return False
         address = _address(target)
         queue = self._conversations.get(address)
         if queue is None:
@@ -123,13 +156,25 @@ class ReplyOutbox:
         timed_parts: deque[tuple[_Part, float]] = deque(
             (part, self._typing_delay(part) if index else 0.0) for index, part in enumerate(parts)
         )
+        if qq_action is not None:
+            if qq_action.kind == "at":
+                timed_parts[0] = (AtReplyPart(parts[0], qq_action), 0.0)
+            else:
+                timed_parts.append((qq_action, 0.0))
         if emoji is not None:
             if emoji.before_text:
                 timed_parts.appendleft((emoji, 0.0))
             else:
                 timed_parts.append((emoji, 0.0))
         reply = _Reply(
-            target, record, timed_parts, on_delivered, on_failed, can_deliver, quote_source
+            target,
+            record,
+            timed_parts,
+            on_delivered,
+            on_failed,
+            can_deliver,
+            quote_source,
+            on_receipt=on_receipt,
         )
         queue.replies.append(reply)
         self._deliver_due(address, queue)
@@ -147,10 +192,12 @@ class ReplyOutbox:
         text_parts = reply.text_parts
         for part, _ in reply.parts:
             segment = None
-            if isinstance(part, str):
+            if isinstance(part, (str, AtReplyPart)):
                 text_parts += 1
                 segment = text_parts
             self._record_discard(reply.record, segment)
+            if reply.on_receipt is not None:
+                reply.on_receipt(segment, False)
         reply.fail()
 
     def deliver_due(self) -> None:
@@ -166,10 +213,21 @@ class ReplyOutbox:
             default=float("inf"),
         )
 
+    def _mention_receipt(self, reply: _Reply) -> PartReceipt:
+        def receipt(segment: int | None, accepted: bool) -> None:
+            reply.mention_confirmed = accepted
+            self._wake()
+            if reply.on_receipt is not None:
+                reply.on_receipt(segment, accepted)
+
+        return receipt
+
     def _deliver_due(self, address: _Address, queue: _ConversationOutbox) -> None:
         while queue.replies:
             reply = queue.replies[0]
-            if reply.can_deliver is not None and not reply.can_deliver():
+            if reply.mention_confirmed is False or (
+                reply.can_deliver is not None and not reply.can_deliver()
+            ):
                 queue.replies.popleft()
                 self._discard(reply)
                 continue
@@ -177,17 +235,27 @@ class ReplyOutbox:
                 break
             content, _ = reply.parts.popleft()
             segment = None
-            if isinstance(content, str):
+            if isinstance(content, (str, AtReplyPart)):
                 reply.text_parts += 1
                 segment = reply.text_parts
+            receipt = reply.on_receipt
+            if isinstance(content, AtReplyPart) and reply.parts:
+                reply.mention_confirmed = None
+                receipt = self._mention_receipt(reply)
             delivered = self._send(
-                reply.target, content, reply.record, reply.quote_source, segment, reply.can_deliver
+                reply.target,
+                content,
+                reply.record,
+                reply.quote_source,
+                segment,
+                reply.can_deliver,
+                receipt,
             )
             reply.quote_source = False
             queue.last_sent_at = self._clock.now()
             if not reply.parts:
                 queue.replies.popleft()
-            if isinstance(content, str) and delivered and not reply.delivered:
+            if isinstance(content, (str, AtReplyPart)) and delivered and not reply.delivered:
                 reply.delivered = True
                 if reply.on_delivered is not None:
                     reply.on_delivered()

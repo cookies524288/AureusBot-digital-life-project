@@ -26,6 +26,32 @@ def _append(timeline: TimelineDatabase, text: str) -> None:
     timeline.append("message", text, ActorType.USER, visibility=VisibilityScope.USER_ONLY)
 
 
+def test_draft_does_not_shrink_learning_window(tmp_path: Path) -> None:
+    clock = ManualClock(NOW)
+    timeline = TimelineDatabase(tmp_path / "aureus.db", clock)
+    timeline.open()
+    try:
+        memory = WorkingMemory(
+            timeline, HeartbeatConfig(working_memory_capacity=3, working_memory_retain=1)
+        )
+        memory.restore()
+        _append(timeline, "第一位群友的样本")
+        timeline.append(
+            "message", "不会提前变成第二个样本", ActorType.ME, metadata={"outbox_internal": True}
+        )
+        _append(timeline, "第二位群友的样本")
+        assert memory.prepare(clock.now(), ModelPreference.PREFERRED) is None
+        timeline.append("reply_delivered", "说出口后才算一次", ActorType.ME)
+        batch = memory.prepare(clock.now(), ModelPreference.PREFERRED)
+        assert batch is not None
+        assert [record.content for record in batch.trimmed] == [
+            "第一位群友的样本",
+            "第二位群友的样本",
+        ]
+    finally:
+        timeline.close()
+
+
 async def _summary(request: OrganRequest) -> OrganResponse:
     assert request.organ_id == "utils"
     content = json.loads(request.prompt)["经历"][0]["content"]

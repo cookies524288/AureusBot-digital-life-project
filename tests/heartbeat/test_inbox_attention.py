@@ -464,7 +464,13 @@ async def test_active_conversation_merges_during_planning_and_handles_priority(
                 if "离开当前群" in request.prompt:
                     return plan_response(request, {"reply": False, "stay_in_conversation": False})
                 return plan_response(
-                    request, {"reply": True, "intent": "回应", "stay_in_conversation": True}
+                    request,
+                    {
+                        "reply": True,
+                        "intent": "回应",
+                        "stay_in_conversation": True,
+                        "target_record_id": request.context["in_reply_to"][-1],
+                    },
                 )
             assert not request.stream
             replies.append(request)

@@ -22,6 +22,7 @@ __all__ = [
     "MessageSink",
     "OutgoingMessage",
     "Perception",
+    "QQChatAction",
     "TrustLevel",
     "VisibilityScope",
     "mentions_bot",
@@ -55,16 +56,32 @@ class MessageRoute:
 class MediaReference:
     """已接收消息中的平台附件标识，可按原会话查找。"""
 
-    kind: Literal["image", "record"]
+    kind: Literal["image", "record", "video", "file"]
     file_id: str
     is_emoji: bool = False
+    name: str = ""
 
 
 @dataclass(frozen=True)
 class MessageComponent:
     """有序的平台消息事实；来源账号、会话、参与者和消息键沿用所在的原件。"""
 
-    kind: Literal["text", "at", "reply", "image", "record", "poke", "unknown"]
+    kind: Literal[
+        "text",
+        "at",
+        "reply",
+        "image",
+        "record",
+        "video",
+        "file",
+        "forward",
+        "card",
+        "face",
+        "poke",
+        "reaction",
+        "recall",
+        "unknown",
+    ]
     position: int
     text: str | None = None
     attachment_index: int | None = None
@@ -74,6 +91,9 @@ class MessageComponent:
     poke_type: int | None = None
     action: str | None = None
     suffix: str | None = None
+    emoji_id: str | None = None
+    count: int | None = None
+    forward_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +112,11 @@ class Perception:
     source_message_id: str | None = None  # 通道提供的稳定入站消息键，用于语言学习去重。
     attachments: tuple[MediaReference, ...] = ()
     components: tuple[MessageComponent, ...] = ()
+
+    @property
+    def has_shared_content(self) -> bool:
+        """含转发或分享卡片的来信只作解读，不作为受托写操作的授权。"""
+        return any(item.kind in ("forward", "card") for item in self.components)
 
     def __post_init__(self) -> None:
         if not self.channel.strip():
@@ -137,6 +162,17 @@ class MessageKind(StrEnum):
 
 
 @dataclass(frozen=True)
+class QQChatAction:
+    """已按会话解析的动作。成员、原件、素材由通道在实际发送前重新核对。"""
+
+    kind: Literal["face", "at", "react", "poke", "recall", "resend_image", "send_asset"]
+    target_id: str = ""
+    emoji_id: str = ""
+    attachment_index: int = 0
+    source_message_id: str = ""
+
+
+@dataclass(frozen=True)
 class OutgoingMessage:
     """心跳交给通道发出去的一条消息。"""
 
@@ -155,6 +191,8 @@ class OutgoingMessage:
     report_delivery_failure: Callable[[str], None] | None = None
     reply_segment: int | None = None
     can_deliver: Callable[[], bool] | None = None
+    qq_action: QQChatAction | None = None
+    confirm_platform_delivery: Callable[[str], None] | None = None
 
 
 # 通道收消息的函数。必须很快返回、不能阻塞（心跳会直接调用它），出错只影响这个通道。
