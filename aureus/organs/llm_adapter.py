@@ -195,6 +195,8 @@ FAILURE_REASON_BY_ERROR_NAME = {
 EMPTY_REPLY_REASON = "返回内容为空或格式异常"
 # 只收到推理内容、没有可见正文时的说明（D127）：测速算模型可用，普通回复按空回复处理。
 REASONING_ONLY_REASON = "只返回了推理内容，没有可见正文"
+# 请求已经发出后被取消时的说明（D152）：用量照记，但取消不是服务商失败，不计入失败和压力。
+CALL_CANCELLED_REASON = "本轮生成已取消"
 
 # 服务商明确拒绝、没有处理这个请求的错误：这种失败记 0 token（06 号文档 12.3 节）。
 # 其余错误（超时、连接中断、服务商内部错误、不认识的错误）可能已经用掉了 token，按估算记。
@@ -1876,10 +1878,13 @@ class LLMOrgan:
         route: ModelRoute,
         usage: TokenUsage,
         failure_reason: str | None = None,
+        *,
+        cancelled: bool = False,
     ) -> CallAttempt:
         # 确知一个 token 都没用（比如被服务商明确拒绝）时费用就是 0，没写价格也一样，
         # 不是“算不出来”。
         nothing_used = usage.known and usage.prompt_tokens + usage.completion_tokens == 0
+        # 取消仍要记账，但它不是服务商失败：succeeded 记为真，只把原因留下作说明（D152）。
         return CallAttempt(
             model=route.model.name,
             provider=route.provider.name,
@@ -1887,7 +1892,7 @@ class LLMOrgan:
             completion_tokens=usage.completion_tokens,
             cached_tokens=usage.cached_tokens,
             estimated=not usage.known,
-            succeeded=failure_reason is None,
+            succeeded=failure_reason is None or cancelled,
             failure_reason=failure_reason,
             cost=0.0 if nothing_used else compute_cost(route.model, usage, self._clock.now()),
         )
@@ -2072,7 +2077,7 @@ class LLMOrgan:
                         tool_calls = ()
         except asyncio.CancelledError:
             usage = self._estimate_usage(route, messages, 1, extra_bytes)
-            attempts.append(self._attempt(route, usage, "本轮生成已取消"))
+            attempts.append(self._attempt(route, usage, CALL_CANCELLED_REASON, cancelled=True))
             raise
         except Exception as error:
             reason = _failure_reason(error)

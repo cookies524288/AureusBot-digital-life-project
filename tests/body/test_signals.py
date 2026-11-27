@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from aureus.body import Body, compute_fatigue, compute_sleep, compute_stress
 from aureus.common import BodyConfig, BudgetCalendar, ManualClock
 from aureus.organs import CallAttempt
+from aureus.organs.llm_adapter import CALL_CANCELLED_REASON
 from aureus.safety import Ledger
 
 START = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
@@ -161,6 +162,21 @@ def test_stress_reads_recent_outcomes_from_the_ledger(ledger: Ledger, clock: Man
     assert (reading.sampled_calls, reading.failed_calls) == (14, 4)
     assert reading.failure_rate == pytest.approx(4 / 20)
     assert reading.recent_failure_reasons == ("模型服务 503",)
+
+
+def test_cancelled_calls_do_not_raise_stress(ledger: Ledger, clock: ManualClock) -> None:
+    # D152：取消的调用照常记账（可能已经花了 token），但不算失败，也不进失败原因。
+    for _ in range(10):
+        record_call(ledger)
+    for _ in range(5):
+        record_call(ledger, succeeded=True, reason=CALL_CANCELLED_REASON)
+    body = make_body(ledger, clock)
+
+    reading = body.read_stress(backlog=0)
+
+    assert (reading.sampled_calls, reading.failed_calls) == (15, 0)
+    assert reading.level == 0.0
+    assert reading.recent_failure_reasons == ()
 
 
 def test_stress_includes_the_backlog_passed_by_the_heartbeat(
