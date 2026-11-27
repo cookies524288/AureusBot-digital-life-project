@@ -228,6 +228,8 @@ async def test_high_stress_triggers_one_self_check_that_names_the_facts(
     assert "压力偏高" in record.content
     assert "失败了 12 次" in record.content
     assert "模型服务 503" in record.content
+    assert "排队" not in record.content
+    assert "backlog" not in record.metadata
     [notice] = rig.notices()
     assert notice.content == record.content
 
@@ -248,7 +250,10 @@ async def test_self_check_fires_again_only_after_stress_has_eased(
     assert len(rig.records(EVENT_SELF_CHECK)) == 2
 
 
-async def test_a_backlog_of_messages_alone_raises_stress(made: list[Rig], tmp_path: Path) -> None:
+async def test_a_backlog_of_messages_alone_does_not_raise_stress(
+    made: list[Rig], tmp_path: Path
+) -> None:
+    # D153：消息多只是队列和注意力的事，不进入压力。
     rig = make_rig(made, tmp_path)
     rig.organs.gate = asyncio.Event()  # 模型很慢：后面的消息只能排队
     rig.say("第 0 条")
@@ -257,9 +262,7 @@ async def test_a_backlog_of_messages_alone_raises_stress(made: list[Rig], tmp_pa
         rig.say(f"第 {index} 条")
     await rig.heartbeat.beat()
 
-    [record] = rig.records(EVENT_SELF_CHECK)
-    assert record.metadata["backlog"] >= 5
-    assert "在排队" in record.content
+    assert rig.records(EVENT_SELF_CHECK) == []
 
     rig.organs.gate.set()
     await rig.settle()

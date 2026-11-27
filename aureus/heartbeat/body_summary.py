@@ -46,7 +46,7 @@ def describe_body_state(reading: BodyReading, config: BodyConfig, reply_approach
         level = "偏高" if stress.high else "不高"
         lines.append(
             f"压力 {stress.level:.0%}（{level}）：最近 {stress.sampled_calls} 次调用失败了 "
-            f"{stress.failed_calls} 次，排队的消息 {stress.backlog} 条"
+            f"{stress.failed_calls} 次"
         )
         if stress.recent_failure_reasons:
             lines.append("最近的失败原因：" + "；".join(stress.recent_failure_reasons))

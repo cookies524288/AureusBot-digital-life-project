@@ -59,6 +59,6 @@ def test_body_uses_the_supplied_conversation_time_and_clock(tmp_path: Path) -> N
         assert body.read().social_need.level == 1
         assert body.read(last_conversation_at=NOW).social_need.level == 0
         clock.advance(timedelta(hours=12))
-        assert body.read(0, NOW).social_need.level == pytest.approx(1 - exp(-1))
+        assert body.read(last_conversation_at=NOW).social_need.level == pytest.approx(1 - exp(-1))
     finally:
         ledger.close()

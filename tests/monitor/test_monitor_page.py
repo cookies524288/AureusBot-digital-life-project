@@ -56,7 +56,6 @@ def test_page_renders_a_sample(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             daily_quota=500,
             fatigue_level=None,
             stress_level=0.2,
-            backlog=0,
             night=False,
             focus="用户",
             inbox_count=2,

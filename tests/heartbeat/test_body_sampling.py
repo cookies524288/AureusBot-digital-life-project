@@ -177,7 +177,7 @@ async def test_disabled_signals_are_stored_as_none(made: list[Rig], tmp_path: Pa
     await rig.heartbeat.beat()
     [sample] = rig.samples()
     assert sample.fatigue_level is None
-    assert sample.stress_level is None and sample.backlog is None
+    assert sample.stress_level is None
     assert sample.night is None
 
 
@@ -186,7 +186,7 @@ async def test_enabled_signals_are_stored_as_numbers(made: list[Rig], tmp_path: 
     await rig.heartbeat.beat()
     [sample] = rig.samples()
     assert sample.fatigue_level == 0.0
-    assert sample.stress_level == 0.0 and sample.backlog == 0
+    assert sample.stress_level == 0.0
     assert sample.night is False  # 当地正午
 
 

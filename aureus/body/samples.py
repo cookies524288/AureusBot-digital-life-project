@@ -33,8 +33,6 @@ class BodySample:
     daily_quota: int | None
     fatigue_level: float | None
     stress_level: float | None
-    # 压力读数里的积压消息数；压力信号关着时是 None。
-    backlog: int | None
     night: bool | None
     # 注意力聚焦在哪（认知状态的 attention_focus）；空串表示没有。
     focus: str
@@ -56,7 +54,6 @@ def sample_from_reading(
         daily_quota=energy.daily_quota,
         fatigue_level=fatigue.level if fatigue.enabled else None,
         stress_level=stress.level if stress.enabled else None,
-        backlog=stress.backlog if stress.enabled else None,
         night=sleep.night if sleep.enabled else None,
         focus=focus,
         inbox_count=max(inbox_count, 0),
@@ -129,8 +126,8 @@ class BodySampleStore:
         night = None if sample.night is None else int(sample.night)
         conn.execute(
             "INSERT INTO body_samples (timestamp, energy_tier, energy_fraction, used_today,"
-            " daily_quota, fatigue_level, stress_level, backlog, night, focus, inbox_count)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " daily_quota, fatigue_level, stress_level, night, focus, inbox_count)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 _format_timestamp(sample.timestamp),
                 sample.energy_tier,
@@ -139,7 +136,6 @@ class BodySampleStore:
                 sample.daily_quota,
                 sample.fatigue_level,
                 sample.stress_level,
-                sample.backlog,
                 night,
                 sample.focus,
                 sample.inbox_count,
@@ -190,7 +186,6 @@ def sample_of(row: sqlite3.Row) -> BodySample:
         daily_quota=row["daily_quota"],
         fatigue_level=row["fatigue_level"],
         stress_level=row["stress_level"],
-        backlog=row["backlog"],
         night=None if night is None else bool(night),
         focus=row["focus"],
         inbox_count=row["inbox_count"],

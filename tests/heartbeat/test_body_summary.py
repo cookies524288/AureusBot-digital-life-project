@@ -28,7 +28,6 @@ CALM = BodyReading(
         failure_rate=0.05,
         sampled_calls=20,
         failed_calls=1,
-        backlog=0,
         recent_failure_reasons=("模型服务 503",),
     ),
     sleep=SleepReading(enabled=True, night=False),
@@ -45,7 +44,8 @@ def test_summary_states_the_real_numbers_and_reasons() -> None:
     assert "疲劳 80%（偏高）" in text
     assert "最近 30 分钟调用了 48 次" in text
     assert "压力 5%（不高）" in text
-    assert "最近 20 次调用失败了 1 次，排队的消息 0 条" in text
+    assert "最近 20 次调用失败了 1 次" in text
+    assert "排队" not in text
     assert "最近的失败原因：模型服务 503" in text
     assert "现在不是夜间时段" in text
 
