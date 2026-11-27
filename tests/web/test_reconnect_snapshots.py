@@ -37,6 +37,8 @@ def test_timeline_reconnect(foreground: bool) -> None:
           release(); await old;
           assert.equal(cacheRead('timeline:' + query), null);
           await showPage('timeline');
+        } else {
+          assert.equal($('tl-summary').children[0].children[1].textContent, '新');
         }
         release(); await old; await advance(0);
         assert.deepEqual(paths, [url, '/api/status', url]);
@@ -107,5 +109,35 @@ def test_late_foreground_list_does_not_start_another_message_refresh() -> None:
         assert.deepEqual(paths, [url, url, messages]);
         release(); await advance(0);
         assert.deepEqual(paths, [url, url, messages]);
+        assert.equal($('inbox-thread-name').textContent, '新名');
+    """)
+
+
+def test_overlapping_lists_keep_the_pending_selected_conversation() -> None:
+    run_page_script("""
+        const list = '/api/inbox/conversations', paths = [];
+        const key = temporary_group_id => ({kind:'private', platform:'qq', account_id:'10',
+          recipient_id:'1', temporary_group_id});
+        const selected = {key:key('20'), name:'原会话'};
+        let release;
+        state.loggedIn = true; state.page = 'inbox'; inbox.view = 'qq'; inbox.selected = selected;
+        fetch = async path => {
+          paths.push(path);
+          if (path !== list) return reply(200, {messages:[], next_before_id:null});
+          const name = release ? '新名' : '旧名';
+          if (!release) await new Promise(resolve => { release = resolve; });
+          return reply(200, {enabled:true, conversations:[{...selected, name}]});
+        };
+        openSocket();
+        const notify = conversation => sockets[0].onmessage({data:JSON.stringify({
+          type:'event', topic:'inbox', data:{conversation},
+        })});
+        notify(selected.key); await advance(250);
+        notify(key('21')); await advance(250);
+        const messages = `${inboxMessageURL()}?${inboxPageQuery(null, null)}`;
+        assert.deepEqual(paths, [list, list, messages]);
+        assert.equal(new URLSearchParams(messages.split('?')[1]).get('temporary_group_id'), '20');
+        release(); await advance(0);
+        assert.deepEqual(paths, [list, list, messages]);
         assert.equal($('inbox-thread-name').textContent, '新名');
     """)

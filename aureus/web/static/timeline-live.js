@@ -13,23 +13,23 @@ function fetchTimelineDelta(query, cursor, current, apply, onError = fail) {
 
 function loadTimelineSince() {
   const session = state.loaded, navigation = pageNavigation, base = String(timelineParams());
+  const generation = timelineGeneration;
   const current = () => state.loaded === session && pageNavigation === navigation &&
-    state.page === 'timeline' && !document.hidden && String(timelineParams()) === base;
-  if (timelineDelta?.matches(session, navigation, base)) { timelineDelta.again = true; return timelineDelta.promise; }
-  const delta = timelineDelta = {again:false, matches:(owner, page, query) => owner === session && page === navigation && query === base};
+    generation === timelineGeneration && state.page === 'timeline' &&
+    !document.hidden && String(timelineParams()) === base;
+  if (timelineDelta?.current()) return timelineDelta.promise;
+  const delta = timelineDelta = {current};
   async function refresh() {
-    if (timelineReading) await timelineReading;
+    const reading = timelineReading;
+    if (reading?.generation === generation) await reading.promise;
     if (!current()) return;
     if (timelineQuery !== base || timelineCursor == null || !timelineRendered) return loadTimeline(false, false, true, true);
-    do {
-      delta.again = false;
-      await fetchTimelineDelta(base, timelineCursor, current, data => {
-        const added = data.records.filter(record => record.id > (tl.records.at(-1)?.id ?? 0));
-        const merged = {...data, records:tl.records.concat(added), next_before_id:tl.next};
-        applyTimelineData(merged, {added, scroll:'live'});
-        cacheWrite('timeline:' + base, merged, TIMELINE_CACHE_MS);
-      });
-    } while (delta.again && current());
+    return fetchTimelineDelta(base, timelineCursor, current, data => {
+      const added = data.records.filter(record => record.id > (tl.records.at(-1)?.id ?? 0));
+      const merged = {...data, records:tl.records.concat(added), next_before_id:tl.next};
+      applyTimelineData(merged, {added, scroll:'live'});
+      cacheWrite('timeline:' + base, merged, TIMELINE_CACHE_MS);
+    });
   }
   delta.promise = refresh().finally(() => { if (timelineDelta === delta) timelineDelta = null; });
   return delta.promise;

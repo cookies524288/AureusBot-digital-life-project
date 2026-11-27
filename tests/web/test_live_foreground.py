@@ -120,24 +120,31 @@ def test_timeline_since_joins_the_existing_round_without_replacing_focused_rows(
         fetch = async path => {
           const query = new URLSearchParams(path.split('?')[1]);
           const cursor = query.get('since_id'); queries.push(cursor);
-          if (cursor === null) await new Promise(resolve => release = resolve);
-          const id = cursor === null ? 1 : 2;
-          return reply(200, {records:[row(id)], since_id:id,
+          const readNumber = queries.length;
+          const records = readNumber === 1 ? [row(1)] : [row(2)];
+          if (readNumber === 3) records.push(row(3));
+          if (readNumber === 2) await new Promise(resolve => release = resolve);
+          return reply(200, {records, since_id:records.at(-1).id,
             has_more:false, next_before_id:cursor === null ? 1 : null, context:{boundary_id:null}});
         };
-        const snapshot = loadTimeline(false);
-        await advance(0);
-        sockets[0].onmessage({data:JSON.stringify({type:'event', topic:'timeline', data:{id:2}})});
-        await advance(250);
-        assert.deepEqual(queries, [null]);
-        release(); await snapshot;
+        await loadTimeline(false);
         const firstGroup = $('tl-list').children[0], firstRow = firstGroup.children[1];
         firstRow.focus();
-        await advance(0);
+        const notify = id => sockets[0].onmessage({data:JSON.stringify({
+          type:'event', topic:'timeline', data:{id},
+        })});
+        notify(2); await advance(250);
         assert.deepEqual(queries, [null, '1']);
+        notify(3); await advance(250);
+        const current = [...firstGroup.children];
+        release(); await advance(0);
+        assert.deepEqual(queries, [null, '1', '1']);
+        assert.deepEqual([...firstGroup.children], current);
         assert.equal($('tl-list').children[0], firstGroup);
         assert.equal(firstGroup.children[1], firstRow);
         assert.equal(firstGroup.children[2].dataset.recordId, '2');
+        assert.equal(firstGroup.children[3].dataset.recordId, '3');
+        assert.equal(timelineCursor, 3);
         assert.equal(document.activeElement, firstRow);
         assert.equal(tl.next, 1);
     """,

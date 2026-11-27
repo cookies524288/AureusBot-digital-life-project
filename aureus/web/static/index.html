@@ -2629,10 +2629,8 @@ function refreshCurrentPage() {
     if (state.page === 'overview') return refreshOverviewLive();
     if (state.page === 'timeline') return loadTimelineSince();
     if (state.page === 'inbox') {
-      const {all, keys} = inboxLiveRefresh;
-      inboxLiveRefresh = {all:false, keys:new Map()};
       const jobs = [refreshInboxActivity()];
-      if (all || keys.size) jobs.push(refreshInboxLive(all, keys));
+      if (inboxLiveRefresh.all || inboxLiveRefresh.keys.size) jobs.push(refreshInboxLive(inboxLiveRefresh));
       return Promise.all(jobs);
     }
     if (state.page === 'chat') return recoverChatReplies(socket);
@@ -3736,8 +3734,8 @@ function timelineParams() {
 }
 
 function loadTimeline(...args) {
-  const reading = timelineReading = readTimeline(...args);
-  return reading.finally(() => { if (timelineReading === reading) timelineReading = null; });
+  const reading = timelineReading = {generation:timelineGeneration, promise:readTimeline(...args)};
+  return reading.promise.finally(() => { if (timelineReading === reading) timelineReading = null; });
 }
 
 async function readTimeline(more, switching = false, force = false, live = false) {
@@ -3775,8 +3773,7 @@ async function readTimeline(more, switching = false, force = false, live = false
   }
   const res = await api('/api/timeline?' + query);
   if (request !== timelineRequest || session !== state.loaded || navigation !== pageNavigation ||
-      (!state.incrementalUpdates && generation !== timelineGeneration) ||
-      (live && (navigation !== pageNavigation || state.page !== 'timeline'))) return;
+      generation !== timelineGeneration || (live && state.page !== 'timeline')) return;
   const missing = $('tl-missing');
   if (notBuilt(res)) {
     missing.textContent = NOT_BUILT_TEXT;
@@ -3796,7 +3793,7 @@ async function readTimeline(more, switching = false, force = false, live = false
     else fail(res);
     return;
   }
-  if (!more && generation === timelineGeneration) cacheWrite('timeline:' + base, res.data, TIMELINE_CACHE_MS);
+  if (!more) cacheWrite('timeline:' + base, res.data, TIMELINE_CACHE_MS);
   timelineQuery = base;
   applyTimelineData(res.data, {more, scroll: live && timelineRendered && !replacesFilter ? 'live' :
     more || shownFromCache || switching ? 'preserve' : 'latest'});
@@ -4421,12 +4418,15 @@ async function loadInbox() {
 }
 
 // 收到 inbox 事件：先刷新会话列表，再只取当前会话最新一页并追加新消息（3.43、3.47）。
-async function refreshInboxLive(all = true, keys = new Map()) {
+async function refreshInboxLive(pending = null) {
   if (!state.loggedIn || state.page !== 'inbox' || document.hidden) return;
   const generation = inboxListGeneration;
   await loadInbox();
-  if (!state.incrementalUpdates && generation !== inboxListGeneration) return;
-  if (all || [...keys.values()].some(key => sameInboxKey(key, inbox.selected?.key))) await refreshInboxMessages();
+  if (generation !== inboxListGeneration || (pending && pending !== inboxLiveRefresh)) return;
+  if (pending) inboxLiveRefresh = {all:false, keys:new Map()};
+  if (!pending || pending.all || [...pending.keys.values()].some(key => sameInboxKey(key, inbox.selected?.key))) {
+    await refreshInboxMessages();
+  }
 }
 
 async function refreshInboxMessages() {
