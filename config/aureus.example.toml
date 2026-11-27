@@ -48,6 +48,10 @@ config_version = 1
 # inbox_attention_enabled = true
 # 每轮每会话最多读这么多条最新未读，更早没读到的自动标已读，不堆积，范围 1–200（D145）。
 # inbox_read_limit = 15
+# 平台会话的滑动驻留窗口，范围 30–3600 秒；0 表示只由规划器决定进出，不自动到期（D148）。
+# inbox_residence_seconds = 300
+# 其他会话有人 @ 或提及时，是否在规划器上下文中提示；不改变抢占规则（D148）。
+# mention_pull_enabled = true
 # 消息防抖档位：off / fast / natural / steady。合并同一会话连续来信；
 # 沉稳档安静 4 秒、活跃 7 秒、同人续发 4 秒、换人 2 秒；裸图至少 4 秒、整批最多 8 秒、@或提及最多 1 秒。
 # message_debounce_mode = "steady"

@@ -89,6 +89,8 @@ class HeartbeatConfig(BaseModel):
     inbox_attention_enabled: bool = True
     # 每轮每会话最多读这么多条最新未读，其余自动标已读（D145）。
     inbox_read_limit: int = Field(default=15, ge=1, le=200)
+    inbox_residence_seconds: float = Field(default=300.0, ge=0, le=3600)
+    mention_pull_enabled: bool = True
     # 消息防抖档位（D142）：off 不等待；fast/natural/steady 的等待规则见 heartbeat/debounce.py。
     # 群聊和私聊共用一个档位。
     message_debounce_mode: Literal["off", "fast", "natural", "steady"] = "steady"
@@ -177,6 +179,14 @@ class HeartbeatConfig(BaseModel):
         if isinstance(restarts, int) and not isinstance(restarts, bool):
             data.setdefault("planner_steering_max_interrupts", restarts)
         return data
+
+    @field_validator("inbox_residence_seconds")
+    @classmethod
+    def validate_residence_seconds(cls, value: float) -> float:
+        """驻留窗口为 0（关闭）或至少 30 秒（D148）。"""
+        if 0 < value < 30:
+            raise ValueError("inbox_residence_seconds 必须为 0 或 30–3600 秒")
+        return value
 
     @model_validator(mode="after")
     def validate_typing_jitter(self) -> Self:

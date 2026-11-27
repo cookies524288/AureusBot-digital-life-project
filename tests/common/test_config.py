@@ -350,6 +350,8 @@ def test_heartbeat_defaults_when_section_is_missing(tmp_path: Path) -> None:
     assert heartbeat.planner_message_steering is True
     assert heartbeat.planner_steering_max_interrupts == 4
     assert heartbeat.inbox_read_limit == 15  # D145
+    assert heartbeat.inbox_residence_seconds == 300
+    assert heartbeat.mention_pull_enabled is True
     assert (heartbeat.working_memory_capacity, heartbeat.working_memory_retain) == (50, 20)  # D146
 
 
@@ -458,6 +460,17 @@ def test_inbox_read_limit_bounds_are_accepted(tmp_path: Path, value: int) -> Non
     assert load_runtime_config(paths).heartbeat.inbox_read_limit == value
 
 
+@pytest.mark.parametrize("seconds", [0, 30, 30.5, 3600])
+def test_residence_window_bounds_and_mention_opt_out(tmp_path: Path, seconds: float) -> None:
+    paths = AureusPaths(tmp_path)
+    write_runtime_config(
+        paths, f"[heartbeat]\ninbox_residence_seconds = {seconds}\nmention_pull_enabled = false\n"
+    )
+    heartbeat = load_runtime_config(paths).heartbeat
+    assert heartbeat.inbox_residence_seconds == seconds
+    assert heartbeat.mention_pull_enabled is False
+
+
 def test_roleplay_mode_is_off_by_default(tmp_path: Path) -> None:
     assert load_runtime_config(AureusPaths(tmp_path)).heartbeat.roleplay_mode is False
 
@@ -499,6 +512,15 @@ def test_heartbeat_integer_seconds_are_accepted(tmp_path: Path) -> None:
         ("inbox_read_limit", "201"),
         ("inbox_read_limit", "35.5"),
         ("inbox_read_limit", '"15"'),
+        ("inbox_residence_seconds", "-1"),
+        ("inbox_residence_seconds", "29.9"),
+        ("inbox_residence_seconds", "3600.1"),
+        ("inbox_residence_seconds", "nan"),
+        ("inbox_residence_seconds", "inf"),
+        ("inbox_residence_seconds", "true"),
+        ("inbox_residence_seconds", '"300"'),
+        ("mention_pull_enabled", "1"),
+        ("mention_pull_enabled", '"true"'),
     ],
 )
 def test_heartbeat_rejects_bad_values(tmp_path: Path, field: str, text: str) -> None:

@@ -56,7 +56,15 @@ def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> No
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
     attention = InboxAttention(
-        store, TimelineDatabase(database, clock), None, [], enabled=True, read_limit=35
+        store,
+        TimelineDatabase(database, clock),
+        None,
+        [],
+        enabled=True,
+        read_limit=35,
+        clock=clock,
+        residence_seconds=300,
+        mention_pull_enabled=True,
     )
 
     def save(group: str, message: str) -> None:
@@ -78,11 +86,11 @@ def test_idle_browse_orders_conversations_by_oldest_unread(tmp_path: Path) -> No
     for number in range(45):
         save("backlog", str(number))
     save("busy", "newest")
-    assert attention.browse(clock.now(), can_browse=True) == []
+    assert attention.browse(can_browse=True) == []
     clock.advance(timedelta(minutes=5))
-    candidates = attention.browse(clock.now(), can_browse=True)
+    candidates = attention.browse(can_browse=True)
     assert [item.key.recipient_id for item in candidates] == ["busy", "backlog"]
-    rows = attention.read_selection(InboxSelection(candidates[1].key, 35))
+    rows = attention.read_selection(InboxSelection(candidates[1].key, 35), now=clock.now())
     # D145：只读最新的 35 条，更早的未读一并标已读丢弃，返回仍按时间升序。
     assert rows[0].perception.content == "10"
     assert rows[-1].perception.content == "44"
@@ -98,7 +106,15 @@ async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> N
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
     attention = InboxAttention(
-        store, TimelineDatabase(database, clock), None, [], enabled=True, read_limit=4
+        store,
+        TimelineDatabase(database, clock),
+        None,
+        [],
+        enabled=True,
+        read_limit=4,
+        clock=clock,
+        residence_seconds=300,
+        mention_pull_enabled=True,
     )
     for number, (kind, name) in enumerate(
         [
@@ -126,9 +142,9 @@ async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> N
             is not None
         )
     attention.allows = lambda key: key.recipient_id != "denied"
-    attention.browse(clock.now(), can_browse=True)
+    attention.browse(can_browse=True)
     clock.advance(timedelta(minutes=5))
-    candidates = attention.browse(clock.now(), can_browse=True)
+    candidates = attention.browse(can_browse=True)
 
     async def choose(request: OrganRequest) -> OrganResponse:
         assert "denied" not in request.prompt
@@ -141,10 +157,10 @@ async def test_planner_selects_one_group_and_rechecks_scope(tmp_path: Path) -> N
     assert selection.conversation == candidates[3].key
     assert selection.conversation is not None
     attention.allows = lambda key: key != selection.conversation
-    assert attention.read_selection(selection) == []
+    assert attention.read_selection(selection, now=clock.now()) == []
     assert len(store.list_unread(selection.conversation)) == 2
     attention.allows = lambda key: key.account_id == "bot" and key.recipient_id == "group-two"
-    rows = attention.read_selection(selection)
+    rows = attention.read_selection(selection, now=clock.now())
     # D145：count=1 表示读最新 1 条，同会话更早的未读一起清掉。
     assert [row.perception.content for row in rows] == ["message-6"]
     assert store.list_unread(selection.conversation) == []
@@ -184,7 +200,15 @@ async def test_planner_invalid_or_declined_selection_does_not_enter(
     )
     assert row is not None
     attention = InboxAttention(
-        store, TimelineDatabase(tmp_path / "aureus.db", clock), None, [], enabled=True, read_limit=4
+        store,
+        TimelineDatabase(tmp_path / "aureus.db", clock),
+        None,
+        [],
+        enabled=True,
+        read_limit=4,
+        clock=clock,
+        residence_seconds=300,
+        mention_pull_enabled=True,
     )
 
     async def choose(request: OrganRequest) -> OrganResponse:
@@ -198,7 +222,7 @@ async def test_planner_invalid_or_declined_selection_does_not_enter(
         read_limit=4,
         stream=False,
     )
-    assert attention.read_selection(result) == []
+    assert attention.read_selection(result, now=clock.now()) == []
     assert attention.active_conversation is None
     assert store.list_unread(row.conversation) == [row]
 
@@ -211,7 +235,15 @@ def test_disallowed_priority_unread_does_not_hide_allowed_mail(tmp_path: Path) -
     timeline.open()
     try:
         attention = InboxAttention(
-            store, timeline, None, [("qq", "owner")], enabled=True, read_limit=35
+            store,
+            timeline,
+            None,
+            [("qq", "owner")],
+            enabled=True,
+            read_limit=35,
+            clock=clock,
+            residence_seconds=300,
+            mention_pull_enabled=True,
         )
         attention.allows = lambda conversation: conversation.recipient_id == "current"
         for number in range(26):
@@ -242,7 +274,15 @@ def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path
     database = tmp_path / "aureus.db"
     store = InboxStore(database, clock)
     attention = InboxAttention(
-        store, TimelineDatabase(database, clock), None, [], enabled=True, read_limit=5
+        store,
+        TimelineDatabase(database, clock),
+        None,
+        [],
+        enabled=True,
+        read_limit=5,
+        clock=clock,
+        residence_seconds=300,
+        mention_pull_enabled=True,
     )
 
     def save(message: str) -> None:
@@ -262,13 +302,12 @@ def test_active_conversation_reads_all_new_unread_not_entry_count(tmp_path: Path
 
     save("first")
     key = ConversationKey("qq", "bot", "group", "active")
-    assert [row.perception.content for row in attention.read_selection(InboxSelection(key, 1))] == [
-        "first"
-    ]
+    rows = attention.read_selection(InboxSelection(key, 1), now=clock.now())
+    assert [row.perception.content for row in rows] == ["first"]
     assert attention.residence is not None and attention.residence.read_limit == 1
     for message in ("second", "third", "fourth"):
         save(message)
-    assert [row.perception.content for row in attention.active_messages()] == [
+    assert [row.perception.content for row in attention.active_messages(now=clock.now())] == [
         "second",
         "third",
         "fourth",
@@ -287,6 +326,9 @@ def test_busy_group_reads_only_the_latest_limit_and_clears_the_backlog(tmp_path:
         [],
         enabled=True,
         read_limit=15,
+        clock=clock,
+        residence_seconds=300,
+        mention_pull_enabled=True,
     )
 
     def save(message: str) -> None:
@@ -307,13 +349,16 @@ def test_busy_group_reads_only_the_latest_limit_and_clears_the_backlog(tmp_path:
     key = ConversationKey("qq", "bot", "group", "busy")
     for number in range(100):
         save(str(number))
-    rows = attention.read_selection(InboxSelection(key, 15))
+    rows = attention.read_selection(InboxSelection(key, 15), now=clock.now())
     assert [row.perception.content for row in rows] == [str(number) for number in range(85, 100)]
     assert store.list_unread(key) == []
 
     save("new-1")
     save("new-2")
-    assert [row.perception.content for row in attention.active_messages()] == ["new-1", "new-2"]
+    assert [row.perception.content for row in attention.active_messages(now=clock.now())] == [
+        "new-1",
+        "new-2",
+    ]
     assert store.list_unread(key) == []
 
 
@@ -328,6 +373,9 @@ def test_debounce_messages_reads_latest_limit_and_clears(tmp_path: Path) -> None
         [],
         enabled=True,
         read_limit=15,
+        clock=clock,
+        residence_seconds=300,
+        mention_pull_enabled=True,
     )
 
     def save(number: int) -> None:
@@ -1009,7 +1057,15 @@ def test_mentions_wake_but_do_not_preempt(tmp_path: Path) -> None:
         people.ensure_user("主人", [("qq", "owner")])
         friend = people.meet("qq", "friend")
         attention = InboxAttention(
-            InboxStore(database, clock), timeline, people, [], enabled=True, read_limit=35
+            InboxStore(database, clock),
+            timeline,
+            people,
+            [],
+            enabled=True,
+            read_limit=35,
+            clock=clock,
+            residence_seconds=300,
+            mention_pull_enabled=True,
         )
         timeline.append(
             "special_contact_changed",
@@ -1059,7 +1115,15 @@ def test_priority_messages_include_mentions_and_dedupe(tmp_path: Path) -> None:
     timeline.open()
     try:
         attention = InboxAttention(
-            store, timeline, None, [("qq", "owner")], enabled=True, read_limit=35
+            store,
+            timeline,
+            None,
+            [("qq", "owner")],
+            enabled=True,
+            read_limit=35,
+            clock=clock,
+            residence_seconds=300,
+            mention_pull_enabled=True,
         )
 
         def save(sender: str, content: str, *, mentioned: bool = False) -> InboxMessage:
@@ -1483,7 +1547,15 @@ def test_priority_messages_put_identity_before_old_mentions(tmp_path: Path) -> N
     timeline.open()
     try:
         attention = InboxAttention(
-            store, timeline, None, [("qq", "owner")], enabled=True, read_limit=35
+            store,
+            timeline,
+            None,
+            [("qq", "owner")],
+            enabled=True,
+            read_limit=35,
+            clock=clock,
+            residence_seconds=300,
+            mention_pull_enabled=True,
         )
 
         def save(number: int, sender: str, *, mentioned: bool = False) -> InboxMessage:
@@ -1539,7 +1611,17 @@ def test_new_attention_recovers_unread_mentions_but_skips_disallowed_routes(
 
         allowed = save("allowed", "在吗")
         save("former", "旧群在吗")
-        attention = InboxAttention(store, timeline, None, [], enabled=True, read_limit=35)
+        attention = InboxAttention(
+            store,
+            timeline,
+            None,
+            [],
+            enabled=True,
+            read_limit=35,
+            clock=clock,
+            residence_seconds=300,
+            mention_pull_enabled=True,
+        )
         attention.allows = lambda key: key.recipient_id == "allowed"
         assert [row.id for row in attention.priority_messages()] == [allowed.id]
 
@@ -1565,7 +1647,15 @@ def test_group_member_cannot_become_a_special_contact(tmp_path: Path) -> None:
     try:
         person = people.meet("qq", "visitor")
         attention = InboxAttention(
-            InboxStore(database, clock), timeline, people, [], enabled=True, read_limit=35
+            InboxStore(database, clock),
+            timeline,
+            people,
+            [],
+            enabled=True,
+            read_limit=35,
+            clock=clock,
+            residence_seconds=300,
+            mention_pull_enabled=True,
         )
         source = timeline.append("message", "在吗", ActorType.PERSON)
         plan = Plan(True, "回应", None, "", special_contact=True)
@@ -1585,11 +1675,11 @@ def test_group_member_cannot_become_a_special_contact(tmp_path: Path) -> None:
             TrustLevel.VERIFIED_CONTACT,
             route=MessageRoute("bot", "private", "visitor", "two"),
         )
-        attention.apply_plan(plan, group, source)
+        attention.apply_plan(plan, group, source, now=clock.now())
         assert timeline.query(TimelineQuery(event_type="special_contact_changed")) == []
         assert person.id not in attention._special
 
-        attention.apply_plan(plan, private, source)
+        attention.apply_plan(plan, private, source, now=clock.now())
         [change] = timeline.query(TimelineQuery(event_type="special_contact_changed"))
         assert change.metadata["person_id"] == person.id
         assert change.metadata["add"] is True

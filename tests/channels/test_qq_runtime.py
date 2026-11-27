@@ -152,7 +152,9 @@ def drive_inbox_clock() -> None:
     clock = ManualClock(datetime(2026, 11, 23, 12, tzinfo=UTC))
 
     class TimedInboxAttention(InboxAttention):
-        def browse(self, now: datetime, *, can_browse: bool) -> list[InboxConversation]:
+        def browse(
+            self, now: datetime | None = None, *, can_browse: bool
+        ) -> list[InboxConversation]:
             clock.advance(timedelta(minutes=5))
             return super().browse(clock.now(), can_browse=can_browse)
 

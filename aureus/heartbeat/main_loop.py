@@ -377,6 +377,9 @@ class Heartbeat:
                 ((account.platform, account.id) for account in identity.user.accounts),
                 enabled=config.inbox_attention_enabled and not config.roleplay_mode,
                 read_limit=config.inbox_read_limit,
+                clock=clock,
+                residence_seconds=config.inbox_residence_seconds,
+                mention_pull_enabled=config.mention_pull_enabled,
             )
             if inbox_store is not None
             else None
@@ -1403,7 +1406,7 @@ class Heartbeat:
                 and not self._stop_requested
                 and self._permissions.check(ACTION_CALL_ORGAN).allowed
             ):
-                self._submit_inbox(inbox.read_selection(outcome))
+                self._submit_inbox(inbox.read_selection(outcome, now=self._clock.now()))
                 self._take_in_perceptions(browsing=True, residence=inbox.residence)
             return
         if isinstance(outcome, SummaryOutcome):
@@ -1484,7 +1487,7 @@ class Heartbeat:
                 for heard in queued
             ):
                 plan = replace(plan, stay_in_conversation=False)
-            self._platform_inbox.apply_plan(plan, target, selected.record)
+            self._platform_inbox.apply_plan(plan, target, selected.record, now=self._clock.now())
             if (
                 inbox is not None
                 and inbox.residence is not None
@@ -2240,7 +2243,7 @@ class Heartbeat:
         if inbox.active_conversation is not None:
             # D116：活跃会话不再提前返回，防抖窗口和规划期间的新未读并入当前批次。
             if conversation is not None and conversation in arrivals:
-                self._submit_inbox(inbox.active_messages())
+                self._submit_inbox(inbox.active_messages(now=self._clock.now()))
             self._take_in_perceptions(browsing=True, residence=inbox.residence)
         else:
             if conversation is not None and conversation in arrivals:
@@ -2270,7 +2273,7 @@ class Heartbeat:
             and self._permissions.check(ACTION_CALL_ORGAN).allowed
         ):
             # D116：思考或待回复批次进行中同样补读新到未读，交给 _maybe_start_thought 合入下一批。
-            self._submit_inbox(inbox.active_messages())
+            self._submit_inbox(inbox.active_messages(now=self._clock.now()))
             self._take_in_perceptions(browsing=True, residence=inbox.residence)
 
     def _restart_planner(self) -> bool:
@@ -2305,7 +2308,6 @@ class Heartbeat:
     def _maybe_select_inbox(self, inbox: InboxAttention, *, had_thought: bool) -> None:
         reading = self._reading
         candidates = inbox.browse(
-            self._clock.now(),
             can_browse=(
                 not had_thought
                 and self._thought is None

@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from aureus.common import Clock
 from aureus.heartbeat.inbox_store import (
     ConversationKey,
     InboxConversation,
@@ -98,7 +99,7 @@ async def select_conversations(
 
 
 class InboxAttention:
-    """按用户绑定、特别关心和连续空闲时间选择未读，状态由时间线恢复。"""
+    """按优先级和连续空闲时间选择未读，管理当次运行中的会话驻留。"""
 
     def __init__(
         self,
@@ -109,17 +110,24 @@ class InboxAttention:
         *,
         enabled: bool,
         read_limit: int,
+        clock: Clock,
+        residence_seconds: float,
+        mention_pull_enabled: bool,
     ) -> None:
         self.store = store
         self._timeline = timeline
+        self._clock = clock
         self._people = people
         self._user_accounts = frozenset(user_accounts)
         self._enabled = enabled
         self.read_limit = read_limit
+        self._residence_window = timedelta(seconds=residence_seconds) if residence_seconds else None
+        self._mention_pull_enabled = mention_pull_enabled
         self._special: set[int] = set()
         self._idle_since: datetime | None = None
         self._wants_to_read = False
         self.residence: InboxResidence | None = None
+        self._residence_deadline: datetime | None = None
         self._staying = False
         self.allows: Callable[[ConversationKey], bool] = lambda _conversation: True
 
@@ -128,6 +136,29 @@ class InboxAttention:
         """当前仍驻留的路由；主动退出后可送毕正在回复的这一轮。"""
         return self.residence.conversation if self._staying and self.residence is not None else None
 
+    @property
+    def deadline(self) -> datetime | None:
+        """当前驻留窗口的截止时间；没有计时窗口时为 None。"""
+        return self._residence_deadline
+
+    def renew(self, now: datetime) -> None:
+        """从最近一次活动重新计时，不改变驻留身份（D148）。"""
+        if self.active_conversation is not None and self._residence_window is not None:
+            self._residence_deadline = now + self._residence_window
+
+    def expire_if_due(self, now: datetime) -> bool:
+        """在调用方确认没有在途工作后结束到期驻留，保留原身份供投递。"""
+        if not self._staying or self._residence_deadline is None or now < self._residence_deadline:
+            return False
+        self._leave()
+        self._idle_since = now - _IDLE_BEFORE_READING
+        return True
+
+    def _leave(self) -> None:
+        """不再接新消息，保留本轮的投递资格。"""
+        self._staying = False
+        self._residence_deadline = None
+
     def permits(self, residence: InboxResidence) -> bool:
         """仅当前未被抢占且仍获授权的驻留可处理或投递。"""
         return self.residence is residence and self.allows(residence.conversation)
@@ -135,7 +166,7 @@ class InboxAttention:
     def interrupt(self) -> None:
         """撤销旧驻留和此前所有未投递内容的资格。"""
         self.residence = None
-        self._staying = False
+        self._leave()
 
     def restore(self) -> None:
         """重放特别关心变动；用户绑定不受规划器改动。"""
@@ -224,11 +255,13 @@ class InboxAttention:
             after = (0 if last.perception.sender_id in senders else 1, last.id)
         return messages
 
-    def browse(self, now: datetime, *, can_browse: bool) -> list[InboxConversation]:
+    def browse(self, now: datetime | None = None, *, can_browse: bool) -> list[InboxConversation]:
         """安全闲暇时取得可选的未读会话，私聊和群聊分别列出。"""
         if not self._enabled or not can_browse or self.active_conversation is not None:
             self._idle_since = None
             return []
+        if now is None:
+            now = self._clock.now()
         if self._idle_since is None or self._idle_since > now:
             self._idle_since = now
         if not self._wants_to_read and now - self._idle_since < _IDLE_BEFORE_READING:
@@ -242,7 +275,7 @@ class InboxAttention:
         groups = [item for item in conversations if item.key.kind == "group"]
         return private[:_CANDIDATE_LIMIT] + groups[:_CANDIDATE_LIMIT]
 
-    def read_selection(self, selection: InboxSelection) -> list[InboxMessage]:
+    def read_selection(self, selection: InboxSelection, *, now: datetime) -> list[InboxMessage]:
         """复验选择与路由权限，读取最新一批并清空该会话未读后才占住会话（D145）。
 
         入场条数仍不超过 inbox_read_limit；实际读最新 min(count, 上限) 条，
@@ -264,9 +297,10 @@ class InboxAttention:
         if messages:
             self.residence = InboxResidence(key, selection.count)
             self._staying = True
+            self.renew(now)
         return messages
 
-    def active_messages(self) -> list[InboxMessage]:
+    def active_messages(self, *, now: datetime) -> list[InboxMessage]:
         """读取当前停留会话最新的至多 inbox_read_limit 条未读，并清空该会话未读（D145）。
 
         入场时规划器选的条数只管「进入哪个会话」，后续补读固定按 inbox_read_limit
@@ -275,7 +309,10 @@ class InboxAttention:
         residence = self.residence
         if not self._staying or residence is None or not self.permits(residence):
             return []
-        return self.store.read_latest_and_clear(residence.conversation, limit=self.read_limit)
+        messages = self.store.read_latest_and_clear(residence.conversation, limit=self.read_limit)
+        if messages:
+            self.renew(now)
+        return messages
 
     def debounce_messages(self, key: ConversationKey) -> list[InboxMessage]:
         """尚未驻留的优先来信读最新一批并清空该会话未读（D145）。"""
@@ -283,7 +320,9 @@ class InboxAttention:
             self.store.read_latest_and_clear(key, limit=self.read_limit) if self.allows(key) else []
         )
 
-    def apply_plan(self, plan: Plan, target: Perception, source: TimelineRecord) -> None:
+    def apply_plan(
+        self, plan: Plan, target: Perception, source: TimelineRecord, *, now: datetime
+    ) -> None:
         """采用规划器的翻阅意愿和对本轮已认出联系人的特别关心建议。"""
         if not self._enabled or target.trust is TrustLevel.UNVERIFIED:
             return
@@ -294,8 +333,9 @@ class InboxAttention:
                 if self.residence is None or self.residence.conversation != key:
                     self.residence = InboxResidence(key, self.read_limit)
                 self._staying = True
+                self.renew(now)
             elif key == self.active_conversation:
-                self._staying = False
+                self._leave()
         if (
             target.route is None
             or target.route.kind != "private"
