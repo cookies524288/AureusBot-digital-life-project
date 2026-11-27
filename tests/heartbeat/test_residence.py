@@ -23,7 +23,13 @@ from aureus.safety import (
     PermissionChecker,
     PermissionLevel,
 )
-from aureus.timeline import ActorType, TimelineDatabase, TimelineRecord, VisibilityScope
+from aureus.timeline import (
+    ActorType,
+    TimelineDatabase,
+    TimelineQuery,
+    TimelineRecord,
+    VisibilityScope,
+)
 from tests.planner_fixtures import plan_response
 
 DEFAULT_CONFIG = HeartbeatConfig()
@@ -280,7 +286,7 @@ def immediate_config(**fields: object) -> HeartbeatConfig:
 async def test_mention_pull_summary_has_no_content(tmp_path: Path, enabled: bool) -> None:
     organs = Organs()
     config = immediate_config(mention_pull_enabled=enabled)
-    async with running_heart(tmp_path, config, organs) as (heart, store, _, _):
+    async with running_heart(tmp_path, config, organs) as (heart, store, clock, _):
         heart.set_inbox_route_filter(lambda key: key.recipient_id != "excluded")
         heart.on_inbox_message(save(store, "current", "入场", mentioned=True))
         heart.beat()
@@ -309,6 +315,22 @@ async def test_mention_pull_summary_has_no_content(tmp_path: Path, enabled: bool
             assert "当前会话最近 5 分钟有 2 条新消息" in prompt
         else:
             assert "收件箱动态" not in prompt
+        heart.beat()
+        records = heart._timeline.query(TimelineQuery(event_type="reply_reference"))
+        metadata = records[-1].metadata
+        assert "residence_deadline" not in records[0].metadata
+        assert metadata["residence_deadline"] == (clock.now() + WINDOW).isoformat()
+        if enabled:
+            assert metadata["mention_pull"] == {
+                "conversations": [
+                    {"name": "会话 first", "count": 3},
+                    {"name": "会话 second", "count": 2},
+                    {"name": "会话 third", "count": 1},
+                ],
+                "others": 1,
+            }
+        else:
+            assert "mention_pull" not in metadata
 
 
 @pytest.mark.asyncio

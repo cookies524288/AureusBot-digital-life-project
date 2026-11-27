@@ -177,7 +177,11 @@ class InboxAttention:
             return ()
         candidates = self.store.list_mention_conversations(limit=-1, pending_ids=pending_ids)
         return tuple(
-            MentionPull(key, name, count)
+            MentionPull(
+                key,
+                "未命名私聊" if key.kind == "private" and name == key.recipient_id else name,
+                count,
+            )
             for key, name, count in candidates
             if key != exclude and self.allows(key)
         )[:limit]

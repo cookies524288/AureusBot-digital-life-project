@@ -9,7 +9,8 @@ from tests.web.test_page_script import run_page_script
 @pytest.mark.parametrize("metadata", ["{}", "{actions:[]}", "{actions:[{reason:'行动依据'}]}"])
 def test_timeline_reading(metadata: str) -> None:
     """没有行动时直接读正文；有行动时仍可从详情读到原文。"""
-    run_page_script(r"""
+    run_page_script(
+        r"""
         const metadata = METADATA;
         const make = content => timelineItem({id:1, time:'2026-11-27T01:02:03Z',
           event_type:'reply_reference', actor:'me', content, metadata}, false);
@@ -44,4 +45,22 @@ def test_timeline_reading(metadata: str) -> None:
         toggle.click();
         assert.equal(body.textContent, preview);
         assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-    """.replace('METADATA', metadata))
+    """.replace("METADATA", metadata)
+    )
+
+
+def test_timeline_shows_read_only_residence_trace() -> None:
+    run_page_script(r"""
+        const time = '2026-11-27T12:00:00Z';
+        const deadline = '2026-11-27T12:05:00Z';
+        const metadata = {residence_deadline:deadline,
+          mention_pull:{conversations:[{name:'会话 <示例>', count:3}], others:2}};
+        for (const event of ['reply_reference', 'planning_interrupted']) {
+          const rows = timelineDetailRows(metadata, event, time);
+          assert.deepEqual(rows, [
+            {label:'开批时的驻留截止', node:tlTimeText(deadline, {day:tlDayKey(time)})},
+            {label:'其他会话提及', node:'会话 <示例>：3 条；另有 2 个会话'},
+          ]);
+        }
+        assert.deepEqual(timelineDetailRows({}, 'reply_reference', time), []);
+    """)

@@ -2061,6 +2061,7 @@ class Heartbeat:
         }
         if thought.round_trace is not None:
             metadata["actions"] = [action.to_metadata() for action in thought.round_trace.actions]
+            metadata.update(thought.round_trace.attention_metadata())
         content = "这轮没有可用的规划建议。"
         if plan is not None:
             content = "建议回复" if plan.should_reply else "建议不回复"
@@ -2111,6 +2112,7 @@ class Heartbeat:
                 **self._round_metadata(thought),
                 "channel": target.channel,
                 "actions": [action.to_metadata() for action in trace.actions],
+                **trace.attention_metadata(),
             },
         )
 
@@ -2637,7 +2639,12 @@ class Heartbeat:
                 self._unanswered.remove(batch[:-capacity])
                 batch = batch[-capacity:]
         # 先组装材料再出队：组装出错时（比如读不了时间线），这些消息还留在队里。
-        trace = _RoundTrace(batch[0].record.id)
+        trace = _RoundTrace(
+            batch[0].record.id,
+            residence_deadline=(
+                inbox.deadline if inbox is not None and residence is not None else None
+            ),
+        )
         job = replace(self._reply_job(batch), round_trace=trace)
         self._unanswered.remove(batch)
         key = _platform_key(batch[-1])

@@ -323,6 +323,23 @@ class _RoundTrace:
     history_stamp: tuple[ConversationKey, int] | None = None
     action_history: dict[int, str] = field(default_factory=dict)
     sticker_selection: asyncio.Task[EmojiReplyPart | None] | None = None
+    residence_deadline: datetime | None = None
+    mention_pull: tuple[MentionPull, ...] = ()
+    other_mention_count: int = 0
+
+    def attention_metadata(self) -> dict[str, object]:
+        """仅公开本轮实际使用的截止时间和摘要，不序列化内部路由。"""
+        metadata: dict[str, object] = {}
+        if self.residence_deadline is not None:
+            metadata["residence_deadline"] = self.residence_deadline.isoformat()
+        if self.mention_pull:
+            metadata["mention_pull"] = {
+                "conversations": [
+                    {"name": item.name, "count": item.count} for item in self.mention_pull
+                ],
+                "others": self.other_mention_count,
+            }
+        return metadata
 
     def cancel_sticker(self) -> None:
         """轮次无效时取消尚未移交给回执队列的选图。"""
@@ -1785,7 +1802,11 @@ class ConversationFlow:
             tools=tools,
             target_record_ids=tuple(heard.record.id for heard in job.target_candidates),
         )
-        prompt += _mention_pull_prompt(job)
+        if mention_prompt := _mention_pull_prompt(job):
+            prompt += mention_prompt
+            if trace is not None:
+                trace.mention_pull = job.mention_pull
+                trace.other_mention_count = job.other_mention_count
         if timed is not None:
             cause = {
                 "reminder": "定时提醒到期",

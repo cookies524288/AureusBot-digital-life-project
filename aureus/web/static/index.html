@@ -2656,6 +2656,12 @@ const TL_FIELDS = {
   select_emoji: {label:'表情', format: tlEmojiText},
   reach_out: {label:'建议主动联系', format: value => tlText(value)},
   stay_in_conversation: {label:'留在对话里', format: value => tlText(value)},
+  residence_deadline: {label:'开批时的驻留截止', format: tlTimeText},
+  mention_pull: {label:'其他会话提及', format: value => {
+    const entries = value.conversations.map(item => `${item.name}：${item.count} 条`);
+    if (value.others) entries.push(`另有 ${value.others} 个会话`);
+    return entries.join('；');
+  }},
   quote_source: {label:'引用原消息', format: value => tlText(value)},
   // 回复做法
   strategy: {label:'回复做法', format: (value, context) => tlStrategyNode(value, context)},
@@ -2928,7 +2934,7 @@ const TL_EVENT_DETAILS = {
     for (const key of ['triggered_at', 'reason', 'source_visibility', 'empathy_for', 'empathy_affinity']) add(key);
   },
   reply_reference(metadata, add) {
-    for (const key of ['channel', 'message_type', 'plan']) add(key);
+    for (const key of ['channel', 'message_type', 'plan', 'residence_deadline', 'mention_pull']) add(key);
   },
   reply_declined(metadata, add) {
     for (const key of ['plan', 'strategy', 'hormones']) add(key);
@@ -3041,7 +3047,7 @@ const TL_EVENT_DETAILS = {
     add('rating');
   },
   planning_interrupted(metadata, add) {
-    add('channel');
+    for (const key of ['channel', 'residence_deadline', 'mention_pull']) add(key);
   },
 };
 
